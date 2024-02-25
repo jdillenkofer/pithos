@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -127,7 +126,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	listBucketResult := ListBucketResult{
 		Name:        bucket,
-		Prefix:      "A",
+		Prefix:      "",
 		StartAfter:  "",
 		KeyCount:    len(objects),
 		MaxKeys:     len(objects),
@@ -195,15 +194,16 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
-	dataReader, err := s.storage.GetObject(bucket, key)
+	reader, err := s.storage.GetObject(bucket, key)
 	if err != nil {
 		w.WriteHeader(500)
 		return
 	}
-	w.Header().Add("Last-Modified", "2013-09-17T18:07:53.000Z")
+	defer reader.Close()
+	w.Header().Add("Last-Modified", object.LastModified.Format(time.RFC3339))
 	w.Header().Add("Content-Length", fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
-	io.Copy(w, dataReader)
+	io.Copy(w, reader)
 }
 
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
@@ -213,12 +213,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Expect") == "100-continue" {
 		w.WriteHeader(100)
 	}
-	data, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(500)
-		return
-	}
-	err = s.storage.PutObject(bucket, key, bytes.NewReader(data))
+	err := s.storage.PutObject(bucket, key, r.Body)
 	if err != nil {
 		w.WriteHeader(500)
 		return

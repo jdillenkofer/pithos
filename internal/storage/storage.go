@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"io"
 	"time"
 )
@@ -17,6 +18,10 @@ type Object struct {
 	Size         int64
 }
 
+var ErrBucketNotFound error = errors.New("Bucket not found")
+var ErrBucketAlreadyExists error = errors.New("Bucket already exists")
+var ErrBucketNotEmpty error = errors.New("Bucket not empty")
+
 type Storage interface {
 	CreateBucket(bucket string) error
 	DeleteBucket(bucket string) error
@@ -24,7 +29,7 @@ type Storage interface {
 	ExistBucket(bucket string) (*Bucket, error)
 	ListObjects(bucket string) ([]Object, error)
 	ExistObject(bucket string, key string) (*Object, error)
-	GetObject(bucket string, key string) (io.Reader, error)
+	GetObject(bucket string, key string) (io.ReadCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
 }
