@@ -2,7 +2,6 @@ package storage
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"strings"
 	"time"
@@ -23,10 +22,8 @@ var mockObject Object = Object{
 	Size:         100,
 }
 
-var ErrBucketNotFound error = errors.New("Bucket not found")
-
-func NewMockStorage() *MockStorage {
-	return &MockStorage{}
+func NewMockStorage() (*MockStorage, error) {
+	return &MockStorage{}, nil
 }
 
 func (*MockStorage) CreateBucket(bucket string) error {

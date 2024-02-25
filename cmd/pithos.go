@@ -10,7 +10,11 @@ import (
 func main() {
 	protocol := "http"
 	addr := "localhost:9000"
-	server := server.New(addr, storage.NewMockStorage())
+	storage, err := storage.NewFilesystemStorage("./data")
+	if err != nil {
+		log.Fatal(err)
+	}
+	server := server.New(addr, storage)
 	log.Printf("Listening with s3 api on %v://%v\n", protocol, addr)
 	log.Fatal(server.ListenAndServe())
 }
