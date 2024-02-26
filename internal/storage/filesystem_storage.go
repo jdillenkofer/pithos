@@ -1,9 +1,12 @@
 package storage
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type FilesystemStorage struct {
@@ -32,6 +35,43 @@ func (fs *FilesystemStorage) getKeyPath(bucket string, key string) string {
 	return filepath.Join(fs.root, bucket, filepath.Clean(key))
 }
 
+func calculateMd5Sum(file *os.File) (*string, error) {
+	hash := md5.New()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	_, err = hash.Write(data)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
+func calculateETag(file *os.File) (*string, error) {
+	md5Sum, err := calculateMd5Sum(file)
+	if err != nil {
+		return nil, err
+	}
+	etag := "\"" + *md5Sum + "\""
+	return &etag, nil
+}
+
+func calculateETagFromPath(path string) (*string, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	etag, err := calculateETag(f)
+	if err != nil {
+		return nil, err
+	}
+	return etag, nil
+}
+
 func isDirEmpty(name string) (bool, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -48,12 +88,20 @@ func isDirEmpty(name string) (bool, error) {
 
 func (fs *FilesystemStorage) CreateBucket(bucket string) error {
 	bucketFolder := fs.getBucketPath(bucket)
-	err := os.Mkdir(bucketFolder, os.ModePerm)
+	fileInfo, err := os.Stat(bucketFolder)
+	if err == nil && fileInfo.IsDir() {
+		return ErrBucketAlreadyExists
+	}
+	err = os.Mkdir(bucketFolder, os.ModePerm)
 	return err
 }
 
 func (fs *FilesystemStorage) DeleteBucket(bucket string) error {
 	bucketFolder := fs.getBucketPath(bucket)
+	fileInfo, err := os.Stat(bucketFolder)
+	if err != nil || !fileInfo.IsDir() {
+		return ErrBucketNotFound
+	}
 	isEmpty, err := isDirEmpty(bucketFolder)
 	if err != nil {
 		return err
@@ -86,22 +134,17 @@ func (fs *FilesystemStorage) ListBuckets() ([]Bucket, error) {
 
 func (fs *FilesystemStorage) ExistBucket(bucket string) (*Bucket, error) {
 	bucketFolder := fs.getBucketPath(bucket)
-	f, err := os.Open(bucketFolder)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	fileInfo, err := f.Stat()
-	if err != nil {
-		return nil, err
+	fileInfo, err := os.Stat(bucketFolder)
+	if err == nil || !fileInfo.IsDir() {
+		return nil, ErrBucketNotFound
 	}
 	return &Bucket{
-		Name:         f.Name(),
+		Name:         bucket,
 		CreationDate: fileInfo.ModTime(),
 	}, nil
 }
 
-func (fs *FilesystemStorage) ListObjects(bucket string) ([]Object, error) {
+func (fs *FilesystemStorage) listAllObjects(bucket string) ([]Object, []string, error) {
 	bucketPath := fs.getBucketPath(bucket)
 	objects := []Object{}
 	err := filepath.WalkDir(bucketPath, func(path string, d os.DirEntry, err error) error {
@@ -112,10 +155,14 @@ func (fs *FilesystemStorage) ListObjects(bucket string) ([]Object, error) {
 				if err != nil {
 					return err
 				}
+				etag, err := calculateETagFromPath(path)
+				if err != nil {
+					return err
+				}
 				objects = append(objects, Object{
 					Key:          relPath,
 					LastModified: fileInfo.ModTime(),
-					ETag:         "",
+					ETag:         *etag,
 					Size:         fileInfo.Size(),
 				})
 			}
@@ -123,9 +170,62 @@ func (fs *FilesystemStorage) ListObjects(bucket string) ([]Object, error) {
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return objects, nil
+	return objects, nil, nil
+}
+
+func (fs *FilesystemStorage) listObjects(bucket string, prefix string, delimiter string) ([]Object, []string, error) {
+	bucketPath := fs.getBucketPath(bucket)
+	prefixPath := filepath.Join(bucketPath, filepath.Dir(prefix))
+	relPath, err := filepath.Rel(bucketPath, prefixPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if relPath == "." {
+		relPath = ""
+	}
+	objects := []Object{}
+	commonPrefixes := []string{}
+	dirEntries, err := os.ReadDir(prefixPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, dirEntry := range dirEntries {
+		relPathToEntry := filepath.Join(relPath, dirEntry.Name())
+		if !strings.HasPrefix(relPathToEntry, prefix) {
+			continue
+		}
+		fileInfo, err := dirEntry.Info()
+		if err != nil {
+			return nil, nil, err
+		}
+		if !dirEntry.IsDir() {
+			etag, err := calculateETagFromPath(filepath.Join(prefixPath, dirEntry.Name()))
+			if err != nil {
+				return nil, nil, err
+			}
+			objects = append(objects, Object{
+				Key:          relPathToEntry,
+				LastModified: fileInfo.ModTime(),
+				ETag:         *etag,
+				Size:         fileInfo.Size(),
+			})
+		} else {
+			commonPrefixes = append(commonPrefixes, relPathToEntry+"/")
+		}
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return objects, commonPrefixes, nil
+}
+
+func (fs *FilesystemStorage) ListObjects(bucket string, prefix string, delimiter string) ([]Object, []string, error) {
+	if delimiter != "" {
+		return fs.listObjects(bucket, prefix, delimiter)
+	}
+	return fs.listAllObjects(bucket)
 }
 
 func (fs *FilesystemStorage) ExistObject(bucket string, key string) (*Object, error) {
@@ -139,10 +239,14 @@ func (fs *FilesystemStorage) ExistObject(bucket string, key string) (*Object, er
 	if err != nil {
 		return nil, err
 	}
+	etag, err := calculateETag(f)
+	if err != nil {
+		return nil, err
+	}
 	return &Object{
 		Key:          key,
 		LastModified: fileInfo.ModTime(),
-		ETag:         "",
+		ETag:         *etag,
 		Size:         fileInfo.Size(),
 	}, nil
 }

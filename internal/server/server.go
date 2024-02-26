@@ -56,6 +56,10 @@ type ListAllMyBucketsResult struct {
 	Owner   *Owner    `xml:"Owner"`
 }
 
+type Prefix struct {
+	XMLName xml.Name `xml:"Prefix"`
+}
+
 type Content struct {
 	Key          string `xml:"Key"`
 	LastModified string `xml:"LastModified"`
@@ -64,15 +68,21 @@ type Content struct {
 	StorageClass string `xml:"StorageClass"`
 }
 
+type CommonPrefixes struct {
+	Prefix string `xml:"Prefix"`
+}
+
 type ListBucketResult struct {
-	XMLName     xml.Name   `xml:"ListBucketResult"`
-	Name        string     `xml:"Name"`
-	Prefix      string     `xml:"Prefix"`
-	StartAfter  string     `xml:"StartAfter"`
-	KeyCount    int        `xml:"KeyCount"`
-	MaxKeys     int        `xml:"MaxKeys"`
-	IsTruncated bool       `xml:"IsTruncated"`
-	Contents    []*Content `xml:"Contents"`
+	XMLName        xml.Name          `xml:"ListBucketResult"`
+	IsTruncated    bool              `xml:"IsTruncated"`
+	Contents       []*Content        `xml:"Contents"`
+	Name           string            `xml:"Name"`
+	Prefix         string            `xml:"Prefix"`
+	Delimiter      string            `xml:"Delimiter"`
+	MaxKeys        int               `xml:"MaxKeys"`
+	CommonPrefixes []*CommonPrefixes `xml:"CommonPrefixes"`
+	KeyCount       int               `xml:"KeyCount"`
+	StartAfter     string            `xml:"StartAfter"`
 }
 
 func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
@@ -98,12 +108,12 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	out, _ := xml.MarshalIndent(listAllMyBucketsResult, " ", "  ")
-	fmt.Fprint(w, string(out))
+	w.Write(out)
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	bucketName := r.PathValue("bucket")
-	log.Printf("Head bucket %v\n", bucketName)
+	log.Printf("Head bucket %s\n", bucketName)
 	_, err := s.storage.ExistBucket(bucketName)
 	if err == storage.ErrBucketNotFound {
 		w.WriteHeader(404)
@@ -118,21 +128,27 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
-	log.Printf("Listing objects in bucket %v\n", bucket)
-	objects, err := s.storage.ListObjects(bucket)
+	query := r.URL.Query()
+	prefix := query.Get("prefix")
+	delimiter := query.Get("delimiter")
+	log.Printf("Listing objects in bucket %s\n", bucket)
+	objects, commonPrefixes, err := s.storage.ListObjects(bucket, prefix, delimiter)
 	if err != nil {
 		w.WriteHeader(500)
 		return
 	}
 	listBucketResult := ListBucketResult{
-		Name:        bucket,
-		Prefix:      "",
-		StartAfter:  "",
-		KeyCount:    len(objects),
-		MaxKeys:     len(objects),
-		IsTruncated: false,
-		Contents:    []*Content{},
+		Name:           bucket,
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		StartAfter:     "",
+		KeyCount:       len(objects),
+		MaxKeys:        1000,
+		CommonPrefixes: []*CommonPrefixes{},
+		IsTruncated:    false,
+		Contents:       []*Content{},
 	}
+
 	w.Header().Add("Content-Type", "application/xml")
 	w.WriteHeader(200)
 	for _, object := range objects {
@@ -144,13 +160,16 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			StorageClass: "STANDARD",
 		})
 	}
+	for _, commonPrefix := range commonPrefixes {
+		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
+	}
 	out, _ := xml.MarshalIndent(listBucketResult, " ", "  ")
-	fmt.Fprint(w, string(out))
+	w.Write(out)
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
-	log.Printf("Creating bucket %v\n", bucket)
+	log.Printf("Creating bucket %s\n", bucket)
 	err := s.storage.CreateBucket(bucket)
 	if err != nil {
 		w.WriteHeader(500)
@@ -162,7 +181,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
-	log.Printf("Deleting bucket %v\n", bucket)
+	log.Printf("Deleting bucket %s\n", bucket)
 	err := s.storage.DeleteBucket(bucket)
 	if err != nil {
 		w.WriteHeader(500)
@@ -174,7 +193,7 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
-	log.Printf("Head object with key %v in bucket %v\n", key, bucket)
+	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
 	object, err := s.storage.ExistObject(bucket, key)
 	if err != nil {
 		w.WriteHeader(500)
@@ -188,7 +207,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
-	log.Printf("Getting object with key %v from bucket %v\n", key, bucket)
+	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
 	object, err := s.storage.ExistObject(bucket, key)
 	if err != nil {
 		w.WriteHeader(500)
@@ -209,7 +228,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
-	log.Printf("Putting object with key %v to bucket %v\n", key, bucket)
+	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get("Expect") == "100-continue" {
 		w.WriteHeader(100)
 	}
@@ -224,7 +243,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
-	log.Printf("Deleting object with key %v from bucket %v\n", key, bucket)
+	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
 	err := s.storage.DeleteObject(bucket, key)
 	if err != nil {
 		w.WriteHeader(500)
