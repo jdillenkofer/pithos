@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	server "github.com/jdillenkofer/pithos/internal/server"
@@ -29,7 +30,7 @@ func runTestServer() *httptest.Server {
 }
 
 func createS3Client(ts *httptest.Server) *s3.S3 {
-	config := aws.NewConfig().WithS3ForcePathStyle(true).WithRegion("eu-central-1").WithEndpoint(ts.URL)
+	config := aws.NewConfig().WithS3ForcePathStyle(true).WithRegion("eu-central-1").WithEndpoint(ts.URL).WithCredentials(credentials.AnonymousCredentials)
 	session := session.Must(session.NewSession(config))
 	s3Client := s3.New(session)
 	return s3Client
