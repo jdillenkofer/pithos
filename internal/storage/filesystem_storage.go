@@ -135,7 +135,7 @@ func (fs *FilesystemStorage) ListBuckets() ([]Bucket, error) {
 func (fs *FilesystemStorage) ExistBucket(bucket string) (*Bucket, error) {
 	bucketFolder := fs.getBucketPath(bucket)
 	fileInfo, err := os.Stat(bucketFolder)
-	if err == nil || !fileInfo.IsDir() {
+	if err != nil || !fileInfo.IsDir() {
 		return nil, ErrNoSuchBucket
 	}
 	return &Bucket{

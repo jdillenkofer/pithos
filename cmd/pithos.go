@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 
 	server "github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -14,7 +15,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := server.New(addr, storage)
+	server := server.SetupServer(storage)
+	httpServer := &http.Server{Addr: addr, Handler: server}
+
 	log.Printf("Listening with s3 api on %v://%v\n", protocol, addr)
-	log.Fatal(server.ListenAndServe())
+	log.Fatal(httpServer.ListenAndServe())
 }
