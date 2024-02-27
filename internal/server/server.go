@@ -12,11 +12,10 @@ import (
 )
 
 type Server struct {
-	httpServer *http.Server
-	storage    storage.Storage
+	storage storage.Storage
 }
 
-func New(addr string, storage storage.Storage) *Server {
+func SetupServer(storage storage.Storage) http.Handler {
 	server := &Server{
 		storage: storage,
 	}
@@ -30,12 +29,7 @@ func New(addr string, storage storage.Storage) *Server {
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
-	server.httpServer = &http.Server{Addr: addr, Handler: mux}
-	return server
-}
-
-func (s *Server) ListenAndServe() error {
-	return s.httpServer.ListenAndServe()
+	return mux
 }
 
 type Bucket struct {
@@ -262,7 +256,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer reader.Close()
-	w.Header().Add("Last-Modified", object.LastModified.Format(time.RFC3339))
+	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
 	w.Header().Add("Content-Length", fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 	io.Copy(w, reader)
