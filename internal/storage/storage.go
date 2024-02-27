@@ -18,9 +18,10 @@ type Object struct {
 	Size         int64
 }
 
-var ErrBucketNotFound error = errors.New("Bucket not found")
-var ErrBucketAlreadyExists error = errors.New("Bucket already exists")
-var ErrBucketNotEmpty error = errors.New("Bucket not empty")
+var ErrNoSuchBucket error = errors.New("NoSuchBucket")
+var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")
+var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
+var ErrNoSuchKey error = errors.New("NoSuchKey")
 
 type Storage interface {
 	CreateBucket(bucket string) error
