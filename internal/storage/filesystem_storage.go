@@ -100,7 +100,7 @@ func (fs *FilesystemStorage) DeleteBucket(bucket string) error {
 	bucketFolder := fs.getBucketPath(bucket)
 	fileInfo, err := os.Stat(bucketFolder)
 	if err != nil || !fileInfo.IsDir() {
-		return ErrBucketNotFound
+		return ErrNoSuchBucket
 	}
 	isEmpty, err := isDirEmpty(bucketFolder)
 	if err != nil {
@@ -136,7 +136,7 @@ func (fs *FilesystemStorage) ExistBucket(bucket string) (*Bucket, error) {
 	bucketFolder := fs.getBucketPath(bucket)
 	fileInfo, err := os.Stat(bucketFolder)
 	if err == nil || !fileInfo.IsDir() {
-		return nil, ErrBucketNotFound
+		return nil, ErrNoSuchBucket
 	}
 	return &Bucket{
 		Name:         bucket,
@@ -222,6 +222,11 @@ func (fs *FilesystemStorage) listObjects(bucket string, prefix string, delimiter
 }
 
 func (fs *FilesystemStorage) ListObjects(bucket string, prefix string, delimiter string) ([]Object, []string, error) {
+	bucketFolder := fs.getBucketPath(bucket)
+	fileInfo, err := os.Stat(bucketFolder)
+	if err != nil || !fileInfo.IsDir() {
+		return nil, nil, ErrNoSuchBucket
+	}
 	if delimiter != "" {
 		return fs.listObjects(bucket, prefix, delimiter)
 	}

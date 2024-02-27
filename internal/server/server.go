@@ -85,11 +85,58 @@ type ListBucketResult struct {
 	StartAfter     string            `xml:"StartAfter"`
 }
 
+type ErrorResponse struct {
+	XMLName   xml.Name `xml:"Error"`
+	Code      string   `xml:"Code"`
+	Message   string   `xml:"Message"`
+	Resource  string   `xml:"Resource"`
+	RequestId string   `xml:"RequestId"`
+}
+
+func xmlMarshalWithDocType(v any) ([]byte, error) {
+	xmlResponse, err := xml.MarshalIndent(v, "", "  ")
+	if err != nil {
+		log.Printf("Error during handleError: %v", err)
+		return nil, err
+	}
+	xmlResponse = []byte(xml.Header + string(xmlResponse))
+	return xmlResponse, nil
+}
+
+func handleError(err error, w http.ResponseWriter, r *http.Request) {
+	statusCode := 500
+	errResponse := ErrorResponse{}
+	errResponse.Code = err.Error()
+	errResponse.Message = err.Error()
+	errResponse.Resource = r.URL.Path
+	switch err {
+	case storage.ErrNoSuchBucket:
+		statusCode = 404
+	case storage.ErrBucketAlreadyExists:
+		statusCode = 409
+	case storage.ErrBucketNotEmpty:
+		statusCode = 409
+	case storage.ErrNoSuchKey:
+		statusCode = 404
+	default:
+		statusCode = 500
+		errResponse.Code = "InternalError"
+		errResponse.Message = "InternalError"
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		log.Printf("Error during handleError: %v", err)
+		return
+	}
+	w.WriteHeader(statusCode)
+	w.Write(xmlErrorResponse)
+}
+
 func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Listing Buckets")
 	buckets, err := s.storage.ListBuckets()
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.Header().Add("Content-Type", "application/xml")
@@ -107,7 +154,7 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 			CreationDate: bucket.CreationDate.UTC().Format(time.RFC3339),
 		})
 	}
-	out, _ := xml.MarshalIndent(listAllMyBucketsResult, " ", "  ")
+	out, _ := xmlMarshalWithDocType(listAllMyBucketsResult)
 	w.Write(out)
 }
 
@@ -115,12 +162,8 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	bucketName := r.PathValue("bucket")
 	log.Printf("Head bucket %s\n", bucketName)
 	_, err := s.storage.ExistBucket(bucketName)
-	if err == storage.ErrBucketNotFound {
-		w.WriteHeader(404)
-		return
-	}
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.WriteHeader(200)
@@ -134,7 +177,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Listing objects in bucket %s\n", bucket)
 	objects, commonPrefixes, err := s.storage.ListObjects(bucket, prefix, delimiter)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	listBucketResult := ListBucketResult{
@@ -163,7 +206,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	for _, commonPrefix := range commonPrefixes {
 		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
 	}
-	out, _ := xml.MarshalIndent(listBucketResult, " ", "  ")
+	out, _ := xmlMarshalWithDocType(listBucketResult)
 	w.Write(out)
 }
 
@@ -172,7 +215,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Creating bucket %s\n", bucket)
 	err := s.storage.CreateBucket(bucket)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.Header().Add("Location", bucket)
@@ -184,7 +227,7 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Deleting bucket %s\n", bucket)
 	err := s.storage.DeleteBucket(bucket)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.WriteHeader(204)
@@ -196,7 +239,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
 	object, err := s.storage.ExistObject(bucket, key)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.Header().Add("Last-Modified", object.LastModified.Format(time.RFC3339))
@@ -210,12 +253,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
 	object, err := s.storage.ExistObject(bucket, key)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	reader, err := s.storage.GetObject(bucket, key)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	defer reader.Close()
@@ -234,7 +277,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.storage.PutObject(bucket, key, r.Body)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.WriteHeader(200)
@@ -246,7 +289,7 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
 	err := s.storage.DeleteObject(bucket, key)
 	if err != nil {
-		w.WriteHeader(500)
+		handleError(err, w, r)
 		return
 	}
 	w.WriteHeader(204)
