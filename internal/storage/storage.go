@@ -33,4 +33,5 @@ type Storage interface {
 	GetObject(bucket string, key string) (io.ReadCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
+	Clear() error
 }

@@ -293,3 +293,12 @@ func (fs *FilesystemStorage) DeleteObject(bucket string, key string) error {
 	err := os.Remove(keyFolder)
 	return err
 }
+
+func (fs *FilesystemStorage) Clear() error {
+	err := os.RemoveAll(fs.root)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(fs.root, os.ModePerm)
+	return err
+}
