@@ -155,7 +155,7 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	bucketName := r.PathValue("bucket")
 	log.Printf("Head bucket %s\n", bucketName)
-	_, err := s.storage.ExistBucket(bucketName)
+	_, err := s.storage.HeadBucket(bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -231,7 +231,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
-	object, err := s.storage.ExistObject(bucket, key)
+	object, err := s.storage.HeadObject(bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -245,7 +245,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
-	object, err := s.storage.ExistObject(bucket, key)
+	object, err := s.storage.HeadObject(bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return

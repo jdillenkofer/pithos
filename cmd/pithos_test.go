@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	server "github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,7 +34,18 @@ func createS3Client(ts *httptest.Server) *s3.S3 {
 
 func Test_BasicBucketOperations(t *testing.T) {
 	storagePath := "../data"
-	storage, err := storage.NewFilesystemStorage(storagePath)
+	metadataStore, err := metadata.NewJsonMetadataStore(filepath.Join(storagePath, "metadata"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	blobStore, err := blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	storage, err := storage.NewMetadataBlobStorage(metadataStore, blobStore)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
