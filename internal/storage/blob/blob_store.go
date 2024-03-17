@@ -1,8 +1,12 @@
 package blob
 
-import "io"
+import (
+	"io"
 
-type BlobId = uint64
+	"github.com/oklog/ulid/v2"
+)
+
+type BlobId = ulid.ULID
 
 type PutBlobResult struct {
 	BlobId BlobId

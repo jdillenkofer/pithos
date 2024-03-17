@@ -3,11 +3,12 @@ package blob
 import (
 	"crypto/md5"
 	"crypto/rand"
-	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type FilesystemBlobStore struct {
@@ -20,9 +21,7 @@ func (bs *FilesystemBlobStore) ensureRootDir() error {
 }
 
 func (bs *FilesystemBlobStore) getFilename(blobId BlobId) string {
-	blobIdBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(blobIdBytes, uint64(blobId))
-	blobFilename := hex.EncodeToString(blobIdBytes)
+	blobFilename := hex.EncodeToString(blobId[:])
 	return filepath.Join(bs.root, blobFilename)
 }
 
@@ -84,7 +83,7 @@ func (bs *FilesystemBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	blobId := BlobId(binary.LittleEndian.Uint64(blobIdBytes))
+	blobId := BlobId(ulid.Make())
 	filename := bs.getFilename(blobId)
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
