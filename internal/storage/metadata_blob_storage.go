@@ -64,8 +64,8 @@ func convertObject(mObject metadata.Object) Object {
 	}
 }
 
-func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimiter string) ([]Object, []string, error) {
-	mObjects, commonPrefixes, err := mbs.metadataStore.ListObjects(bucket, prefix, delimiter)
+func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error) {
+	mObjects, commonPrefixes, err := mbs.metadataStore.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -111,7 +111,7 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 			putBlobResult.BlobId,
 		},
 	}
-	return mbs.metadataStore.PutObject(bucket, key, &object)
+	return mbs.metadataStore.PutObject(bucket, &object)
 }
 
 func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {

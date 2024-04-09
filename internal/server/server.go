@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
@@ -168,8 +169,15 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	prefix := query.Get("prefix")
 	delimiter := query.Get("delimiter")
+	startAfter := query.Get("startAfter")
+	maxKeysI64, err := strconv.ParseInt(query.Get("maxKeys"), 10, 32)
+	if err != nil || maxKeysI64 < 0 {
+		maxKeysI64 = 1000
+	}
+	maxKeys := int(maxKeysI64)
+
 	log.Printf("Listing objects in bucket %s\n", bucket)
-	objects, commonPrefixes, err := s.storage.ListObjects(bucket, prefix, delimiter)
+	objects, commonPrefixes, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -178,11 +186,11 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Name:           bucket,
 		Prefix:         prefix,
 		Delimiter:      delimiter,
-		StartAfter:     "",
+		StartAfter:     startAfter,
 		KeyCount:       len(objects),
-		MaxKeys:        1000,
+		MaxKeys:        maxKeys,
 		CommonPrefixes: []*CommonPrefixes{},
-		IsTruncated:    false,
+		IsTruncated:    len(objects) == maxKeys,
 		Contents:       []*Content{},
 	}
 
