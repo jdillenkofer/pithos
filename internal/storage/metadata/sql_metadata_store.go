@@ -6,6 +6,10 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/oklog/ulid/v2"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/sqlite3"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
 type SqlMetadataStore struct {
@@ -20,49 +24,19 @@ func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	createBucketTableStmt := `
-	CREATE TABLE IF NOT EXISTS buckets 
-	(
-		id TEXT NOT NULL PRIMARY KEY, 
-		name TEXT NOT NULL UNIQUE, 
-		creation_date DATETIME NOT NULL
-	);
-	`
-	_, err = db.Exec(createBucketTableStmt)
+
+	driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
 	if err != nil {
 		return nil, err
 	}
-	createObjectTableStmt := `
-	CREATE TABLE IF NOT EXISTS objects 
-	(
-		id TEXT NOT NULL primary key, 
-		bucket_name TEXT NOT NULL, 
-		key TEXT NOT NULL, 
-		etag TEXT NOT NULL, 
-		size INTEGER NOT NULL, 
-		last_modified_date DATETIME NOT NULL, 
-		FOREIGN KEY(bucket_name) REFERENCES buckets(name),
-		UNIQUE(bucket_name, key)
-	);
-	`
-	_, err = db.Exec(createObjectTableStmt)
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://migrations",
+		"postgres", driver)
 	if err != nil {
 		return nil, err
 	}
-	createBlobTableStmt := `
-	CREATE TABLE IF NOT EXISTS blobs 
-	(
-		id TEXT NOT NULL primary key, 
-		object_id TEXT NOT NULL, 
-		sequence_number INTEGER NOT NULL, 
-		FOREIGN KEY(object_id) REFERENCES objects(id), 
-		UNIQUE(object_id, sequence_number)
-	);
-	`
-	_, err = db.Exec(createBlobTableStmt)
-	if err != nil {
-		return nil, err
-	}
+	m.Up()
+
 	return &SqlMetadataStore{
 		db: db,
 	}, nil
@@ -83,7 +57,7 @@ func (sms *SqlMetadataStore) CreateBucket(bucketName string) error {
 		tx.Rollback()
 		return ErrBucketAlreadyExists
 	}
-	_, err = tx.Exec("INSERT INTO buckets (id, name, creation_date) VALUES(?, ?, datetime('now'))", ulid.Make(), bucketName)
+	_, err = tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, datetime('now'), datetime('now'))", ulid.Make(), bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -127,7 +101,7 @@ func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
 }
 
 func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
-	rows, err := sms.db.Query("SELECT name, creation_date FROM buckets")
+	rows, err := sms.db.Query("SELECT name, created_at FROM buckets")
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +123,7 @@ func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
 }
 
 func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
-	rows, err := sms.db.Query("SELECT creation_date FROM buckets WHERE name = ?", bucketName)
+	rows, err := sms.db.Query("SELECT created_at FROM buckets WHERE name = ?", bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +144,7 @@ func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
 }
 
 func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int, tx *sql.Tx) ([]Object, []string, error) {
-	rows, err := tx.Query("SELECT id, key, last_modified_date, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
+	rows, err := tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
 		return nil, nil, err
@@ -253,7 +227,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		tx.Rollback()
 		return nil, ErrNoSuchBucket
 	}
-	rows, err = tx.Query("SELECT id, key, last_modified_date, etag, size FROM objects WHERE bucket_name = ? AND key = ?", bucketName, key)
+	rows, err = tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key = ?", bucketName, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -343,14 +317,14 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 		}
 	}
 	objectId := ulid.Make()
-	_, err = tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, last_modified_date) VALUES(?, ?, ?, ?, ?, datetime('now'))", objectId.String(), bucketName, object.Key, object.ETag, object.Size)
+	_, err = tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, created_at, updated_at) VALUES(?, ?, ?, ?, ?, datetime('now'), datetime('now'))", objectId.String(), bucketName, object.Key, object.ETag, object.Size)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	sequenceNumber := 0
 	for _, blobId := range object.BlobIds {
-		_, err = tx.Exec("INSERT INTO blobs (id, object_id, sequence_number) VALUES(?, ?, ?)", blobId.String(), objectId.String(), sequenceNumber)
+		_, err = tx.Exec("INSERT INTO blobs (id, object_id, sequence_number, created_at, updated_at) VALUES(?, ?, ?, datetime('now'), datetime('now'))", blobId.String(), objectId.String(), sequenceNumber)
 		if err != nil {
 			tx.Rollback()
 			return err
