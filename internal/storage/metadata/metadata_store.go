@@ -30,9 +30,9 @@ type MetadataStore interface {
 	DeleteBucket(bucketName string) error
 	ListBuckets() ([]Bucket, error)
 	HeadBucket(bucketName string) (*Bucket, error)
-	ListObjects(bucketName string, prefix string, delimiter string) ([]Object, []string, error)
+	ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error)
 	HeadObject(bucketName string, key string) (*Object, error)
-	PutObject(bucketName string, key string, object *Object) error
+	PutObject(bucketName string, object *Object) error
 	DeleteObject(bucketName string, key string) error
 	Clear() error
 }

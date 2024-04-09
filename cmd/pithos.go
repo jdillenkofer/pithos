@@ -1,19 +1,27 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
+	"path/filepath"
 
 	server "github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
 	protocol := "http"
 	addr := "localhost:9000"
-	metadataStore, err := metadata.NewJsonMetadataStore("./data/metadata")
+	db, err := sql.Open("sqlite3", filepath.Join("./data", "metadata.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatal(err)
 	}

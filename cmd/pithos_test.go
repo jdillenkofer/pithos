@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,7 +36,12 @@ func createS3Client(ts *httptest.Server) *s3.S3 {
 
 func Test_BasicBucketOperations(t *testing.T) {
 	storagePath := "../data"
-	metadataStore, err := metadata.NewJsonMetadataStore(filepath.Join(storagePath, "metadata"))
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -59,7 +66,9 @@ func Test_BasicBucketOperations(t *testing.T) {
 	defer ts.Close()
 
 	bucketName := aws.String("test")
-	key := aws.String("hello_world.txt")
+	bucketName2 := aws.String("test2")
+	keyPrefix := aws.String("my/test/key")
+	key := aws.String(*keyPrefix + "/hello_world.txt")
 	body := []byte("Hello, world!")
 	s3Client := createS3Client(ts)
 
@@ -346,5 +355,119 @@ func Test_BasicBucketOperations(t *testing.T) {
 		if aerr, ok := err.(awserr.Error); ok && aerr.Code() != "NotFound" {
 			assert.Fail(t, "Expected aws error NotFound", "err %v", err)
 		}
+	})
+
+	t.Run("it should list all buckets", func(t *testing.T) {
+		t.Cleanup(clearStorage)
+		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult)
+
+		createBucketResult2, err := s3Client.CreateBucket(&s3.CreateBucketInput{
+			Bucket: bucketName2,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult2)
+
+		listBucketResult, err := s3Client.ListBuckets(&s3.ListBucketsInput{})
+		if err != nil {
+			assert.Fail(t, "ListBuckets failed", "err %v", err)
+		}
+		assert.Len(t, listBucketResult.Buckets, 2)
+	})
+
+	t.Run("it should list all objects", func(t *testing.T) {
+		t.Cleanup(clearStorage)
+		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult)
+
+		putObjectResult, err := s3Client.PutObject(&s3.PutObjectInput{
+			Bucket: bucketName,
+			Body:   bytes.NewReader([]byte("Hello, first object!")),
+			Key:    key,
+		})
+		if err != nil {
+			assert.Fail(t, "PutObject failed", "err %v", err)
+		}
+		assert.NotNil(t, putObjectResult)
+
+		listObjectResult, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Len(t, listObjectResult.Contents, 1)
+	})
+
+	t.Run("it should list objects starting with prefix \"my/test/key\"", func(t *testing.T) {
+		t.Cleanup(clearStorage)
+		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult)
+
+		putObjectResult, err := s3Client.PutObject(&s3.PutObjectInput{
+			Bucket: bucketName,
+			Body:   bytes.NewReader([]byte("Hello, first object!")),
+			Key:    key,
+		})
+		if err != nil {
+			assert.Fail(t, "PutObject failed", "err %v", err)
+		}
+		assert.NotNil(t, putObjectResult)
+
+		listObjectResult, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket: bucketName,
+			Prefix: keyPrefix,
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Len(t, listObjectResult.Contents, 1)
+	})
+
+	t.Run("it should list no objects when searching for prefix \"key\"", func(t *testing.T) {
+		t.Cleanup(clearStorage)
+		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult)
+
+		putObjectResult, err := s3Client.PutObject(&s3.PutObjectInput{
+			Bucket: bucketName,
+			Body:   bytes.NewReader([]byte("Hello, first object!")),
+			Key:    key,
+		})
+		if err != nil {
+			assert.Fail(t, "PutObject failed", "err %v", err)
+		}
+		assert.NotNil(t, putObjectResult)
+
+		listObjectResult, err := s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket: bucketName,
+			Prefix: aws.String("key"),
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Len(t, listObjectResult.Contents, 0)
 	})
 }

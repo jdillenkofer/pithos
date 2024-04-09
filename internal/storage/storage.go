@@ -29,7 +29,7 @@ type Storage interface {
 	DeleteBucket(bucket string) error
 	ListBuckets() ([]Bucket, error)
 	HeadBucket(bucket string) (*Bucket, error)
-	ListObjects(bucket string, prefix string, delimiter string) ([]Object, []string, error)
+	ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error)
 	HeadObject(bucket string, key string) (*Object, error)
 	GetObject(bucket string, key string) (io.ReadCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
