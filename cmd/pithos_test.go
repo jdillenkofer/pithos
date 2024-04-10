@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,6 +37,10 @@ func createS3Client(ts *httptest.Server) *s3.S3 {
 
 func Test_BasicBucketOperations(t *testing.T) {
 	storagePath := "../data"
+	err := os.MkdirAll(storagePath, os.ModePerm)
+	if err != nil {
+		log.Fatal(err)
+	}
 	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
 	if err != nil {
 		log.Fatal(err)
