@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"database/sql"
+	"embed"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
@@ -10,7 +11,11 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
+
+//go:embed migrations/*.sql
+var migrationsFilesystem embed.FS
 
 type SqlMetadataStore struct {
 	db *sql.DB
@@ -25,13 +30,16 @@ func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
 		return nil, err
 	}
 
-	driver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
+	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
 	if err != nil {
 		return nil, err
 	}
-	m, err := migrate.NewWithDatabaseInstance(
-		"file://migrations",
-		"postgres", driver)
+
+	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
+	if err != nil {
+		return nil, err
+	}
+	m, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite3", databaseDriver)
 	if err != nil {
 		return nil, err
 	}

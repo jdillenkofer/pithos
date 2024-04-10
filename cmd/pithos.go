@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	server "github.com/jdillenkofer/pithos/internal/server"
@@ -16,7 +17,12 @@ import (
 func main() {
 	protocol := "http"
 	addr := "localhost:9000"
-	db, err := sql.Open("sqlite3", filepath.Join("./data", "metadata.db"))
+	storagePath := "./data"
+	err := os.MkdirAll(storagePath, os.ModePerm)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -25,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	blobStore, err := blob.NewFilesystemBlobStore("./data/blobs")
+	blobStore, err := blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
 	if err != nil {
 		log.Fatal(err)
 	}
