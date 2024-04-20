@@ -24,61 +24,59 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func runTestServer(storage storage.Storage) *httptest.Server {
-	return httptest.NewServer(server.SetupServer(storage))
-}
-
-func createS3Client(ts *httptest.Server) *s3.S3 {
-	config := aws.NewConfig().WithS3ForcePathStyle(true).WithRegion("eu-central-1").WithEndpoint(ts.URL).WithCredentials(credentials.AnonymousCredentials)
-	session := session.Must(session.NewSession(config))
-	s3Client := s3.New(session)
-	return s3Client
-}
-
-func Test_BasicBucketOperations(t *testing.T) {
-	storagePath := "../data"
-	err := os.MkdirAll(storagePath, os.ModePerm)
+func setupTestServer() (s3Client *s3.S3, cleanup func()) {
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not create temp directory: %s", err)
 	}
 	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not open sqlite3 database: %s", err)
 	}
-	defer db.Close()
 	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not create metadataStore: %s", err)
 	}
 	blobStore, err := blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not create filesystemBlobStore: %s", err)
 	}
 	storage, err := storage.NewMetadataBlobStorage(metadataStore, blobStore)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Could not create metadataBlobStorage: %s", err)
 	}
-	if err != nil {
-		log.Fatal(err)
-	}
-	clearStorage := func() {
-		err := storage.Clear()
+	ts := httptest.NewServer(server.SetupServer(storage))
+
+	config := aws.NewConfig().WithS3ForcePathStyle(true).WithRegion("eu-central-1").WithEndpoint(ts.URL).WithCredentials(credentials.AnonymousCredentials)
+	session := session.Must(session.NewSession(config))
+	s3Client = s3.New(session)
+
+	cleanup = func() {
+		ts.Close()
+		err := db.Close()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("Could not close db: %s", err)
+		}
+		err = os.RemoveAll(storagePath)
+		if err != nil {
+			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}
-	ts := runTestServer(storage)
-	defer ts.Close()
+	return
+}
 
+func Test_BasicBucketOperations(t *testing.T) {
 	bucketName := aws.String("test")
 	bucketName2 := aws.String("test2")
 	keyPrefix := aws.String("my/test/key")
 	key := aws.String(*keyPrefix + "/hello_world.txt")
 	body := []byte("Hello, world!")
-	s3Client := createS3Client(ts)
+
+	t.Parallel()
 
 	t.Run("it should create a bucket", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -91,7 +89,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should not be able to create the same bucket twice", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -114,7 +113,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should be able to see an existing bucket", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -134,7 +134,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should be able to list all buckets", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -156,7 +157,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should allow uploading an object", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -177,7 +179,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should not allow deleting a bucket with objects in it", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -209,7 +212,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should allow uploading an object a second time", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -240,7 +244,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should allow downloading the object again", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -274,7 +279,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should allow deleting an object", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -304,7 +310,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should delete an existing bucket", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -323,6 +330,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should fail when deleting non existing bucket", func(t *testing.T) {
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		_, err := s3Client.DeleteBucket(&s3.DeleteBucketInput{
 			Bucket: aws.String("test2"),
 		})
@@ -337,7 +346,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should not see the bucket after deletion anymore", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -363,7 +373,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should list all buckets", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -388,7 +399,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should list all objects", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -417,7 +429,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should list objects starting with prefix \"my/test/key\"", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
@@ -447,7 +460,8 @@ func Test_BasicBucketOperations(t *testing.T) {
 	})
 
 	t.Run("it should list no objects when searching for prefix \"key\"", func(t *testing.T) {
-		t.Cleanup(clearStorage)
+		s3Client, cleanup := setupTestServer()
+		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(&s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
