@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
@@ -16,7 +17,21 @@ type Server struct {
 	storage storage.Storage
 }
 
-func SetupServer(storage storage.Storage) http.Handler {
+func virtualHostBucketAddressingMiddleware(baseEndpoint string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hostname := r.Host
+		if hostname != baseEndpoint {
+			endpointSplit := strings.SplitN(hostname, ".", 2)
+			if len(endpointSplit) == 2 {
+				bucket := endpointSplit[0]
+				r.URL.Path = strings.TrimSuffix("/"+bucket+r.URL.Path, "/")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func SetupServer(baseEndpoint string, storage storage.Storage) http.Handler {
 	server := &Server{
 		storage: storage,
 	}
@@ -30,7 +45,7 @@ func SetupServer(storage storage.Storage) http.Handler {
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
-	return mux
+	return virtualHostBucketAddressingMiddleware(baseEndpoint, mux)
 }
 
 type Bucket struct {

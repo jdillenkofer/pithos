@@ -5,13 +5,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -47,15 +53,28 @@ func setupTestServer() (s3Client *s3.Client, cleanup func()) {
 	if err != nil {
 		log.Fatalf("Could not create metadataBlobStorage: %s", err)
 	}
-	ts := httptest.NewServer(server.SetupServer(storage))
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"))
+	baseEndpoint := "localhost"
+	ts := httptest.NewServer(server.SetupServer(baseEndpoint, storage))
+
+	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			endpointSplit := strings.SplitN(addr, ".", 2)
+			if len(endpointSplit) == 2 {
+				addr = endpointSplit[1]
+			}
+			return net.Dial(network, addr)
+		}
+	})
+
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"), config.WithHTTPClient(httpClient))
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
+	addr, err := net.ResolveTCPAddr("tcp", ts.Listener.Addr().String())
 	s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = true
-		o.BaseEndpoint = aws.String(ts.URL)
+		o.UsePathStyle = false
+		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%v:%v", baseEndpoint, addr.Port))
 	})
 
 	cleanup = func() {
