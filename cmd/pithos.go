@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -16,7 +17,8 @@ import (
 
 func main() {
 	protocol := "http"
-	addr := "localhost:9000"
+	baseDomain := "localhost"
+	addr := fmt.Sprintf("%v:9000", baseDomain)
 	storagePath := "./data"
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
@@ -39,7 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := server.SetupServer(storage)
+	server := server.SetupServer(baseDomain, storage)
 	httpServer := &http.Server{Addr: addr, Handler: server}
 
 	log.Printf("Listening with s3 api on %v://%v\n", protocol, addr)
