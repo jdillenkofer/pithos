@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -32,7 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func setupTestServer() (s3Client *s3.Client, cleanup func()) {
+func setupTestServer(usePathStyle bool) (s3Client *s3.Client, cleanup func()) {
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
@@ -73,8 +74,8 @@ func setupTestServer() (s3Client *s3.Client, cleanup func()) {
 	}
 	addr, err := net.ResolveTCPAddr("tcp", ts.Listener.Addr().String())
 	s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = false
-		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%v:%v", baseEndpoint, addr.Port))
+		o.UsePathStyle = usePathStyle
+		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s:%d", baseEndpoint, addr.Port))
 	})
 
 	cleanup = func() {
@@ -100,424 +101,430 @@ func Test_BasicBucketOperations(t *testing.T) {
 
 	t.Parallel()
 
-	t.Run("it should create a bucket", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
+	for _, usePathStyle := range []bool{false, true} {
+		pathStyleSuffix := " using host style"
+		if usePathStyle {
+			pathStyleSuffix = " using path style"
 		}
-		assert.NotNil(t, createBucketResult)
+		t.Run("it should create a bucket"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-		assert.Equal(t, bucketName, createBucketResult.Location)
-	})
-
-	t.Run("it should not be able to create the same bucket twice", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		_, err = s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
+			assert.Equal(t, bucketName, createBucketResult.Location)
 		})
 
-		if err == nil {
-			assert.Fail(t, "CreateBucket should failed when reusing the same bucket name")
-		}
+		t.Run("it should not be able to create the same bucket twice"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-		var bucketAlreadyExistsError *types.BucketAlreadyExists
-		if !errors.As(err, &bucketAlreadyExistsError) {
-			assert.Fail(t, "Expected aws error BucketAlreadyExists", "err %v", err)
-		}
-	})
+			_, err = s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
 
-	t.Run("it should be able to see an existing bucket", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
+			if err == nil {
+				assert.Fail(t, "CreateBucket should failed when reusing the same bucket name")
+			}
 
-		assert.NotNil(t, createBucketResult)
-		headBucketResult, err := s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
-			Bucket: bucketName,
-		})
-
-		if err != nil {
-			assert.Fail(t, "HeadBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, headBucketResult)
-	})
-
-	t.Run("it should be able to list all buckets", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		listBucketsResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
-
-		if err != nil {
-			assert.Fail(t, "ListBuckets failed", "err %v", err)
-		}
-
-		assert.Len(t, listBucketsResult.Buckets, 1)
-		assert.Equal(t, bucketName, listBucketsResult.Buckets[0].Name)
-		assert.NotNil(t, listBucketsResult.Buckets[0].CreationDate)
-		assert.True(t, listBucketsResult.Buckets[0].CreationDate.Before(time.Now()))
-	})
-
-	t.Run("it should allow uploading an object", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-	})
-
-	t.Run("it should not allow deleting a bucket with objects in it", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-
-		_, err = s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
-			Bucket: bucketName,
-		})
-		if err == nil {
-			assert.Fail(t, "DeleteBucket should fail when using non existing bucket name")
-		}
-
-		var ae smithy.APIError
-		if !errors.As(err, &ae) || ae.ErrorCode() != "BucketNotEmpty" {
-			assert.Fail(t, "Expected aws error BucketNotEmpty", "err %v", err)
-		}
-	})
-
-	t.Run("it should allow uploading an object a second time", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader(body),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-	})
-
-	t.Run("it should allow downloading the object again", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader(body),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-			Bucket: bucketName,
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "GetObject failed", "err %v", err)
-		}
-		assert.NotNil(t, getObjectResult)
-		assert.NotNil(t, getObjectResult.Body)
-		objectBytes, err := io.ReadAll(getObjectResult.Body)
-		assert.Nil(t, err)
-		assert.Equal(t, body, objectBytes)
-	})
-
-	t.Run("it should allow deleting an object", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
-
-		deleteObjectResult, err := s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-			Bucket: bucketName,
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "DeleteObject failed", "err %v", err)
-		}
-		assert.NotNil(t, deleteObjectResult)
-	})
-
-	t.Run("it should delete an existing bucket", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "DeleteBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, deleteBucketResult)
-	})
-
-	t.Run("it should fail when deleting non existing bucket", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		_, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
-			Bucket: aws.String("test2"),
+			var bucketAlreadyExistsError *types.BucketAlreadyExists
+			if !errors.As(err, &bucketAlreadyExistsError) {
+				assert.Fail(t, "Expected aws error BucketAlreadyExists", "err %v", err)
+			}
 		})
 
-		if err == nil {
-			assert.Fail(t, "DeleteBucket should fail when using non existing bucket name")
-		}
+		t.Run("it should be able to see an existing bucket"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
 
-		var ae smithy.APIError
-		if !errors.As(err, &ae) || ae.ErrorCode() != "NoSuchBucket" {
-			assert.Fail(t, "Expected aws error NoSuchBucket", "err %v", err)
-		}
-	})
+			assert.NotNil(t, createBucketResult)
+			headBucketResult, err := s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+				Bucket: bucketName,
+			})
 
-	t.Run("it should not see the bucket after deletion anymore", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
-
-		deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "DeleteBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, deleteBucketResult)
-
-		_, err = s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
-			Bucket: bucketName,
+			if err != nil {
+				assert.Fail(t, "HeadBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, headBucketResult)
 		})
 
-		var notFoundError *types.NotFound
-		if !errors.As(err, &notFoundError) {
-			assert.Fail(t, "Expected aws error NotFound", "err %v", err)
-		}
-	})
+		t.Run("it should be able to list all buckets"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-	t.Run("it should list all buckets", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
+			listBucketsResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+
+			if err != nil {
+				assert.Fail(t, "ListBuckets failed", "err %v", err)
+			}
+
+			assert.Len(t, listBucketsResult.Buckets, 1)
+			assert.Equal(t, bucketName, listBucketsResult.Buckets[0].Name)
+			assert.NotNil(t, listBucketsResult.Buckets[0].CreationDate)
+			assert.True(t, listBucketsResult.Buckets[0].CreationDate.Before(time.Now()))
 		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
 
-		createBucketResult2, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName2,
+		t.Run("it should allow uploading an object"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
 		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult2)
 
-		listBucketResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
-		if err != nil {
-			assert.Fail(t, "ListBuckets failed", "err %v", err)
-		}
-		assert.Len(t, listBucketResult.Buckets, 2)
-	})
+		t.Run("it should not allow deleting a bucket with objects in it"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-	t.Run("it should list all objects", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			_, err = s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				Bucket: bucketName,
+			})
+			if err == nil {
+				assert.Fail(t, "DeleteBucket should fail when using non existing bucket name")
+			}
+
+			var ae smithy.APIError
+			if !errors.As(err, &ae) || ae.ErrorCode() != "BucketNotEmpty" {
+				assert.Fail(t, "Expected aws error BucketNotEmpty", "err %v", err)
+			}
 		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
+		t.Run("it should allow uploading an object a second time"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket: bucketName,
-		})
-		if err != nil {
-			assert.Fail(t, "ListObjects failed", "err %v", err)
-		}
-		assert.Len(t, listObjectResult.Contents, 1)
-	})
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
 
-	t.Run("it should list objects starting with prefix \"my/test/key\"", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
+			putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
 		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
+		t.Run("it should allow downloading the object again"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket: bucketName,
-			Prefix: keyPrefix,
-		})
-		if err != nil {
-			assert.Fail(t, "ListObjects failed", "err %v", err)
-		}
-		assert.Len(t, listObjectResult.Contents, 1)
-	})
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
 
-	t.Run("it should list no objects when searching for prefix \"key\"", func(t *testing.T) {
-		s3Client, cleanup := setupTestServer()
-		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-			Bucket: bucketName,
+			getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "GetObject failed", "err %v", err)
+			}
+			assert.NotNil(t, getObjectResult)
+			assert.NotNil(t, getObjectResult.Body)
+			objectBytes, err := io.ReadAll(getObjectResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
 		})
-		if err != nil {
-			assert.Fail(t, "CreateBucket failed", "err %v", err)
-		}
-		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: bucketName,
-			Body:   bytes.NewReader([]byte("Hello, first object!")),
-			Key:    key,
-		})
-		if err != nil {
-			assert.Fail(t, "PutObject failed", "err %v", err)
-		}
-		assert.NotNil(t, putObjectResult)
+		t.Run("it should allow deleting an object"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket: bucketName,
-			Prefix: aws.String("key"),
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			deleteObjectResult, err := s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "DeleteObject failed", "err %v", err)
+			}
+			assert.NotNil(t, deleteObjectResult)
 		})
-		if err != nil {
-			assert.Fail(t, "ListObjects failed", "err %v", err)
-		}
-		assert.Len(t, listObjectResult.Contents, 0)
-	})
+
+		t.Run("it should delete an existing bucket"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "DeleteBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, deleteBucketResult)
+		})
+
+		t.Run("it should fail when deleting non existing bucket"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			_, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				Bucket: aws.String("test2"),
+			})
+
+			if err == nil {
+				assert.Fail(t, "DeleteBucket should fail when using non existing bucket name")
+			}
+
+			var ae smithy.APIError
+			if !errors.As(err, &ae) || ae.ErrorCode() != "NoSuchBucket" {
+				assert.Fail(t, "Expected aws error NoSuchBucket", "err %v", err)
+			}
+		})
+
+		t.Run("it should not see the bucket after deletion anymore"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "DeleteBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, deleteBucketResult)
+
+			_, err = s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+				Bucket: bucketName,
+			})
+
+			var notFoundError *types.NotFound
+			if !errors.As(err, &notFoundError) {
+				assert.Fail(t, "Expected aws error NotFound", "err %v", err)
+			}
+		})
+
+		t.Run("it should list all buckets"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			createBucketResult2, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName2,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult2)
+
+			listBucketResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+			if err != nil {
+				assert.Fail(t, "ListBuckets failed", "err %v", err)
+			}
+			assert.Len(t, listBucketResult.Buckets, 2)
+		})
+
+		t.Run("it should list all objects"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+			assert.Len(t, listObjectResult.Contents, 1)
+		})
+
+		t.Run("it should list objects starting with prefix my/test/key"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+				Prefix: keyPrefix,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+			assert.Len(t, listObjectResult.Contents, 1)
+		})
+
+		t.Run("it should list no objects when searching for prefix key"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+				Prefix: aws.String("key"),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+			assert.Len(t, listObjectResult.Contents, 0)
+		})
+	}
 }
