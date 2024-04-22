@@ -21,7 +21,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -92,7 +91,11 @@ func setupTestServer(usePathStyle bool) (s3Client *s3.Client, cleanup func()) {
 	return
 }
 
-func Test_BasicBucketOperations(t *testing.T) {
+func TestBasicBucketOperationsIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests")
+	}
+
 	bucketName := aws.String("test")
 	bucketName2 := aws.String("test2")
 	keyPrefix := aws.String("my/test/key")
