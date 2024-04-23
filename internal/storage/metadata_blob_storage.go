@@ -81,20 +81,33 @@ func (mbs *MetadataBlobStorage) HeadObject(bucket string, key string) (*Object, 
 	return &o, err
 }
 
-func (mbs *MetadataBlobStorage) GetObject(bucket string, key string) (io.ReadCloser, error) {
+func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	object, err := mbs.metadataStore.HeadObject(bucket, key)
 	if err != nil {
 		return nil, err
 	}
 	blobReaders := []io.ReadCloser{}
-	for _, blobId := range object.BlobIds {
-		blobReader, err := mbs.blobStore.GetBlob(blobId)
+	for _, blob := range object.Blobs {
+		blobReader, err := mbs.blobStore.GetBlob(blob.Id)
 		if err != nil {
 			return nil, err
 		}
 		blobReaders = append(blobReaders, blobReader)
 	}
-	return ioutils.NewMultiReadCloser(blobReaders), nil
+	var reader io.ReadCloser
+	reader = ioutils.NewMultiReadCloser(blobReaders)
+	if startByte != nil {
+		// if we make the multiReadCloser seekable, we could seek here instead of reading
+		_, err := io.CopyN(io.Discard, reader, *startByte)
+		if err != nil {
+			reader.Close()
+			return nil, err
+		}
+	}
+	if endByte != nil {
+		reader = ioutils.NewLimitedReadCloser(reader, *endByte)
+	}
+	return reader, nil
 }
 
 func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
@@ -107,8 +120,12 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		LastModified: time.Now(),
 		ETag:         putBlobResult.ETag,
 		Size:         putBlobResult.Size,
-		BlobIds: []blob.BlobId{
-			putBlobResult.BlobId,
+		Blobs: []metadata.Blob{
+			{
+				Id:   putBlobResult.BlobId,
+				ETag: putBlobResult.ETag,
+				Size: putBlobResult.Size,
+			},
 		},
 	}
 	return mbs.metadataStore.PutObject(bucket, &object)
@@ -119,8 +136,8 @@ func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {
 	if err != nil {
 		return err
 	}
-	for _, blobId := range object.BlobIds {
-		err = mbs.blobStore.DeleteBlob(blobId)
+	for _, blob := range object.Blobs {
+		err = mbs.blobStore.DeleteBlob(blob.Id)
 		if err != nil {
 			log.Printf("Failed to delete blob: %v", err)
 		}

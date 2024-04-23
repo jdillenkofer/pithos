@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/xml"
 	"fmt"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"io"
 	"log"
 	"net/http"
@@ -264,25 +265,103 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+type byteRange struct {
+	start *int64
+	end   *int64
+}
+
+var invalidByteRange error = fmt.Errorf("Invalid byte range")
+
+func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
+	byteRanges := []byteRange{}
+	if rangeHeader != "" {
+		rangeUnitAndRangesSplit := strings.SplitN(rangeHeader, "=", 2)
+		if len(rangeUnitAndRangesSplit) != 2 || len(rangeUnitAndRangesSplit) > 0 && rangeUnitAndRangesSplit[0] != "bytes" {
+			return nil, invalidByteRange
+		}
+		ranges := rangeUnitAndRangesSplit[1]
+		rangesSplit := strings.Split(ranges, ",")
+		for _, rangeVal := range rangesSplit {
+			var start *int64 = nil
+			var end *int64 = nil
+
+			byteSplit := strings.SplitN(rangeVal, "-", 2)
+			if len(byteSplit) == 2 {
+				startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
+				if err == nil {
+					start = &startByte
+				}
+				endByte, err := strconv.ParseInt(byteSplit[1], 10, 64)
+				if err == nil {
+					end = &endByte
+				}
+			}
+
+			byteRangeVal := byteRange{
+				start: start,
+				end:   end,
+			}
+			byteRanges = append(byteRanges, byteRangeVal)
+		}
+	}
+	return byteRanges, nil
+}
+
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
+	rangeHeader := r.Header.Get("Range")
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
 	object, err := s.storage.HeadObject(bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	reader, err := s.storage.GetObject(bucket, key)
+
+	var reader io.ReadCloser
+	var size int64 = 0
+
+	byteRanges, err := parseRangeHeader(rangeHeader)
 	if err != nil {
-		handleError(err, w, r)
+		w.WriteHeader(416)
 		return
 	}
+	if len(byteRanges) > 0 {
+		rangeReaders := []io.ReadCloser{}
+
+		for _, byteRange := range byteRanges {
+			var end int64 = object.Size
+			if byteRange.end != nil {
+				end = *byteRange.end
+			}
+			if byteRange.start != nil {
+				size += end - *byteRange.start + 1
+			}
+			rangeReader, err := s.storage.GetObject(bucket, key, byteRange.start, byteRange.end)
+			if err != nil {
+				for _, rangeReader := range rangeReaders {
+					rangeReader.Close()
+				}
+				handleError(err, w, r)
+				return
+			}
+			rangeReaders = append(rangeReaders, rangeReader)
+		}
+		reader = ioutils.NewMultiReadCloser(rangeReaders)
+	} else {
+		reader, err = s.storage.GetObject(bucket, key, nil, nil)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		size = object.Size
+	}
+
 	defer reader.Close()
 	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
-	w.Header().Add("Content-Length", fmt.Sprintf("%v", object.Size))
+	w.Header().Add("Content-Length", fmt.Sprintf("%v", size))
 	w.WriteHeader(200)
-	io.Copy(w, reader)
+	io.CopyN(w, reader, size)
 }
 
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {

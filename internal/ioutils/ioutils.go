@@ -31,3 +31,30 @@ func (mrc *MultiReadCloser) Close() error {
 	}
 	return nil
 }
+
+type LimitedReadCloser struct {
+	limitedReader   io.LimitedReader
+	innerReadCloser io.ReadCloser
+}
+
+func NewLimitedReadCloser(innerReadCloser io.ReadCloser, limit int64) *LimitedReadCloser {
+	return &LimitedReadCloser{
+		limitedReader: io.LimitedReader{
+			R: innerReadCloser,
+			N: limit,
+		},
+		innerReadCloser: innerReadCloser,
+	}
+}
+
+func (lrc *LimitedReadCloser) Read(p []byte) (n int, err error) {
+	return lrc.limitedReader.Read(p)
+}
+
+func (lrc *LimitedReadCloser) Close() error {
+	err := lrc.innerReadCloser.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}

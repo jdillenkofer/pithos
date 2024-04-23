@@ -5,7 +5,6 @@ import (
 	"embed"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/oklog/ulid/v2"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -171,28 +170,35 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 			tx.Rollback()
 			return nil, nil, err
 		}
-		blobRows, err := tx.Query("SELECT id FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
+		blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
 		if err != nil {
 			tx.Rollback()
 			return nil, nil, err
 		}
 		defer blobRows.Close()
-		blobIds := []blob.BlobId{}
+		blobs := []Blob{}
 		for blobRows.Next() {
 			var blobId string
-			err = blobRows.Scan(&blobId)
+			var etag string
+			var size int64
+			err = blobRows.Scan(&blobId, &etag, &size)
 			if err != nil {
 				tx.Rollback()
 				return nil, nil, err
 			}
-			blobIds = append(blobIds, ulid.MustParse(blobId))
+			blobStruc := Blob{
+				Id:   ulid.MustParse(blobId),
+				ETag: etag,
+				Size: size,
+			}
+			blobs = append(blobs, blobStruc)
 		}
 		objects = append(objects, Object{
 			Key:          key,
 			LastModified: lastModified,
 			ETag:         etag,
 			Size:         size,
-			BlobIds:      blobIds,
+			Blobs:        blobs,
 		})
 		if len(objects)+len(commonPrefixes) == maxKeys {
 			break
@@ -254,22 +260,30 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		tx.Rollback()
 		return nil, err
 	}
-	rows, err = tx.Query("SELECT id FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
+	rows, err = tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 	defer rows.Close()
-	blobIds := []blob.BlobId{}
+	blobs := []Blob{}
 	for rows.Next() {
 		var blobId string
-		err = rows.Scan(&blobId)
+		var etag string
+		var size int64
+		err = rows.Scan(&blobId, &etag, &size)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
 		}
-		blobIds = append(blobIds, ulid.MustParse(blobId))
+		blobStruc := Blob{
+			Id:   ulid.MustParse(blobId),
+			ETag: etag,
+			Size: size,
+		}
+		blobs = append(blobs, blobStruc)
 	}
+
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
@@ -279,7 +293,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		LastModified: lastModified,
 		ETag:         etag,
 		Size:         size,
-		BlobIds:      blobIds,
+		Blobs:        blobs,
 	}
 	return &object, nil
 }
@@ -331,8 +345,8 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 		return err
 	}
 	sequenceNumber := 0
-	for _, blobId := range object.BlobIds {
-		_, err = tx.Exec("INSERT INTO blobs (id, object_id, sequence_number, created_at, updated_at) VALUES(?, ?, ?, datetime('now'), datetime('now'))", blobId.String(), objectId.String(), sequenceNumber)
+	for _, blobStruc := range object.Blobs {
+		_, err = tx.Exec("INSERT INTO blobs (id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, datetime('now'), datetime('now'))", blobStruc.Id.String(), objectId.String(), blobStruc.ETag, blobStruc.Size, sequenceNumber)
 		if err != nil {
 			tx.Rollback()
 			return err

@@ -20,6 +20,8 @@ CREATE TABLE objects (
 CREATE TABLE blobs (
   id TEXT NOT NULL primary key,
   object_id TEXT NOT NULL,
+  etag TEXT NOT NULL,
+  size INTEGER NOT NULL,
   sequence_number INTEGER NOT NULL,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
