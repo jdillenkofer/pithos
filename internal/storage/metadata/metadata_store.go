@@ -17,7 +17,13 @@ type Object struct {
 	LastModified time.Time
 	ETag         string
 	Size         int64
-	BlobIds      []blob.BlobId
+	Blobs        []Blob
+}
+
+type Blob struct {
+	Id   blob.BlobId
+	Size int64
+	ETag string
 }
 
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
