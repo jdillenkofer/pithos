@@ -67,7 +67,7 @@ func setupTestServer(usePathStyle bool) (s3Client *s3.Client, cleanup func()) {
 		}
 	})
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"), config.WithHTTPClient(httpClient))
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(aws.AnonymousCredentials{}))
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
