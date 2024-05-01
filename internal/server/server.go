@@ -318,14 +318,14 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reader io.ReadCloser
-	var size int64 = 0
-
 	byteRanges, err := parseRangeHeader(rangeHeader)
 	if err != nil {
 		w.WriteHeader(416)
 		return
 	}
+
+	var reader io.ReadCloser
+	var size int64 = 0
 	if len(byteRanges) > 0 {
 		rangeReaders := []io.ReadSeekCloser{}
 
@@ -349,12 +349,16 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		reader, err = ioutils.NewMultiReadSeekCloser(rangeReaders)
 		if err != nil {
+			for _, rangeReader := range rangeReaders {
+				rangeReader.Close()
+			}
 			handleError(err, w, r)
 			return
 		}
 	} else {
 		reader, err = s.storage.GetObject(bucket, key, nil, nil)
 		if err != nil {
+			reader.Close()
 			handleError(err, w, r)
 			return
 		}
