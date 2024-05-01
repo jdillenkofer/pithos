@@ -2,29 +2,49 @@ package ioutils
 
 import "io"
 
-type MultiReadCloser struct {
-	multiReader io.Reader
-	readClosers []io.ReadCloser
+type MultiReadSeekCloser struct {
+	activeReaderIndex int
+	readSeekClosers   []io.ReadSeekCloser
 }
 
-func NewMultiReadCloser(readClosers []io.ReadCloser) *MultiReadCloser {
-	readers := []io.Reader{}
-	for _, readCloser := range readClosers {
-		readers = append(readers, readCloser)
-	}
-	return &MultiReadCloser{
-		multiReader: io.MultiReader(readers...),
-		readClosers: readClosers,
+func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) *MultiReadSeekCloser {
+	return &MultiReadSeekCloser{
+		activeReaderIndex: 0,
+		readSeekClosers:   readSeekClosers,
 	}
 }
 
-func (mrc *MultiReadCloser) Read(p []byte) (n int, err error) {
-	return mrc.multiReader.Read(p)
+func (mrc *MultiReadSeekCloser) Read(p []byte) (n int, err error) {
+	if mrc.activeReaderIndex >= len(mrc.readSeekClosers) {
+		return 0, io.EOF
+	}
+	n, err = mrc.readSeekClosers[mrc.activeReaderIndex].Read(p)
+	if err == io.EOF && mrc.activeReaderIndex < len(mrc.readSeekClosers)-1 {
+		mrc.activeReaderIndex += 1
+		return mrc.Read(p)
+	}
+	return n, err
 }
 
-func (mrc *MultiReadCloser) Close() error {
-	for _, readCloser := range mrc.readClosers {
-		err := readCloser.Close()
+func (mrc *MultiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	var n int64
+	var err error
+	switch whence {
+	case io.SeekStart:
+		mrc.activeReaderIndex = 0
+		n, err = mrc.readSeekClosers[mrc.activeReaderIndex].Seek(offset, whence)
+	case io.SeekCurrent:
+		n, err = mrc.readSeekClosers[mrc.activeReaderIndex].Seek(offset, whence)
+	case io.SeekEnd:
+		mrc.activeReaderIndex = len(mrc.readSeekClosers) - 1
+		n, err = mrc.readSeekClosers[mrc.activeReaderIndex].Seek(offset, whence)
+	}
+	return n, err
+}
+
+func (mrc *MultiReadSeekCloser) Close() error {
+	for _, readSeekCloser := range mrc.readSeekClosers {
+		err := readSeekCloser.Close()
 		if err != nil {
 			return err
 		}
@@ -32,27 +52,42 @@ func (mrc *MultiReadCloser) Close() error {
 	return nil
 }
 
-type LimitedReadCloser struct {
-	limitedReader   io.LimitedReader
-	innerReadCloser io.ReadCloser
+type LimitedReadSeekCloser struct {
+	limit               int64
+	limitedReader       io.LimitedReader
+	innerReadSeekCloser io.ReadSeekCloser
 }
 
-func NewLimitedReadCloser(innerReadCloser io.ReadCloser, limit int64) *LimitedReadCloser {
-	return &LimitedReadCloser{
+func NewLimitedReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, limit int64) *LimitedReadSeekCloser {
+	return &LimitedReadSeekCloser{
+		limit: limit,
 		limitedReader: io.LimitedReader{
-			R: innerReadCloser,
+			R: innerReadSeekCloser,
 			N: limit,
 		},
-		innerReadCloser: innerReadCloser,
+		innerReadSeekCloser: innerReadSeekCloser,
 	}
 }
 
-func (lrc *LimitedReadCloser) Read(p []byte) (n int, err error) {
-	return lrc.limitedReader.Read(p)
+func (lrc *LimitedReadSeekCloser) Read(p []byte) (int, error) {
+	n, err := lrc.limitedReader.Read(p)
+	return n, err
 }
 
-func (lrc *LimitedReadCloser) Close() error {
-	err := lrc.innerReadCloser.Close()
+func (lrc *LimitedReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	n, err := lrc.innerReadSeekCloser.Seek(offset, whence)
+	lrc.limitedReader = io.LimitedReader{
+		R: lrc.innerReadSeekCloser,
+		N: lrc.limit - n,
+	}
+	if n > lrc.limit {
+		return lrc.limit, err
+	}
+	return n, err
+}
+
+func (lrc *LimitedReadSeekCloser) Close() error {
+	err := lrc.innerReadSeekCloser.Close()
 	if err != nil {
 		return err
 	}

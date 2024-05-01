@@ -327,7 +327,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(byteRanges) > 0 {
-		rangeReaders := []io.ReadCloser{}
+		rangeReaders := []io.ReadSeekCloser{}
 
 		for _, byteRange := range byteRanges {
 			var end int64 = object.Size
@@ -347,7 +347,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			rangeReaders = append(rangeReaders, rangeReader)
 		}
-		reader = ioutils.NewMultiReadCloser(rangeReaders)
+		reader = ioutils.NewMultiReadSeekCloser(rangeReaders)
 	} else {
 		reader, err = s.storage.GetObject(bucket, key, nil, nil)
 		if err != nil {
