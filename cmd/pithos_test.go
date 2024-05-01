@@ -351,6 +351,42 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			assert.Equal(t, body[1:5], objectBytes)
 		})
 
+		t.Run("it should allow downloading the object with byte range without end"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Range:  aws.String("bytes=1-"),
+			})
+			if err != nil {
+				assert.Fail(t, "GetObject failed", "err %v", err)
+			}
+			assert.NotNil(t, getObjectResult)
+			assert.NotNil(t, getObjectResult.Body)
+			objectBytes, err := io.ReadAll(getObjectResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body[1:], objectBytes)
+		})
+
 		t.Run("it should allow deleting an object"+pathStyleSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle)
 			t.Cleanup(cleanup)

@@ -332,12 +332,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		for _, byteRange := range byteRanges {
 			var end int64 = object.Size
 			if byteRange.end != nil {
-				end = *byteRange.end
+				end = *byteRange.end + 1
 			}
 			if byteRange.start != nil {
-				size += end - *byteRange.start + 1
+				size += end - *byteRange.start
 			}
-			rangeReader, err := s.storage.GetObject(bucket, key, byteRange.start, byteRange.end)
+			rangeReader, err := s.storage.GetObject(bucket, key, byteRange.start, &end)
 			if err != nil {
 				for _, rangeReader := range rangeReaders {
 					rangeReader.Close()

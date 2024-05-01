@@ -107,7 +107,7 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 		}
 	}
 	if endByte != nil {
-		reader = ioutils.NewLimitedReadSeekCloser(reader, *endByte+1)
+		reader = ioutils.NewLimitedReadSeekCloser(reader, *endByte)
 	}
 	return reader, nil
 }
