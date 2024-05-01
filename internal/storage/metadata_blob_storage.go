@@ -81,12 +81,12 @@ func (mbs *MetadataBlobStorage) HeadObject(bucket string, key string) (*Object, 
 	return &o, err
 }
 
-func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
 	object, err := mbs.metadataStore.HeadObject(bucket, key)
 	if err != nil {
 		return nil, err
 	}
-	blobReaders := []io.ReadCloser{}
+	blobReaders := []io.ReadSeekCloser{}
 	for _, blob := range object.Blobs {
 		blobReader, err := mbs.blobStore.GetBlob(blob.Id)
 		if err != nil {
@@ -94,23 +94,27 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 		}
 		blobReaders = append(blobReaders, blobReader)
 	}
-	var reader io.ReadCloser
-	reader = ioutils.NewMultiReadCloser(blobReaders)
+	var reader io.ReadSeekCloser
+	reader, err = ioutils.NewMultiReadSeekCloser(blobReaders)
+	if err != nil {
+		return nil, err
+	}
 	if startByte != nil {
-		// if we make the multiReadCloser seekable, we could seek here instead of reading
-		_, err := io.CopyN(io.Discard, reader, *startByte)
+		_, err := reader.Seek(*startByte, io.SeekStart)
 		if err != nil {
 			reader.Close()
 			return nil, err
 		}
 	}
 	if endByte != nil {
-		reader = ioutils.NewLimitedReadCloser(reader, *endByte)
+		reader = ioutils.NewLimitedReadSeekCloser(reader, *endByte+1)
 	}
 	return reader, nil
 }
 
 func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
+	// TODO: instead of putting everything in the same blob,
+	// create multiple blobs instead
 	putBlobResult, err := mbs.blobStore.PutBlob(reader)
 	if err != nil {
 		return err

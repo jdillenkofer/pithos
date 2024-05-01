@@ -31,7 +31,7 @@ type Storage interface {
 	HeadBucket(bucket string) (*Bucket, error)
 	ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error)
 	HeadObject(bucket string, key string) (*Object, error)
-	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
+	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
 	Clear() error
