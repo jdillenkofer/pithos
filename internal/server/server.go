@@ -347,7 +347,11 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			rangeReaders = append(rangeReaders, rangeReader)
 		}
-		reader = ioutils.NewMultiReadSeekCloser(rangeReaders)
+		reader, err = ioutils.NewMultiReadSeekCloser(rangeReaders)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
 	} else {
 		reader, err = s.storage.GetObject(bucket, key, nil, nil)
 		if err != nil {

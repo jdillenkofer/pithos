@@ -95,7 +95,10 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 		blobReaders = append(blobReaders, blobReader)
 	}
 	var reader io.ReadSeekCloser
-	reader = ioutils.NewMultiReadSeekCloser(blobReaders)
+	reader, err = ioutils.NewMultiReadSeekCloser(blobReaders)
+	if err != nil {
+		return nil, err
+	}
 	if startByte != nil {
 		_, err := reader.Seek(*startByte, io.SeekStart)
 		if err != nil {
@@ -104,12 +107,14 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 		}
 	}
 	if endByte != nil {
-		reader = ioutils.NewLimitedReadSeekCloser(reader, *endByte)
+		reader = ioutils.NewLimitedReadSeekCloser(reader, *endByte+1)
 	}
 	return reader, nil
 }
 
 func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
+	// TODO: instead of putting everything in the same blob,
+	// create multiple blobs instead
 	putBlobResult, err := mbs.blobStore.PutBlob(reader)
 	if err != nil {
 		return err
