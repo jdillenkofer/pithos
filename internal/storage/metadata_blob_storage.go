@@ -94,11 +94,7 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 		}
 		blobReaders = append(blobReaders, blobReader)
 	}
-	var reader io.ReadSeekCloser
-	reader, err = ioutils.NewMultiReadSeekCloser(blobReaders)
-	if err != nil {
-		return nil, err
-	}
+	var reader io.ReadSeekCloser = ioutils.NewMultiReadSeekCloser(blobReaders)
 	if startByte != nil {
 		_, err := reader.Seek(*startByte, io.SeekStart)
 		if err != nil {

@@ -4,38 +4,21 @@ import "io"
 
 type MultiReadSeekCloser struct {
 	currentReadOffset int64
-	size              int64
 	activeReaderIndex int
 	readSeekClosers   []io.ReadSeekCloser
+	// the last two fields are lazily initialized
+	size              int64
 	readerSizeByIndex []int64
 }
 
-func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) (*MultiReadSeekCloser, error) {
-	readerSizeByIndex := []int64{}
-	size := int64(0)
-	for _, readSeekCloser := range readSeekClosers {
-		currentOffset, err := readSeekCloser.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return nil, err
-		}
-		n, err := readSeekCloser.Seek(0, io.SeekEnd)
-		if err != nil {
-			return nil, err
-		}
-		_, err = readSeekCloser.Seek(currentOffset, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		readerSizeByIndex = append(readerSizeByIndex, n)
-		size += n
-	}
+func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) *MultiReadSeekCloser {
 	return &MultiReadSeekCloser{
 		currentReadOffset: 0,
-		size:              size,
 		activeReaderIndex: 0,
 		readSeekClosers:   readSeekClosers,
-		readerSizeByIndex: readerSizeByIndex,
-	}, nil
+		size:              -1,
+		readerSizeByIndex: nil,
+	}
 }
 
 func (mrc *MultiReadSeekCloser) Read(p []byte) (int, error) {
@@ -51,7 +34,34 @@ func (mrc *MultiReadSeekCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func (mrc *MultiReadSeekCloser) initializeReaderSizes() error {
+	readerSizeByIndex := []int64{}
+	size := int64(0)
+	for _, readSeekCloser := range mrc.readSeekClosers {
+		currentOffset, err := readSeekCloser.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		n, err := readSeekCloser.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+		_, err = readSeekCloser.Seek(currentOffset, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		readerSizeByIndex = append(readerSizeByIndex, n)
+		size += n
+	}
+	mrc.size = size
+	mrc.readerSizeByIndex = readerSizeByIndex
+	return nil
+}
+
 func (mrc *MultiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	if mrc.size == -1 {
+		mrc.initializeReaderSizes()
+	}
 	switch whence {
 	case io.SeekStart:
 		mrc.currentReadOffset = offset
