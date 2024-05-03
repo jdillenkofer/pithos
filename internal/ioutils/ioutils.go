@@ -96,13 +96,14 @@ func (mrc *MultiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (mrc *MultiReadSeekCloser) Close() error {
+	var err error
 	for _, readSeekCloser := range mrc.readSeekClosers {
-		err := readSeekCloser.Close()
-		if err != nil {
-			return err
+		innerErr := readSeekCloser.Close()
+		if err == nil && innerErr != nil {
+			err = innerErr
 		}
 	}
-	return nil
+	return err
 }
 
 type LimitedReadSeekCloser struct {
