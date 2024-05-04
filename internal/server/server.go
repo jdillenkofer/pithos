@@ -270,14 +270,14 @@ type byteRange struct {
 	end   *int64
 }
 
-var invalidByteRange error = fmt.Errorf("Invalid byte range")
+var errInvalidByteRange error = fmt.Errorf("Invalid byte range")
 
-func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
+func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]byteRange, error) {
 	byteRanges := []byteRange{}
 	if rangeHeader != "" {
 		rangeUnitAndRangesSplit := strings.SplitN(rangeHeader, "=", 2)
 		if len(rangeUnitAndRangesSplit) != 2 || len(rangeUnitAndRangesSplit) > 0 && rangeUnitAndRangesSplit[0] != "bytes" {
-			return nil, invalidByteRange
+			return nil, errInvalidByteRange
 		}
 		ranges := rangeUnitAndRangesSplit[1]
 		rangesSplit := strings.Split(ranges, ",")
@@ -285,6 +285,7 @@ func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
 			var start *int64 = nil
 			var end *int64 = nil
 
+			rangeVal = strings.TrimSpace(rangeVal)
 			byteSplit := strings.SplitN(rangeVal, "-", 2)
 			if len(byteSplit) == 2 {
 				startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
@@ -295,6 +296,13 @@ func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
 				if err == nil {
 					end = &endByte
 				}
+			}
+
+			if start != nil && *start < 0 {
+				return nil, errInvalidByteRange
+			}
+			if end != nil && *end > object.Size {
+				return nil, errInvalidByteRange
 			}
 
 			byteRangeVal := byteRange{
@@ -318,8 +326,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byteRanges, err := parseRangeHeader(rangeHeader)
-	if err != nil {
+	byteRanges, err := parseAndValidateRangeHeader(rangeHeader, object)
+	if err != nil || len(byteRanges) > 1 {
 		w.WriteHeader(416)
 		return
 	}
@@ -361,7 +369,22 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
 	w.Header().Add("Content-Length", fmt.Sprintf("%v", size))
-	w.WriteHeader(200)
+	if len(byteRanges) > 0 {
+		firstRangeEntry := byteRanges[0]
+		start := int64(0)
+		if firstRangeEntry.start != nil {
+			start = *firstRangeEntry.start
+		}
+		end := object.Size - 1
+		if firstRangeEntry.end != nil {
+			end = *firstRangeEntry.end
+		}
+		contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, object.Size)
+		w.Header().Add("Content-Range", contentRangeValue)
+		w.WriteHeader(206)
+	} else {
+		w.WriteHeader(200)
+	}
 	io.CopyN(w, reader, size)
 }
 
