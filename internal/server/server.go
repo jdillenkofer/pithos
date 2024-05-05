@@ -3,13 +3,14 @@ package server
 import (
 	"encoding/xml"
 	"fmt"
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 )
@@ -327,12 +328,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	byteRanges, err := parseAndValidateRangeHeader(rangeHeader, object)
-	if err != nil || len(byteRanges) > 1 {
+	if err != nil {
 		w.WriteHeader(416)
 		return
 	}
 
-	var reader io.ReadCloser
+	var reader io.ReadSeekCloser
 	var size int64 = 0
 	if len(byteRanges) > 0 {
 		rangeReaders := []io.ReadSeekCloser{}
@@ -355,11 +356,14 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			rangeReaders = append(rangeReaders, rangeReader)
 		}
-		reader = ioutils.NewMultiReadSeekCloser(rangeReaders)
+		reader, err = ioutils.NewMultiReadSeekCloser(rangeReaders)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
 	} else {
 		reader, err = s.storage.GetObject(bucket, key, nil, nil)
 		if err != nil {
-			reader.Close()
 			handleError(err, w, r)
 			return
 		}
