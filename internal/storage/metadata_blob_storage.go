@@ -99,11 +99,13 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 	if err != nil {
 		return nil, err
 	}
-	if startByte != nil {
-		reader = ioutils.NewLimitedStartReadSeekCloser(reader, *startByte)
-	}
+	// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
+	// because the LimitedStartSeekCloser changes the offsets
 	if endByte != nil {
 		reader = ioutils.NewLimitedEndReadSeekCloser(reader, *endByte)
+	}
+	if startByte != nil {
+		reader = ioutils.NewLimitedStartReadSeekCloser(reader, *startByte)
 	}
 	return reader, nil
 }

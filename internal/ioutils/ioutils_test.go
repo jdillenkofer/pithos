@@ -117,3 +117,13 @@ func TestSimpleLimitedEndReadSeekCloser(t *testing.T) {
 	err := iotest.TestReader(limitedEndReadSeekCloser, content[0:2])
 	assert.Nil(t, err)
 }
+
+func TestSimpleDebugReadSeekCloser(t *testing.T) {
+	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
+	reader := byteReadSeekCloser{
+		bytes.NewReader(content),
+	}
+	debugReadSeekCloser := NewDebugReadSeekCloser("Debug", &reader)
+	err := iotest.TestReader(debugReadSeekCloser, content)
+	assert.Nil(t, err)
+}
