@@ -146,12 +146,3 @@ func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {
 	}
 	return mbs.metadataStore.DeleteObject(bucket, key)
 }
-
-func (mbs *MetadataBlobStorage) Clear() error {
-	err := mbs.metadataStore.Clear()
-	if err != nil {
-		return err
-	}
-	err = mbs.blobStore.Clear()
-	return err
-}

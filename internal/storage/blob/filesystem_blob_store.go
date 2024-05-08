@@ -122,12 +122,3 @@ func (bs *FilesystemBlobStore) DeleteBlob(blobId BlobId) error {
 	err := os.Remove(filename)
 	return err
 }
-
-func (bs *FilesystemBlobStore) Clear() error {
-	err := os.RemoveAll(bs.root)
-	if err != nil {
-		return err
-	}
-	err = bs.ensureRootDir()
-	return err
-}

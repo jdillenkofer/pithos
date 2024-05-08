@@ -403,27 +403,3 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 	tx.Commit()
 	return nil
 }
-
-func (sms *SqlMetadataStore) Clear() error {
-	tx, err := sms.db.Begin()
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec("DELETE FROM blobs")
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	_, err = tx.Exec("DELETE FROM objects")
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	_, err = tx.Exec("DELETE FROM buckets")
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	err = tx.Commit()
-	return err
-}

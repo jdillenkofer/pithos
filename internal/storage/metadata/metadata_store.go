@@ -40,5 +40,4 @@ type MetadataStore interface {
 	HeadObject(bucketName string, key string) (*Object, error)
 	PutObject(bucketName string, object *Object) error
 	DeleteObject(bucketName string, key string) error
-	Clear() error
 }

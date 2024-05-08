@@ -18,5 +18,4 @@ type BlobStore interface {
 	PutBlob(blob io.Reader) (*PutBlobResult, error)
 	GetBlob(blobId BlobId) (io.ReadSeekCloser, error)
 	DeleteBlob(blobId BlobId) error
-	Clear() error
 }
