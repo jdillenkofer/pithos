@@ -468,10 +468,11 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue(keyPath)
 
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
+
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	err := s.storage.PutObject(bucket, key, r.Body)
+	err := s.storage.PutObject(bucket, key, r.Body, r.ContentLength)
 	if err != nil {
 		handleError(err, w, r)
 		return

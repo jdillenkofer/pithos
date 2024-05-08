@@ -11,6 +11,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 )
 
+const maxBlobSize int64 = 5000000
+
 type MetadataBlobStorage struct {
 	db            *sql.DB
 	metadataStore metadata.MetadataStore
@@ -241,7 +243,7 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 	return reader, nil
 }
 
-func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
+func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader, contentLength int64) error {
 	tx, err := mbs.db.Begin()
 	if err != nil {
 		return err
@@ -264,30 +266,57 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		}
 	}
 
-	blobId, err := blob.GenerateBlobId()
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
+	etag := ""
+	size := int64(0)
+	blobs := []metadata.Blob{}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, reader)
-	if err != nil {
-		tx.Rollback()
-		return err
+	if contentLength == -1 {
+		blobId, err := blob.GenerateBlobId()
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, reader)
+		if err != nil {
+			return err
+		}
+		blobs = append(blobs, metadata.Blob{
+			Id:   putBlobResult.BlobId,
+			ETag: putBlobResult.ETag,
+			Size: putBlobResult.Size,
+		})
+		size = putBlobResult.Size
+	} else {
+		// instead of putting everything in the same blob,
+		// create multiple blobs instead
+		for range (contentLength / maxBlobSize) + 1 {
+			blobId, err := blob.GenerateBlobId()
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+
+			limitedReader := io.LimitReader(reader, maxBlobSize)
+			putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, limitedReader)
+			if err != nil {
+				return err
+			}
+			blobs = append(blobs, metadata.Blob{
+				Id:   putBlobResult.BlobId,
+				ETag: putBlobResult.ETag,
+				Size: putBlobResult.Size,
+			})
+			size += putBlobResult.Size
+		}
 	}
 
 	object := metadata.Object{
 		Key:          key,
 		LastModified: time.Now(),
-		ETag:         putBlobResult.ETag,
-		Size:         putBlobResult.Size,
-		Blobs: []metadata.Blob{
-			{
-				Id:   putBlobResult.BlobId,
-				ETag: putBlobResult.ETag,
-				Size: putBlobResult.Size,
-			},
-		},
+		ETag:         etag,
+		Size:         size,
+		Blobs:        blobs,
 	}
 
 	err = mbs.metadataStore.PutObject(tx, bucket, &object)
