@@ -297,12 +297,20 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 				if err == nil {
 					end = &endByte
 				}
+
+				// Translate suffix range to int range
+				if start == nil && end != nil {
+					startByte = object.Size - *end
+					start = &startByte
+					endByte = object.Size - 1
+					end = &endByte
+				}
 			}
 
 			if start != nil && *start < 0 {
 				return nil, errInvalidByteRange
 			}
-			if end != nil && *end > object.Size {
+			if end != nil && *end >= object.Size {
 				return nil, errInvalidByteRange
 			}
 
@@ -341,6 +349,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		for _, byteRange := range byteRanges {
 			var end int64 = object.Size
 			if byteRange.end != nil {
+				// convert to exclusive end indexing
 				end = *byteRange.end + 1
 			}
 			if byteRange.start != nil {
