@@ -453,13 +453,38 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 				assert.Fail(t, "GetObject failed", "err %v", err)
 			}
 			assert.NotNil(t, getObjectResult)
+			assert.NotNil(t, getObjectResult.ContentType)
+			assert.Contains(t, *getObjectResult.ContentType, "multipart/byteranges; boundary=")
+			boundary, _ := strings.CutPrefix(*getObjectResult.ContentType, "multipart/byteranges; boundary=")
 			assert.NotNil(t, getObjectResult.Body)
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
 
 			newContent := []byte{}
+			/*
+				+ 00000000  2d 2d 30 31 48 58 45 52  50 59 56 4a 39 41 47 56  |--01HXERPYVJ9AGV|
+				+ 00000010  44 42 34 57 4a 41 44 4a  43 56 59 4e 0d 0a 43 6f  |DB4WJADJCVYN..Co|
+				+ 00000020  6e 74 65 6e 74 2d 52 61  6e 67 65 3a 20 62 79 74  |ntent-Range: byt|
+				+ 00000030  65 73 20 31 2d 34 2f 31  33 0d 0a 0d 0a 65 6c 6c  |es 1-4/13....ell|
+				+ 00000040  6f 0d 0a 2d 2d 30 31 48  58 45 52 50 59 56 4a 39  |o..--01HXERPYVJ9|
+				+ 00000050  41 47 56 44 42 34 57 4a  41 44 4a 43 56 59 4e 0d  |AGVDB4WJADJCVYN.|
+				+ 00000060  0a 43 6f 6e 74 65 6e 74  2d 52 61 6e 67 65 3a 20  |.Content-Range: |
+				+ 00000070  62 79 74 65 73 20 35 2d  36 2f 31 33 0d 0a 0d 0a  |bytes 5-6/13....|
+				+ 00000080  2c 20 0d 0a 2d 2d 30 31  48 58 45 52 50 59 56 4a  |, ..--01HXERPYVJ|
+				+ 00000090  39 41 47 56 44 42 34 57  4a 41 44 4a 43 56 59 4e  |9AGVDB4WJADJCVYN|
+				+ 000000a0  2d 2d 0d 0a                                       |--..|
+			*/
+			newContent = append(newContent, []byte("--")...)
+			newContent = append(newContent, []byte(boundary)...)
+			newContent = append(newContent, []byte("\r\nContent-Range: bytes 1-4/13\r\n\r\n")...)
 			newContent = append(newContent, body[1:5]...)
+			newContent = append(newContent, []byte("\r\n--")...)
+			newContent = append(newContent, []byte(boundary)...)
+			newContent = append(newContent, []byte("\r\nContent-Range: bytes 5-6/13\r\n\r\n")...)
 			newContent = append(newContent, body[5:7]...)
+			newContent = append(newContent, []byte("\r\n--")...)
+			newContent = append(newContent, []byte(boundary)...)
+			newContent = append(newContent, []byte("--\r\n")...)
 			assert.Equal(t, newContent, objectBytes)
 		})
 

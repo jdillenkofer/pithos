@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/middlewares"
+	"github.com/oklog/ulid/v2"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 )
@@ -332,11 +332,10 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reader io.ReadSeekCloser
-	var size int64 = 0
+	var readers []io.ReadSeekCloser
+	var sizes []int64
+	var totalSize int64 = 0
 	if len(byteRanges) > 0 {
-		rangeReaders := []io.ReadSeekCloser{}
-
 		for _, byteRange := range byteRanges {
 			var end int64 = object.Size
 			if byteRange.end != nil {
@@ -344,37 +343,80 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 				end = *byteRange.end + 1
 			}
 			if byteRange.start != nil {
-				size += end - *byteRange.start
+				size := end - *byteRange.start
+				sizes = append(sizes, size)
+				totalSize += size
 			}
 			rangeReader, err := s.storage.GetObject(bucket, key, byteRange.start, &end)
 			if err != nil {
-				for _, rangeReader := range rangeReaders {
+				for _, rangeReader := range readers {
 					rangeReader.Close()
 				}
 				handleError(err, w, r)
 				return
 			}
-			rangeReaders = append(rangeReaders, rangeReader)
-		}
-		reader, err = ioutils.NewMultiReadSeekCloser(rangeReaders)
-		if err != nil {
-			handleError(err, w, r)
-			return
+			readers = append(readers, rangeReader)
 		}
 	} else {
-		reader, err = s.storage.GetObject(bucket, key, nil, nil)
+		reader, err := s.storage.GetObject(bucket, key, nil, nil)
 		if err != nil {
 			handleError(err, w, r)
 			return
 		}
-		size = object.Size
+		readers = append(readers, reader)
+		size := object.Size
+		sizes = append(sizes, size)
+		totalSize = size
 	}
 
-	defer reader.Close()
+	defer (func() {
+		for _, reader := range readers {
+			reader.Close()
+		}
+	})()
 	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
 	w.Header().Add("Accept-Ranges", "bytes")
-	w.Header().Add("Content-Length", fmt.Sprintf("%v", size))
-	if len(byteRanges) > 0 {
+	if len(byteRanges) > 1 {
+		separator := ulid.Make().String()
+		rangeHeaderLength := int64(0)
+		rangeHeaders := []string{}
+		for idx := range readers {
+			byteRangeEntry := byteRanges[idx]
+			start := int64(0)
+			if byteRangeEntry.start != nil {
+				start = *byteRangeEntry.start
+			}
+			end := object.Size - 1
+			if byteRangeEntry.end != nil {
+				end = *byteRangeEntry.end
+			}
+			contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, object.Size)
+			rangeHeader := fmt.Sprintf("Content-Range: %v\r\n\r\n", contentRangeValue)
+			rangeHeaders = append(rangeHeaders, rangeHeader)
+			rangeHeaderLength += int64(len(rangeHeader))
+		}
+		separatorLength := int64(len(separator))
+		byteRangesCount := int64(len(byteRanges))
+		startCrlfLength := (byteRangesCount - 1) * 2 /* \r\n */
+		separatorLineLength := (2 /* -- */ + 2 /* \r\n */ + separatorLength)
+		endSeparatorLineLength := separatorLineLength + 2 /* \r\n */ + 2 /* -- at the end */
+		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*byteRangesCount + endSeparatorLineLength
+		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
+		w.Header().Add("Content-Type", fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
+		w.WriteHeader(206)
+		for idx := range readers {
+			if idx > 0 {
+				io.WriteString(w, "\r\n")
+			}
+			io.WriteString(w, fmt.Sprintf("--%s\r\n", separator))
+
+			io.WriteString(w, rangeHeaders[idx])
+
+			io.CopyN(w, readers[idx], sizes[idx])
+		}
+		io.WriteString(w, fmt.Sprintf("\r\n--%s--\r\n", separator))
+	} else if len(byteRanges) == 1 {
+		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
 		start := int64(0)
 		if firstRangeEntry.start != nil {
@@ -387,10 +429,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, object.Size)
 		w.Header().Add("Content-Range", contentRangeValue)
 		w.WriteHeader(206)
+		io.CopyN(w, readers[0], totalSize)
 	} else {
+		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
+		io.CopyN(w, readers[0], totalSize)
 	}
-	io.CopyN(w, reader, size)
 }
 
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
