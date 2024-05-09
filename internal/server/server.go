@@ -11,26 +11,13 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/middlewares"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 )
 
 type Server struct {
 	storage storage.Storage
-}
-
-func virtualHostBucketAddressingMiddleware(baseEndpoint string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hostname := r.Host
-		if hostname != baseEndpoint {
-			endpointSplit := strings.SplitN(hostname, ".", 2)
-			if len(endpointSplit) == 2 {
-				bucket := endpointSplit[0]
-				r.URL.Path = strings.TrimSuffix("/"+bucket+r.URL.Path, "/")
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func SetupServer(baseEndpoint string, storage storage.Storage) http.Handler {
@@ -47,7 +34,11 @@ func SetupServer(baseEndpoint string, storage storage.Storage) http.Handler {
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
-	return virtualHostBucketAddressingMiddleware(baseEndpoint, mux)
+	var rootHandler http.Handler = mux
+	rootHandler = middlewares.MakeGzipMiddleware(rootHandler)
+	rootHandler = middlewares.MakeDeflateMiddleware(rootHandler)
+	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
+	return rootHandler
 }
 
 type Bucket struct {
