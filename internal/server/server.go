@@ -381,6 +381,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	defer reader.Close()
 	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
+	w.Header().Add("Accept-Ranges", "bytes")
 	w.Header().Add("Content-Length", fmt.Sprintf("%v", size))
 	if len(byteRanges) > 0 {
 		firstRangeEntry := byteRanges[0]
