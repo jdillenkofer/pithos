@@ -262,6 +262,19 @@ type byteRange struct {
 	end   *int64
 }
 
+func (br byteRange) generateContentRangeValue(length int64) string {
+	start := int64(0)
+	if br.start != nil {
+		start = *br.start
+	}
+	end := length - 1
+	if br.end != nil {
+		end = *br.end
+	}
+	contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, length)
+	return contentRangeValue
+}
+
 var errInvalidByteRange error = fmt.Errorf("Invalid byte range")
 
 func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]byteRange, error) {
@@ -382,15 +395,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		rangeHeaders := []string{}
 		for idx := range readers {
 			byteRangeEntry := byteRanges[idx]
-			start := int64(0)
-			if byteRangeEntry.start != nil {
-				start = *byteRangeEntry.start
-			}
-			end := object.Size - 1
-			if byteRangeEntry.end != nil {
-				end = *byteRangeEntry.end
-			}
-			contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, object.Size)
+			contentRangeValue := byteRangeEntry.generateContentRangeValue(object.Size)
 			rangeHeader := fmt.Sprintf("Content-Range: %v\r\n\r\n", contentRangeValue)
 			rangeHeaders = append(rangeHeaders, rangeHeader)
 			rangeHeaderLength += int64(len(rangeHeader))
@@ -418,15 +423,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	} else if len(byteRanges) == 1 {
 		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
-		start := int64(0)
-		if firstRangeEntry.start != nil {
-			start = *firstRangeEntry.start
-		}
-		end := object.Size - 1
-		if firstRangeEntry.end != nil {
-			end = *firstRangeEntry.end
-		}
-		contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, object.Size)
+		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
 		w.Header().Add("Content-Range", contentRangeValue)
 		w.WriteHeader(206)
 		io.CopyN(w, readers[0], totalSize)
