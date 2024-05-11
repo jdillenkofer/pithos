@@ -20,6 +20,12 @@ type Object struct {
 	Blobs        []Blob
 }
 
+type ListBucketResult struct {
+	Objects        []Object
+	CommonPrefixes []string
+	IsTruncated    bool
+}
+
 type Blob struct {
 	Id   blob.BlobId
 	Size int64
@@ -36,7 +42,7 @@ type MetadataStore interface {
 	DeleteBucket(bucketName string) error
 	ListBuckets() ([]Bucket, error)
 	HeadBucket(bucketName string) (*Bucket, error)
-	ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error)
+	ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
 	HeadObject(bucketName string, key string) (*Object, error)
 	PutObject(bucketName string, object *Object) error
 	DeleteObject(bucketName string, key string) error

@@ -185,7 +185,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	maxKeys := int(maxKeysI64)
 
 	log.Printf("Listing objects in bucket %s\n", bucket)
-	objects, commonPrefixes, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
+	result, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -195,16 +195,16 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Prefix:         prefix,
 		Delimiter:      delimiter,
 		StartAfter:     startAfter,
-		KeyCount:       len(objects),
+		KeyCount:       len(result.Objects),
 		MaxKeys:        maxKeys,
 		CommonPrefixes: []*CommonPrefixes{},
-		IsTruncated:    len(objects) == maxKeys,
+		IsTruncated:    result.IsTruncated,
 		Contents:       []*Content{},
 	}
 
 	w.Header().Add("Content-Type", "application/xml")
 	w.WriteHeader(200)
-	for _, object := range objects {
+	for _, object := range result.Objects {
 		listBucketResult.Contents = append(listBucketResult.Contents, &Content{
 			Key:          object.Key,
 			LastModified: object.LastModified.Format(time.RFC3339),
@@ -213,7 +213,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			StorageClass: "STANDARD",
 		})
 	}
-	for _, commonPrefix := range commonPrefixes {
+	for _, commonPrefix := range result.CommonPrefixes {
 		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
 	}
 	out, _ := xmlMarshalWithDocType(listBucketResult)

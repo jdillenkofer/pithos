@@ -150,11 +150,18 @@ func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
 	return &bucket, nil
 }
 
-func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int, tx *sql.Tx) ([]Object, []string, error) {
+func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int, tx *sql.Tx) (*ListBucketResult, error) {
+	keyCountRow := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
+	var keyCount int
+	err := keyCountRow.Scan(&keyCount)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	rows, err := tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
-		return nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
 	commonPrefixes := []string{}
@@ -168,12 +175,12 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 		err = rows.Scan(&objectId, &key, &lastModified, &etag, &size)
 		if err != nil {
 			tx.Rollback()
-			return nil, nil, err
+			return nil, err
 		}
 		blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
 		if err != nil {
 			tx.Rollback()
-			return nil, nil, err
+			return nil, err
 		}
 		defer blobRows.Close()
 		blobs := []Blob{}
@@ -184,7 +191,7 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 			err = blobRows.Scan(&blobId, &etag, &size)
 			if err != nil {
 				tx.Rollback()
-				return nil, nil, err
+				return nil, err
 			}
 			blobStruc := Blob{
 				Id:   ulid.MustParse(blobId),
@@ -200,28 +207,33 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 			Size:         size,
 			Blobs:        blobs,
 		})
-		if len(objects)+len(commonPrefixes) == maxKeys {
+		if len(objects) == maxKeys {
 			break
 		}
 	}
 	tx.Commit()
-	return objects, commonPrefixes, nil
+	listBucketResult := ListBucketResult{
+		Objects:        objects,
+		CommonPrefixes: commonPrefixes,
+		IsTruncated:    keyCount > maxKeys,
+	}
+	return &listBucketResult, nil
 }
 
-func (sms *SqlMetadataStore) ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error) {
+func (sms *SqlMetadataStore) ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
 	tx, err := sms.db.Begin()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	rows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
 	if err != nil {
 		tx.Rollback()
-		return nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		tx.Rollback()
-		return nil, nil, ErrNoSuchBucket
+		return nil, ErrNoSuchBucket
 	}
 	return sms.listObjects(bucketName, prefix, delimiter, startAfter, maxKeys, tx)
 }

@@ -64,12 +64,21 @@ func convertObject(mObject metadata.Object) Object {
 	}
 }
 
-func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) ([]Object, []string, error) {
-	mObjects, commonPrefixes, err := mbs.metadataStore.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
-	if err != nil {
-		return nil, nil, err
+func convertListBucketResult(mListBucketResult metadata.ListBucketResult) ListBucketResult {
+	return ListBucketResult{
+		Objects:        sliceutils.Map(convertObject, mListBucketResult.Objects),
+		CommonPrefixes: mListBucketResult.CommonPrefixes,
+		IsTruncated:    mListBucketResult.IsTruncated,
 	}
-	return sliceutils.Map(convertObject, mObjects), commonPrefixes, nil
+}
+
+func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	mListBucketResult, err := mbs.metadataStore.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
+	if err != nil {
+		return nil, err
+	}
+	listBucketResult := convertListBucketResult(*mListBucketResult)
+	return &listBucketResult, nil
 }
 
 func (mbs *MetadataBlobStorage) HeadObject(bucket string, key string) (*Object, error) {
