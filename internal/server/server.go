@@ -178,7 +178,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	prefix := query.Get("prefix")
 	delimiter := query.Get("delimiter")
 	startAfter := query.Get("startAfter")
-	maxKeysI64, err := strconv.ParseInt(query.Get("maxKeys"), 10, 32)
+	maxKeysI64, err := strconv.ParseInt(query.Get("max-keys"), 10, 32)
 	if err != nil || maxKeysI64 < 0 {
 		maxKeysI64 = 1000
 	}

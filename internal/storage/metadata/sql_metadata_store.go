@@ -177,38 +177,37 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 			tx.Rollback()
 			return nil, err
 		}
-		blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
-		if err != nil {
-			tx.Rollback()
-			return nil, err
-		}
-		defer blobRows.Close()
-		blobs := []Blob{}
-		for blobRows.Next() {
-			var blobId string
-			var etag string
-			var size int64
-			err = blobRows.Scan(&blobId, &etag, &size)
+		if len(objects) < maxKeys {
+			blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
 			if err != nil {
 				tx.Rollback()
 				return nil, err
 			}
-			blobStruc := Blob{
-				Id:   ulid.MustParse(blobId),
-				ETag: etag,
-				Size: size,
+			defer blobRows.Close()
+			blobs := []Blob{}
+			for blobRows.Next() {
+				var blobId string
+				var etag string
+				var size int64
+				err = blobRows.Scan(&blobId, &etag, &size)
+				if err != nil {
+					tx.Rollback()
+					return nil, err
+				}
+				blobStruc := Blob{
+					Id:   ulid.MustParse(blobId),
+					ETag: etag,
+					Size: size,
+				}
+				blobs = append(blobs, blobStruc)
 			}
-			blobs = append(blobs, blobStruc)
-		}
-		objects = append(objects, Object{
-			Key:          key,
-			LastModified: lastModified,
-			ETag:         etag,
-			Size:         size,
-			Blobs:        blobs,
-		})
-		if len(objects) == maxKeys {
-			break
+			objects = append(objects, Object{
+				Key:          key,
+				LastModified: lastModified,
+				ETag:         etag,
+				Size:         size,
+				Blobs:        blobs,
+			})
 		}
 	}
 	tx.Commit()

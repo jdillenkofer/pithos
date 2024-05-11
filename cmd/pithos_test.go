@@ -100,6 +100,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 	bucketName2 := aws.String("test2")
 	keyPrefix := aws.String("my/test/key")
 	key := aws.String(*keyPrefix + "/hello_world.txt")
+	key2 := aws.String(*keyPrefix + "/hello_world2.txt")
 	body := []byte("Hello, world!")
 
 	t.Parallel()
@@ -611,7 +612,30 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			assert.Len(t, listBucketResult.Buckets, 2)
 		})
 
-		t.Run("it should list all objects"+pathStyleSuffix, func(t *testing.T) {
+		t.Run("it should list no objects"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 0)
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		t.Run("it should list a single object"+pathStyleSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
@@ -638,7 +662,128 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			if err != nil {
 				assert.Fail(t, "ListObjects failed", "err %v", err)
 			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
 			assert.Len(t, listObjectResult.Contents, 1)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, key, object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		t.Run("it should list two objects"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, second object!")),
+				Key:    key2,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 2)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, key, object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			object2 := listObjectResult.Contents[1]
+			assert.Equal(t, key2, object2.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object2.StorageClass)
+			assert.Equal(t, int64(21), *object2.Size)
+			assert.Equal(t, "\"72b52198921c896c2e7f5b3ef0ad42be\"", *object2.ETag)
+
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		t.Run("it should truncate when listing objects"+pathStyleSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, second object!")),
+				Key:    key2,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			maxKeys := int32(1)
+			listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+				Bucket:  bucketName,
+				MaxKeys: &maxKeys,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 1)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, key, object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			assert.True(t, *listObjectResult.IsTruncated)
 		})
 
 		t.Run("it should list objects starting with prefix my/test/key"+pathStyleSuffix, func(t *testing.T) {
@@ -669,7 +814,18 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			if err != nil {
 				assert.Fail(t, "ListObjects failed", "err %v", err)
 			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
 			assert.Len(t, listObjectResult.Contents, 1)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, key, object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			assert.False(t, *listObjectResult.IsTruncated)
 		})
 
 		t.Run("it should list no objects when searching for prefix key"+pathStyleSuffix, func(t *testing.T) {
@@ -700,7 +856,11 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			if err != nil {
 				assert.Fail(t, "ListObjects failed", "err %v", err)
 			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
 			assert.Len(t, listObjectResult.Contents, 0)
+			assert.False(t, *listObjectResult.IsTruncated)
 		})
 	}
 }
