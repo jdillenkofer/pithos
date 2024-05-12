@@ -3,6 +3,8 @@ package metadata
 import (
 	"database/sql"
 	"embed"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -150,6 +152,19 @@ func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
 	return &bucket, nil
 }
 
+func determineCommonPrefix(prefix, key, delimiter string) *string {
+	prefixSegments := strings.Split(prefix, delimiter)
+	keySegments := strings.Split(key, delimiter)
+	if len(prefixSegments) >= len(keySegments) {
+		return nil
+	}
+	commonPrefix := ""
+	for idx := range prefixSegments {
+		commonPrefix += keySegments[idx] + delimiter
+	}
+	return &commonPrefix
+}
+
 func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int, tx *sql.Tx) (*ListBucketResult, error) {
 	keyCountRow := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
 	var keyCount int
@@ -158,7 +173,7 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 		tx.Rollback()
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
+	rows, err := tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? ORDER BY key ASC", bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -176,6 +191,12 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 		if err != nil {
 			tx.Rollback()
 			return nil, err
+		}
+		if delimiter != "" {
+			commonPrefix := determineCommonPrefix(prefix, key, delimiter)
+			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
+				commonPrefixes = append(commonPrefixes, *commonPrefix)
+			}
 		}
 		if len(objects) < maxKeys {
 			blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
@@ -201,13 +222,16 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 				}
 				blobs = append(blobs, blobStruc)
 			}
-			objects = append(objects, Object{
-				Key:          key,
-				LastModified: lastModified,
-				ETag:         etag,
-				Size:         size,
-				Blobs:        blobs,
-			})
+			keyWithoutPrefix := strings.TrimPrefix(key, prefix)
+			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
+				objects = append(objects, Object{
+					Key:          key,
+					LastModified: lastModified,
+					ETag:         etag,
+					Size:         size,
+					Blobs:        blobs,
+				})
+			}
 		}
 	}
 	tx.Commit()
