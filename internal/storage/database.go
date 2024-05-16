@@ -37,7 +37,10 @@ func applyDatabaseMigrations(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	m.Up()
+	err = m.Up()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

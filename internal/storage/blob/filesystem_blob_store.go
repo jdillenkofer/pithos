@@ -1,7 +1,6 @@
 package blob
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"io"
@@ -38,43 +37,6 @@ func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
 		return nil, err
 	}
 	return bs, nil
-}
-
-func calculateMd5Sum(file *os.File) (*string, error) {
-	hash := md5.New()
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-	_, err = hash.Write(data)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
-}
-
-func calculateETag(file *os.File) (*string, error) {
-	md5Sum, err := calculateMd5Sum(file)
-	if err != nil {
-		return nil, err
-	}
-	etag := "\"" + *md5Sum + "\""
-	return &etag, nil
-}
-
-func calculateETagFromPath(path string) (*string, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	etag, err := calculateETag(f)
-	if err != nil {
-		return nil, err
-	}
-	return etag, nil
 }
 
 func (bs *FilesystemBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
