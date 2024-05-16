@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,10 +37,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	blobStore, err := blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
+	blobStore, err := blob.NewSqlBlobStore(db)
 	if err != nil {
 		log.Fatal(err)
 	}
+	/*
+		blobStore, err := blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
+		if err != nil {
+			log.Fatal(err)
+		}
+	*/
 	storage, err := storage.NewMetadataBlobStorage(metadataStore, blobStore)
 	if err != nil {
 		log.Fatal(err)
