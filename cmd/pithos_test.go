@@ -41,6 +41,10 @@ func setupTestServer(usePathStyle bool) (s3Client *s3.Client, cleanup func()) {
 	if err != nil {
 		log.Fatalf("Could not open sqlite3 database: %s", err)
 	}
+	err = storage.SetupDatabase(db)
+	if err != nil {
+		log.Fatalf("Could not setup database: %s", err)
+	}
 	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatalf("Could not create metadataStore: %s", err)
