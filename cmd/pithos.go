@@ -29,6 +29,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	err = storage.SetupDatabase(db)
+	if err != nil {
+		log.Fatal(err)
+	}
 	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatal(err)

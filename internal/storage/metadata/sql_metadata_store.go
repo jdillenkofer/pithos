@@ -2,49 +2,18 @@ package metadata
 
 import (
 	"database/sql"
-	"embed"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
-
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/sqlite3"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
-
-//go:embed migrations/*.sql
-var migrationsFilesystem embed.FS
 
 type SqlMetadataStore struct {
 	db *sql.DB
 }
 
 func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
-	enableForeignKeysStmt := `
-	PRAGMA foreign_keys = ON;
-	`
-	_, err := db.Exec(enableForeignKeysStmt)
-	if err != nil {
-		return nil, err
-	}
-
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
-	if err != nil {
-		return nil, err
-	}
-
-	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
-	if err != nil {
-		return nil, err
-	}
-	m, err := migrate.NewWithInstance("iofs", sourceDriver, "sqlite3", databaseDriver)
-	if err != nil {
-		return nil, err
-	}
-	m.Up()
 
 	return &SqlMetadataStore{
 		db: db,
