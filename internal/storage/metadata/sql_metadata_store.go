@@ -14,7 +14,6 @@ type SqlMetadataStore struct {
 }
 
 func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
-
 	return &SqlMetadataStore{
 		db: db,
 	}, nil
@@ -35,7 +34,7 @@ func (sms *SqlMetadataStore) CreateBucket(bucketName string) error {
 		tx.Rollback()
 		return ErrBucketAlreadyExists
 	}
-	_, err = tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, datetime('now'), datetime('now'))", ulid.Make(), bucketName)
+	_, err = tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, datetime('now'), datetime('now'))", ulid.Make().String(), bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
