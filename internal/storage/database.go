@@ -12,10 +12,22 @@ import (
 //go:embed migrations/*.sql
 var migrationsFilesystem embed.FS
 
+// In auto-vacuum full mode freelist pages are moved to the end of the file
+// end the file is truncated
+// See https://www.sqlite.org/pragma.html#pragma_auto_vacuum
+func enableAutoVacuumFullMode(db *sql.DB) error {
+	enableAutoVacuumFullStmt := "PRAGMA auto_vacuum = FULL;"
+
+	_, err := db.Exec(enableAutoVacuumFullStmt)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func enableForeignKeyConstraints(db *sql.DB) error {
-	enableForeignKeysStmt := `
-	PRAGMA foreign_keys = ON;
-	`
+	enableForeignKeysStmt := "PRAGMA foreign_keys = ON;"
+
 	_, err := db.Exec(enableForeignKeysStmt)
 	if err != nil {
 		return err
@@ -45,7 +57,11 @@ func applyDatabaseMigrations(db *sql.DB) error {
 }
 
 func SetupDatabase(db *sql.DB) error {
-	err := enableForeignKeyConstraints(db)
+	err := enableAutoVacuumFullMode(db)
+	if err != nil {
+		return err
+	}
+	err = enableForeignKeyConstraints(db)
 	if err != nil {
 		return err
 	}
