@@ -32,6 +32,7 @@ func SetupServer(baseEndpoint string, storage storage.Storage) http.Handler {
 	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
+	mux.HandleFunc("POST /{bucket}/{key...}", server.postObjectHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
 	var rootHandler http.Handler = mux
@@ -86,6 +87,25 @@ type ListBucketResult struct {
 	CommonPrefixes []*CommonPrefixes `xml:"CommonPrefixes"`
 	KeyCount       int               `xml:"KeyCount"`
 	StartAfter     string            `xml:"StartAfter"`
+}
+
+type InitiateMultipartUploadResult struct {
+	XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+	Bucket   string   `xml:"Bucket"`
+	Key      string   `xml:"Key"`
+	UploadId string   `xml:"UploadId"`
+}
+
+type CompleteMultipartUploadResult struct {
+	XMLName        xml.Name `xml:"CompleteMultipartUploadResult"`
+	Location       string   `xml:"Location"`
+	Bucket         string   `xml:"Bucket"`
+	Key            string   `xml:"Key"`
+	ETag           string   `xml:"ETag"`
+	ChecksumCRC32  string   `xml:"ChecksumCRC32"`
+	ChecksumCRC32C string   `xml:"ChecksumCRC32C"`
+	ChecksumSHA1   string   `xml:"ChecksumSHA1"`
+	ChecksumSHA256 string   `xml:"ChecksumSHA256"`
 }
 
 type ErrorResponse struct {
@@ -434,9 +454,108 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
+	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
+	uploadId, err := s.storage.CreateMultipartUpload(bucket, key)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	initiateMultipartUploadResult := InitiateMultipartUploadResult{
+		Bucket:   bucket,
+		Key:      key,
+		UploadId: *uploadId,
+	}
+
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(initiateMultipartUploadResult)
+	w.Write(out)
+}
+
+func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	key := r.PathValue("key")
+	query := r.URL.Query()
+	uploadId := query.Get("uploadId")
+	log.Printf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
+	result, err := s.storage.CompleteMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	completeMultipartUploadResult := CompleteMultipartUploadResult{
+		Location:       result.Location,
+		Bucket:         bucket,
+		Key:            key,
+		ETag:           result.ETag,
+		ChecksumCRC32:  result.ChecksumCRC32,
+		ChecksumCRC32C: result.ChecksumCRC32C,
+		ChecksumSHA1:   result.ChecksumSHA1,
+		ChecksumSHA256: result.ChecksumSHA256,
+	}
+
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(completeMultipartUploadResult)
+	w.Write(out)
+}
+
+func (s *Server) postObjectHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	queryUploadsParam := query.Has("uploads")
+	queryUploadIdParam := query.Has("uploadId")
+
+	// CreateMultipartUpload
+	if queryUploadsParam {
+		s.createMultipartUpload(w, r)
+		return
+	}
+
+	// CompleteMultipartUpload
+	if queryUploadIdParam {
+		s.completeMultipartUpload(w, r)
+		return
+	}
+
+	w.WriteHeader(404)
+}
+
+func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	key := r.PathValue("key")
+	query := r.URL.Query()
+	uploadId := query.Get("uploadId")
+	partNumber := query.Get("partNumber")
+	log.Printf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)\n", key, bucket, uploadId, partNumber)
+	if !query.Has("uploadId") || !query.Has("partNumber") {
+		w.WriteHeader(400)
+		return
+	}
+	partNumberUint64, err := strconv.ParseUint(partNumber, 10, 16)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	partNumberUint16 := uint16(partNumberUint64)
+	if partNumberUint16 < 1 || partNumberUint16 > 10000 {
+		w.WriteHeader(400)
+		return
+	}
+	err = s.storage.UploadPart(bucket, key, uploadId, partNumberUint16, r.Body)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	key := r.PathValue("key")
+
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get("Expect") == "100-continue" {
 		w.WriteHeader(100)
@@ -447,9 +566,37 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(200)
+
 }
 
-func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	// UploadPart
+	if query.Has("uploadId") || query.Has("partNumber") {
+		s.uploadPart(w, r)
+		return
+	}
+
+	// PutObject
+	s.putObject(w, r)
+}
+
+func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	bucket := r.PathValue("bucket")
+	key := r.PathValue("key")
+	query := r.URL.Query()
+	uploadId := query.Get("uploadId")
+	log.Printf("AbortMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
+	err := s.storage.AbortMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue("bucket")
 	key := r.PathValue("key")
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
@@ -459,4 +606,17 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+
+	// AbortMultipartUpload
+	if query.Has("uploadId") {
+		s.abortMultipartUpload(w, r)
+		return
+	}
+
+	// DeleteObject
+	s.deleteObject(w, r)
 }

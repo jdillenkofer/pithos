@@ -155,3 +155,19 @@ func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {
 	}
 	return mbs.metadataStore.DeleteObject(bucket, key)
 }
+
+func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string) (*string, error) {
+	return nil, nil
+}
+
+func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error {
+	return nil
+}
+
+func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	return nil, nil
+}
+
+func (mbs *MetadataBlobStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	return nil
+}

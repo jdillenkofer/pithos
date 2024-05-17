@@ -233,6 +233,28 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 				assert.NotNil(t, putObjectResult)
 			})
 
+			t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
+				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				t.Cleanup(cleanup)
+				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+					Bucket: bucketName,
+				})
+				if err != nil {
+					assert.Fail(t, "CreateBucket failed", "err %v", err)
+				}
+				assert.NotNil(t, createBucketResult)
+
+				createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+
+				if err != nil {
+					assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+				}
+				assert.NotNil(t, createMultiPartUploadResult)
+			})
+
 			t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
 				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
 				t.Cleanup(cleanup)
