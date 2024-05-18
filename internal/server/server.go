@@ -49,6 +49,9 @@ const prefixQuery = "prefix"
 const delimiterQuery = "delimiter"
 const startAfterQuery = "startAfter"
 const maxKeysQuery = "max-keys"
+const uploadIdQuery = "uploadId"
+const uploadsQuery = "uploads"
+const partNumberQuery = "partNumber"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -475,8 +478,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
 	uploadId, err := s.storage.CreateMultipartUpload(bucket, key)
 	if err != nil {
@@ -496,10 +499,10 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	query := r.URL.Query()
-	uploadId := query.Get("uploadId")
+	uploadId := query.Get(uploadIdQuery)
 	log.Printf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
 	result, err := s.storage.CompleteMultipartUpload(bucket, key, uploadId)
 	if err != nil {
@@ -525,17 +528,15 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
-	queryUploadsParam := query.Has("uploads")
-	queryUploadIdParam := query.Has("uploadId")
 
 	// CreateMultipartUpload
-	if queryUploadsParam {
+	if query.Has(uploadsQuery) {
 		s.createMultipartUpload(w, r)
 		return
 	}
 
 	// CompleteMultipartUpload
-	if queryUploadIdParam {
+	if query.Has(uploadIdQuery) {
 		s.completeMultipartUpload(w, r)
 		return
 	}
@@ -547,10 +548,10 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
-	uploadId := query.Get("uploadId")
-	partNumber := query.Get("partNumber")
+	uploadId := query.Get(uploadIdQuery)
+	partNumber := query.Get(partNumberQuery)
 	log.Printf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)\n", key, bucket, uploadId, partNumber)
-	if !query.Has("uploadId") || !query.Has("partNumber") {
+	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
 		return
 	}
@@ -593,7 +594,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// UploadPart
-	if query.Has("uploadId") || query.Has("partNumber") {
+	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
 		s.uploadPart(w, r)
 		return
 	}
@@ -603,10 +604,10 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	query := r.URL.Query()
-	uploadId := query.Get("uploadId")
+	uploadId := query.Get(uploadIdQuery)
 	log.Printf("AbortMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
 	err := s.storage.AbortMultipartUpload(bucket, key, uploadId)
 	if err != nil {
@@ -632,7 +633,7 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// AbortMultipartUpload
-	if query.Has("uploadId") {
+	if query.Has(uploadIdQuery) {
 		s.abortMultipartUpload(w, r)
 		return
 	}
