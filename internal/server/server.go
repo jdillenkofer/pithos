@@ -41,6 +41,25 @@ func SetupServer(baseEndpoint string, storage storage.Storage) http.Handler {
 	return rootHandler
 }
 
+const bucketPath = "bucket"
+const keyPath = "key"
+
+const prefixQuery = "prefix"
+const delimiterQuery = "delimiter"
+const startAfterQuery = "startAfter"
+const maxKeysQuery = "max-keys"
+
+const acceptRangesHeader = "Accept-Ranges"
+const expectHeader = "Expect"
+const contentRangeHeader = "Content-Range"
+const contentLengthHeader = "Content-Length"
+const rangeHeader = "Range"
+const lastModifiedHeader = "Last-Modified"
+const contentTypeHeader = "Content-Type"
+const locationHeader = "Location"
+
+const applicationXmlContentType = "application/xml"
+
 type Bucket struct {
 	XMLName      xml.Name `xml:"Bucket"`
 	CreationDate string   `xml:"CreationDate"`
@@ -142,7 +161,7 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add("Content-Type", "application/xml")
+	w.Header().Add(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
 		Buckets: []*Bucket{},
@@ -162,7 +181,7 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
-	bucketName := r.PathValue("bucket")
+	bucketName := r.PathValue(bucketPath)
 	log.Printf("Head bucket %s\n", bucketName)
 	_, err := s.storage.HeadBucket(bucketName)
 	if err != nil {
@@ -173,19 +192,20 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
+	bucket := r.PathValue(bucketPath)
 	query := r.URL.Query()
-	prefix := query.Get("prefix")
-	delimiter := query.Get("delimiter")
-	startAfter := query.Get("startAfter")
-	maxKeysI64, err := strconv.ParseInt(query.Get("max-keys"), 10, 32)
+	prefix := query.Get(prefixQuery)
+	delimiter := query.Get(delimiterQuery)
+	startAfter := query.Get(startAfterQuery)
+	maxKeys := query.Get(maxKeysQuery)
+	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
 	if err != nil || maxKeysI64 < 0 {
 		maxKeysI64 = 1000
 	}
-	maxKeys := int(maxKeysI64)
+	maxKeysInt := int(maxKeysI64)
 
 	log.Printf("Listing objects in bucket %s\n", bucket)
-	result, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
+	result, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeysInt)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -196,13 +216,13 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Delimiter:      delimiter,
 		StartAfter:     startAfter,
 		KeyCount:       len(result.Objects),
-		MaxKeys:        maxKeys,
+		MaxKeys:        maxKeysInt,
 		CommonPrefixes: []*CommonPrefixes{},
 		IsTruncated:    result.IsTruncated,
 		Contents:       []*Content{},
 	}
 
-	w.Header().Add("Content-Type", "application/xml")
+	w.Header().Add(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, object := range result.Objects {
 		listBucketResult.Contents = append(listBucketResult.Contents, &Content{
@@ -221,19 +241,19 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
+	bucket := r.PathValue(bucketPath)
 	log.Printf("Creating bucket %s\n", bucket)
 	err := s.storage.CreateBucket(bucket)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add("Location", bucket)
+	w.Header().Add(locationHeader, bucket)
 	w.WriteHeader(200)
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
+	bucket := r.PathValue(bucketPath)
 	log.Printf("Deleting bucket %s\n", bucket)
 	err := s.storage.DeleteBucket(bucket)
 	if err != nil {
@@ -244,16 +264,16 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
 	object, err := s.storage.HeadObject(bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add("Last-Modified", object.LastModified.Format(time.RFC3339))
-	w.Header().Add("Content-Length", fmt.Sprintf("%v", object.Size))
+	w.Header().Add(lastModifiedHeader, object.LastModified.Format(time.RFC3339))
+	w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 }
 
@@ -329,9 +349,9 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
-	rangeHeader := r.Header.Get("Range")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
+	rangeHeaderValue := r.Header.Get(rangeHeader)
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
 	object, err := s.storage.HeadObject(bucket, key)
 	if err != nil {
@@ -339,7 +359,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byteRanges, err := parseAndValidateRangeHeader(rangeHeader, object)
+	byteRanges, err := parseAndValidateRangeHeader(rangeHeaderValue, object)
 	if err != nil {
 		w.WriteHeader(416)
 		return
@@ -387,8 +407,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			reader.Close()
 		}
 	})()
-	w.Header().Add("Last-Modified", object.LastModified.UTC().Format(http.TimeFormat))
-	w.Header().Add("Accept-Ranges", "bytes")
+	w.Header().Add(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	w.Header().Add(acceptRangesHeader, "bytes")
 	if len(byteRanges) > 1 {
 		separator := ulid.Make().String()
 		rangeHeaderLength := int64(0)
@@ -396,7 +416,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		for idx := range readers {
 			byteRangeEntry := byteRanges[idx]
 			contentRangeValue := byteRangeEntry.generateContentRangeValue(object.Size)
-			rangeHeader := fmt.Sprintf("Content-Range: %v\r\n\r\n", contentRangeValue)
+			rangeHeader := fmt.Sprintf("%s: %s\r\n\r\n", contentRangeHeader, contentRangeValue)
 			rangeHeaders = append(rangeHeaders, rangeHeader)
 			rangeHeaderLength += int64(len(rangeHeader))
 		}
@@ -406,8 +426,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		separatorLineLength := (2 /* -- */ + 2 /* \r\n */ + separatorLength)
 		endSeparatorLineLength := separatorLineLength + 2 /* \r\n */ + 2 /* -- at the end */
 		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*byteRangesCount + endSeparatorLineLength
-		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
-		w.Header().Add("Content-Type", fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
+		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		w.Header().Add(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
 		w.WriteHeader(206)
 		for idx := range readers {
 			if idx > 0 {
@@ -421,24 +441,24 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		io.WriteString(w, fmt.Sprintf("\r\n--%s--\r\n", separator))
 	} else if len(byteRanges) == 1 {
-		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
+		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
 		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
-		w.Header().Add("Content-Range", contentRangeValue)
+		w.Header().Add(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		io.CopyN(w, readers[0], totalSize)
 	} else {
-		w.Header().Add("Content-Length", fmt.Sprintf("%v", totalSize))
+		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		io.CopyN(w, readers[0], totalSize)
 	}
 }
 
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
-	if r.Header.Get("Expect") == "100-continue" {
+	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
 	err := s.storage.PutObject(bucket, key, r.Body)
@@ -450,8 +470,8 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
-	bucket := r.PathValue("bucket")
-	key := r.PathValue("key")
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
 	err := s.storage.DeleteObject(bucket, key)
 	if err != nil {
