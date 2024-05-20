@@ -8,10 +8,29 @@ import (
 )
 
 type BucketEntity struct {
-	Id        string
+	Id        *ulid.ULID
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+func convertRowToBucketEntity(bucketRows *sql.Rows) (*BucketEntity, error) {
+	var id string
+	var name string
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := bucketRows.Scan(&id, &name, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	ulidId := ulid.MustParse(id)
+	bucketEntity := BucketEntity{
+		Id:        &ulidId,
+		Name:      name,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+	return &bucketEntity, nil
 }
 
 func FindAllBuckets(tx *sql.Tx) ([]BucketEntity, error) {
@@ -22,20 +41,11 @@ func FindAllBuckets(tx *sql.Tx) ([]BucketEntity, error) {
 	defer bucketRows.Close()
 	buckets := []BucketEntity{}
 	for bucketRows.Next() {
-		var id string
-		var name string
-		var createdAt time.Time
-		var updatedAt time.Time
-		err = bucketRows.Scan(&id, &name, &createdAt, &updatedAt)
+		bucketEntity, err := convertRowToBucketEntity(bucketRows)
 		if err != nil {
 			return nil, err
 		}
-		buckets = append(buckets, BucketEntity{
-			Id:        id,
-			Name:      name,
-			CreatedAt: createdAt,
-			UpdatedAt: updatedAt,
-		})
+		buckets = append(buckets, *bucketEntity)
 	}
 	return buckets, nil
 }
@@ -49,34 +59,24 @@ func FindBucketByName(tx *sql.Tx, bucketName string) (*BucketEntity, error) {
 	if !bucketRows.Next() {
 		return nil, nil
 	}
-	var id string
-	var name string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err = bucketRows.Scan(&id, &name, &createdAt, &updatedAt)
+	bucketEntity, err := convertRowToBucketEntity(bucketRows)
 	if err != nil {
 		return nil, err
 	}
-
-	bucket := BucketEntity{
-		Id:        id,
-		Name:      name,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}
-	return &bucket, nil
+	return bucketEntity, nil
 }
 
 func SaveBucket(tx *sql.Tx, bucket *BucketEntity) error {
-	if bucket.Id == "" {
-		bucket.Id = ulid.Make().String()
+	if bucket.Id == nil {
+		id := ulid.Make()
+		bucket.Id = &id
 		bucket.CreatedAt = time.Now()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)", bucket.Id, bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)", bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?", bucket.Name, bucket.UpdatedAt, bucket.Id)
+	_, err := tx.Exec("UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?", bucket.Name, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 
@@ -100,7 +100,7 @@ const UploadStatusCompleted = "COMPLETED"
 const UploadStatusAborted = "ABORTED"
 
 type ObjectEntity struct {
-	Id           string
+	Id           *ulid.ULID
 	BucketName   string
 	Key          string
 	ETag         string
@@ -112,15 +112,16 @@ type ObjectEntity struct {
 }
 
 func SaveObject(tx *sql.Tx, object *ObjectEntity) error {
-	if object.Id == "" {
-		object.Id = ulid.Make().String()
+	if object.Id == nil {
+		id := ulid.Make()
+		object.Id = &id
 		object.CreatedAt = time.Now()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", object.Id, object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", object.Id.String(), object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE objects SET bucket_name = ?, key = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?", object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id)
+	_, err := tx.Exec("UPDATE objects SET bucket_name = ?, key = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?", object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 
@@ -134,6 +135,35 @@ func ContainsBucketObjectsByBucketName(tx *sql.Tx, bucketName string) (*bool, er
 	return &containsObjects, nil
 }
 
+func convertRowToObjectEntity(objectRows *sql.Rows) (*ObjectEntity, error) {
+	var id string
+	var bucketName string
+	var key string
+	var etag string
+	var size int64
+	var upload_status string
+	var upload_id string
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := objectRows.Scan(&id, &bucketName, &key, &etag, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	ulidId := ulid.MustParse(id)
+	objectEntity := ObjectEntity{
+		Id:           &ulidId,
+		BucketName:   bucketName,
+		Key:          key,
+		ETag:         etag,
+		Size:         size,
+		UploadStatus: upload_status,
+		UploadId:     upload_id,
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
+	}
+	return &objectEntity, nil
+}
+
 func FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]ObjectEntity, error) {
 	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC", bucketName, prefix, startAfter, UploadStatusCompleted)
 	if err != nil {
@@ -142,30 +172,11 @@ func FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx *sql.Tx, buck
 	defer objectRows.Close()
 	objects := []ObjectEntity{}
 	for objectRows.Next() {
-		var id string
-		var bucketName string
-		var key string
-		var etag string
-		var size int64
-		var upload_status string
-		var upload_id string
-		var createdAt time.Time
-		var updatedAt time.Time
-		err = objectRows.Scan(&id, &bucketName, &key, &etag, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
+		objectEntity, err := convertRowToObjectEntity(objectRows)
 		if err != nil {
 			return nil, err
 		}
-		objects = append(objects, ObjectEntity{
-			Id:           id,
-			BucketName:   bucketName,
-			Key:          key,
-			ETag:         etag,
-			Size:         size,
-			UploadStatus: upload_status,
-			UploadId:     upload_id,
-			CreatedAt:    createdAt,
-			UpdatedAt:    updatedAt,
-		})
+		objects = append(objects, *objectEntity)
 	}
 	return objects, nil
 }
@@ -178,30 +189,11 @@ func FindObjectByBucketNameAndKey(tx *sql.Tx, bucketName string, key string) (*O
 	defer objectRows.Close()
 	exists := objectRows.Next()
 	if exists {
-		var id string
-		var bucketName string
-		var key string
-		var etag string
-		var size int64
-		var upload_status string
-		var upload_id string
-		var createdAt time.Time
-		var updatedAt time.Time
-		err = objectRows.Scan(&id, &bucketName, &key, &etag, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
+		objectEntity, err := convertRowToObjectEntity(objectRows)
 		if err != nil {
 			return nil, err
 		}
-		return &ObjectEntity{
-			Id:           id,
-			BucketName:   bucketName,
-			Key:          key,
-			ETag:         etag,
-			Size:         size,
-			UploadStatus: upload_status,
-			UploadId:     upload_id,
-			CreatedAt:    createdAt,
-			UpdatedAt:    updatedAt,
-		}, nil
+		return objectEntity, nil
 	}
 	return nil, nil
 }
@@ -216,15 +208,15 @@ func CountObjectsByBucketNameAndPrefixAndStartAfter(tx *sql.Tx, bucketName strin
 	return &keyCount, nil
 }
 
-func DeleteObjectById(tx *sql.Tx, objectId string) error {
-	_, err := tx.Exec("DELETE FROM objects WHERE id = ?", objectId)
+func DeleteObjectById(tx *sql.Tx, objectId ulid.ULID) error {
+	_, err := tx.Exec("DELETE FROM objects WHERE id = ?", objectId.String())
 	return err
 }
 
 type BlobEntity struct {
-	Id             string
-	BlobId         string
-	ObjectId       string
+	Id             *ulid.ULID
+	BlobId         ulid.ULID
+	ObjectId       ulid.ULID
 	ETag           string
 	Size           int64
 	SequenceNumber int
@@ -232,101 +224,123 @@ type BlobEntity struct {
 	UpdatedAt      time.Time
 }
 
-func FindBlobsByObjectIdOrderBySequenceNumberAsc(tx *sql.Tx, objectId string) ([]BlobEntity, error) {
-	blobRows, err := tx.Query("SELECT id, blob_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
+func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
+	var id string
+	var blobId string
+	var objectId string
+	var etag string
+	var size int64
+	var sequenceNumber int
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := blobRows.Scan(&id, &blobId, &objectId, &etag, &size, &sequenceNumber, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	ulidId := ulid.MustParse(id)
+	blobEntity := BlobEntity{
+		Id:             &ulidId,
+		BlobId:         ulid.MustParse(blobId),
+		ObjectId:       ulid.MustParse(objectId),
+		ETag:           etag,
+		Size:           size,
+		SequenceNumber: sequenceNumber,
+		CreatedAt:      createdAt,
+		UpdatedAt:      updatedAt,
+	}
+	return &blobEntity, nil
+}
+
+func FindBlobsByObjectIdOrderBySequenceNumberAsc(tx *sql.Tx, objectId ulid.ULID) ([]BlobEntity, error) {
+	blobRows, err := tx.Query("SELECT id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId.String())
 	if err != nil {
 		return nil, err
 	}
 	defer blobRows.Close()
 	blobs := []BlobEntity{}
 	for blobRows.Next() {
-		var id string
-		var blobId string
-		var etag string
-		var size int64
-		var sequenceNumber int
-		var createdAt time.Time
-		var updatedAt time.Time
-		err = blobRows.Scan(&id, &blobId, &etag, &size, &sequenceNumber, &createdAt, &updatedAt)
+		blobEntity, err := convertRowToBlobEntity(blobRows)
 		if err != nil {
 			return nil, err
 		}
-		blobStruc := BlobEntity{
-			Id:             id,
-			BlobId:         blobId,
-			ETag:           etag,
-			Size:           size,
-			SequenceNumber: sequenceNumber,
-			CreatedAt:      createdAt,
-			UpdatedAt:      updatedAt,
-		}
-		blobs = append(blobs, blobStruc)
+		blobs = append(blobs, *blobEntity)
 	}
 	return blobs, nil
 }
 
 func SaveBlob(tx *sql.Tx, blob *BlobEntity) error {
-	if blob.Id == "" {
-		blob.Id = ulid.Make().String()
+	if blob.Id == nil {
+		id := ulid.Make()
+		blob.Id = &id
 		blob.CreatedAt = time.Now()
 		blob.UpdatedAt = blob.CreatedAt
-		_, err := tx.Exec("INSERT INTO blobs (id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", blob.Id, blob.BlobId, blob.ObjectId, blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
+		_, err := tx.Exec("INSERT INTO blobs (id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
 		return err
 	}
 
 	blob.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?", blob.BlobId, blob.ObjectId, blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id)
+	_, err := tx.Exec("UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?", blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
 	return err
 }
 
-func DeleteBlobByObjectId(tx *sql.Tx, objectId string) error {
-	_, err := tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId)
+func DeleteBlobByObjectId(tx *sql.Tx, objectId ulid.ULID) error {
+	_, err := tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId.String())
 	return err
 }
 
 type BlobContentEntity struct {
-	Id        string
+	Id        *ulid.ULID
 	Content   []byte
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-func FindBlobContentById(tx *sql.Tx, blobContentId string) (*BlobContentEntity, error) {
-	row := tx.QueryRow("SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = ?", blobContentId)
+func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*BlobContentEntity, error) {
 	var id string
 	var content []byte
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := row.Scan(&id, &content, &createdAt, &updatedAt)
+	err := blobContentRow.Scan(&id, &content, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	ulidId := ulid.MustParse(id)
 	return &BlobContentEntity{
-		Id:        id,
+		Id:        &ulidId,
 		Content:   content,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}, nil
 }
 
+func FindBlobContentById(tx *sql.Tx, blobContentId ulid.ULID) (*BlobContentEntity, error) {
+	row := tx.QueryRow("SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = ?", blobContentId.String())
+	blobContentEntity, err := convertRowToBlobContentEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return blobContentEntity, nil
+}
+
 func SaveBlobContent(tx *sql.Tx, blobContent *BlobContentEntity) error {
-	if blobContent.Id == "" {
-		blobContent.Id = ulid.Make().String()
+	if blobContent.Id == nil {
+		id := ulid.Make()
+		blobContent.Id = &id
 		blobContent.CreatedAt = time.Now()
 		blobContent.UpdatedAt = blobContent.CreatedAt
-		_, err := tx.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id, blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
+		_, err := tx.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
 		return err
 	}
 
 	blobContent.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE blob_contents SET content = ?, updated_at = ? WHERE id = ?", blobContent.Content, blobContent.UpdatedAt, blobContent.Id)
+	_, err := tx.Exec("UPDATE blob_contents SET content = ?, updated_at = ? WHERE id = ?", blobContent.Content, blobContent.UpdatedAt, blobContent.Id.String())
 	return err
 }
 
-func DeleteBlobContentById(tx *sql.Tx, id string) error {
-	_, err := tx.Exec("DELETE FROM blob_contents WHERE id = ?", id)
+func DeleteBlobContentById(tx *sql.Tx, id ulid.ULID) error {
+	_, err := tx.Exec("DELETE FROM blob_contents WHERE id = ?", id.String())
 	return err
 }

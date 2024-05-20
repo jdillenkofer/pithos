@@ -7,7 +7,6 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
-	"github.com/oklog/ulid/v2"
 )
 
 type SqlBlobStore struct {
@@ -46,7 +45,7 @@ func (bs *SqlBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 
 	tx.Commit()
 	return &PutBlobResult{
-		BlobId: BlobId(ulid.MustParse(blobId)),
+		BlobId: BlobId(*blobId),
 		ETag:   *etag,
 		Size:   int64(len(content)),
 	}, nil
@@ -57,7 +56,7 @@ func (bs *SqlBlobStore) GetBlob(blobId BlobId) (io.ReadSeekCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	blobContentEntity, err := repository.FindBlobContentById(tx, blobId.String())
+	blobContentEntity, err := repository.FindBlobContentById(tx, blobId)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -78,7 +77,7 @@ func (bs *SqlBlobStore) DeleteBlob(blobId BlobId) error {
 		return err
 	}
 
-	err = repository.DeleteBlobContentById(tx, blobId.String())
+	err = repository.DeleteBlobContentById(tx, blobId)
 	if err != nil {
 		tx.Rollback()
 	}

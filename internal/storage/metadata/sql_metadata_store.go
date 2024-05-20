@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
-	"github.com/oklog/ulid/v2"
 )
 
 type SqlMetadataStore struct {
@@ -161,7 +160,7 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 			}
 		}
 		if len(objects) < maxKeys {
-			blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, objectEntity.Id)
+			blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
 			if err != nil {
 				tx.Rollback()
 				return nil, err
@@ -169,7 +168,7 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 			blobs := []Blob{}
 			for _, blobEntity := range blobEntities {
 				blobStruc := Blob{
-					Id:   ulid.MustParse(blobEntity.BlobId),
+					Id:   blobEntity.BlobId,
 					ETag: blobEntity.ETag,
 					Size: blobEntity.Size,
 				}
@@ -240,7 +239,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		tx.Rollback()
 		return nil, ErrNoSuchKey
 	}
-	blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, objectEntity.Id)
+	blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -248,7 +247,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 	blobs := []Blob{}
 	for _, blobEntity := range blobEntities {
 		blobStruc := Blob{
-			Id:   ulid.MustParse(blobEntity.BlobId),
+			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,
 			Size: blobEntity.Size,
 		}
@@ -292,12 +291,12 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 	}
 	if oldObjectEntity != nil {
 		// object already exists
-		err = repository.DeleteBlobByObjectId(tx, oldObjectEntity.Id)
+		err = repository.DeleteBlobByObjectId(tx, *oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
-		err = repository.DeleteObjectById(tx, oldObjectEntity.Id)
+		err = repository.DeleteObjectById(tx, *oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -319,8 +318,8 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 	sequenceNumber := 0
 	for _, blobStruc := range object.Blobs {
 		blobEntity := repository.BlobEntity{
-			BlobId:         blobStruc.Id.String(),
-			ObjectId:       objectId,
+			BlobId:         blobStruc.Id,
+			ObjectId:       *objectId,
 			ETag:           blobStruc.ETag,
 			Size:           blobStruc.Size,
 			SequenceNumber: sequenceNumber,
@@ -359,13 +358,13 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 	}
 
 	if objectEntity != nil {
-		err = repository.DeleteBlobByObjectId(tx, objectEntity.Id)
+		err = repository.DeleteBlobByObjectId(tx, *objectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 
-		err = repository.DeleteObjectById(tx, objectEntity.Id)
+		err = repository.DeleteObjectById(tx, *objectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
