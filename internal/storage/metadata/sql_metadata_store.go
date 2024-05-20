@@ -9,12 +9,18 @@ import (
 )
 
 type SqlMetadataStore struct {
-	db *sql.DB
+	db               *sql.DB
+	bucketRepository repository.BucketRepository
+	objectRepository repository.ObjectRepository
+	blobRepository   repository.BlobRepository
 }
 
 func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
 	return &SqlMetadataStore{
-		db: db,
+		db:               db,
+		bucketRepository: repository.NewBucketRepository(db),
+		objectRepository: repository.NewObjectRepository(db),
+		blobRepository:   repository.NewBlobRepository(db),
 	}, nil
 }
 
@@ -24,7 +30,7 @@ func (sms *SqlMetadataStore) CreateBucket(bucketName string) error {
 		return err
 	}
 
-	exists, err := repository.ExistsBucketByName(tx, bucketName)
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -34,15 +40,20 @@ func (sms *SqlMetadataStore) CreateBucket(bucketName string) error {
 		return ErrBucketAlreadyExists
 	}
 
-	err = repository.SaveBucket(tx, &repository.BucketEntity{
+	err = sms.bucketRepository.SaveBucket(tx, &repository.BucketEntity{
 		Name: bucketName,
 	})
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
+
 	err = tx.Commit()
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
@@ -51,7 +62,7 @@ func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
 		return err
 	}
 
-	exists, err := repository.ExistsBucketByName(tx, bucketName)
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -61,7 +72,7 @@ func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
 		return ErrNoSuchBucket
 	}
 
-	containsBucketObjects, err := repository.ContainsBucketObjectsByBucketName(tx, bucketName)
+	containsBucketObjects, err := sms.objectRepository.ContainsBucketObjectsByBucketName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -71,14 +82,18 @@ func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
 		return ErrBucketNotEmpty
 	}
 
-	err = repository.DeleteBucketByName(tx, bucketName)
+	err = sms.bucketRepository.DeleteBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
 	err = tx.Commit()
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
@@ -86,7 +101,7 @@ func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	bucketEntities, err := repository.FindAllBuckets(tx)
+	bucketEntities, err := sms.bucketRepository.FindAllBuckets(tx)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -98,7 +113,12 @@ func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
 			CreationDate: bucketEntity.CreatedAt,
 		})
 	}
-	tx.Commit()
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
 	return buckets, nil
 }
 
@@ -107,7 +127,7 @@ func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
 	if err != nil {
 		return nil, err
 	}
-	bucketEntity, err := repository.FindBucketByName(tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -121,7 +141,12 @@ func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
 		Name:         bucketEntity.Name,
 		CreationDate: bucketEntity.CreatedAt,
 	}
-	tx.Commit()
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
 	return &bucket, nil
 }
 
@@ -139,14 +164,14 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 }
 
 func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	keyCount, err := repository.CountObjectsByBucketNameAndPrefixAndStartAfter(tx, bucketName, prefix, startAfter)
+	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(tx, bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 	commonPrefixes := []string{}
 	objects := []Object{}
-	objectEntities, err := repository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx, bucketName, prefix, startAfter)
+	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx, bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -160,7 +185,7 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 			}
 		}
 		if len(objects) < maxKeys {
-			blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+			blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
 			if err != nil {
 				tx.Rollback()
 				return nil, err
@@ -186,7 +211,12 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 			}
 		}
 	}
-	tx.Commit()
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
 	listBucketResult := ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
@@ -201,7 +231,7 @@ func (sms *SqlMetadataStore) ListObjects(bucketName string, prefix string, delim
 		return nil, err
 	}
 
-	exists, err := repository.ExistsBucketByName(tx, bucketName)
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -220,7 +250,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		return nil, err
 	}
 
-	exists, err := repository.ExistsBucketByName(tx, bucketName)
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -230,7 +260,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		return nil, ErrNoSuchBucket
 	}
 
-	objectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -239,7 +269,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		tx.Rollback()
 		return nil, ErrNoSuchKey
 	}
-	blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -258,6 +288,7 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 	if err != nil {
 		return nil, err
 	}
+
 	object := Object{
 		Key:          key,
 		LastModified: objectEntity.UpdatedAt,
@@ -274,7 +305,7 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 		return err
 	}
 
-	existsBucket, err := repository.ExistsBucketByName(tx, bucketName)
+	existsBucket, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -284,19 +315,19 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 		return ErrNoSuchBucket
 	}
 
-	oldObjectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, object.Key)
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, object.Key)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	if oldObjectEntity != nil {
 		// object already exists
-		err = repository.DeleteBlobByObjectId(tx, *oldObjectEntity.Id)
+		err = sms.blobRepository.DeleteBlobByObjectId(tx, *oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
-		err = repository.DeleteObjectById(tx, *oldObjectEntity.Id)
+		err = sms.objectRepository.DeleteObjectById(tx, *oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -309,7 +340,7 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 		Size:         object.Size,
 		UploadStatus: repository.UploadStatusCompleted,
 	}
-	err = repository.SaveObject(tx, &objectEntity)
+	err = sms.objectRepository.SaveObject(tx, &objectEntity)
 	objectId := objectEntity.Id
 	if err != nil {
 		tx.Rollback()
@@ -324,14 +355,19 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 			Size:           blobStruc.Size,
 			SequenceNumber: sequenceNumber,
 		}
-		err = repository.SaveBlob(tx, &blobEntity)
+		err = sms.blobRepository.SaveBlob(tx, &blobEntity)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 		sequenceNumber += 1
 	}
-	tx.Commit()
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -341,7 +377,7 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 		return err
 	}
 
-	exists, err := repository.ExistsBucketByName(tx, bucketName)
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -351,27 +387,31 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 		return ErrNoSuchBucket
 	}
 
-	objectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
 	if objectEntity != nil {
-		err = repository.DeleteBlobByObjectId(tx, *objectEntity.Id)
+		err = sms.blobRepository.DeleteBlobByObjectId(tx, *objectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 
-		err = repository.DeleteObjectById(tx, *objectEntity.Id)
+		err = sms.objectRepository.DeleteObjectById(tx, *objectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
 
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

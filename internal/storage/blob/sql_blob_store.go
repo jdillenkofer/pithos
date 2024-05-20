@@ -10,12 +10,14 @@ import (
 )
 
 type SqlBlobStore struct {
-	db *sql.DB
+	db                    *sql.DB
+	blobContentRepository repository.BlobContentRepository
 }
 
 func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
 	return &SqlBlobStore{
-		db: db,
+		db:                    db,
+		blobContentRepository: repository.NewBlobContentRepository(db),
 	}, nil
 }
 
@@ -31,7 +33,7 @@ func (bs *SqlBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 	blobContentEntity := repository.BlobContentEntity{
 		Content: content,
 	}
-	err = repository.SaveBlobContent(tx, &blobContentEntity)
+	err = bs.blobContentRepository.SaveBlobContent(tx, &blobContentEntity)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -43,7 +45,11 @@ func (bs *SqlBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 		return nil, err
 	}
 
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
 	return &PutBlobResult{
 		BlobId: BlobId(*blobId),
 		ETag:   *etag,
@@ -56,7 +62,7 @@ func (bs *SqlBlobStore) GetBlob(blobId BlobId) (io.ReadSeekCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	blobContentEntity, err := repository.FindBlobContentById(tx, blobId)
+	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(tx, blobId)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -67,7 +73,11 @@ func (bs *SqlBlobStore) GetBlob(blobId BlobId) (io.ReadSeekCloser, error) {
 	}
 	reader := ioutils.NewByteReadSeekCloser(blobContentEntity.Content)
 
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
 	return reader, nil
 }
 
@@ -77,10 +87,15 @@ func (bs *SqlBlobStore) DeleteBlob(blobId BlobId) error {
 		return err
 	}
 
-	err = repository.DeleteBlobContentById(tx, blobId)
+	err = bs.blobContentRepository.DeleteBlobContentById(tx, blobId)
 	if err != nil {
 		tx.Rollback()
 	}
-	tx.Commit()
-	return err
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
