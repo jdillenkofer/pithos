@@ -25,6 +25,10 @@ type ListBucketResult struct {
 	IsTruncated    bool
 }
 
+type InitiateMultipartUploadResult struct {
+	UploadId string
+}
+
 type CompleteMultipartUploadResult struct {
 	Location       string
 	ETag           string
@@ -49,7 +53,7 @@ type Storage interface {
 	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
-	CreateMultipartUpload(bucket string, key string) (*string, error)
+	CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error)
 	UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error
 	CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(bucket string, key string, uploadId string) error

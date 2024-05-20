@@ -481,7 +481,7 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
-	uploadId, err := s.storage.CreateMultipartUpload(bucket, key)
+	result, err := s.storage.CreateMultipartUpload(bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -490,7 +490,7 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	initiateMultipartUploadResult := InitiateMultipartUploadResult{
 		Bucket:   bucket,
 		Key:      key,
-		UploadId: *uploadId,
+		UploadId: result.UploadId,
 	}
 
 	w.WriteHeader(200)

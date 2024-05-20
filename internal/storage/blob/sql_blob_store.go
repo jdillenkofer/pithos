@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/repository"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -24,37 +25,63 @@ func (bs *SqlBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	blobId := ulid.Make()
-	_, err = bs.db.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, datetime('now'), datetime('now'))", blobId.String(), content)
+	tx, err := bs.db.Begin()
 	if err != nil {
 		return nil, err
 	}
+	blobContentEntity := repository.BlobContentEntity{
+		Content: content,
+	}
+	err = repository.SaveBlobContent(tx, &blobContentEntity)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	blobId := blobContentEntity.Id
 
 	etag, err := calculateETag(bytes.NewReader(content))
 	if err != nil {
 		return nil, err
 	}
 
+	tx.Commit()
 	return &PutBlobResult{
-		BlobId: BlobId(blobId),
+		BlobId: BlobId(ulid.MustParse(blobId)),
 		ETag:   *etag,
 		Size:   int64(len(content)),
 	}, nil
 }
 
 func (bs *SqlBlobStore) GetBlob(blobId BlobId) (io.ReadSeekCloser, error) {
-	row := bs.db.QueryRow("SELECT content FROM blob_contents WHERE id = ?", blobId.String())
-	var content []byte
-	err := row.Scan(&content)
+	tx, err := bs.db.Begin()
 	if err != nil {
 		return nil, err
 	}
-	reader := ioutils.NewByteReadSeekCloser(content)
+	blobContentEntity, err := repository.FindBlobContentById(tx, blobId.String())
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if blobContentEntity == nil {
+		tx.Rollback()
+		return nil, nil
+	}
+	reader := ioutils.NewByteReadSeekCloser(blobContentEntity.Content)
 
+	tx.Commit()
 	return reader, nil
 }
 
 func (bs *SqlBlobStore) DeleteBlob(blobId BlobId) error {
-	_, err := bs.db.Exec("DELETE FROM blob_contents WHERE id = ?", blobId.String())
+	tx, err := bs.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	err = repository.DeleteBlobContentById(tx, blobId.String())
+	if err != nil {
+		tx.Rollback()
+	}
+	tx.Commit()
 	return err
 }

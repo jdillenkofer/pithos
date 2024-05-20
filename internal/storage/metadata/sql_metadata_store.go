@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"slices"
 	"strings"
-	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/repository"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -24,17 +24,20 @@ func (sms *SqlMetadataStore) CreateBucket(bucketName string) error {
 	if err != nil {
 		return err
 	}
-	result, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	exists, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer result.Close()
-	if result.Next() {
+	if *exists {
 		tx.Rollback()
 		return ErrBucketAlreadyExists
 	}
-	_, err = tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, datetime('now'), datetime('now'))", ulid.Make().String(), bucketName)
+
+	err = repository.SaveBucket(tx, &repository.BucketEntity{
+		Name: bucketName,
+	})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -48,75 +51,78 @@ func (sms *SqlMetadataStore) DeleteBucket(bucketName string) error {
 	if err != nil {
 		return err
 	}
-	result, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	exists, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer result.Close()
-	if !result.Next() {
+	if !*exists {
 		tx.Rollback()
 		return ErrNoSuchBucket
 	}
-	result, err = tx.Query("SELECT id FROM objects WHERE bucket_name = ?", bucketName)
+
+	containsBucketObjects, err := repository.ContainsBucketObjectsByBucketName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer result.Close()
-	if result.Next() {
+	if *containsBucketObjects {
 		tx.Rollback()
 		return ErrBucketNotEmpty
 	}
-	_, err = tx.Exec("DELETE FROM buckets WHERE name = ?", bucketName)
+
+	err = repository.DeleteBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
+
 	err = tx.Commit()
 	return err
 }
 
 func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
-	rows, err := sms.db.Query("SELECT name, created_at FROM buckets")
+	tx, err := sms.db.Begin()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	bucketEntities, err := repository.FindAllBuckets(tx)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	buckets := []Bucket{}
-	for rows.Next() {
-		var name string
-		var creationDate time.Time
-		err = rows.Scan(&name, &creationDate)
-		if err != nil {
-			return nil, err
-		}
+	for _, bucketEntity := range bucketEntities {
 		buckets = append(buckets, Bucket{
-			Name:         name,
-			CreationDate: creationDate,
+			Name:         bucketEntity.Name,
+			CreationDate: bucketEntity.CreatedAt,
 		})
 	}
+	tx.Commit()
 	return buckets, nil
 }
 
 func (sms *SqlMetadataStore) HeadBucket(bucketName string) (*Bucket, error) {
-	rows, err := sms.db.Query("SELECT created_at FROM buckets WHERE name = ?", bucketName)
+	tx, err := sms.db.Begin()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	bucketEntity, err := repository.FindBucketByName(tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if bucketEntity == nil {
+		tx.Rollback()
 		return nil, ErrNoSuchBucket
 	}
-	var creationDate time.Time
-	err = rows.Scan(&creationDate)
-	if err != nil {
-		return nil, err
-	}
+
 	bucket := Bucket{
-		Name:         bucketName,
-		CreationDate: creationDate,
+		Name:         bucketEntity.Name,
+		CreationDate: bucketEntity.CreatedAt,
 	}
+	tx.Commit()
 	return &bucket, nil
 }
 
@@ -133,70 +139,49 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int, tx *sql.Tx) (*ListBucketResult, error) {
-	keyCountRow := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ?", bucketName, prefix, startAfter)
-	var keyCount int
-	err := keyCountRow.Scan(&keyCount)
+func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	keyCount, err := repository.CountObjectsByBucketNameAndPrefixAndStartAfter(tx, bucketName, prefix, startAfter)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? ORDER BY key ASC", bucketName, prefix, startAfter)
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	defer rows.Close()
 	commonPrefixes := []string{}
 	objects := []Object{}
-	for rows.Next() {
-		var objectId string
-		var key string
-		var lastModified time.Time
-		var etag string
-		var size int64
-		err = rows.Scan(&objectId, &key, &lastModified, &etag, &size)
-		if err != nil {
-			tx.Rollback()
-			return nil, err
-		}
+	objectEntities, err := repository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx, bucketName, prefix, startAfter)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	for _, objectEntity := range objectEntities {
 		if delimiter != "" {
-			commonPrefix := determineCommonPrefix(prefix, key, delimiter)
+			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key, delimiter)
 			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
 				commonPrefixes = append(commonPrefixes, *commonPrefix)
 			}
 		}
 		if len(objects) < maxKeys {
-			blobRows, err := tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
+			blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, objectEntity.Id)
 			if err != nil {
 				tx.Rollback()
 				return nil, err
 			}
-			defer blobRows.Close()
 			blobs := []Blob{}
-			for blobRows.Next() {
-				var blobId string
-				var etag string
-				var size int64
-				err = blobRows.Scan(&blobId, &etag, &size)
-				if err != nil {
-					tx.Rollback()
-					return nil, err
-				}
+			for _, blobEntity := range blobEntities {
 				blobStruc := Blob{
-					Id:   ulid.MustParse(blobId),
-					ETag: etag,
-					Size: size,
+					Id:   ulid.MustParse(blobEntity.BlobId),
+					ETag: blobEntity.ETag,
+					Size: blobEntity.Size,
 				}
 				blobs = append(blobs, blobStruc)
 			}
-			keyWithoutPrefix := strings.TrimPrefix(key, prefix)
+			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key, prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				objects = append(objects, Object{
-					Key:          key,
-					LastModified: lastModified,
-					ETag:         etag,
-					Size:         size,
+					Key:          objectEntity.Key,
+					LastModified: objectEntity.UpdatedAt,
+					ETag:         objectEntity.ETag,
+					Size:         objectEntity.Size,
 					Blobs:        blobs,
 				})
 			}
@@ -206,7 +191,7 @@ func (sms *SqlMetadataStore) listObjects(bucketName string, prefix string, delim
 	listBucketResult := ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
-		IsTruncated:    keyCount > maxKeys,
+		IsTruncated:    *keyCount > maxKeys,
 	}
 	return &listBucketResult, nil
 }
@@ -216,17 +201,18 @@ func (sms *SqlMetadataStore) ListObjects(bucketName string, prefix string, delim
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	exists, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	if !*exists {
 		tx.Rollback()
 		return nil, ErrNoSuchBucket
 	}
-	return sms.listObjects(bucketName, prefix, delimiter, startAfter, maxKeys, tx)
+
+	return sms.listObjects(tx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
 func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object, error) {
@@ -234,55 +220,37 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	exists, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	if !*exists {
 		tx.Rollback()
 		return nil, ErrNoSuchBucket
 	}
-	rows, err = tx.Query("SELECT id, key, updated_at, etag, size FROM objects WHERE bucket_name = ? AND key = ?", bucketName, key)
+
+	objectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	if objectEntity == nil {
 		tx.Rollback()
 		return nil, ErrNoSuchKey
 	}
-	var objectId string
-	var lastModified time.Time
-	var etag string
-	var size int64
-	err = rows.Scan(&objectId, &key, &lastModified, &etag, &size)
+	blobEntities, err := repository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, objectEntity.Id)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	rows, err = tx.Query("SELECT id, etag, size FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId)
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-	defer rows.Close()
 	blobs := []Blob{}
-	for rows.Next() {
-		var blobId string
-		var etag string
-		var size int64
-		err = rows.Scan(&blobId, &etag, &size)
-		if err != nil {
-			tx.Rollback()
-			return nil, err
-		}
+	for _, blobEntity := range blobEntities {
 		blobStruc := Blob{
-			Id:   ulid.MustParse(blobId),
-			ETag: etag,
-			Size: size,
+			Id:   ulid.MustParse(blobEntity.BlobId),
+			ETag: blobEntity.ETag,
+			Size: blobEntity.Size,
 		}
 		blobs = append(blobs, blobStruc)
 	}
@@ -293,9 +261,9 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 	}
 	object := Object{
 		Key:          key,
-		LastModified: lastModified,
-		ETag:         etag,
-		Size:         size,
+		LastModified: objectEntity.UpdatedAt,
+		ETag:         objectEntity.ETag,
+		Size:         objectEntity.Size,
 		Blobs:        blobs,
 	}
 	return &object, nil
@@ -306,50 +274,58 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	existsBucket, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	if !*existsBucket {
 		tx.Rollback()
 		return ErrNoSuchBucket
 	}
-	rows, err = tx.Query("SELECT id FROM objects WHERE bucket_name = ? AND key = ?", bucketName, object.Key)
+
+	oldObjectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, object.Key)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer rows.Close()
-	if rows.Next() {
+	if oldObjectEntity != nil {
 		// object already exists
-		var objectId string
-		err = rows.Scan(&objectId)
+		err = repository.DeleteBlobByObjectId(tx, oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
-		_, err = tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-		_, err = tx.Exec("DELETE FROM objects WHERE id = ?", objectId)
+		err = repository.DeleteObjectById(tx, oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
-	objectId := ulid.Make()
-	_, err = tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, created_at, updated_at) VALUES(?, ?, ?, ?, ?, datetime('now'), datetime('now'))", objectId.String(), bucketName, object.Key, object.ETag, object.Size)
+	objectEntity := repository.ObjectEntity{
+		BucketName:   bucketName,
+		Key:          object.Key,
+		ETag:         object.ETag,
+		Size:         object.Size,
+		UploadStatus: repository.UploadStatusCompleted,
+	}
+	err = repository.SaveObject(tx, &objectEntity)
+	objectId := objectEntity.Id
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	sequenceNumber := 0
 	for _, blobStruc := range object.Blobs {
-		_, err = tx.Exec("INSERT INTO blobs (id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, datetime('now'), datetime('now'))", blobStruc.Id.String(), objectId.String(), blobStruc.ETag, blobStruc.Size, sequenceNumber)
+		blobEntity := repository.BlobEntity{
+			BlobId:         blobStruc.Id.String(),
+			ObjectId:       objectId,
+			ETag:           blobStruc.ETag,
+			Size:           blobStruc.Size,
+			SequenceNumber: sequenceNumber,
+		}
+		err = repository.SaveBlob(tx, &blobEntity)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -365,44 +341,55 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+
+	exists, err := repository.ExistsBucketByName(tx, bucketName)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	defer rows.Close()
-	if !rows.Next() {
+	if !*exists {
 		tx.Rollback()
 		return ErrNoSuchBucket
 	}
-	rows, err = tx.Query("SELECT id FROM objects WHERE bucket_name = ? AND key = ?", bucketName, key)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		tx.Rollback()
-		return ErrNoSuchKey
-	}
-	var objectId string
-	err = rows.Scan(&objectId)
+
+	objectEntity, err := repository.FindObjectByBucketNameAndKey(tx, bucketName, key)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	_, err = tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId)
-	if err != nil {
-		tx.Rollback()
-		return err
+	if objectEntity != nil {
+		err = repository.DeleteBlobByObjectId(tx, objectEntity.Id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		err = repository.DeleteObjectById(tx, objectEntity.Id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 
-	_, err = tx.Exec("DELETE FROM objects WHERE id = ?", objectId)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
 	tx.Commit()
 	return nil
+}
+
+func (sms *SqlMetadataStore) CreateMultipartUpload(bucketName string, key string) (*InitiateMultipartUploadResult, error) {
+	return &InitiateMultipartUploadResult{
+		UploadId: ""}, nil
+}
+
+func (sms *SqlMetadataStore) UploadPart(bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error {
+	return nil
+}
+
+func (sms *SqlMetadataStore) CompleteMultipartUpload(bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	return &CompleteMultipartUploadResult{}, nil
+}
+
+func (sms *SqlMetadataStore) AbortMultipartUpload(bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
+	return &AbortMultipartResult{
+		Blobs: []Blob{}}, nil
 }

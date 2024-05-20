@@ -253,6 +253,35 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 					assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
 				}
 				assert.NotNil(t, createMultiPartUploadResult)
+				assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+				assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+				uploadId := createMultiPartUploadResult.UploadId
+				assert.NotNil(t, uploadId)
+
+				uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Body:       bytes.NewReader([]byte("Hello, first object!")),
+					Key:        key,
+					UploadId:   uploadId,
+					PartNumber: aws.Int32(1),
+				})
+
+				if err != nil {
+					assert.Fail(t, "UploadPart failed", "err %v", err)
+				}
+				assert.NotNil(t, uploadPartResult)
+
+				completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+					Bucket:   bucketName,
+					Key:      key,
+					UploadId: uploadId,
+				})
+				if err != nil {
+					assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
+				}
+				assert.NotNil(t, completeMultipartUploadResult)
+				assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
+				assert.Equal(t, key, completeMultipartUploadResult.Key)
 			})
 
 			t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {

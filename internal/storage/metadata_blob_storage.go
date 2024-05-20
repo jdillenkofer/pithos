@@ -120,8 +120,6 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 }
 
 func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
-	// TODO: instead of putting everything in the same blob,
-	// create multiple blobs instead
 	putBlobResult, err := mbs.blobStore.PutBlob(reader)
 	if err != nil {
 		return err
@@ -156,18 +154,65 @@ func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {
 	return mbs.metadataStore.DeleteObject(bucket, key)
 }
 
-func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string) (*string, error) {
-	return nil, nil
+func convertInitiateMultipartUploadResult(result metadata.InitiateMultipartUploadResult) InitiateMultipartUploadResult {
+	return InitiateMultipartUploadResult{
+		UploadId: result.UploadId,
+	}
+}
+
+func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	result, err := mbs.metadataStore.CreateMultipartUpload(bucket, key)
+	if err != nil {
+		return nil, err
+	}
+	initiateMultipartUploadResult := convertInitiateMultipartUploadResult(*result)
+	return &initiateMultipartUploadResult, nil
 }
 
 func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error {
-	return nil
+	putBlobResult, err := mbs.blobStore.PutBlob(data)
+	if err != nil {
+		return err
+	}
+	err = mbs.metadataStore.UploadPart(bucket, key, uploadId, partNumber, metadata.Blob{
+		Id:   putBlobResult.BlobId,
+		ETag: putBlobResult.ETag,
+		Size: putBlobResult.Size,
+	})
+	return err
+}
+
+func convertCompleteMultipartUploadResult(result metadata.CompleteMultipartUploadResult) CompleteMultipartUploadResult {
+	return CompleteMultipartUploadResult{
+		Location:       result.Location,
+		ETag:           result.ETag,
+		ChecksumCRC32:  result.ChecksumCRC32,
+		ChecksumCRC32C: result.ChecksumCRC32C,
+		ChecksumSHA1:   result.ChecksumSHA1,
+		ChecksumSHA256: result.ChecksumSHA256,
+	}
 }
 
 func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	return nil, nil
+	result, err := mbs.metadataStore.CompleteMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	completeMultipartUploadResult := convertCompleteMultipartUploadResult(*result)
+	return &completeMultipartUploadResult, nil
 }
 
 func (mbs *MetadataBlobStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		return err
+	}
+	blobs := abortMultipartUploadResult.Blobs
+	for _, blob := range blobs {
+		err = mbs.blobStore.DeleteBlob(blob.Id)
+		if err != nil {
+			log.Printf("Failed to delete blob: %v", err)
+		}
+	}
 	return nil
 }
