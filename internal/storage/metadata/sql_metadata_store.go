@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
 )
 
@@ -106,13 +107,12 @@ func (sms *SqlMetadataStore) ListBuckets() ([]Bucket, error) {
 		tx.Rollback()
 		return nil, err
 	}
-	buckets := []Bucket{}
-	for _, bucketEntity := range bucketEntities {
-		buckets = append(buckets, Bucket{
+	buckets := sliceutils.Map(func(bucketEntity repository.BucketEntity) Bucket {
+		return Bucket{
 			Name:         bucketEntity.Name,
 			CreationDate: bucketEntity.CreatedAt,
-		})
-	}
+		}
+	}, bucketEntities)
 
 	err = tx.Commit()
 	if err != nil {
@@ -274,15 +274,13 @@ func (sms *SqlMetadataStore) HeadObject(bucketName string, key string) (*Object,
 		tx.Rollback()
 		return nil, err
 	}
-	blobs := []Blob{}
-	for _, blobEntity := range blobEntities {
-		blobStruc := Blob{
+	blobs := sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+		return Blob{
 			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,
 			Size: blobEntity.Size,
 		}
-		blobs = append(blobs, blobStruc)
-	}
+	}, blobEntities)
 
 	err = tx.Commit()
 	if err != nil {
@@ -322,7 +320,7 @@ func (sms *SqlMetadataStore) PutObject(bucketName string, object *Object) error 
 	}
 	if oldObjectEntity != nil {
 		// object already exists
-		err = sms.blobRepository.DeleteBlobByObjectId(tx, *oldObjectEntity.Id)
+		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *oldObjectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -394,7 +392,7 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 	}
 
 	if objectEntity != nil {
-		err = sms.blobRepository.DeleteBlobByObjectId(tx, *objectEntity.Id)
+		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *objectEntity.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -417,7 +415,8 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 
 func (sms *SqlMetadataStore) CreateMultipartUpload(bucketName string, key string) (*InitiateMultipartUploadResult, error) {
 	return &InitiateMultipartUploadResult{
-		UploadId: ""}, nil
+		UploadId: "",
+	}, nil
 }
 
 func (sms *SqlMetadataStore) UploadPart(bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error {
@@ -430,5 +429,6 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(bucketName string, key stri
 
 func (sms *SqlMetadataStore) AbortMultipartUpload(bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
 	return &AbortMultipartResult{
-		Blobs: []Blob{}}, nil
+		Blobs: []Blob{},
+	}, nil
 }

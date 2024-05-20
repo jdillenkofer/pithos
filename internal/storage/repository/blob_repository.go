@@ -87,7 +87,7 @@ func (br *BlobRepository) SaveBlob(tx *sql.Tx, blob *BlobEntity) error {
 	return err
 }
 
-func (br *BlobRepository) DeleteBlobByObjectId(tx *sql.Tx, objectId ulid.ULID) error {
+func (br *BlobRepository) DeleteBlobsByObjectId(tx *sql.Tx, objectId ulid.ULID) error {
 	_, err := tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId.String())
 	return err
 }
