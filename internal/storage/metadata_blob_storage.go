@@ -120,8 +120,6 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 }
 
 func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
-	// TODO: instead of putting everything in the same blob,
-	// create multiple blobs instead
 	putBlobResult, err := mbs.blobStore.PutBlob(reader)
 	if err != nil {
 		return err

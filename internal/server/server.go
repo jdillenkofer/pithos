@@ -48,6 +48,9 @@ const prefixQuery = "prefix"
 const delimiterQuery = "delimiter"
 const startAfterQuery = "startAfter"
 const maxKeysQuery = "max-keys"
+const uploadIdQuery = "uploadId"
+const uploadsQuery = "uploads"
+const partNumberQuery = "partNumber"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -454,9 +457,10 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
@@ -467,9 +471,15 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(200)
+
 }
 
-func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+	// PutObject
+	s.putObject(w, r)
+}
+
+func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
@@ -479,4 +489,9 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+	// DeleteObject
+	s.deleteObject(w, r)
 }
