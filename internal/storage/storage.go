@@ -29,6 +29,19 @@ type ListBucketResult struct {
 	IsTruncated    bool
 }
 
+type InitiateMultipartUploadResult struct {
+	UploadId string
+}
+
+type CompleteMultipartUploadResult struct {
+	Location       string
+	ETag           string
+	ChecksumCRC32  string
+	ChecksumCRC32C string
+	ChecksumSHA1   string
+	ChecksumSHA256 string
+}
+
 var ErrNoSuchBucket error = metadata.ErrNoSuchBucket
 var ErrBucketAlreadyExists error = metadata.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadata.ErrBucketNotEmpty
@@ -46,6 +59,10 @@ type Storage interface {
 	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
+	CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error)
+	UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error
+	CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(bucket string, key string, uploadId string) error
 }
 
 func CreateAndInitializeStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
