@@ -233,57 +233,6 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 				assert.NotNil(t, putObjectResult)
 			})
 
-			t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
-				t.Cleanup(cleanup)
-				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
-					Bucket: bucketName,
-				})
-				if err != nil {
-					assert.Fail(t, "CreateBucket failed", "err %v", err)
-				}
-				assert.NotNil(t, createBucketResult)
-
-				createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
-					Bucket: bucketName,
-					Key:    key,
-				})
-
-				if err != nil {
-					assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
-				}
-				assert.NotNil(t, createMultiPartUploadResult)
-				assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
-				assert.Equal(t, *key, *createMultiPartUploadResult.Key)
-				uploadId := createMultiPartUploadResult.UploadId
-				assert.NotNil(t, uploadId)
-
-				uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
-					Bucket:     bucketName,
-					Body:       bytes.NewReader([]byte("Hello, first object!")),
-					Key:        key,
-					UploadId:   uploadId,
-					PartNumber: aws.Int32(1),
-				})
-
-				if err != nil {
-					assert.Fail(t, "UploadPart failed", "err %v", err)
-				}
-				assert.NotNil(t, uploadPartResult)
-
-				completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
-					Bucket:   bucketName,
-					Key:      key,
-					UploadId: uploadId,
-				})
-				if err != nil {
-					assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
-				}
-				assert.NotNil(t, completeMultipartUploadResult)
-				assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
-				assert.Equal(t, key, completeMultipartUploadResult.Key)
-			})
-
 			t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
 				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
 				t.Cleanup(cleanup)

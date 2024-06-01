@@ -412,23 +412,3 @@ func (sms *SqlMetadataStore) DeleteObject(bucketName string, key string) error {
 
 	return nil
 }
-
-func (sms *SqlMetadataStore) CreateMultipartUpload(bucketName string, key string) (*InitiateMultipartUploadResult, error) {
-	return &InitiateMultipartUploadResult{
-		UploadId: "",
-	}, nil
-}
-
-func (sms *SqlMetadataStore) UploadPart(bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error {
-	return nil
-}
-
-func (sms *SqlMetadataStore) CompleteMultipartUpload(bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	return &CompleteMultipartUploadResult{}, nil
-}
-
-func (sms *SqlMetadataStore) AbortMultipartUpload(bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
-	return &AbortMultipartResult{
-		Blobs: []Blob{},
-	}, nil
-}
