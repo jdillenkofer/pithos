@@ -307,3 +307,23 @@ func (sms *SqlMetadataStore) DeleteObject(tx *sql.Tx, bucketName string, key str
 
 	return nil
 }
+
+func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error) {
+	return &InitiateMultipartUploadResult{
+		UploadId: "",
+	}, nil
+}
+
+func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error {
+	return nil
+}
+
+func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	return &CompleteMultipartUploadResult{}, nil
+}
+
+func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
+	return &AbortMultipartResult{
+		Blobs: []Blob{},
+	}, nil
+}
