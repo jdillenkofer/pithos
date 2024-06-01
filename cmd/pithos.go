@@ -18,20 +18,21 @@ import (
 func main() {
 	protocol := "http"
 	baseDomain := "localhost"
-	addr := fmt.Sprintf("%v:9000", baseDomain)
+	bindAddress := "0.0.0.0"
+	addr := fmt.Sprintf("%v:9000", bindAddress)
 	storagePath := "./data"
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Error while creating data directory: ", err)
 	}
 	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Error when opening sqlite database: ", err)
 	}
 	defer db.Close()
 	err = storage.SetupDatabase(db)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Error during SetupDatabase: ", err)
 	}
 	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
