@@ -7,77 +7,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	server "github.com/jdillenkofer/pithos/internal/server"
+	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const envKeyPrefix string = "PITHOS"
-
-const domainEnvKey string = envKeyPrefix + "_DOMAIN"
-const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
-const portEnvKey string = envKeyPrefix + "_PORT"
-const storagePathEnvKey string = envKeyPrefix + "_STORAGE_PATH"
-const useFilesystemBlobStoreEnvKey string = envKeyPrefix + "_USE_FILESYSTEM_BLOB_STORE"
-
-const defaultDomain = "localhost"
-const defaultBindAddress = "0.0.0.0"
-const defaultPort = "9000"
-const defaultStoragePath = "./data"
-const defaultUseFilesystemBlobStore = false
-
-type Settings struct {
-	domain                 string
-	bindAddress            string
-	port                   string
-	storagePath            string
-	useFilesystemBlobStore bool
-}
-
-func getStringFromEnv(envKey string, defaultValue string) string {
-	val := os.Getenv(envKey)
-	if val == "" {
-		return defaultValue
-	}
-	return val
-}
-
-func getBoolFromEnv(envKey string, defaultValue bool) bool {
-	val := os.Getenv(envKey)
-	val = strings.ToLower(val)
-	if val == "" {
-		return defaultValue
-	}
-	return val == "1" || val == "t" || val == "true"
-}
-
-func loadSettingsFromEnv() (*Settings, error) {
-	domain := getStringFromEnv(domainEnvKey, defaultDomain)
-	bindAddress := getStringFromEnv(bindAddressEnvKey, defaultBindAddress)
-	port := getStringFromEnv(portEnvKey, defaultPort)
-	storagePath := getStringFromEnv(storagePathEnvKey, defaultStoragePath)
-	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey, defaultUseFilesystemBlobStore)
-	return &Settings{
-		domain:                 domain,
-		bindAddress:            bindAddress,
-		port:                   port,
-		storagePath:            storagePath,
-		useFilesystemBlobStore: useFilesystemBlobStore,
-	}, nil
-}
-
 func main() {
 
-	settings, err := loadSettingsFromEnv()
+	settings, err := settings.LoadSettings()
 	if err != nil {
 		log.Fatal("Error while loading settings: ", err)
 	}
 
-	storagePath := settings.storagePath
+	storagePath := settings.StoragePath()
 	err = os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
 		log.Fatal("Error while creating data directory: ", err)
@@ -96,7 +42,7 @@ func main() {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
 	}
 	var blobStore blob.BlobStore
-	if settings.useFilesystemBlobStore {
+	if settings.UseFilesystemBlobStore() {
 		blobStore, err = blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
 		if err != nil {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
@@ -112,9 +58,9 @@ func main() {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
 	}
 
-	domain := settings.domain
+	domain := settings.Domain()
 	server := server.SetupServer(domain, storage)
-	addr := fmt.Sprintf("%v:%v", settings.bindAddress, settings.port)
+	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{Addr: addr, Handler: server}
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
