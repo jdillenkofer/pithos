@@ -19,6 +19,8 @@ type PutBlobResult struct {
 }
 
 type BlobStore interface {
+	Start() error
+	Stop() error
 	PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error)
 	GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
 	DeleteBlob(tx *sql.Tx, blobId BlobId) error

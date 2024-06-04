@@ -23,6 +23,14 @@ func NewSqlMetadataStore() (*SqlMetadataStore, error) {
 	}, nil
 }
 
+func (sms *SqlMetadataStore) Start() error {
+	return nil
+}
+
+func (sms *SqlMetadataStore) Stop() error {
+	return nil
+}
+
 func (sms *SqlMetadataStore) CreateBucket(tx *sql.Tx, bucketName string) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
 	if err != nil {

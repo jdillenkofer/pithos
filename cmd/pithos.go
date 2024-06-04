@@ -58,6 +58,17 @@ func main() {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
 	}
 
+	err = storage.Start()
+	if err != nil {
+		log.Fatal("Error during storage initialization: ", err)
+	}
+	defer func() {
+		err := storage.Stop()
+		if err != nil {
+			log.Fatal("Error during storage shutdown: ", err)
+		}
+	}()
+
 	domain := settings.Domain()
 	server := server.SetupServer(domain, storage)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())

@@ -19,6 +19,14 @@ func NewSqlBlobStore() (*SqlBlobStore, error) {
 	}, nil
 }
 
+func (bs *SqlBlobStore) Start() error {
+	return nil
+}
+
+func (bs *SqlBlobStore) Stop() error {
+	return nil
+}
+
 func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error) {
 	content, err := io.ReadAll(blob)
 	if err != nil {

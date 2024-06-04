@@ -65,6 +65,10 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 	if err != nil {
 		log.Fatalf("Could not create metadataBlobStorage: %s", err)
 	}
+	err = storage.Start()
+	if err != nil {
+		log.Fatalf("Could not initialize storage: %s", err)
+	}
 
 	baseEndpoint := "localhost"
 	ts := httptest.NewServer(server.SetupServer(baseEndpoint, storage))
@@ -90,8 +94,13 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 	})
 
 	cleanup = func() {
+		err := storage.Stop()
+		if err != nil {
+			log.Fatalf("Error during storage shutdown: %s", err)
+		}
+
 		ts.Close()
-		err := db.Close()
+		err = db.Close()
 		if err != nil {
 			log.Fatalf("Could not close db: %s", err)
 		}

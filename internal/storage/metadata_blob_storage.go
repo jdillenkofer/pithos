@@ -25,6 +25,30 @@ func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, bl
 	}, nil
 }
 
+func (mbs *MetadataBlobStorage) Start() error {
+	err := mbs.metadataStore.Start()
+	if err != nil {
+		return err
+	}
+	err = mbs.blobStore.Start()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (mbs *MetadataBlobStorage) Stop() error {
+	err := mbs.metadataStore.Stop()
+	if err != nil {
+		return err
+	}
+	err = mbs.blobStore.Stop()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (mbs *MetadataBlobStorage) CreateBucket(bucket string) error {
 	tx, err := mbs.db.Begin()
 	if err != nil {

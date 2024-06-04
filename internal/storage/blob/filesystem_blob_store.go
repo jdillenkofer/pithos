@@ -40,6 +40,14 @@ func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
 	return bs, nil
 }
 
+func (bs *FilesystemBlobStore) Start() error {
+	return nil
+}
+
+func (bs *FilesystemBlobStore) Stop() error {
+	return nil
+}
+
 func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error) {
 	blobIdBytes := make([]byte, 8)
 	_, err := rand.Read(blobIdBytes)
