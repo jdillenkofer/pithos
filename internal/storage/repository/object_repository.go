@@ -12,13 +12,10 @@ const UploadStatusCompleted = "COMPLETED"
 const UploadStatusAborted = "ABORTED"
 
 type ObjectRepository struct {
-	db *sql.DB
 }
 
-func NewObjectRepository(db *sql.DB) ObjectRepository {
-	return ObjectRepository{
-		db: db,
-	}
+func NewObjectRepository() ObjectRepository {
+	return ObjectRepository{}
 }
 
 type ObjectEntity struct {

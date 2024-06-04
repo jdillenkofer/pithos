@@ -10,14 +10,12 @@ import (
 )
 
 type SqlBlobStore struct {
-	db                    *sql.DB
 	blobContentRepository repository.BlobContentRepository
 }
 
-func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
+func NewSqlBlobStore() (*SqlBlobStore, error) {
 	return &SqlBlobStore{
-		db:                    db,
-		blobContentRepository: repository.NewBlobContentRepository(db),
+		blobContentRepository: repository.NewBlobContentRepository(),
 	}, nil
 }
 
