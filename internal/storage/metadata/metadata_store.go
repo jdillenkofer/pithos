@@ -39,6 +39,8 @@ var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
 
 type MetadataStore interface {
+	Start() error
+	Stop() error
 	CreateBucket(tx *sql.Tx, bucketName string) error
 	DeleteBucket(tx *sql.Tx, bucketName string) error
 	ListBuckets(tx *sql.Tx) ([]Bucket, error)
