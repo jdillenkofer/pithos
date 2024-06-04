@@ -7,14 +7,14 @@ import (
 
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
-const defaultPort = "9000"
+const defaultPort = 9000
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
 
 type Settings struct {
 	domain                 *string
 	bindAddress            *string
-	port                   *string
+	port                   *int
 	storagePath            *string
 	useFilesystemBlobStore *bool
 }
@@ -80,7 +80,7 @@ func (s *Settings) BindAddress() string {
 	return valueOrDefault(s.bindAddress, defaultBindAddress)
 }
 
-func (s *Settings) Port() string {
+func (s *Settings) Port() int {
 	return valueOrDefault(s.port, defaultPort)
 }
 

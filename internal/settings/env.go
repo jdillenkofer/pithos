@@ -2,6 +2,7 @@ package settings
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +22,19 @@ func getStringFromEnv(envKey string) *string {
 	return &val
 }
 
+func getIntFromEnv(envKey string) *int {
+	val := os.Getenv(envKey)
+	if val == "" {
+		return nil
+	}
+	int64Val, err := strconv.ParseInt(val, 10, 32)
+	if err != nil {
+		return nil
+	}
+	intVal := int(int64Val)
+	return &intVal
+}
+
 func getBoolFromEnv(envKey string) *bool {
 	val := os.Getenv(envKey)
 	val = strings.ToLower(val)
@@ -34,7 +48,7 @@ func getBoolFromEnv(envKey string) *bool {
 func loadSettingsFromEnv() (*Settings, error) {
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
-	port := getStringFromEnv(portEnvKey)
+	port := getIntFromEnv(portEnvKey)
 	storagePath := getStringFromEnv(storagePathEnvKey)
 	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey)
 	return &Settings{

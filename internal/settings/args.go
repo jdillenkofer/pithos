@@ -4,29 +4,69 @@ import (
 	"flag"
 )
 
-func optionalStringFlag(v string) *string {
-	if v == "" {
-		return nil
+func registerStringFlag(name string, description string) func() *string {
+	stringVar := flag.String(name, "", description)
+	accessor := func() *string {
+		found := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == name {
+				found = true
+			}
+		})
+		if !found {
+			return nil
+		}
+		return stringVar
 	}
-	return &v
+	return accessor
+}
+
+func registerIntFlag(name string, description string) func() *int {
+	intVar := flag.Int(name, 0, description)
+	accessor := func() *int {
+		found := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == name {
+				found = true
+			}
+		})
+		if !found {
+			return nil
+		}
+		return intVar
+	}
+	return accessor
+}
+
+func registerBoolFlag(name string, description string) func() *bool {
+	boolVar := flag.Bool(name, false, description)
+	accessor := func() *bool {
+		found := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == name {
+				found = true
+			}
+		})
+		if !found {
+			return nil
+		}
+		return boolVar
+	}
+	return accessor
 }
 
 func loadSettingsFromCmdArgs() (*Settings, error) {
-	// TODO: import nullable field handling by checking if a flag was actually set
-	// instead of comparing with the default value
-	domain := flag.String("domain", "", "the domain for the s3 api")
-	bindAddress := flag.String("bindAddress", "", "the address the s3 socket is bound to")
-	// TODO: Change port flag to int
-	port := flag.String("port", "", "the port for the s3 api")
-	storagePath := flag.String("storagePath", "", "the storagePath for metadata and blobs")
-	// TODO: How to check if bool flag is not set
-	useFilesystemBlobStore := flag.Bool("useFilesystemBlobStore", false, "true if we want to store blobs in the filesystem instead of the sqlite database")
+	domainAccessor := registerStringFlag("domain", "the domain for the s3 api")
+	bindAddressAccessor := registerStringFlag("bindAddress", "the address the s3 socket is bound to")
+	portAccessor := registerIntFlag("port", "the port for the s3 api")
+	storagePathAccessor := registerStringFlag("storagePath", "the storagePath for metadata and blobs")
+	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", "true if we want to store blobs in the filesystem instead of the sqlite database")
 	flag.Parse()
 	return &Settings{
-		domain:                 optionalStringFlag(*domain),
-		bindAddress:            optionalStringFlag(*bindAddress),
-		port:                   optionalStringFlag(*port),
-		storagePath:            optionalStringFlag(*storagePath),
-		useFilesystemBlobStore: useFilesystemBlobStore,
+		domain:                 domainAccessor(),
+		bindAddress:            bindAddressAccessor(),
+		port:                   portAccessor(),
+		storagePath:            storagePathAccessor(),
+		useFilesystemBlobStore: useFilesystemBlobStoreAccessor(),
 	}, nil
 }
