@@ -1,5 +1,10 @@
 package settings
 
+import (
+	"reflect"
+	"unsafe"
+)
+
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = "9000"
@@ -21,26 +26,50 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 	return *v
 }
 
-// TODO: use reflection to implement this
-// otherwise we need to change the implementation
-// everytime a new field is added to the Settings struct
-func (s *Settings) merge(other *Settings) {
-	if other.domain != nil {
-		s.domain = other.domain
-	}
-	if other.bindAddress != nil {
-		s.bindAddress = other.bindAddress
-	}
-	if other.port != nil {
-		s.port = other.port
-	}
-	if other.storagePath != nil {
-		s.storagePath = other.storagePath
-	}
-	if other.useFilesystemBlobStore != nil {
-		s.useFilesystemBlobStore = other.useFilesystemBlobStore
+func getUnexportedField(field reflect.Value) interface{} {
+	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
+}
+
+func setUnexportedField(field reflect.Value, value interface{}) {
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+}
+
+func isNilish(val any) bool {
+	if val == nil {
+		return true
 	}
 
+	v := reflect.ValueOf(val)
+	k := v.Kind()
+	switch k {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer,
+		reflect.UnsafePointer, reflect.Interface, reflect.Slice:
+		return v.IsNil()
+	}
+
+	return false
+}
+
+func (s *Settings) merge(other *Settings) {
+	fields := reflect.VisibleFields(reflect.TypeOf(other).Elem())
+	sStruct := reflect.ValueOf(s).Elem()
+	otherStruct := reflect.ValueOf(other).Elem()
+
+	for _, field := range fields {
+		sField := sStruct.FieldByName(field.Name)
+		otherField := otherStruct.FieldByName(field.Name)
+
+		if field.Type.Kind() == reflect.Pointer {
+			otherFieldValue := getUnexportedField(otherField)
+			if !isNilish(otherFieldValue) {
+				setUnexportedField(sField, otherFieldValue)
+			}
+		} else {
+			otherFieldValue := getUnexportedField(otherField)
+			setUnexportedField(sField, otherFieldValue)
+
+		}
+	}
 }
 
 func (s *Settings) Domain() string {
