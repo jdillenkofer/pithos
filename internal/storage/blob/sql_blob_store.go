@@ -48,11 +48,9 @@ func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, err
 func (bs *SqlBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
 	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(tx, blobId)
 	if err != nil {
-		tx.Rollback()
 		return nil, err
 	}
 	if blobContentEntity == nil {
-		tx.Rollback()
 		return nil, nil
 	}
 	reader := ioutils.NewByteReadSeekCloser(blobContentEntity.Content)
