@@ -2,6 +2,7 @@ package blob
 
 import (
 	"crypto/md5"
+	"database/sql"
 	"encoding/hex"
 	"io"
 	"os"
@@ -18,9 +19,9 @@ type PutBlobResult struct {
 }
 
 type BlobStore interface {
-	PutBlob(blob io.Reader) (*PutBlobResult, error)
-	GetBlob(blobId BlobId) (io.ReadSeekCloser, error)
-	DeleteBlob(blobId BlobId) error
+	PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error)
+	GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
+	DeleteBlob(tx *sql.Tx, blobId BlobId) error
 }
 
 func calculateMd5Sum(reader io.Reader) (*string, error) {

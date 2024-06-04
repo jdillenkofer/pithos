@@ -61,7 +61,7 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 			log.Fatalf("Could not create filesystemBlobStore: %s", err)
 		}
 	}
-	storage, err := storage.NewMetadataBlobStorage(metadataStore, blobStore)
+	storage, err := storage.NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
 		log.Fatalf("Could not create metadataBlobStorage: %s", err)
 	}

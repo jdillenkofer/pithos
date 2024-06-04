@@ -2,6 +2,7 @@ package blob
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"io"
 	"os"
@@ -39,7 +40,7 @@ func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
 	return bs, nil
 }
 
-func (bs *FilesystemBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
+func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error) {
 	blobIdBytes := make([]byte, 8)
 	_, err := rand.Read(blobIdBytes)
 	if err != nil {
@@ -73,13 +74,13 @@ func (bs *FilesystemBlobStore) PutBlob(blob io.Reader) (*PutBlobResult, error) {
 	}, nil
 }
 
-func (bs *FilesystemBlobStore) GetBlob(blobId BlobId) (io.ReadSeekCloser, error) {
+func (bs *FilesystemBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	return f, err
 }
 
-func (bs *FilesystemBlobStore) DeleteBlob(blobId BlobId) error {
+func (bs *FilesystemBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
 	filename := bs.getFilename(blobId)
 	err := os.Remove(filename)
 	return err

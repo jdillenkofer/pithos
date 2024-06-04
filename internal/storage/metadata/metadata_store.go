@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"database/sql"
 	"errors"
 	"time"
 
@@ -38,12 +39,12 @@ var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
 
 type MetadataStore interface {
-	CreateBucket(bucketName string) error
-	DeleteBucket(bucketName string) error
-	ListBuckets() ([]Bucket, error)
-	HeadBucket(bucketName string) (*Bucket, error)
-	ListObjects(bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
-	HeadObject(bucketName string, key string) (*Object, error)
-	PutObject(bucketName string, object *Object) error
-	DeleteObject(bucketName string, key string) error
+	CreateBucket(tx *sql.Tx, bucketName string) error
+	DeleteBucket(tx *sql.Tx, bucketName string) error
+	ListBuckets(tx *sql.Tx) ([]Bucket, error)
+	HeadBucket(tx *sql.Tx, bucketName string) (*Bucket, error)
+	ListObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
+	HeadObject(tx *sql.Tx, bucketName string, key string) (*Object, error)
+	PutObject(tx *sql.Tx, bucketName string, object *Object) error
+	DeleteObject(tx *sql.Tx, bucketName string, key string) error
 }
