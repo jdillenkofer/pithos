@@ -10,18 +10,16 @@ import (
 )
 
 type SqlMetadataStore struct {
-	db               *sql.DB
 	bucketRepository repository.BucketRepository
 	objectRepository repository.ObjectRepository
 	blobRepository   repository.BlobRepository
 }
 
-func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
+func NewSqlMetadataStore() (*SqlMetadataStore, error) {
 	return &SqlMetadataStore{
-		db:               db,
-		bucketRepository: repository.NewBucketRepository(db),
-		objectRepository: repository.NewObjectRepository(db),
-		blobRepository:   repository.NewBlobRepository(db),
+		bucketRepository: repository.NewBucketRepository(),
+		objectRepository: repository.NewObjectRepository(),
+		blobRepository:   repository.NewBlobRepository(),
 	}, nil
 }
 

@@ -45,13 +45,13 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 	if err != nil {
 		log.Fatalf("Could not setup database: %s", err)
 	}
-	metadataStore, err := metadata.NewSqlMetadataStore(db)
+	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
 		log.Fatalf("Could not create metadataStore: %s", err)
 	}
 	var blobStore blob.BlobStore
 	if useSqlBlobStore {
-		blobStore, err = blob.NewSqlBlobStore(db)
+		blobStore, err = blob.NewSqlBlobStore()
 		if err != nil {
 			log.Fatalf("Could not create sqlBlobStore: %s", err)
 		}

@@ -8,13 +8,10 @@ import (
 )
 
 type BucketRepository struct {
-	db *sql.DB
 }
 
-func NewBucketRepository(db *sql.DB) BucketRepository {
-	return BucketRepository{
-		db: db,
-	}
+func NewBucketRepository() BucketRepository {
+	return BucketRepository{}
 }
 
 type BucketEntity struct {

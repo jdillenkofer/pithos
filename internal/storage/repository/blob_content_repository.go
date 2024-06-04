@@ -8,13 +8,10 @@ import (
 )
 
 type BlobContentRepository struct {
-	db *sql.DB
 }
 
-func NewBlobContentRepository(db *sql.DB) BlobContentRepository {
-	return BlobContentRepository{
-		db: db,
-	}
+func NewBlobContentRepository() BlobContentRepository {
+	return BlobContentRepository{}
 }
 
 type BlobContentEntity struct {

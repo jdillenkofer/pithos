@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error during SetupDatabase: ", err)
 	}
-	metadataStore, err := metadata.NewSqlMetadataStore(db)
+	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
 	}
@@ -48,7 +48,7 @@ func main() {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
 		}
 	} else {
-		blobStore, err = blob.NewSqlBlobStore(db)
+		blobStore, err = blob.NewSqlBlobStore()
 		if err != nil {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
 		}
