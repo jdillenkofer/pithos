@@ -53,7 +53,7 @@ func main() {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
 		}
 	}
-	storage, err := storage.NewMetadataBlobStorage(metadataStore, blobStore)
+	storage, err := storage.NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
 	}
