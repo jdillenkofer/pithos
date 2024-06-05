@@ -247,6 +247,23 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		return err
 	}
 
+	// if we already have such an object,
+	// remove all previous blobs
+	previousObject, err := mbs.metadataStore.HeadObject(tx, bucket, key)
+	if err != nil && err != ErrNoSuchKey {
+		tx.Rollback()
+		return err
+	}
+	if previousObject != nil {
+		for _, blob := range previousObject.Blobs {
+			err = mbs.blobStore.DeleteBlob(tx, blob.Id)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+	}
+
 	blobId, err := blob.GenerateBlobId()
 	if err != nil {
 		tx.Rollback()
@@ -273,7 +290,6 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		},
 	}
 
-	// TODO: remove old blobs if the object already existed
 	err = mbs.metadataStore.PutObject(tx, bucket, &object)
 	if err != nil {
 		tx.Rollback()
