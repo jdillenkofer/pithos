@@ -51,6 +51,17 @@ func (bcr *BlobContentRepository) FindBlobContentById(tx *sql.Tx, blobContentId 
 	return blobContentEntity, nil
 }
 
+func (bcr *BlobContentRepository) PutBlobContent(tx *sql.Tx, blobContent *BlobContentEntity) error {
+	_, err := tx.Exec("DELETE FROM blob_contents WHERE id = ?", blobContent.Id.String())
+	if err != nil {
+		return err
+	}
+	blobContent.CreatedAt = time.Now()
+	blobContent.UpdatedAt = blobContent.CreatedAt
+	_, err = tx.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
+	return err
+}
+
 func (bcr *BlobContentRepository) SaveBlobContent(tx *sql.Tx, blobContent *BlobContentEntity) error {
 	if blobContent.Id == nil {
 		id := ulid.Make()

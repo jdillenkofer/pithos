@@ -1,14 +1,12 @@
 package blob
 
 import (
-	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/oklog/ulid/v2"
+	"syscall"
 )
 
 type FilesystemBlobStore struct {
@@ -48,13 +46,7 @@ func (bs *FilesystemBlobStore) Stop() error {
 	return nil
 }
 
-func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error) {
-	blobIdBytes := make([]byte, 8)
-	_, err := rand.Read(blobIdBytes)
-	if err != nil {
-		return nil, err
-	}
-	blobId := BlobId(ulid.Make())
+func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
 	filename := bs.getFilename(blobId)
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -91,5 +83,13 @@ func (bs *FilesystemBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCl
 func (bs *FilesystemBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
 	filename := bs.getFilename(blobId)
 	err := os.Remove(filename)
-	return err
+	if err != nil {
+		e, ok := err.(*os.PathError)
+		if ok && e.Err == syscall.ENOENT {
+			// The file didn't exist
+		} else {
+			return err
+		}
+	}
+	return nil
 }

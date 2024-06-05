@@ -60,6 +60,10 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 		if err != nil {
 			log.Fatalf("Could not create filesystemBlobStore: %s", err)
 		}
+		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
+		if err != nil {
+			log.Fatalf("Could not create outboxBlobStore: %s", err)
+		}
 	}
 	storage, err := storage.NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
