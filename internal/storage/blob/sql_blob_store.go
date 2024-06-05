@@ -3,6 +3,7 @@ package blob
 import (
 	"bytes"
 	"database/sql"
+	"github.com/oklog/ulid/v2"
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
@@ -27,19 +28,19 @@ func (bs *SqlBlobStore) Stop() error {
 	return nil
 }
 
-func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error) {
+func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
 	content, err := io.ReadAll(blob)
 	if err != nil {
 		return nil, err
 	}
 	blobContentEntity := repository.BlobContentEntity{
+		Id:      (*ulid.ULID)(&blobId),
 		Content: content,
 	}
-	err = bs.blobContentRepository.SaveBlobContent(tx, &blobContentEntity)
+	err = bs.blobContentRepository.PutBlobContent(tx, &blobContentEntity)
 	if err != nil {
 		return nil, err
 	}
-	blobId := blobContentEntity.Id
 
 	etag, err := calculateETag(bytes.NewReader(content))
 	if err != nil {
@@ -47,7 +48,7 @@ func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, err
 	}
 
 	return &PutBlobResult{
-		BlobId: BlobId(*blobId),
+		BlobId: blobId,
 		ETag:   *etag,
 		Size:   int64(len(content)),
 	}, nil

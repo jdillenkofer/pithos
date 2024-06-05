@@ -2,12 +2,12 @@ package blob
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"github.com/oklog/ulid/v2"
 	"io"
 	"os"
-
-	"github.com/oklog/ulid/v2"
 )
 
 type BlobId = ulid.ULID
@@ -21,9 +21,19 @@ type PutBlobResult struct {
 type BlobStore interface {
 	Start() error
 	Stop() error
-	PutBlob(tx *sql.Tx, blob io.Reader) (*PutBlobResult, error)
+	PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error)
 	GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
 	DeleteBlob(tx *sql.Tx, blobId BlobId) error
+}
+
+func GenerateBlobId() (*BlobId, error) {
+	blobIdBytes := make([]byte, 8)
+	_, err := rand.Read(blobIdBytes)
+	if err != nil {
+		return nil, err
+	}
+	blobId := BlobId(ulid.Make())
+	return &blobId, nil
 }
 
 func calculateMd5Sum(reader io.Reader) (*string, error) {

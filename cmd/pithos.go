@@ -47,6 +47,10 @@ func main() {
 		if err != nil {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
 		}
+		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
+		if err != nil {
+			log.Fatal("Error during NewOutboxBlobStore: ", err)
+		}
 	} else {
 		blobStore, err = blob.NewSqlBlobStore()
 		if err != nil {

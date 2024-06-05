@@ -247,7 +247,13 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		return err
 	}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(tx, reader)
+	blobId, err := blob.GenerateBlobId()
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -266,6 +272,8 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 			},
 		},
 	}
+
+	// TODO: remove old blobs if the object already existed
 	err = mbs.metadataStore.PutObject(tx, bucket, &object)
 	if err != nil {
 		tx.Rollback()
