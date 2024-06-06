@@ -11,12 +11,14 @@ const defaultPort = 9000
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
 
+const mergableTagKey = "mergable"
+
 type Settings struct {
-	domain                 *string
-	bindAddress            *string
-	port                   *int
-	storagePath            *string
-	useFilesystemBlobStore *bool
+	domain                 *string `mergable:""`
+	bindAddress            *string `mergable:""`
+	port                   *int    `mergable:""`
+	storagePath            *string `mergable:""`
+	useFilesystemBlobStore *bool   `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -24,6 +26,26 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 		return defaultValue
 	}
 	return *v
+}
+
+func (s *Settings) Domain() string {
+	return valueOrDefault(s.domain, defaultDomain)
+}
+
+func (s *Settings) BindAddress() string {
+	return valueOrDefault(s.bindAddress, defaultBindAddress)
+}
+
+func (s *Settings) Port() int {
+	return valueOrDefault(s.port, defaultPort)
+}
+
+func (s *Settings) StoragePath() string {
+	return valueOrDefault(s.storagePath, defaultStoragePath)
+}
+
+func (s *Settings) UseFilesystemBlobStore() bool {
+	return valueOrDefault(s.useFilesystemBlobStore, defaultUseFilesystemBlobStore)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {
@@ -56,6 +78,9 @@ func (s *Settings) merge(other *Settings) {
 	otherStruct := reflect.ValueOf(other).Elem()
 
 	for _, field := range fields {
+		if _, ok := field.Tag.Lookup(mergableTagKey); !ok {
+			continue
+		}
 		sField := sStruct.FieldByName(field.Name)
 		otherField := otherStruct.FieldByName(field.Name)
 
@@ -70,26 +95,6 @@ func (s *Settings) merge(other *Settings) {
 
 		}
 	}
-}
-
-func (s *Settings) Domain() string {
-	return valueOrDefault(s.domain, defaultDomain)
-}
-
-func (s *Settings) BindAddress() string {
-	return valueOrDefault(s.bindAddress, defaultBindAddress)
-}
-
-func (s *Settings) Port() int {
-	return valueOrDefault(s.port, defaultPort)
-}
-
-func (s *Settings) StoragePath() string {
-	return valueOrDefault(s.storagePath, defaultStoragePath)
-}
-
-func (s *Settings) UseFilesystemBlobStore() bool {
-	return valueOrDefault(s.useFilesystemBlobStore, defaultUseFilesystemBlobStore)
 }
 
 func mergeSettings(settings ...*Settings) *Settings {
