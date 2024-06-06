@@ -23,7 +23,7 @@ type OutboxBlobStore struct {
 func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore, error) {
 	obs := &OutboxBlobStore{
 		db:                        db,
-		triggerChannel:            make(chan struct{}, 1000),
+		triggerChannel:            make(chan struct{}, 16),
 		innerBlobStore:            innerBlobStore,
 		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(),
 	}
@@ -31,7 +31,7 @@ func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore,
 }
 
 func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
-	log.Println("Processing one outbox entries")
+	processedOutboxEntryCount := 0
 	tx, err := obs.db.Begin()
 	if err != nil {
 		return
@@ -44,7 +44,6 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 			return
 		}
 		if blobOutboxEntry == nil {
-			log.Println("No more outbox entries found")
 			break
 		}
 
@@ -64,19 +63,25 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 				return
 			}
 		default:
-			log.Println("Invalid operation", blobOutboxEntry.Operation, "during outbox processing. Skipping...")
+			log.Println("Invalid operation", blobOutboxEntry.Operation, "during outbox processing.")
+			tx.Rollback()
+			time.Sleep(30 * time.Second)
+			return
 		}
 		err = obs.blobOutboxEntryRepository.DeleteBlobOutboxEntryById(tx, *blobOutboxEntry.Id)
 		if err != nil {
 			tx.Rollback()
 			return
 		}
+		processedOutboxEntryCount += 1
 	}
 	tx.Commit()
-	log.Println("Processed one outbox entry")
+	if processedOutboxEntryCount > 0 {
+		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
+	}
 }
 
-func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	c := make(chan struct{})
 	go func() {
 		defer close(c)
@@ -84,9 +89,9 @@ func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	}()
 	select {
 	case <-c:
-		return false // completed normally
+		return false
 	case <-time.After(timeout):
-		return true // timed out
+		return true
 	}
 }
 
@@ -95,15 +100,13 @@ out:
 	for {
 		select {
 		case _, ok := <-obs.triggerChannel:
-			if ok {
-				obs.maybeProcessOutboxEntries()
-			} else {
+			if !ok {
 				log.Println("Stopping outbox processing")
 				break out
 			}
 		case <-time.After(10 * time.Second):
-			obs.maybeProcessOutboxEntries()
 		}
+		obs.maybeProcessOutboxEntries()
 	}
 	obs.outboxProcessingStopped.Done()
 }
@@ -116,8 +119,33 @@ func (obs *OutboxBlobStore) Start() error {
 
 func (obs *OutboxBlobStore) Stop() error {
 	close(obs.triggerChannel)
-	waitTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+	waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
 	return obs.innerBlobStore.Stop()
+}
+
+func (obs *OutboxBlobStore) storeBlobOutboxEntry(tx *sql.Tx, operation string, blobId BlobId, content []byte) error {
+	ordinal, err := obs.blobOutboxEntryRepository.NextOrdinal(tx)
+	if err != nil {
+		return err
+	}
+	blobOutboxEntry := repository.BlobOutboxEntryEntity{
+		Operation: operation,
+		BlobId:    blobId,
+		Content:   content,
+		Ordinal:   *ordinal,
+	}
+	err = obs.blobOutboxEntryRepository.SaveBlobOutboxEntry(tx, &blobOutboxEntry)
+	if err != nil {
+		return err
+	}
+
+	// Put struct{} in the channel unless it is full
+	select {
+	case obs.triggerChannel <- struct{}{}:
+	default:
+	}
+
+	return nil
 }
 
 func (obs *OutboxBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
@@ -125,25 +153,16 @@ func (obs *OutboxBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (
 	if err != nil {
 		return nil, err
 	}
-	ordinal, err := obs.blobOutboxEntryRepository.NextOrdinal(tx)
+
+	err = obs.storeBlobOutboxEntry(tx, repository.PutOperation, blobId, content)
 	if err != nil {
 		return nil, err
 	}
-	blobOutboxEntry := repository.BlobOutboxEntryEntity{
-		Operation: repository.PutOperation,
-		BlobId:    blobId,
-		Content:   content,
-		Ordinal:   *ordinal,
-	}
-	err = obs.blobOutboxEntryRepository.SaveBlobOutboxEntry(tx, &blobOutboxEntry)
-	if err != nil {
-		return nil, err
-	}
+
 	etag, err := calculateETag(bytes.NewReader(content))
 	if err != nil {
 		return nil, err
 	}
-	obs.triggerChannel <- struct{}{}
 
 	return &PutBlobResult{
 		BlobId: blobId,
@@ -167,20 +186,10 @@ func (obs *OutboxBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekClose
 }
 
 func (obs *OutboxBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
-	ordinal, err := obs.blobOutboxEntryRepository.NextOrdinal(tx)
+	err := obs.storeBlobOutboxEntry(tx, repository.DeleteOperation, blobId, []byte{})
 	if err != nil {
 		return err
 	}
-	blobOutboxEntry := repository.BlobOutboxEntryEntity{
-		Operation: repository.DeleteOperation,
-		BlobId:    blobId,
-		Ordinal:   *ordinal,
-		Content:   []byte{},
-	}
-	err = obs.blobOutboxEntryRepository.SaveBlobOutboxEntry(tx, &blobOutboxEntry)
-	if err != nil {
-		return err
-	}
-	obs.triggerChannel <- struct{}{}
+
 	return nil
 }
