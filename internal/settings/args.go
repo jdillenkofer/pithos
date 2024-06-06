@@ -4,8 +4,8 @@ import (
 	"flag"
 )
 
-func registerStringFlag(name string, description string) func() *string {
-	stringVar := flag.String(name, "", description)
+func registerStringFlag(name string, defaultValue string, description string) func() *string {
+	stringVar := flag.String(name, defaultValue, description)
 	accessor := func() *string {
 		found := false
 		flag.Visit(func(f *flag.Flag) {
@@ -21,8 +21,8 @@ func registerStringFlag(name string, description string) func() *string {
 	return accessor
 }
 
-func registerIntFlag(name string, description string) func() *int {
-	intVar := flag.Int(name, 0, description)
+func registerIntFlag(name string, defaultValue int, description string) func() *int {
+	intVar := flag.Int(name, defaultValue, description)
 	accessor := func() *int {
 		found := false
 		flag.Visit(func(f *flag.Flag) {
@@ -38,8 +38,8 @@ func registerIntFlag(name string, description string) func() *int {
 	return accessor
 }
 
-func registerBoolFlag(name string, description string) func() *bool {
-	boolVar := flag.Bool(name, false, description)
+func registerBoolFlag(name string, defaultValue bool, description string) func() *bool {
+	boolVar := flag.Bool(name, defaultValue, description)
 	accessor := func() *bool {
 		found := false
 		flag.Visit(func(f *flag.Flag) {
@@ -56,11 +56,11 @@ func registerBoolFlag(name string, description string) func() *bool {
 }
 
 func loadSettingsFromCmdArgs() (*Settings, error) {
-	domainAccessor := registerStringFlag("domain", "the domain for the s3 api")
-	bindAddressAccessor := registerStringFlag("bindAddress", "the address the s3 socket is bound to")
-	portAccessor := registerIntFlag("port", "the port for the s3 api")
-	storagePathAccessor := registerStringFlag("storagePath", "the storagePath for metadata and blobs")
-	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", "true if we want to store blobs in the filesystem instead of the sqlite database")
+	domainAccessor := registerStringFlag("domain", defaultDomain, "the domain for the s3 api")
+	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
+	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
+	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
+	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "true if we want to store blobs in the filesystem instead of the sqlite database")
 	flag.Parse()
 	return &Settings{
 		domain:                 domainAccessor(),
