@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
@@ -14,6 +15,7 @@ import (
 type OutboxBlobStore struct {
 	db                        *sql.DB
 	triggerChannel            chan struct{}
+	outboxProcessingStopped   sync.WaitGroup
 	innerBlobStore            BlobStore
 	blobOutboxEntryRepository repository.BlobOutboxEntryRepository
 }
@@ -74,7 +76,22 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 	log.Println("Processed one outbox entry")
 }
 
+func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		wg.Wait()
+	}()
+	select {
+	case <-c:
+		return false // completed normally
+	case <-time.After(timeout):
+		return true // timed out
+	}
+}
+
 func (obs *OutboxBlobStore) processOutboxLoop() {
+out:
 	for {
 		select {
 		case _, ok := <-obs.triggerChannel:
@@ -82,21 +99,24 @@ func (obs *OutboxBlobStore) processOutboxLoop() {
 				obs.maybeProcessOutboxEntries()
 			} else {
 				log.Println("Stopping outbox processing")
-				return
+				break out
 			}
 		case <-time.After(10 * time.Second):
 			obs.maybeProcessOutboxEntries()
 		}
 	}
+	obs.outboxProcessingStopped.Done()
 }
 
 func (obs *OutboxBlobStore) Start() error {
+	obs.outboxProcessingStopped.Add(1)
 	go obs.processOutboxLoop()
 	return obs.innerBlobStore.Start()
 }
 
 func (obs *OutboxBlobStore) Stop() error {
 	close(obs.triggerChannel)
+	waitTimeout(&obs.outboxProcessingStopped, 10*time.Second)
 	return obs.innerBlobStore.Stop()
 }
 
