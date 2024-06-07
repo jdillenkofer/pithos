@@ -49,7 +49,7 @@ type Storage interface {
 	DeleteObject(bucket string, key string) error
 }
 
-func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool) (storage Storage, closeStorage func()) {
+func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (storage Storage, closeStorage func()) {
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
 		log.Fatal("Error while creating data directory: ", err)
@@ -72,14 +72,16 @@ func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool)
 		if err != nil {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
 		}
-		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
-		if err != nil {
-			log.Fatal("Error during NewOutboxBlobStore: ", err)
-		}
 	} else {
 		blobStore, err = blob.NewSqlBlobStore()
 		if err != nil {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
+		}
+	}
+	if wrapBlobStoreWithOutbox {
+		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
+		if err != nil {
+			log.Fatal("Error during NewOutboxBlobStore: ", err)
 		}
 	}
 	storage, err = NewMetadataBlobStorage(db, metadataStore, blobStore)

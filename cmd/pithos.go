@@ -17,7 +17,7 @@ func main() {
 		log.Fatal("Error while loading settings: ", err)
 	}
 
-	storage, closeStorage := storage.CreateAndInitializeStorage(settings.StoragePath(), settings.UseFilesystemBlobStore())
+	storage, closeStorage := storage.CreateAndInitializeStorage(settings.StoragePath(), settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
 	defer closeStorage()
 
 	server := server.SetupServer(settings.Domain(), storage)

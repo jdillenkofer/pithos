@@ -14,11 +14,12 @@ const defaultUseFilesystemBlobStore = false
 const mergableTagKey = "mergable"
 
 type Settings struct {
-	domain                 *string `mergable:""`
-	bindAddress            *string `mergable:""`
-	port                   *int    `mergable:""`
-	storagePath            *string `mergable:""`
-	useFilesystemBlobStore *bool   `mergable:""`
+	domain                  *string `mergable:""`
+	bindAddress             *string `mergable:""`
+	port                    *int    `mergable:""`
+	storagePath             *string `mergable:""`
+	useFilesystemBlobStore  *bool   `mergable:""`
+	wrapBlobStoreWithOutbox *bool   `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -46,6 +47,11 @@ func (s *Settings) StoragePath() string {
 
 func (s *Settings) UseFilesystemBlobStore() bool {
 	return valueOrDefault(s.useFilesystemBlobStore, defaultUseFilesystemBlobStore)
+}
+
+func (s *Settings) WrapBlobStoreWithOutbox() bool {
+	defaultWrapBlobStoreWithOutbox := s.UseFilesystemBlobStore()
+	return valueOrDefault(s.wrapBlobStoreWithOutbox, defaultWrapBlobStoreWithOutbox)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {
