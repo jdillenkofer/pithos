@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,57 +22,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	server "github.com/jdillenkofer/pithos/internal/server"
+	"github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
-	"github.com/jdillenkofer/pithos/internal/storage/metadata"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
-func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Client, cleanup func()) {
+func setupTestServer(usePathStyle bool, useFilesystemBlobStore bool) (s3Client *s3.Client, cleanup func()) {
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
 	}
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "metadata.db"))
-	if err != nil {
-		log.Fatalf("Could not open sqlite3 database: %s", err)
-	}
-	err = storage.SetupDatabase(db)
-	if err != nil {
-		log.Fatalf("Could not setup database: %s", err)
-	}
-	metadataStore, err := metadata.NewSqlMetadataStore()
-	if err != nil {
-		log.Fatalf("Could not create metadataStore: %s", err)
-	}
-	var blobStore blob.BlobStore
-	if useSqlBlobStore {
-		blobStore, err = blob.NewSqlBlobStore()
-		if err != nil {
-			log.Fatalf("Could not create sqlBlobStore: %s", err)
-		}
-	} else {
-		blobStore, err = blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
-		if err != nil {
-			log.Fatalf("Could not create filesystemBlobStore: %s", err)
-		}
-		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
-		if err != nil {
-			log.Fatalf("Could not create outboxBlobStore: %s", err)
-		}
-	}
-	storage, err := storage.NewMetadataBlobStorage(db, metadataStore, blobStore)
-	if err != nil {
-		log.Fatalf("Could not create metadataBlobStorage: %s", err)
-	}
-	err = storage.Start()
-	if err != nil {
-		log.Fatalf("Could not initialize storage: %s", err)
-	}
 
 	baseEndpoint := "localhost"
+
+	storage, closeStorage := storage.CreateAndInitializeStorage(storagePath, useFilesystemBlobStore)
+
 	ts := httptest.NewServer(server.SetupServer(baseEndpoint, storage))
 
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
@@ -98,16 +60,13 @@ func setupTestServer(usePathStyle bool, useSqlBlobStore bool) (s3Client *s3.Clie
 	})
 
 	cleanup = func() {
-		err := storage.Stop()
-		if err != nil {
-			log.Fatalf("Error during storage shutdown: %s", err)
-		}
-
 		ts.Close()
-		err = db.Close()
 		if err != nil {
 			log.Fatalf("Could not close db: %s", err)
 		}
+
+		closeStorage()
+
 		err = os.RemoveAll(storagePath)
 		if err != nil {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
@@ -135,14 +94,14 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 		if usePathStyle {
 			testSuffix = " using path style"
 		}
-		for _, useSqlBlobStore := range []bool{false, true} {
-			if useSqlBlobStore {
-				testSuffix += " with sqlBlobStore"
-			} else {
+		for _, useFilesystemBlobStore := range []bool{false, true} {
+			if useFilesystemBlobStore {
 				testSuffix += " with filesystemBlobStore"
+			} else {
+				testSuffix += " with sqlBlobStore"
 			}
 			t.Run("it should create a bucket"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -156,7 +115,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should not be able to create the same bucket twice"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -181,7 +140,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should be able to see an existing bucket"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -202,7 +161,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should be able to list all buckets"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -225,7 +184,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow uploading an object"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -247,7 +206,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -281,7 +240,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow uploading an object a second time"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -313,7 +272,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow downloading the object"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -348,7 +307,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow downloading the object with byte range"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -384,7 +343,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow downloading the object with byte range without end"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -420,7 +379,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow downloading the object with suffix byte range"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -456,7 +415,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow downloading the object with multi byte range"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -521,7 +480,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should allow deleting an object"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -552,7 +511,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should delete an existing bucket"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -572,7 +531,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should fail when deleting non existing bucket"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				_, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 					Bucket: aws.String("test2"),
@@ -589,7 +548,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should not see the bucket after deletion anymore"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -618,7 +577,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list all buckets"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -644,7 +603,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list no objects"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -667,7 +626,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list a single object"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -708,7 +667,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list two objects"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -765,7 +724,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should truncate when listing objects"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -818,7 +777,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects starting with prefix my/test/key"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -860,7 +819,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list no objects when searching for prefix key"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -895,7 +854,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects with delimiter \"/\" one folder"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -932,7 +891,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects with delimiter \"/\" two folders"+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -979,7 +938,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects with delimiter \"/\""+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -1034,7 +993,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects with prefix \"my/\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -1084,7 +1043,7 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 			})
 
 			t.Run("it should list objects with prefix \"my/test/key\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-				s3Client, cleanup := setupTestServer(usePathStyle, useSqlBlobStore)
+				s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: bucketName,

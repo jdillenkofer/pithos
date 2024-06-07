@@ -1,9 +1,14 @@
 package storage
 
 import (
+	"database/sql"
 	"io"
+	"log"
+	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 )
 
@@ -42,4 +47,59 @@ type Storage interface {
 	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
+}
+
+func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool) (storage Storage, closeStorage func()) {
+	err := os.MkdirAll(storagePath, os.ModePerm)
+	if err != nil {
+		log.Fatal("Error while creating data directory: ", err)
+	}
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
+	if err != nil {
+		log.Fatal("Error when opening sqlite database: ", err)
+	}
+	err = SetupDatabase(db)
+	if err != nil {
+		log.Fatal("Error during SetupDatabase: ", err)
+	}
+	metadataStore, err := metadata.NewSqlMetadataStore()
+	if err != nil {
+		log.Fatal("Error during NewSqlMetadataStore: ", err)
+	}
+	var blobStore blob.BlobStore
+	if useFilesystemBlobStore {
+		blobStore, err = blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
+		if err != nil {
+			log.Fatal("Error during NewFilesystemBlobStore: ", err)
+		}
+		blobStore, err = blob.NewOutboxBlobStore(db, blobStore)
+		if err != nil {
+			log.Fatal("Error during NewOutboxBlobStore: ", err)
+		}
+	} else {
+		blobStore, err = blob.NewSqlBlobStore()
+		if err != nil {
+			log.Fatal("Error during NewSqlBlobStore: ", err)
+		}
+	}
+	storage, err = NewMetadataBlobStorage(db, metadataStore, blobStore)
+	if err != nil {
+		log.Fatal("Error during NewMetadataBlobStorage: ", err)
+	}
+
+	err = storage.Start()
+	if err != nil {
+		log.Fatal("Error during storage initialization: ", err)
+	}
+	closeStorage = func() {
+		err := storage.Stop()
+		if err != nil {
+			log.Fatal("Error during storage closing: ", err)
+		}
+		err = db.Close()
+		if err != nil {
+			log.Fatal("Error when closing db: ", err)
+		}
+	}
+	return
 }
