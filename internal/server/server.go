@@ -57,6 +57,7 @@ const expectHeader = "Expect"
 const contentRangeHeader = "Content-Range"
 const contentLengthHeader = "Content-Length"
 const rangeHeader = "Range"
+const etagHeader = "ETag"
 const lastModifiedHeader = "Last-Modified"
 const contentTypeHeader = "Content-Type"
 const locationHeader = "Location"
@@ -275,7 +276,9 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add(lastModifiedHeader, object.LastModified.Format(time.RFC3339))
+	gmtTimeLoc := time.FixedZone("GMT", 0)
+	w.Header().Add(etagHeader, object.ETag)
+	w.Header().Add(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
 	w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 }
