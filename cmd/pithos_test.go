@@ -68,9 +68,9 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		originalTs := ts
 		originalCloseStorage := closeStorage
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
-		store, err := storage.NewReplicationStorage(s3Client)
+		store, err := storage.NewS3ClientStorage(s3Client)
 		if err != nil {
-			log.Fatal("Could not create replicationStorage")
+			log.Fatal("Could not create s3ClientStorage")
 		}
 		closeStorage = func() {
 			originalTs.Close()

@@ -15,25 +15,25 @@ import (
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 )
 
-type ReplicationStorage struct {
+type S3ClientStorage struct {
 	s3Client *s3.Client
 }
 
-func NewReplicationStorage(s3Client *s3.Client) (*ReplicationStorage, error) {
-	return &ReplicationStorage{
+func NewS3ClientStorage(s3Client *s3.Client) (*S3ClientStorage, error) {
+	return &S3ClientStorage{
 		s3Client: s3Client,
 	}, nil
 }
 
-func (rs *ReplicationStorage) Start() error {
+func (rs *S3ClientStorage) Start() error {
 	return nil
 }
 
-func (rs *ReplicationStorage) Stop() error {
+func (rs *S3ClientStorage) Stop() error {
 	return nil
 }
 
-func (rs *ReplicationStorage) CreateBucket(bucket string) error {
+func (rs *S3ClientStorage) CreateBucket(bucket string) error {
 	_, err := rs.s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	})
@@ -47,7 +47,7 @@ func (rs *ReplicationStorage) CreateBucket(bucket string) error {
 	return nil
 }
 
-func (rs *ReplicationStorage) DeleteBucket(bucket string) error {
+func (rs *S3ClientStorage) DeleteBucket(bucket string) error {
 	_, err := rs.s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 		Bucket: aws.String(bucket),
 	})
@@ -64,7 +64,7 @@ func (rs *ReplicationStorage) DeleteBucket(bucket string) error {
 	return nil
 }
 
-func (rs *ReplicationStorage) ListBuckets() ([]Bucket, error) {
+func (rs *S3ClientStorage) ListBuckets() ([]Bucket, error) {
 	listBucketsResult, err := rs.s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (rs *ReplicationStorage) ListBuckets() ([]Bucket, error) {
 	return buckets, nil
 }
 
-func (rs *ReplicationStorage) HeadBucket(bucket string) (*Bucket, error) {
+func (rs *S3ClientStorage) HeadBucket(bucket string) (*Bucket, error) {
 	_, err := rs.s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
 		Bucket: aws.String(bucket),
 	})
@@ -95,7 +95,7 @@ func (rs *ReplicationStorage) HeadBucket(bucket string) (*Bucket, error) {
 	}, nil
 }
 
-func (rs *ReplicationStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+func (rs *S3ClientStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
 	listObjectsResult, err := rs.s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
 		Bucket:     aws.String(bucket),
 		Prefix:     aws.String(prefix),
@@ -128,7 +128,7 @@ func (rs *ReplicationStorage) ListObjects(bucket string, prefix string, delimite
 	}, nil
 }
 
-func (rs *ReplicationStorage) HeadObject(bucket string, key string) (*Object, error) {
+func (rs *S3ClientStorage) HeadObject(bucket string, key string) (*Object, error) {
 	headObjectResult, err := rs.s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -148,7 +148,7 @@ func (rs *ReplicationStorage) HeadObject(bucket string, key string) (*Object, er
 	}, nil
 }
 
-func (rs *ReplicationStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (rs *S3ClientStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
 	var byteRange *string = nil
 	if startByte != nil && endByte != nil {
 		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
@@ -180,7 +180,7 @@ func (rs *ReplicationStorage) GetObject(bucket string, key string, startByte *in
 	return ioutils.NewByteReadSeekCloser(data), nil
 }
 
-func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Reader) error {
+func (rs *S3ClientStorage) PutObject(bucket string, key string, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -198,7 +198,7 @@ func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Rea
 	return err
 }
 
-func (rs *ReplicationStorage) DeleteObject(bucket string, key string) error {
+func (rs *S3ClientStorage) DeleteObject(bucket string, key string) error {
 	_, err := rs.s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
