@@ -3,6 +3,9 @@ package storage
 import (
 	"database/sql"
 	"embed"
+	"os"
+	"path/filepath"
+
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -54,6 +57,22 @@ func applyDatabaseMigrations(db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+func OpenDatabase(storagePath string) (*sql.DB, error) {
+	err := os.MkdirAll(storagePath, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
+	if err != nil {
+		return nil, err
+	}
+	err = SetupDatabase(db)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }
 
 func SetupDatabase(db *sql.DB) error {

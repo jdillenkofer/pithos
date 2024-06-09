@@ -17,8 +17,22 @@ func main() {
 		log.Fatal("Error while loading settings: ", err)
 	}
 
-	storage, closeStorage := storage.CreateAndInitializeStorage(settings.StoragePath(), settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
-	defer closeStorage()
+	storagePath := settings.StoragePath()
+	db, err := storage.OpenDatabase(storagePath)
+	if err != nil {
+		log.Fatal("Couldn't open database")
+	}
+	storage := storage.CreateAndInitializeStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
+	defer func() {
+		err := storage.Stop()
+		if err != nil {
+			log.Fatal("Couldn't stop storage")
+		}
+		err = db.Close()
+		if err != nil {
+			log.Fatal("Couldn't close database")
+		}
+	}()
 
 	server := server.SetupServer(settings.Domain(), storage)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())

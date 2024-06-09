@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"io"
 	"log"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -49,19 +48,7 @@ type Storage interface {
 	DeleteObject(bucket string, key string) error
 }
 
-func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (storage Storage, closeStorage func()) {
-	err := os.MkdirAll(storagePath, os.ModePerm)
-	if err != nil {
-		log.Fatal("Error while creating data directory: ", err)
-	}
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
-	if err != nil {
-		log.Fatal("Error when opening sqlite database: ", err)
-	}
-	err = SetupDatabase(db)
-	if err != nil {
-		log.Fatal("Error during SetupDatabase: ", err)
-	}
+func CreateAndInitializeStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
 	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
@@ -84,6 +71,7 @@ func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool,
 			log.Fatal("Error during NewOutboxBlobStore: ", err)
 		}
 	}
+	var storage Storage
 	storage, err = NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
@@ -93,15 +81,5 @@ func CreateAndInitializeStorage(storagePath string, useFilesystemBlobStore bool,
 	if err != nil {
 		log.Fatal("Error during storage initialization: ", err)
 	}
-	closeStorage = func() {
-		err := storage.Stop()
-		if err != nil {
-			log.Fatal("Error during storage closing: ", err)
-		}
-		err = db.Close()
-		if err != nil {
-			log.Fatal("Error when closing db: ", err)
-		}
-	}
-	return
+	return storage
 }
