@@ -15,6 +15,7 @@ import (
 type OutboxBlobStore struct {
 	db                        *sql.DB
 	triggerChannel            chan struct{}
+	triggerChannelClosed      bool
 	outboxProcessingStopped   sync.WaitGroup
 	innerBlobStore            BlobStore
 	blobOutboxEntryRepository repository.BlobOutboxEntryRepository
@@ -24,6 +25,7 @@ func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore,
 	obs := &OutboxBlobStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
+		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
 		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(),
 	}
@@ -118,8 +120,11 @@ func (obs *OutboxBlobStore) Start() error {
 }
 
 func (obs *OutboxBlobStore) Stop() error {
-	close(obs.triggerChannel)
-	waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+	if !obs.triggerChannelClosed {
+		close(obs.triggerChannel)
+		waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+		obs.triggerChannelClosed = true
+	}
 	return obs.innerBlobStore.Stop()
 }
 
