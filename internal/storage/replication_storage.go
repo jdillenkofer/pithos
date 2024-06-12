@@ -106,6 +106,10 @@ func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Rea
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
+		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+		if err != nil {
+			return err
+		}
 		err = secondaryStorage.PutObject(bucket, key, byteReadSeekCloser)
 		if err != nil {
 			return err
