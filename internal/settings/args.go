@@ -56,6 +56,9 @@ func registerBoolFlag(name string, defaultValue bool, description string) func()
 }
 
 func loadSettingsFromCmdArgs() (*Settings, error) {
+	accessKeyIdAccessor := registerStringFlag("accessKeyId", "", "the access key id")
+	secretAccessKeyAccessor := registerStringFlag("secretAccessKey", "", "the secret access key")
+	regionAccessor := registerStringFlag("region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag("domain", defaultDomain, "the domain for the s3 api")
 	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
@@ -64,6 +67,9 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", false, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
 	flag.Parse()
 	return &Settings{
+		accessKeyId:             accessKeyIdAccessor(),
+		secretAccessKey:         secretAccessKeyAccessor(),
+		region:                  regionAccessor(),
 		domain:                  domainAccessor(),
 		bindAddress:             bindAddressAccessor(),
 		port:                    portAccessor(),

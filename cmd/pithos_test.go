@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -26,6 +27,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/stretchr/testify/assert"
 )
+
+const accessKeyId string = "AKIAIOSFODNN7EXAMPLE"
+const secretAccessKey string = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+const region string = "eu-central-1"
 
 func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
@@ -38,7 +43,7 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 		}
 	})
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(aws.AnonymousCredentials{}))
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
@@ -76,7 +81,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			log.Fatal("Couldn't close database")
 		}
 	}
-	ts := httptest.NewServer(server.SetupServer(baseEndpoint, store))
+
+	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
 
 	if useReplication {
 		originalTs := ts
@@ -116,7 +122,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			}
 
 		}
-		ts = httptest.NewServer(server.SetupServer(baseEndpoint, store))
+		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
 	}
 
 	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)

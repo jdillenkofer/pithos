@@ -5,6 +5,7 @@ import (
 	"unsafe"
 )
 
+const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
@@ -14,6 +15,9 @@ const defaultUseFilesystemBlobStore = false
 const mergableTagKey = "mergable"
 
 type Settings struct {
+	accessKeyId             *string `mergable:""`
+	secretAccessKey         *string `mergable:""`
+	region                  *string `mergable:""`
 	domain                  *string `mergable:""`
 	bindAddress             *string `mergable:""`
 	port                    *int    `mergable:""`
@@ -27,6 +31,18 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 		return defaultValue
 	}
 	return *v
+}
+
+func (s *Settings) AccessKeyId() string {
+	return valueOrDefault(s.accessKeyId, "")
+}
+
+func (s *Settings) SecretAccessKey() string {
+	return valueOrDefault(s.secretAccessKey, "")
+}
+
+func (s *Settings) Region() string {
+	return valueOrDefault(s.region, defaultRegion)
 }
 
 func (s *Settings) Domain() string {

@@ -34,7 +34,7 @@ func main() {
 		}
 	}()
 
-	server := server.SetupServer(settings.Domain(), storage)
+	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), storage)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{Addr: addr, Handler: server}
 
