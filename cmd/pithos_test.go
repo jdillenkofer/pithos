@@ -19,6 +19,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -37,7 +38,10 @@ func setupTestServer(usePathStyle bool, useFilesystemBlobStore bool, wrapBlobSto
 
 	storage, closeStorage := storage.CreateAndInitializeStorage(storagePath, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 
-	ts := httptest.NewServer(server.SetupServer(baseEndpoint, storage))
+	accessKeyId := "AKIAIOSFODNN7EXAMPLE"
+	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	region := "eu-central-1"
+	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, storage))
 
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
 		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -49,7 +53,7 @@ func setupTestServer(usePathStyle bool, useFilesystemBlobStore bool, wrapBlobSto
 		}
 	})
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("eu-central-1"), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(aws.AnonymousCredentials{}))
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}

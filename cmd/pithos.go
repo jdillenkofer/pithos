@@ -20,7 +20,7 @@ func main() {
 	storage, closeStorage := storage.CreateAndInitializeStorage(settings.StoragePath(), settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
 	defer closeStorage()
 
-	server := server.SetupServer(settings.Domain(), storage)
+	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), storage)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{Addr: addr, Handler: server}
 

@@ -8,6 +8,9 @@ import (
 
 const envKeyPrefix string = "PITHOS"
 
+const accessKeyIdEnvKey string = envKeyPrefix + "_ACCESS_KEY_ID"
+const secretAccessKeyEnvKey string = envKeyPrefix + "_SECRET_ACCESS_KEY"
+const regionEnvKey string = envKeyPrefix + "_REGION"
 const domainEnvKey string = envKeyPrefix + "_DOMAIN"
 const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey string = envKeyPrefix + "_PORT"
@@ -47,6 +50,9 @@ func getBoolFromEnv(envKey string) *bool {
 }
 
 func loadSettingsFromEnv() (*Settings, error) {
+	accessKeyId := getStringFromEnv(accessKeyIdEnvKey)
+	secretAccessKey := getStringFromEnv(secretAccessKeyEnvKey)
+	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
 	port := getIntFromEnv(portEnvKey)
@@ -54,6 +60,9 @@ func loadSettingsFromEnv() (*Settings, error) {
 	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey)
 	wrapBlobStoreWithOutbox := getBoolFromEnv(wrapBlobStoreWithOutboxEnvKey)
 	return &Settings{
+		accessKeyId:             accessKeyId,
+		secretAccessKey:         secretAccessKey,
+		region:                  region,
 		domain:                  domain,
 		bindAddress:             bindAddress,
 		port:                    port,
