@@ -64,7 +64,7 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
 	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
 	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "store blobs in the filesystem instead of the sqlite database")
-	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", false, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
+	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", defaultWrapBlobStoreWithOutbox, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
 	flag.Parse()
 	return &Settings{
 		accessKeyId:             accessKeyIdAccessor(),

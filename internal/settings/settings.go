@@ -11,6 +11,7 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
+const defaultWrapBlobStoreWithOutbox = false
 
 const mergableTagKey = "mergable"
 
