@@ -67,7 +67,7 @@ type MetadataStore interface {
 	PutObject(tx *sql.Tx, bucketName string, object *Object) error
 	DeleteObject(tx *sql.Tx, bucketName string, key string) error
 	CreateMultipartUpload(tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error)
-	UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error
+	UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
 	CompleteMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
 }

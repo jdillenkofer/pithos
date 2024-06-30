@@ -247,3 +247,19 @@ func (os *OutboxStorage) DeleteObject(bucket string, key string) error {
 	tx.Commit()
 	return nil
 }
+
+func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	return os.innerStorage.CreateMultipartUpload(bucket, key)
+}
+
+func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+	return os.innerStorage.UploadPart(bucket, key, uploadId, partNumber, data)
+}
+
+func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	return os.CompleteMultipartUpload(bucket, key, uploadId)
+}
+
+func (os *OutboxStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	return os.AbortMultipartUpload(bucket, key, uploadId)
+}

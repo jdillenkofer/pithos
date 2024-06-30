@@ -296,7 +296,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,

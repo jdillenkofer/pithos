@@ -561,17 +561,17 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	partNumberUint64, err := strconv.ParseUint(partNumber, 10, 16)
+	partNumberUint64, err := strconv.ParseInt(partNumber, 10, 16)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	partNumberUint16 := uint16(partNumberUint64)
-	if partNumberUint16 < 1 || partNumberUint16 > 10000 {
+	partNumberInt32 := int32(partNumberUint64)
+	if partNumberInt32 < 1 || partNumberInt32 > 10000 {
 		w.WriteHeader(400)
 		return
 	}
-	err = s.storage.UploadPart(bucket, key, uploadId, partNumberUint16, r.Body)
+	err = s.storage.UploadPart(bucket, key, uploadId, partNumberInt32, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return

@@ -314,7 +314,7 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string
 	}, nil
 }
 
-func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber uint16, blob Blob) error {
+func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error {
 	return nil
 }
 

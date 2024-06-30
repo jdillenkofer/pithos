@@ -212,3 +212,77 @@ func (rs *S3ClientStorage) DeleteObject(bucket string, key string) error {
 	}
 	return nil
 }
+
+func (rs *S3ClientStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return nil, ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &InitiateMultipartUploadResult{
+		UploadId: *initiateMultipartUploadResult.UploadId,
+	}, nil
+}
+
+func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+	_, err := rs.s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(key),
+		UploadId:   aws.String(uploadId),
+		PartNumber: aws.Int32(partNumber),
+		Body:       data,
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *S3ClientStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadId),
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return nil, ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &CompleteMultipartUploadResult{
+		Location:       *completeMultipartUploadResult.Location,
+		ETag:           *completeMultipartUploadResult.ETag,
+		ChecksumSHA1:   *completeMultipartUploadResult.ChecksumSHA1,
+		ChecksumCRC32:  *completeMultipartUploadResult.ChecksumCRC32,
+		ChecksumCRC32C: *completeMultipartUploadResult.ChecksumCRC32C,
+		ChecksumSHA256: *completeMultipartUploadResult.ChecksumSHA256,
+	}, nil
+}
+
+func (rs *S3ClientStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	_, err := rs.s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadId),
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
