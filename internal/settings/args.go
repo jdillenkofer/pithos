@@ -65,7 +65,32 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
 	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "store blobs in the filesystem instead of the sqlite database")
 	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", defaultWrapBlobStoreWithOutbox, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
+
+	replicationAccessKeyIdAccessor := registerStringFlag("replicationAccessKeyId", "", "the replication access key id")
+	replicationSecretAccessKeyAccessor := registerStringFlag("replicationSecretAccessKey", "", "the replication secret access key")
+	replicationRegionAccessor := registerStringFlag("replicationRegion", defaultRegion, "the replication region for the s3 api")
+	replicationEndpointAccessor := registerStringFlag("replicationEndpoint", "", "the replication endpoint for the s3 api")
+	replicationUseOutboxAccessor := registerBoolFlag("replicationUseOutbox", defaultReplicationUseOutbox, "use transactional outbox pattern for replication")
+
 	flag.Parse()
+
+	replicationAccessKeyId := replicationAccessKeyIdAccessor()
+	replicationSecretAccessKey := replicationSecretAccessKeyAccessor()
+	replicationRegion := replicationRegionAccessor()
+	replicationEndpoint := replicationEndpointAccessor()
+	replicationUseOutbox := replicationUseOutboxAccessor()
+
+	var replication *ReplicationSettings = nil
+	if replicationAccessKeyId != nil && replicationSecretAccessKey != nil && replicationRegion != nil {
+		replication = &ReplicationSettings{
+			accessKeyId:     replicationAccessKeyId,
+			secretAccessKey: replicationSecretAccessKey,
+			region:          replicationRegion,
+			endpoint:        replicationEndpoint,
+			useOutbox:       replicationUseOutbox,
+		}
+	}
+
 	return &Settings{
 		accessKeyId:             accessKeyIdAccessor(),
 		secretAccessKey:         secretAccessKeyAccessor(),
@@ -76,5 +101,6 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 		storagePath:             storagePathAccessor(),
 		useFilesystemBlobStore:  useFilesystemBlobStoreAccessor(),
 		wrapBlobStoreWithOutbox: wrapBlobStoreWithOutboxAccessor(),
+		replication:             replication,
 	}, nil
 }

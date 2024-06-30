@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -22,9 +26,39 @@ func main() {
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
-	storage := storage.CreateAndInitializeStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
+	store := storage.CreateAndInitializeStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
+
+	replication := settings.Replication()
+	if replication != nil {
+		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
+
+		if err != nil {
+			log.Fatal("Couldn't create s3Client config")
+		}
+
+		s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+			o.BaseEndpoint = replication.Endpoint()
+		})
+
+		var s3ClientStorage storage.Storage
+		s3ClientStorage, err = storage.NewS3ClientStorage(s3Client)
+		if err != nil {
+			log.Fatal("Could not create s3ClientStorage")
+		}
+		if replication.UseOutbox() {
+			s3ClientStorage, err = storage.NewOutboxStorage(db, s3ClientStorage)
+			if err != nil {
+				log.Fatal("Could not create outboxStorage")
+			}
+		}
+		store, err = storage.NewReplicationStorage(store, s3ClientStorage)
+		if err != nil {
+			log.Fatal("Could not create replicationStorage")
+		}
+	}
+
 	defer func() {
-		err := storage.Stop()
+		err := store.Stop()
 		if err != nil {
 			log.Fatal("Couldn't stop storage")
 		}
@@ -34,7 +68,7 @@ func main() {
 		}
 	}()
 
-	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), storage)
+	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{Addr: addr, Handler: server}
 
