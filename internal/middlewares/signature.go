@@ -46,7 +46,7 @@ func generateCanonicalHttpMethod(r *http.Request) string {
 }
 
 func generateCanonicalURI(r *http.Request) string {
-	return r.URL.Path
+	return r.URL.EscapedPath()
 }
 
 func uriEncode(input string) string {
