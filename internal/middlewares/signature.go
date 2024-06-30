@@ -176,8 +176,11 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string) string
 	canonicalRequest += generateCanonicalQueryString(r) + "\n"
 	canonicalRequest += generateCanonicalHeaders(r, headersToInclude) + "\n"
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
-	canonicalRequest += generateHashedPayload(r)
-
+	if r.Header.Get("x-amz-content-sha256") == "UNSIGNED-PAYLOAD" {
+		canonicalRequest += "UNSIGNED-PAYLOAD"
+	} else {
+		canonicalRequest += generateHashedPayload(r)
+	}
 	return canonicalRequest
 }
 
