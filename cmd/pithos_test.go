@@ -28,21 +28,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func setupTestServer(usePathStyle bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (s3Client *s3.Client, cleanup func()) {
-	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
-	if err != nil {
-		log.Fatalf("Could not create temp directory: %s", err)
-	}
+const accessKeyId string = "AKIAIOSFODNN7EXAMPLE"
+const secretAccessKey string = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+const region string = "eu-central-1"
 
-	baseEndpoint := "localhost"
-
-	storage, closeStorage := storage.CreateAndInitializeStorage(storagePath, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
-
-	accessKeyId := "AKIAIOSFODNN7EXAMPLE"
-	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-	region := "eu-central-1"
-	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, storage))
-
+func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
 		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			endpointSplit := strings.SplitN(addr, ".", 2)
@@ -57,11 +47,85 @@ func setupTestServer(usePathStyle bool, useFilesystemBlobStore bool, wrapBlobSto
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
-	addr, err := net.ResolveTCPAddr("tcp", ts.Listener.Addr().String())
-	s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+	addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
+	if err != nil {
+		log.Fatalf("Could not resolveTcpAddr: %s", err)
+	}
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = usePathStyle
 		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s:%d", baseEndpoint, addr.Port))
 	})
+	return s3Client
+}
+
+func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (s3Client *s3.Client, cleanup func()) {
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
+	if err != nil {
+		log.Fatalf("Could not create temp directory: %s", err)
+	}
+
+	baseEndpoint := "localhost"
+
+	db, err := storage.OpenDatabase(storagePath)
+	if err != nil {
+		log.Fatalf("Couldn't open database: %s", err)
+	}
+	store := storage.CreateAndInitializeStorage(storagePath, db, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+	closeStorage := func() {
+		err := store.Stop()
+		if err != nil {
+			log.Fatal("Couldn't stop storage")
+		}
+		err = db.Close()
+		if err != nil {
+			log.Fatal("Couldn't close database")
+		}
+	}
+
+	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
+
+	if useReplication {
+		originalTs := ts
+		originalCloseStorage := closeStorage
+		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
+		if err != nil {
+			log.Fatalf("Could not create temp directory: %s", err)
+		}
+		db2, err := storage.OpenDatabase(storagePath2)
+		if err != nil {
+			log.Fatalf("Couldn't open database: %s", err)
+		}
+		localStore := storage.CreateAndInitializeStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+
+		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
+		s3ClientStorage, err := storage.NewS3ClientStorage(s3Client)
+		if err != nil {
+			log.Fatal("Could not create s3ClientStorage")
+		}
+		outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
+		if err != nil {
+			log.Fatal("Could not create outboxStorage")
+		}
+		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
+		if err != nil {
+			log.Fatal("Could not create replicationStorage")
+		}
+
+		closeStorage = func() {
+			originalTs.Close()
+			originalCloseStorage()
+			store.Stop()
+			db2.Close()
+			err = os.RemoveAll(storagePath2)
+			if err != nil {
+				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
+			}
+
+		}
+		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
+	}
+
+	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)
 
 	cleanup = func() {
 		ts.Close()
@@ -93,26 +157,32 @@ func TestBasicBucketOperationsIntegration(t *testing.T) {
 		} else {
 			hostOrPathStyleSuffix = " using host style"
 		}
-		for _, useFilesystemBlobStore := range []bool{false, true} {
-			blobStoreSuffix := hostOrPathStyleSuffix
-			if useFilesystemBlobStore {
-				blobStoreSuffix += " with filesystemBlobStore"
-			} else {
-				blobStoreSuffix += " with sqlBlobStore"
+		for _, useReplication := range []bool{false, true} {
+			replicationSuffix := hostOrPathStyleSuffix
+			if useReplication {
+				replicationSuffix += " replicated"
 			}
-			for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
-				testSuffix := blobStoreSuffix
-				if wrapBlobStoreWithOutbox {
-					testSuffix = blobStoreSuffix + " (using transactional outbox)"
+			for _, useFilesystemBlobStore := range []bool{false, true} {
+				blobStoreSuffix := replicationSuffix
+				if useFilesystemBlobStore {
+					blobStoreSuffix += " with filesystemBlobStore"
+				} else {
+					blobStoreSuffix += " with sqlBlobStore"
 				}
+				for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+					testSuffix := blobStoreSuffix
+					if wrapBlobStoreWithOutbox {
+						testSuffix = blobStoreSuffix + " (using transactional outbox)"
+					}
 
-				runTestsWithConfiguration(t, testSuffix, usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+					runTestsWithConfiguration(t, testSuffix, usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+				}
 			}
 		}
 	}
 }
 
-func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) {
+func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) {
 	bucketName := aws.String("test")
 	bucketName2 := aws.String("test2")
 	keyPrefix := aws.String("my/test/key")
@@ -121,7 +191,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	body := []byte("Hello, world!")
 
 	t.Run("it should create a bucket"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -135,7 +205,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should not be able to create the same bucket twice"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -160,7 +230,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should be able to see an existing bucket"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -181,7 +251,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should be able to list all buckets"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -204,7 +274,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow uploading an object"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -226,7 +296,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -260,7 +330,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow uploading an object a second time"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -292,7 +362,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow downloading the object"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -327,7 +397,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow downloading the object with byte range"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -363,7 +433,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow downloading the object with byte range without end"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -399,7 +469,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow downloading the object with suffix byte range"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -435,7 +505,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow downloading the object with multi byte range"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -501,7 +571,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should allow deleting an object"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -532,7 +602,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should delete an existing bucket"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -552,7 +622,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should fail when deleting non existing bucket"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		_, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 			Bucket: aws.String("test2"),
@@ -569,7 +639,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should not see the bucket after deletion anymore"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -598,7 +668,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list all buckets"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -624,7 +694,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list no objects"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -647,7 +717,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list a single object"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -688,7 +758,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list two objects"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -745,7 +815,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should truncate when listing objects"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -798,7 +868,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects starting with prefix my/test/key"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -840,7 +910,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list no objects when searching for prefix key"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -875,7 +945,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects with delimiter \"/\" one folder"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -912,7 +982,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects with delimiter \"/\" two folders"+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -959,7 +1029,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects with delimiter \"/\""+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -1014,7 +1084,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects with prefix \"my/\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,
@@ -1064,7 +1134,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	})
 
 	t.Run("it should list objects with prefix \"my/test/key\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-		s3Client, cleanup := setupTestServer(usePathStyle, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
 		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: bucketName,

@@ -15,6 +15,7 @@ import (
 type OutboxBlobStore struct {
 	db                        *sql.DB
 	triggerChannel            chan struct{}
+	triggerChannelClosed      bool
 	outboxProcessingStopped   sync.WaitGroup
 	innerBlobStore            BlobStore
 	blobOutboxEntryRepository repository.BlobOutboxEntryRepository
@@ -24,6 +25,7 @@ func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore,
 	obs := &OutboxBlobStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
+		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
 		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(),
 	}
@@ -48,14 +50,14 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 		}
 
 		switch blobOutboxEntry.Operation {
-		case repository.PutOperation:
+		case repository.PutBlobOperation:
 			_, err := obs.innerBlobStore.PutBlob(tx, blobOutboxEntry.BlobId, bytes.NewReader(blobOutboxEntry.Content))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(30 * time.Second)
 				return
 			}
-		case repository.DeleteOperation:
+		case repository.DeleteBlobOperation:
 			err = obs.innerBlobStore.DeleteBlob(tx, blobOutboxEntry.BlobId)
 			if err != nil {
 				tx.Rollback()
@@ -118,8 +120,11 @@ func (obs *OutboxBlobStore) Start() error {
 }
 
 func (obs *OutboxBlobStore) Stop() error {
-	close(obs.triggerChannel)
-	waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+	if !obs.triggerChannelClosed {
+		close(obs.triggerChannel)
+		waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+		obs.triggerChannelClosed = true
+	}
 	return obs.innerBlobStore.Stop()
 }
 
@@ -154,7 +159,7 @@ func (obs *OutboxBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (
 		return nil, err
 	}
 
-	err = obs.storeBlobOutboxEntry(tx, repository.PutOperation, blobId, content)
+	err = obs.storeBlobOutboxEntry(tx, repository.PutBlobOperation, blobId, content)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +183,7 @@ func (obs *OutboxBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekClose
 	}
 	if lastBlobOutboxEntry != nil {
 		switch lastBlobOutboxEntry.Operation {
-		case repository.PutOperation:
+		case repository.PutBlobOperation:
 			return ioutils.NewByteReadSeekCloser(lastBlobOutboxEntry.Content), nil
 		}
 	}
@@ -186,7 +191,7 @@ func (obs *OutboxBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekClose
 }
 
 func (obs *OutboxBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
-	err := obs.storeBlobOutboxEntry(tx, repository.DeleteOperation, blobId, []byte{})
+	err := obs.storeBlobOutboxEntry(tx, repository.DeleteBlobOperation, blobId, []byte{})
 	if err != nil {
 		return err
 	}

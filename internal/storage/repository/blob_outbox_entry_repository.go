@@ -15,8 +15,8 @@ func NewBlobOutboxEntryRepository() BlobOutboxEntryRepository {
 }
 
 const (
-	PutOperation    = "PUT"
-	DeleteOperation = "DELETE"
+	PutBlobOperation    = "PutBlob"
+	DeleteBlobOperation = "DeleteBlob"
 )
 
 type BlobOutboxEntryEntity struct {

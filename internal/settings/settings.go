@@ -11,19 +11,30 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
+const defaultWrapBlobStoreWithOutbox = false
+const defaultReplicationUseOutbox = true
 
 const mergableTagKey = "mergable"
 
+type ReplicationSettings struct {
+	accessKeyId     *string
+	secretAccessKey *string
+	region          *string
+	endpoint        *string
+	useOutbox       *bool
+}
+
 type Settings struct {
-	accessKeyId             *string `mergable:""`
-	secretAccessKey         *string `mergable:""`
-	region                  *string `mergable:""`
-	domain                  *string `mergable:""`
-	bindAddress             *string `mergable:""`
-	port                    *int    `mergable:""`
-	storagePath             *string `mergable:""`
-	useFilesystemBlobStore  *bool   `mergable:""`
-	wrapBlobStoreWithOutbox *bool   `mergable:""`
+	accessKeyId             *string              `mergable:""`
+	secretAccessKey         *string              `mergable:""`
+	region                  *string              `mergable:""`
+	domain                  *string              `mergable:""`
+	bindAddress             *string              `mergable:""`
+	port                    *int                 `mergable:""`
+	storagePath             *string              `mergable:""`
+	useFilesystemBlobStore  *bool                `mergable:""`
+	wrapBlobStoreWithOutbox *bool                `mergable:""`
+	replication             *ReplicationSettings `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -68,6 +79,30 @@ func (s *Settings) UseFilesystemBlobStore() bool {
 func (s *Settings) WrapBlobStoreWithOutbox() bool {
 	defaultWrapBlobStoreWithOutbox := s.UseFilesystemBlobStore()
 	return valueOrDefault(s.wrapBlobStoreWithOutbox, defaultWrapBlobStoreWithOutbox)
+}
+
+func (s *Settings) Replication() *ReplicationSettings {
+	return s.replication
+}
+
+func (r *ReplicationSettings) AccessKeyId() string {
+	return valueOrDefault(r.accessKeyId, "")
+}
+
+func (r *ReplicationSettings) SecretAccessKey() string {
+	return valueOrDefault(r.secretAccessKey, "")
+}
+
+func (r *ReplicationSettings) Region() string {
+	return valueOrDefault(r.region, defaultRegion)
+}
+
+func (r *ReplicationSettings) Endpoint() *string {
+	return r.endpoint
+}
+
+func (r *ReplicationSettings) UseOutbox() bool {
+	return valueOrDefault(r.useOutbox, true)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {
