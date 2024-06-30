@@ -360,7 +360,7 @@ func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string)
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error {
+func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
 	tx, err := mbs.db.Begin()
 	if err != nil {
 		return err

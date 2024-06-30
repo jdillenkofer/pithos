@@ -60,7 +60,7 @@ type Storage interface {
 	PutObject(bucket string, key string, data io.Reader) error
 	DeleteObject(bucket string, key string) error
 	CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error)
-	UploadPart(bucket string, key string, uploadId string, partNumber uint16, data io.Reader) error
+	UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error
 	CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(bucket string, key string, uploadId string) error
 }

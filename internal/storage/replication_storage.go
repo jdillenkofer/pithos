@@ -131,3 +131,67 @@ func (rs *ReplicationStorage) DeleteObject(bucket string, key string) error {
 	}
 	return nil
 }
+
+func (rs *ReplicationStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(bucket, key)
+	if err != nil {
+		return nil, err
+	}
+	/*
+		for _, secondaryStorage := range rs.secondaryStorages {
+			err = secondaryStorage.CreateMultipartUpload(bucket, key)
+			if err != nil {
+				return nil, err
+			}
+		}
+	*/
+	return initiateMultipartUploadResult, nil
+}
+
+func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+	err := rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, data)
+	if err != nil {
+		return err
+	}
+	/*
+		for _, secondaryStorage := range rs.secondaryStorages {
+			err = secondaryStorage.UploadPart(bucket, key, uploadId, partNumber, data)
+			if err != nil {
+				return err
+			}
+		}
+	*/
+	return nil
+}
+
+func (rs *ReplicationStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	/*
+		for _, secondaryStorage := range rs.secondaryStorages {
+			err = secondaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
+			if err != nil {
+				return nil, err
+			}
+		}
+	*/
+	return completeMultipartUploadResult, nil
+}
+
+func (rs *ReplicationStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	err := rs.primaryStorage.AbortMultipartUpload(bucket, key, uploadId)
+	if err != nil {
+		return err
+	}
+	/*
+		for _, secondaryStorage := range rs.secondaryStorages {
+			err = secondaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
+			if err != nil {
+				return err
+			}
+		}
+	*/
+	return nil
+}
