@@ -21,6 +21,7 @@ func TestMergeSettingsTwoNils(t *testing.T) {
 	assert.Nil(t, b.domain)
 	assert.Nil(t, mergedSettings.domain)
 }
+
 func TestMergeSettingsNilAndValue(t *testing.T) {
 	a := Settings{
 		domain: nil,
