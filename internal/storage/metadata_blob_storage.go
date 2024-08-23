@@ -356,7 +356,10 @@ func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string)
 		return nil, err
 	}
 	initiateMultipartUploadResult := convertInitiateMultipartUploadResult(*result)
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
 	return &initiateMultipartUploadResult, nil
 }
 
@@ -385,7 +388,10 @@ func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId s
 		tx.Rollback()
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -420,7 +426,10 @@ func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key strin
 		}
 	}
 	completeMultipartUploadResult := convertCompleteMultipartUploadResult(*result)
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
 	return &completeMultipartUploadResult, nil
 }
 
@@ -443,6 +452,9 @@ func (mbs *MetadataBlobStorage) AbortMultipartUpload(bucket string, key string, 
 			return err
 		}
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }

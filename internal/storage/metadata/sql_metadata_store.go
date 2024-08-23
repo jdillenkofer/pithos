@@ -389,11 +389,13 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 		return nil, err
 	}
 
-	// Validate SequenceNumbers
+	// Validate SequenceNumbers and calculate totalSize
+	var totalSize int64 = 0
 	for i, blobEntity := range blobEntities {
 		if i+1 != blobEntity.SequenceNumber {
 			return nil, ErrUploadWithInvalidSequenceNumber
 		}
+		totalSize += blobEntity.Size
 	}
 
 	deletedBlobs := []Blob{}
@@ -429,6 +431,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 	}
 
 	objectEntity.UploadStatus = repository.UploadStatusCompleted
+	objectEntity.Size = totalSize
 	err = sms.objectRepository.SaveObject(tx, objectEntity)
 	if err != nil {
 		return nil, err
