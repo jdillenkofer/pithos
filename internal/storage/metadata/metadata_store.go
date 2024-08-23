@@ -38,6 +38,7 @@ type InitiateMultipartUploadResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
+	DeletedBlobs   []Blob
 	Location       string
 	ETag           string
 	ChecksumCRC32  string
@@ -47,13 +48,14 @@ type CompleteMultipartUploadResult struct {
 }
 
 type AbortMultipartResult struct {
-	Blobs []Blob
+	DeletedBlobs []Blob
 }
 
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")
 var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
+var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 
 type MetadataStore interface {
 	Start() error

@@ -411,6 +411,14 @@ func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key strin
 		tx.Rollback()
 		return nil, err
 	}
+	deletedBlobs := result.DeletedBlobs
+	for _, deletedBlob := range deletedBlobs {
+		err = mbs.blobStore.DeleteBlob(tx, deletedBlob.Id)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
 	completeMultipartUploadResult := convertCompleteMultipartUploadResult(*result)
 	tx.Commit()
 	return &completeMultipartUploadResult, nil
@@ -427,9 +435,9 @@ func (mbs *MetadataBlobStorage) AbortMultipartUpload(bucket string, key string, 
 		tx.Rollback()
 		return err
 	}
-	blobs := abortMultipartUploadResult.Blobs
-	for _, blob := range blobs {
-		err = mbs.blobStore.DeleteBlob(tx, blob.Id)
+	deletedBlobs := abortMultipartUploadResult.DeletedBlobs
+	for _, deletedBlob := range deletedBlobs {
+		err = mbs.blobStore.DeleteBlob(tx, deletedBlob.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
