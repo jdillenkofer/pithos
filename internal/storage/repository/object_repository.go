@@ -100,6 +100,23 @@ func (or *ObjectRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 	return objects, nil
 }
 
+func (or *ObjectRepository) FindObjectByBucketNameAndKeyAndUploadId(tx *sql.Tx, bucketName string, key string, uploadId string) (*ObjectEntity, error) {
+	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?", bucketName, key, uploadId, UploadStatusPending)
+	if err != nil {
+		return nil, err
+	}
+	defer objectRows.Close()
+	exists := objectRows.Next()
+	if exists {
+		objectEntity, err := convertRowToObjectEntity(objectRows)
+		if err != nil {
+			return nil, err
+		}
+		return objectEntity, nil
+	}
+	return nil, nil
+}
+
 func (or *ObjectRepository) FindObjectByBucketNameAndKey(tx *sql.Tx, bucketName string, key string) (*ObjectEntity, error) {
 	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?", bucketName, key, UploadStatusCompleted)
 	if err != nil {

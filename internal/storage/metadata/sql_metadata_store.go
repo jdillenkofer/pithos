@@ -7,6 +7,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	"github.com/oklog/ulid/v2"
 )
 
 type SqlMetadataStore struct {
@@ -309,21 +310,176 @@ func (sms *SqlMetadataStore) DeleteObject(tx *sql.Tx, bucketName string, key str
 }
 
 func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, ErrNoSuchBucket
+	}
+
+	objectEntity := repository.ObjectEntity{
+		BucketName:   bucketName,
+		Key:          key,
+		ETag:         "",
+		Size:         -1,
+		UploadId:     ulid.Make().String(),
+		UploadStatus: repository.UploadStatusPending,
+	}
+	err = sms.objectRepository.SaveObject(tx, &objectEntity)
+	if err != nil {
+		return nil, err
+	}
+
 	return &InitiateMultipartUploadResult{
-		UploadId: "",
+		UploadId: objectEntity.UploadId,
 	}, nil
 }
 
 func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error {
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil {
+		return ErrNoSuchKey
+	}
+
+	blobEntity := repository.BlobEntity{
+		BlobId:         blob.Id,
+		ObjectId:       *objectEntity.Id,
+		ETag:           blob.ETag,
+		Size:           blob.Size,
+		SequenceNumber: int(partNumber),
+	}
+	err = sms.blobRepository.SaveBlob(tx, &blobEntity)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	return &CompleteMultipartUploadResult{}, nil
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, ErrNoSuchKey
+	}
+
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate SequenceNumbers
+	for i, blobEntity := range blobEntities {
+		if i+1 != blobEntity.SequenceNumber {
+			return nil, ErrUploadWithInvalidSequenceNumber
+		}
+	}
+
+	deletedBlobs := []Blob{}
+
+	// Remove old objects
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	if err != nil {
+		return nil, err
+	}
+	if oldObjectEntity != nil {
+		oldBlobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		deletedBlobs = sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+			return Blob{
+				Id:   blobEntity.BlobId,
+				ETag: blobEntity.ETag,
+				Size: blobEntity.Size,
+			}
+		}, oldBlobEntities)
+
+		err = sms.objectRepository.DeleteObjectById(tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	objectEntity.UploadStatus = repository.UploadStatusCompleted
+	err = sms.objectRepository.SaveObject(tx, objectEntity)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CompleteMultipartUploadResult{
+		DeletedBlobs: deletedBlobs,
+	}, nil
 }
 
 func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, ErrNoSuchKey
+	}
+
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.blobRepository.DeleteBlobsByObjectId(tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	blobs := sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+		return Blob{
+			Id:   blobEntity.BlobId,
+			ETag: blobEntity.ETag,
+			Size: blobEntity.Size,
+		}
+	}, blobEntities)
+
+	err = sms.objectRepository.DeleteObjectById(tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	return &AbortMultipartResult{
-		Blobs: []Blob{},
+		DeletedBlobs: blobs,
 	}, nil
 }

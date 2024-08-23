@@ -257,9 +257,9 @@ func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, 
 }
 
 func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	return os.CompleteMultipartUpload(bucket, key, uploadId)
+	return os.innerStorage.CompleteMultipartUpload(bucket, key, uploadId)
 }
 
 func (os *OutboxStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	return os.AbortMultipartUpload(bucket, key, uploadId)
+	return os.innerStorage.AbortMultipartUpload(bucket, key, uploadId)
 }
