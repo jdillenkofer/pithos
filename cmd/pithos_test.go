@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -366,6 +367,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Len(t, listObjectResult.CommonPrefixes, 0)
 		assert.Len(t, listObjectResult.Contents, 1)
 		assert.Equal(t, key, listObjectResult.Contents[0].Key)
+		assert.True(t, strings.HasSuffix(*completeMultipartUploadResult.ETag, "-"+strconv.Itoa(1)+"\""))
 		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
@@ -456,6 +458,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Len(t, listObjectResult.CommonPrefixes, 0)
 		assert.Len(t, listObjectResult.Contents, 1)
 		assert.Equal(t, key, listObjectResult.Contents[0].Key)
+		assert.True(t, strings.HasSuffix(*completeMultipartUploadResult.ETag, "-"+strconv.Itoa(2)+"\""))
 		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
