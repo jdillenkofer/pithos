@@ -322,7 +322,108 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 
 		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
 			Bucket:     bucketName,
-			Body:       bytes.NewReader([]byte("Hello, first object!")),
+			Body:       bytes.NewReader(body),
+			Key:        key,
+			UploadId:   uploadId,
+			PartNumber: aws.Int32(1),
+		})
+
+		if err != nil {
+			assert.Fail(t, "UploadPart failed", "err %v", err)
+		}
+		assert.NotNil(t, uploadPartResult)
+
+		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Equal(t, bucketName, listObjectResult.Name)
+		assert.Len(t, listObjectResult.CommonPrefixes, 0)
+		assert.Len(t, listObjectResult.Contents, 0)
+		assert.False(t, *listObjectResult.IsTruncated)
+
+		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+			Bucket:   bucketName,
+			Key:      key,
+			UploadId: uploadId,
+		})
+		if err != nil {
+			assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
+		}
+		assert.NotNil(t, completeMultipartUploadResult)
+		assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
+		assert.Equal(t, key, completeMultipartUploadResult.Key)
+
+		listObjectResult, err = s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Equal(t, bucketName, listObjectResult.Name)
+		assert.Len(t, listObjectResult.CommonPrefixes, 0)
+		assert.Len(t, listObjectResult.Contents, 1)
+		assert.Equal(t, key, listObjectResult.Contents[0].Key)
+		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
+		assert.False(t, *listObjectResult.IsTruncated)
+
+		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: bucketName,
+			Key:    key,
+		})
+		if err != nil {
+			assert.Fail(t, "GetObject failed", "err %v", err)
+		}
+		assert.NotNil(t, getObjectResult)
+		assert.NotNil(t, getObjectResult.Body)
+		objectBytes, err := io.ReadAll(getObjectResult.Body)
+		assert.Nil(t, err)
+		assert.Equal(t, body, objectBytes)
+	})
+
+	t.Run("it should allow multipart uploads with two parts"+testSuffix, func(t *testing.T) {
+		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		t.Cleanup(cleanup)
+		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "CreateBucket failed", "err %v", err)
+		}
+		assert.NotNil(t, createBucketResult)
+
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+			Bucket: bucketName,
+			Key:    key,
+		})
+
+		if err != nil {
+			assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+		}
+		assert.NotNil(t, createMultiPartUploadResult)
+		assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+		assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+		uploadId := createMultiPartUploadResult.UploadId
+		assert.NotNil(t, uploadId)
+
+		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+			Bucket:     bucketName,
+			Body:       bytes.NewReader(body[2:]),
+			Key:        key,
+			UploadId:   uploadId,
+			PartNumber: aws.Int32(2),
+		})
+
+		if err != nil {
+			assert.Fail(t, "UploadPart failed", "err %v", err)
+		}
+		assert.NotNil(t, uploadPartResult)
+
+		uploadPartResult, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+			Bucket:     bucketName,
+			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
 			UploadId:   uploadId,
 			PartNumber: aws.Int32(1),
@@ -344,6 +445,32 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.NotNil(t, completeMultipartUploadResult)
 		assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult.Key)
+
+		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			Bucket: bucketName,
+		})
+		if err != nil {
+			assert.Fail(t, "ListObjects failed", "err %v", err)
+		}
+		assert.Equal(t, bucketName, listObjectResult.Name)
+		assert.Len(t, listObjectResult.CommonPrefixes, 0)
+		assert.Len(t, listObjectResult.Contents, 1)
+		assert.Equal(t, key, listObjectResult.Contents[0].Key)
+		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
+		assert.False(t, *listObjectResult.IsTruncated)
+
+		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+			Bucket: bucketName,
+			Key:    key,
+		})
+		if err != nil {
+			assert.Fail(t, "GetObject failed", "err %v", err)
+		}
+		assert.NotNil(t, getObjectResult)
+		assert.NotNil(t, getObjectResult.Body)
+		objectBytes, err := io.ReadAll(getObjectResult.Body)
+		assert.Nil(t, err)
+		assert.Equal(t, body, objectBytes)
 	})
 
 	t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
