@@ -1,8 +1,11 @@
 package metadata
 
 import (
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
@@ -391,12 +394,19 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 
 	// Validate SequenceNumbers and calculate totalSize
 	var totalSize int64 = 0
+	hash := md5.New()
 	for i, blobEntity := range blobEntities {
 		if i+1 != blobEntity.SequenceNumber {
 			return nil, ErrUploadWithInvalidSequenceNumber
 		}
 		totalSize += blobEntity.Size
+
+		_, err = hash.Write([]byte(blobEntity.ETag))
+		if err != nil {
+			return nil, err
+		}
 	}
+	etag := "\"" + hex.EncodeToString(hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)) + "\""
 
 	deletedBlobs := []Blob{}
 
@@ -432,6 +442,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 
 	objectEntity.UploadStatus = repository.UploadStatusCompleted
 	objectEntity.Size = totalSize
+	objectEntity.ETag = etag
 	err = sms.objectRepository.SaveObject(tx, objectEntity)
 	if err != nil {
 		return nil, err
@@ -439,6 +450,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 
 	return &CompleteMultipartUploadResult{
 		DeletedBlobs: deletedBlobs,
+		ETag:         etag,
 	}, nil
 }
 
