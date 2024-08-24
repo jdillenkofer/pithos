@@ -90,7 +90,10 @@ func (os *OutboxStorage) maybeProcessOutboxEntries() {
 		}
 		processedOutboxEntryCount += 1
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return
+	}
 	if processedOutboxEntryCount > 0 {
 		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
 	}
@@ -116,7 +119,7 @@ out:
 		select {
 		case _, ok := <-os.triggerChannel:
 			if !ok {
-				log.Println("Stopping outbox processing")
+				log.Println("Stopping outboxStorage processing")
 				break out
 			}
 		case <-time.After(10 * time.Second):
@@ -177,7 +180,10 @@ func (os *OutboxStorage) CreateBucket(bucket string) error {
 		tx.Rollback()
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -191,27 +197,99 @@ func (os *OutboxStorage) DeleteBucket(bucket string) error {
 		tx.Rollback()
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
+func (os *OutboxStorage) flushOutboxEntries() error {
+	tx, err := os.db.Begin()
+	if err != nil {
+		return err
+	}
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(tx)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	if lastStorageOutboxEntry == nil {
+		return nil
+	}
+
+	lastOrdinal := lastStorageOutboxEntry.Ordinal
+
+	for {
+		tx, err := os.db.Begin()
+		if err != nil {
+			return err
+		}
+		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(tx)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		err = tx.Commit()
+		if err != nil {
+			return err
+		}
+		if storageOutboxEntry == nil {
+			return nil
+		}
+		if storageOutboxEntry.Ordinal > lastOrdinal {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func (os *OutboxStorage) ListBuckets() ([]Bucket, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.ListBuckets()
 }
 
 func (os *OutboxStorage) HeadBucket(bucket string) (*Bucket, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.HeadBucket(bucket)
 }
 
 func (os *OutboxStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
 }
 
 func (os *OutboxStorage) HeadObject(bucket string, key string) (*Object, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.HeadObject(bucket, key)
 }
 
 func (os *OutboxStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.GetObject(bucket, key, startByte, endByte)
 }
 
@@ -230,7 +308,10 @@ func (os *OutboxStorage) PutObject(bucket string, key string, reader io.Reader) 
 		tx.Rollback()
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -244,22 +325,44 @@ func (os *OutboxStorage) DeleteObject(bucket string, key string) error {
 		tx.Rollback()
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
 	return os.innerStorage.CreateMultipartUpload(bucket, key)
 }
 
 func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return err
+	}
+
 	return os.innerStorage.UploadPart(bucket, key, uploadId, partNumber, data)
 }
 
 func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.CompleteMultipartUpload(bucket, key, uploadId)
 }
 
 func (os *OutboxStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
+	err := os.flushOutboxEntries()
+	if err != nil {
+		return err
+	}
+
 	return os.innerStorage.AbortMultipartUpload(bucket, key, uploadId)
 }

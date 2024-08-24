@@ -65,7 +65,7 @@ type Storage interface {
 	AbortMultipartUpload(bucket string, key string, uploadId string) error
 }
 
-func CreateAndInitializeStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
+func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
 	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
@@ -88,15 +88,10 @@ func CreateAndInitializeStorage(storagePath string, db *sql.DB, useFilesystemBlo
 			log.Fatal("Error during NewOutboxBlobStore: ", err)
 		}
 	}
-	var storage Storage
-	storage, err = NewMetadataBlobStorage(db, metadataStore, blobStore)
+	storage, err := NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
 	}
 
-	err = storage.Start()
-	if err != nil {
-		log.Fatal("Error during storage initialization: ", err)
-	}
 	return storage
 }

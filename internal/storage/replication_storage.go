@@ -2,19 +2,25 @@ package storage
 
 import (
 	"io"
+	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
 type ReplicationStorage struct {
-	primaryStorage    Storage
-	secondaryStorages []Storage
+	primaryStorage                      Storage
+	secondaryStorages                   []Storage
+	primaryUploadIdToSecondaryUploadIds map[string][]string
+	mapMutex                            sync.Mutex
 }
 
 func NewReplicationStorage(primaryStorage Storage, secondaryStorages ...Storage) (*ReplicationStorage, error) {
+	primaryUploadIdToSecondaryUploadIds := make(map[string][]string)
 	return &ReplicationStorage{
-		primaryStorage:    primaryStorage,
-		secondaryStorages: secondaryStorages,
+		primaryStorage:                      primaryStorage,
+		secondaryStorages:                   secondaryStorages,
+		primaryUploadIdToSecondaryUploadIds: primaryUploadIdToSecondaryUploadIds,
+		mapMutex:                            sync.Mutex{},
 	}, nil
 }
 
@@ -137,30 +143,48 @@ func (rs *ReplicationStorage) CreateMultipartUpload(bucket string, key string) (
 	if err != nil {
 		return nil, err
 	}
-	/*
-		for _, secondaryStorage := range rs.secondaryStorages {
-			err = secondaryStorage.CreateMultipartUpload(bucket, key)
-			if err != nil {
-				return nil, err
-			}
+	var secondaryUploadIds []string = []string{}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(bucket, key)
+		if err != nil {
+			return nil, err
 		}
-	*/
+		secondaryUploadIds = append(secondaryUploadIds, initiateMultipartUploadResult.UploadId)
+	}
+
+	rs.mapMutex.Lock()
+	rs.primaryUploadIdToSecondaryUploadIds[initiateMultipartUploadResult.UploadId] = secondaryUploadIds
+	rs.mapMutex.Unlock()
+
 	return initiateMultipartUploadResult, nil
 }
 
-func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
-	err := rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, data)
+func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, reader io.Reader) error {
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
-	/*
-		for _, secondaryStorage := range rs.secondaryStorages {
-			err = secondaryStorage.UploadPart(bucket, key, uploadId, partNumber, data)
-			if err != nil {
-				return err
-			}
+	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
+
+	err = rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, byteReadSeekCloser)
+	if err != nil {
+		return err
+	}
+
+	rs.mapMutex.Lock()
+	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	rs.mapMutex.Unlock()
+
+	for i, secondaryStorage := range rs.secondaryStorages {
+		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+		if err != nil {
+			return err
 		}
-	*/
+		err := secondaryStorage.UploadPart(bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -169,14 +193,16 @@ func (rs *ReplicationStorage) CompleteMultipartUpload(bucket string, key string,
 	if err != nil {
 		return nil, err
 	}
-	/*
-		for _, secondaryStorage := range rs.secondaryStorages {
-			err = secondaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
-			if err != nil {
-				return nil, err
-			}
+	rs.mapMutex.Lock()
+	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	for i, secondaryStorage := range rs.secondaryStorages {
+		_, err := secondaryStorage.CompleteMultipartUpload(bucket, key, secondaryUploadIds[i])
+		if err != nil {
+			return nil, err
 		}
-	*/
+	}
+	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
+	rs.mapMutex.Unlock()
 	return completeMultipartUploadResult, nil
 }
 
@@ -185,13 +211,15 @@ func (rs *ReplicationStorage) AbortMultipartUpload(bucket string, key string, up
 	if err != nil {
 		return err
 	}
-	/*
-		for _, secondaryStorage := range rs.secondaryStorages {
-			err = secondaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
-			if err != nil {
-				return err
-			}
+	rs.mapMutex.Lock()
+	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	for i, secondaryStorage := range rs.secondaryStorages {
+		err := secondaryStorage.AbortMultipartUpload(bucket, key, secondaryUploadIds[i])
+		if err != nil {
+			return err
 		}
-	*/
+	}
+	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
+	rs.mapMutex.Unlock()
 	return nil
 }
