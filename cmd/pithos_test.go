@@ -100,28 +100,24 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}
-		// @TODO: wrapBlobStoreWithOutbox disabled because of temp folder deletion failure
-		//localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
-		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, false)
+		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
 		s3ClientStorage, err := storage.NewS3ClientStorage(s3Client)
 		if err != nil {
 			log.Fatal("Could not create s3ClientStorage")
 		}
-		// @TODO: Outbox disabled because of s3Client close error
-		/*
-			outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
-			if err != nil {
-				log.Fatal("Could not create outboxStorage")
-			}
-			store, err = storage.NewReplicationStorage(localStore, outboxStorage)
-		*/
 
-		store, err = storage.NewReplicationStorage(localStore, s3ClientStorage)
+		outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
+		if err != nil {
+			log.Fatal("Could not create outboxStorage")
+		}
+
+		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
 		if err != nil {
 			log.Fatal("Could not create replicationStorage")
 		}
+
 		err = store.Start()
 		if err != nil {
 			log.Fatal("Couldn't start storage")
