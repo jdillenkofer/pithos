@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
-	store := storage.CreateAndInitializeStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
+	store := storage.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
 
 	replication := settings.Replication()
 	if replication != nil {
@@ -55,6 +55,11 @@ func main() {
 		if err != nil {
 			log.Fatal("Could not create replicationStorage")
 		}
+	}
+
+	err = store.Start()
+	if err != nil {
+		log.Fatal("Couldn't start storage")
 	}
 
 	defer func() {

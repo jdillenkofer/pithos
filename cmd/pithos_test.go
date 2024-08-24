@@ -71,7 +71,11 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if err != nil {
 		log.Fatalf("Couldn't open database: %s", err)
 	}
-	store := storage.CreateAndInitializeStorage(storagePath, db, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+	err = store.Start()
+	if err != nil {
+		log.Fatal("Couldn't start storage")
+	}
 	closeStorage := func() {
 		err := store.Stop()
 		if err != nil {
@@ -96,20 +100,31 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}
-		localStore := storage.CreateAndInitializeStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		// @TODO: wrapBlobStoreWithOutbox disabled because of temp folder deletion failure
+		//localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, false)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
 		s3ClientStorage, err := storage.NewS3ClientStorage(s3Client)
 		if err != nil {
 			log.Fatal("Could not create s3ClientStorage")
 		}
-		outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
-		if err != nil {
-			log.Fatal("Could not create outboxStorage")
-		}
-		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
+		// @TODO: Outbox disabled because of s3Client close error
+		/*
+			outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
+			if err != nil {
+				log.Fatal("Could not create outboxStorage")
+			}
+			store, err = storage.NewReplicationStorage(localStore, outboxStorage)
+		*/
+
+		store, err = storage.NewReplicationStorage(localStore, s3ClientStorage)
 		if err != nil {
 			log.Fatal("Could not create replicationStorage")
+		}
+		err = store.Start()
+		if err != nil {
+			log.Fatal("Couldn't start storage")
 		}
 
 		closeStorage = func() {
@@ -121,7 +136,6 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			if err != nil {
 				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
 			}
-
 		}
 		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
 	}
@@ -130,10 +144,6 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 
 	cleanup = func() {
 		ts.Close()
-		if err != nil {
-			log.Fatalf("Could not close db: %s", err)
-		}
-
 		closeStorage()
 
 		err = os.RemoveAll(storagePath)

@@ -77,7 +77,10 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 		}
 		processedOutboxEntryCount += 1
 	}
-	tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return
+	}
 	if processedOutboxEntryCount > 0 {
 		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
 	}
@@ -103,7 +106,7 @@ out:
 		select {
 		case _, ok := <-obs.triggerChannel:
 			if !ok {
-				log.Println("Stopping outbox processing")
+				log.Println("Stopping OutboxBlobStore processing")
 				break out
 			}
 		case <-time.After(10 * time.Second):
