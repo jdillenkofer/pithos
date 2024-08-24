@@ -64,10 +64,11 @@ func OpenDatabase(storagePath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db"))
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db?cache=shared"))
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 	err = SetupDatabase(db)
 	if err != nil {
 		return nil, err

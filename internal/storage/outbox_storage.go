@@ -41,7 +41,7 @@ func (os *OutboxStorage) maybeProcessOutboxEntries() {
 		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(tx)
 		if err != nil {
 			tx.Rollback()
-			time.Sleep(30 * time.Second)
+			time.Sleep(5 * time.Second)
 			return
 		}
 		if storageOutboxEntry == nil {
@@ -53,34 +53,34 @@ func (os *OutboxStorage) maybeProcessOutboxEntries() {
 			err = os.innerStorage.CreateBucket(storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.PutObjectStorageOperation:
 			err = os.innerStorage.PutObject(storageOutboxEntry.Bucket, storageOutboxEntry.Key, bytes.NewReader(storageOutboxEntry.Data))
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.DeleteObjectStorageOperation:
 			err = os.innerStorage.DeleteObject(storageOutboxEntry.Bucket, storageOutboxEntry.Key)
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		default:
 			log.Println("Invalid operation", storageOutboxEntry.Operation, "during outbox processing.")
 			tx.Rollback()
-			time.Sleep(30 * time.Second)
+			time.Sleep(5 * time.Second)
 			return
 		}
 		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(tx, *storageOutboxEntry.Id)
@@ -122,7 +122,7 @@ out:
 				log.Println("Stopping outboxStorage processing")
 				break out
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(1 * time.Second):
 		}
 		os.maybeProcessOutboxEntries()
 	}
@@ -138,7 +138,7 @@ func (os *OutboxStorage) Start() error {
 func (os *OutboxStorage) Stop() error {
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
-		waitWithTimeout(&os.outboxProcessingStopped, 10*time.Second)
+		waitWithTimeout(&os.outboxProcessingStopped, 5*time.Second)
 		os.triggerChannelClosed = true
 	}
 	return os.innerStorage.Stop()

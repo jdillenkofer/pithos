@@ -42,7 +42,7 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 		blobOutboxEntry, err := obs.blobOutboxEntryRepository.FindFirstBlobOutboxEntry(tx)
 		if err != nil {
 			tx.Rollback()
-			time.Sleep(30 * time.Second)
+			time.Sleep(5 * time.Second)
 			return
 		}
 		if blobOutboxEntry == nil {
@@ -54,20 +54,20 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries() {
 			_, err := obs.innerBlobStore.PutBlob(tx, blobOutboxEntry.BlobId, bytes.NewReader(blobOutboxEntry.Content))
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.DeleteBlobOperation:
 			err = obs.innerBlobStore.DeleteBlob(tx, blobOutboxEntry.BlobId)
 			if err != nil {
 				tx.Rollback()
-				time.Sleep(30 * time.Second)
+				time.Sleep(5 * time.Second)
 				return
 			}
 		default:
 			log.Println("Invalid operation", blobOutboxEntry.Operation, "during outbox processing.")
 			tx.Rollback()
-			time.Sleep(30 * time.Second)
+			time.Sleep(5 * time.Second)
 			return
 		}
 		err = obs.blobOutboxEntryRepository.DeleteBlobOutboxEntryById(tx, *blobOutboxEntry.Id)
@@ -109,7 +109,7 @@ out:
 				log.Println("Stopping OutboxBlobStore processing")
 				break out
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(1 * time.Second):
 		}
 		obs.maybeProcessOutboxEntries()
 	}
@@ -125,7 +125,7 @@ func (obs *OutboxBlobStore) Start() error {
 func (obs *OutboxBlobStore) Stop() error {
 	if !obs.triggerChannelClosed {
 		close(obs.triggerChannel)
-		waitWithTimeout(&obs.outboxProcessingStopped, 10*time.Second)
+		waitWithTimeout(&obs.outboxProcessingStopped, 5*time.Second)
 		obs.triggerChannelClosed = true
 	}
 	return obs.innerBlobStore.Stop()
