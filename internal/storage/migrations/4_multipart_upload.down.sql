@@ -14,7 +14,7 @@ CREATE TABLE objects2 (
 
 INSERT INTO objects2 SELECT * FROM objects;
 DROP INDEX objects_completed_unique;
-DROP INDEX objects_pending_or_aborted_unique_upload_id;
+DROP INDEX objects_pending_unique_upload_id;
 DROP TABLE objects;
 
 ALTER TABLE objects2 RENAME TO objects;

@@ -9,7 +9,6 @@ import (
 
 const UploadStatusPending = "PENDING"
 const UploadStatusCompleted = "COMPLETED"
-const UploadStatusAborted = "ABORTED"
 
 type ObjectRepository struct {
 }
