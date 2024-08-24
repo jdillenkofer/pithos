@@ -18,5 +18,5 @@ DROP TABLE objects;
 
 ALTER TABLE objects2 RENAME TO objects;
 CREATE UNIQUE INDEX objects_completed_unique ON objects (bucket_name, key, upload_status) WHERE upload_status = 'COMPLETED';
-CREATE UNIQUE INDEX objects_pending_or_aborted_unique_upload_id ON objects (bucket_name, key, upload_status, upload_id)
-WHERE upload_status = 'PENDING' OR upload_status = 'ABORTED';
+CREATE UNIQUE INDEX objects_pending_unique_upload_id ON objects (bucket_name, key, upload_status, upload_id)
+WHERE upload_status = 'PENDING';
