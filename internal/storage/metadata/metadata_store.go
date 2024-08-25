@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"time"
@@ -60,16 +61,16 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 type MetadataStore interface {
 	Start() error
 	Stop() error
-	CreateBucket(tx *sql.Tx, bucketName string) error
-	DeleteBucket(tx *sql.Tx, bucketName string) error
-	ListBuckets(tx *sql.Tx) ([]Bucket, error)
-	HeadBucket(tx *sql.Tx, bucketName string) (*Bucket, error)
-	ListObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
-	HeadObject(tx *sql.Tx, bucketName string, key string) (*Object, error)
-	PutObject(tx *sql.Tx, bucketName string, object *Object) error
-	DeleteObject(tx *sql.Tx, bucketName string, key string) error
-	CreateMultipartUpload(tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error)
-	UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
-	CompleteMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
+	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
+	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
+	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
+	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*Bucket, error)
+	ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
+	HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error)
+	PutObject(ctx context.Context, tx *sql.Tx, bucketName string, object *Object) error
+	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error)
+	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
+	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
 }

@@ -44,7 +44,7 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 		}
 	})
 
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
+	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
@@ -200,7 +200,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should create a bucket"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -214,7 +214,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should not be able to create the same bucket twice"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -222,7 +222,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		_, err = s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 
@@ -239,7 +239,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should be able to see an existing bucket"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -247,7 +247,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 
 		assert.NotNil(t, createBucketResult)
-		headBucketResult, err := s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		headBucketResult, err := s3Client.HeadBucket(context.Background(), &s3.HeadBucketInput{
 			Bucket: bucketName,
 		})
 
@@ -260,7 +260,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should be able to list all buckets"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -268,7 +268,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		listBucketsResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+		listBucketsResult, err := s3Client.ListBuckets(context.Background(), &s3.ListBucketsInput{})
 
 		if err != nil {
 			assert.Fail(t, "ListBuckets failed", "err %v", err)
@@ -283,7 +283,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow uploading an object"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -291,7 +291,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -305,7 +305,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -313,7 +313,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -327,7 +327,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId := createMultiPartUploadResult.UploadId
 		assert.NotNil(t, uploadId)
 
-		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body),
 			Key:        key,
@@ -340,7 +340,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -351,7 +351,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Len(t, listObjectResult.Contents, 0)
 		assert.False(t, *listObjectResult.IsTruncated)
 
-		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId,
@@ -363,7 +363,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult.Key)
 
-		listObjectResult, err = s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err = s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -377,7 +377,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -394,7 +394,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow multipart uploads with two parts"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -402,7 +402,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -416,7 +416,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId := createMultiPartUploadResult.UploadId
 		assert.NotNil(t, uploadId)
 
-		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -429,7 +429,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		uploadPartResult, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -442,7 +442,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId,
@@ -454,7 +454,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult.Key)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -468,7 +468,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, completeMultipartUploadResult.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -485,7 +485,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow cancellation of multipart uploads"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -493,7 +493,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -507,7 +507,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId := createMultiPartUploadResult.UploadId
 		assert.NotNil(t, uploadId)
 
-		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -520,7 +520,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		uploadPartResult, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -533,7 +533,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		abortMultipartUpload, err := s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
+		abortMultipartUpload, err := s3Client.AbortMultipartUpload(context.Background(), &s3.AbortMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId,
@@ -543,7 +543,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, abortMultipartUpload)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -558,7 +558,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow two multipart uploads on same key after complete first"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -566,7 +566,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -580,7 +580,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId := createMultiPartUploadResult.UploadId
 		assert.NotNil(t, uploadId)
 
-		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -593,7 +593,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		uploadPartResult, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -606,7 +606,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId,
@@ -618,7 +618,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, bucketName, completeMultipartUploadResult.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult.Key)
 
-		createMultiPartUploadResult2, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult2, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -632,7 +632,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId2 := createMultiPartUploadResult2.UploadId
 		assert.NotNil(t, uploadId2)
 
-		uploadPartResult2, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult2, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -645,7 +645,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult2)
 
-		uploadPartResult2, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -658,7 +658,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult2)
 
-		completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId2,
@@ -670,7 +670,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, bucketName, completeMultipartUploadResult2.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult2.Key)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -684,7 +684,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, completeMultipartUploadResult2.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -701,7 +701,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow two multipart uploads on same key after abort first"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -709,7 +709,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -723,7 +723,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId := createMultiPartUploadResult.UploadId
 		assert.NotNil(t, uploadId)
 
-		uploadPartResult, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -736,7 +736,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		uploadPartResult, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -749,7 +749,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult)
 
-		abortMultipartUploadResult, err := s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
+		abortMultipartUploadResult, err := s3Client.AbortMultipartUpload(context.Background(), &s3.AbortMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId,
@@ -759,7 +759,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, abortMultipartUploadResult)
 
-		createMultiPartUploadResult2, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		createMultiPartUploadResult2, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -773,7 +773,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		uploadId2 := createMultiPartUploadResult2.UploadId
 		assert.NotNil(t, uploadId2)
 
-		uploadPartResult2, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult2, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[2:]),
 			Key:        key,
@@ -786,7 +786,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult2)
 
-		uploadPartResult2, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+		uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 			Bucket:     bucketName,
 			Body:       bytes.NewReader(body[0:2]),
 			Key:        key,
@@ -799,7 +799,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, uploadPartResult2)
 
-		completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 			Bucket:   bucketName,
 			Key:      key,
 			UploadId: uploadId2,
@@ -811,7 +811,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, bucketName, completeMultipartUploadResult2.Bucket)
 		assert.Equal(t, key, completeMultipartUploadResult2.Key)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -825,7 +825,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.Equal(t, completeMultipartUploadResult2.ETag, listObjectResult.Contents[0].ETag)
 		assert.False(t, *listObjectResult.IsTruncated)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -842,7 +842,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -850,7 +850,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -860,7 +860,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		_, err = s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		_, err = s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 			Bucket: bucketName,
 		})
 		if err == nil {
@@ -876,7 +876,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow uploading an object a second time"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -884,7 +884,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -894,7 +894,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -908,7 +908,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow downloading the object"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -916,7 +916,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -926,7 +926,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -943,7 +943,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow downloading the object with byte range"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -951,7 +951,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -961,7 +961,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 			Range:  aws.String("bytes=1-4"),
@@ -979,7 +979,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow downloading the object with byte range without end"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -987,7 +987,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -997,7 +997,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 			Range:  aws.String("bytes=1-"),
@@ -1015,7 +1015,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow downloading the object with suffix byte range"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1023,7 +1023,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -1033,7 +1033,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 			Range:  aws.String("bytes=-6"),
@@ -1051,7 +1051,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow downloading the object with multi byte range"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1059,7 +1059,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader(body),
 			Key:    key,
@@ -1069,7 +1069,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		getObjectResult, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 			Range:  aws.String("bytes=1-4, 5-6"),
@@ -1117,7 +1117,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should allow deleting an object"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1125,7 +1125,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1135,7 +1135,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		deleteObjectResult, err := s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+		deleteObjectResult, err := s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
 			Bucket: bucketName,
 			Key:    key,
 		})
@@ -1148,7 +1148,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should delete an existing bucket"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1156,7 +1156,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		deleteBucketResult, err := s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1168,7 +1168,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should fail when deleting non existing bucket"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		_, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		_, err := s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 			Bucket: aws.String("test2"),
 		})
 
@@ -1185,7 +1185,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should not see the bucket after deletion anymore"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1193,7 +1193,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		deleteBucketResult, err := s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+		deleteBucketResult, err := s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1201,7 +1201,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, deleteBucketResult)
 
-		_, err = s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+		_, err = s3Client.HeadBucket(context.Background(), &s3.HeadBucketInput{
 			Bucket: bucketName,
 		})
 
@@ -1214,7 +1214,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list all buckets"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1222,7 +1222,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		createBucketResult2, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult2, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName2,
 		})
 		if err != nil {
@@ -1230,7 +1230,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult2)
 
-		listBucketResult, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+		listBucketResult, err := s3Client.ListBuckets(context.Background(), &s3.ListBucketsInput{})
 		if err != nil {
 			assert.Fail(t, "ListBuckets failed", "err %v", err)
 		}
@@ -1240,7 +1240,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list no objects"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1248,7 +1248,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1263,7 +1263,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list a single object"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1271,7 +1271,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1281,7 +1281,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1304,7 +1304,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list two objects"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1312,7 +1312,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1322,7 +1322,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    key2,
@@ -1332,7 +1332,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1361,7 +1361,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should truncate when listing objects"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1369,7 +1369,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1379,7 +1379,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    key2,
@@ -1390,7 +1390,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		assert.NotNil(t, putObjectResult)
 
 		maxKeys := int32(1)
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:  bucketName,
 			MaxKeys: &maxKeys,
 		})
@@ -1414,7 +1414,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects starting with prefix my/test/key"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1422,7 +1422,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1432,7 +1432,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 			Prefix: keyPrefix,
 		})
@@ -1456,7 +1456,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list no objects when searching for prefix key"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1464,7 +1464,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1474,7 +1474,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket: bucketName,
 			Prefix: aws.String("key"),
 		})
@@ -1491,7 +1491,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects with delimiter \"/\" one folder"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1499,7 +1499,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1509,7 +1509,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:    bucketName,
 			Delimiter: aws.String("/"),
 		})
@@ -1528,7 +1528,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects with delimiter \"/\" two folders"+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1536,7 +1536,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1546,7 +1546,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    key2,
@@ -1556,7 +1556,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:    bucketName,
 			Delimiter: aws.String("/"),
 		})
@@ -1575,7 +1575,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects with delimiter \"/\""+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1583,7 +1583,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1593,7 +1593,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    aws.String("my.txt"),
@@ -1603,7 +1603,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:    bucketName,
 			Delimiter: aws.String("/"),
 		})
@@ -1630,7 +1630,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects with prefix \"my/\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1638,7 +1638,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1648,7 +1648,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    aws.String("my.txt"),
@@ -1658,7 +1658,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:    bucketName,
 			Delimiter: aws.String("/"),
 			Prefix:    aws.String("my/"),
@@ -1680,7 +1680,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 	t.Run("it should list objects with prefix \"my/test/key\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
 		s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 		t.Cleanup(cleanup)
-		createBucketResult, err := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+		createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 			Bucket: bucketName,
 		})
 		if err != nil {
@@ -1688,7 +1688,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, createBucketResult)
 
-		putObjectResult, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, first object!")),
 			Key:    key,
@@ -1698,7 +1698,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		putObjectResult, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 			Bucket: bucketName,
 			Body:   bytes.NewReader([]byte("Hello, second object!")),
 			Key:    aws.String("my.txt"),
@@ -1708,7 +1708,7 @@ func runTestsWithConfiguration(t *testing.T, testSuffix string, usePathStyle boo
 		}
 		assert.NotNil(t, putObjectResult)
 
-		listObjectResult, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 			Bucket:    bucketName,
 			Delimiter: aws.String("/"),
 			Prefix:    aws.String("my/test/key/"),

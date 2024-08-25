@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"context"
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
@@ -35,8 +36,8 @@ func (sms *SqlMetadataStore) Stop() error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) CreateBucket(tx *sql.Tx, bucketName string) error {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -44,7 +45,7 @@ func (sms *SqlMetadataStore) CreateBucket(tx *sql.Tx, bucketName string) error {
 		return ErrBucketAlreadyExists
 	}
 
-	err = sms.bucketRepository.SaveBucket(tx, &repository.BucketEntity{
+	err = sms.bucketRepository.SaveBucket(ctx, tx, &repository.BucketEntity{
 		Name: bucketName,
 	})
 	if err != nil {
@@ -54,8 +55,8 @@ func (sms *SqlMetadataStore) CreateBucket(tx *sql.Tx, bucketName string) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) DeleteBucket(tx *sql.Tx, bucketName string) error {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -63,7 +64,7 @@ func (sms *SqlMetadataStore) DeleteBucket(tx *sql.Tx, bucketName string) error {
 		return ErrNoSuchBucket
 	}
 
-	containsBucketObjects, err := sms.objectRepository.ContainsBucketObjectsByBucketName(tx, bucketName)
+	containsBucketObjects, err := sms.objectRepository.ContainsBucketObjectsByBucketName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -71,7 +72,7 @@ func (sms *SqlMetadataStore) DeleteBucket(tx *sql.Tx, bucketName string) error {
 		return ErrBucketNotEmpty
 	}
 
-	err = sms.bucketRepository.DeleteBucketByName(tx, bucketName)
+	err = sms.bucketRepository.DeleteBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -79,8 +80,8 @@ func (sms *SqlMetadataStore) DeleteBucket(tx *sql.Tx, bucketName string) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) ListBuckets(tx *sql.Tx) ([]Bucket, error) {
-	bucketEntities, err := sms.bucketRepository.FindAllBuckets(tx)
+func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error) {
+	bucketEntities, err := sms.bucketRepository.FindAllBuckets(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,8 +95,8 @@ func (sms *SqlMetadataStore) ListBuckets(tx *sql.Tx) ([]Bucket, error) {
 	return buckets, nil
 }
 
-func (sms *SqlMetadataStore) HeadBucket(tx *sql.Tx, bucketName string) (*Bucket, error) {
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*Bucket, error) {
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -124,14 +125,14 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(tx, bucketName, prefix, startAfter)
+func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
 	}
 	commonPrefixes := []string{}
 	objects := []Object{}
-	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx, bucketName, prefix, startAfter)
+	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +145,7 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 			}
 		}
 		if len(objects) < maxKeys {
-			blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+			blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 			if err != nil {
 				return nil, err
 			}
@@ -178,8 +179,8 @@ func (sms *SqlMetadataStore) listObjects(tx *sql.Tx, bucketName string, prefix s
 	return &listBucketResult, nil
 }
 
-func (sms *SqlMetadataStore) ListObjects(tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -187,11 +188,11 @@ func (sms *SqlMetadataStore) ListObjects(tx *sql.Tx, bucketName string, prefix s
 		return nil, ErrNoSuchBucket
 	}
 
-	return sms.listObjects(tx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (sms *SqlMetadataStore) HeadObject(tx *sql.Tx, bucketName string, key string) (*Object, error) {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -199,14 +200,14 @@ func (sms *SqlMetadataStore) HeadObject(tx *sql.Tx, bucketName string, key strin
 		return nil, ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
 	if objectEntity == nil {
 		return nil, ErrNoSuchKey
 	}
-	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -228,8 +229,8 @@ func (sms *SqlMetadataStore) HeadObject(tx *sql.Tx, bucketName string, key strin
 	return &object, nil
 }
 
-func (sms *SqlMetadataStore) PutObject(tx *sql.Tx, bucketName string, object *Object) error {
-	existsBucket, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, object *Object) error {
+	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -237,17 +238,17 @@ func (sms *SqlMetadataStore) PutObject(tx *sql.Tx, bucketName string, object *Ob
 		return ErrNoSuchBucket
 	}
 
-	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, object.Key)
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, object.Key)
 	if err != nil {
 		return err
 	}
 	if oldObjectEntity != nil {
 		// object already exists
-		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *oldObjectEntity.Id)
+		err = sms.blobRepository.DeleteBlobsByObjectId(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return err
 		}
-		err = sms.objectRepository.DeleteObjectById(tx, *oldObjectEntity.Id)
+		err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return err
 		}
@@ -259,7 +260,7 @@ func (sms *SqlMetadataStore) PutObject(tx *sql.Tx, bucketName string, object *Ob
 		Size:         object.Size,
 		UploadStatus: repository.UploadStatusCompleted,
 	}
-	err = sms.objectRepository.SaveObject(tx, &objectEntity)
+	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	objectId := objectEntity.Id
 	if err != nil {
 		return err
@@ -273,7 +274,7 @@ func (sms *SqlMetadataStore) PutObject(tx *sql.Tx, bucketName string, object *Ob
 			Size:           blobStruc.Size,
 			SequenceNumber: sequenceNumber,
 		}
-		err = sms.blobRepository.SaveBlob(tx, &blobEntity)
+		err = sms.blobRepository.SaveBlob(ctx, tx, &blobEntity)
 		if err != nil {
 			return err
 		}
@@ -283,8 +284,8 @@ func (sms *SqlMetadataStore) PutObject(tx *sql.Tx, bucketName string, object *Ob
 	return nil
 }
 
-func (sms *SqlMetadataStore) DeleteObject(tx *sql.Tx, bucketName string, key string) error {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -292,18 +293,18 @@ func (sms *SqlMetadataStore) DeleteObject(tx *sql.Tx, bucketName string, key str
 		return ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
 		return err
 	}
 
 	if objectEntity != nil {
-		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *objectEntity.Id)
+		err = sms.blobRepository.DeleteBlobsByObjectId(ctx, tx, *objectEntity.Id)
 		if err != nil {
 			return err
 		}
 
-		err = sms.objectRepository.DeleteObjectById(tx, *objectEntity.Id)
+		err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
 		if err != nil {
 			return err
 		}
@@ -312,8 +313,8 @@ func (sms *SqlMetadataStore) DeleteObject(tx *sql.Tx, bucketName string, key str
 	return nil
 }
 
-func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error) {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +330,7 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string
 		UploadId:     ulid.Make().String(),
 		UploadStatus: repository.UploadStatusPending,
 	}
-	err = sms.objectRepository.SaveObject(tx, &objectEntity)
+	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
 		return nil, err
 	}
@@ -339,8 +340,8 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(tx *sql.Tx, bucketName string
 	}, nil
 }
 
-func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -348,7 +349,7 @@ func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key strin
 		return ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
 	if err != nil {
 		return err
 	}
@@ -363,15 +364,15 @@ func (sms *SqlMetadataStore) UploadPart(tx *sql.Tx, bucketName string, key strin
 		Size:           blob.Size,
 		SequenceNumber: int(partNumber),
 	}
-	err = sms.blobRepository.SaveBlob(tx, &blobEntity)
+	err = sms.blobRepository.SaveBlob(ctx, tx, &blobEntity)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +380,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 		return nil, ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +388,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 		return nil, ErrNoSuchKey
 	}
 
-	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -411,17 +412,17 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 	deletedBlobs := []Blob{}
 
 	// Remove old objects
-	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(tx, bucketName, key)
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
 	if oldObjectEntity != nil {
-		oldBlobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *oldObjectEntity.Id)
+		oldBlobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return nil, err
 		}
 
-		err = sms.blobRepository.DeleteBlobsByObjectId(tx, *oldObjectEntity.Id)
+		err = sms.blobRepository.DeleteBlobsByObjectId(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -434,7 +435,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 			}
 		}, oldBlobEntities)
 
-		err = sms.objectRepository.DeleteObjectById(tx, *oldObjectEntity.Id)
+		err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -443,7 +444,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 	objectEntity.UploadStatus = repository.UploadStatusCompleted
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
-	err = sms.objectRepository.SaveObject(tx, objectEntity)
+	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 	if err != nil {
 		return nil, err
 	}
@@ -454,8 +455,8 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(tx *sql.Tx, bucketName stri
 	}, nil
 }
 
-func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
-	exists, err := sms.bucketRepository.ExistsBucketByName(tx, bucketName)
+func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +464,7 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string,
 		return nil, ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(tx, bucketName, key, uploadId)
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
 	if err != nil {
 		return nil, err
 	}
@@ -471,12 +472,12 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string,
 		return nil, ErrNoSuchKey
 	}
 
-	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(tx, *objectEntity.Id)
+	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	err = sms.blobRepository.DeleteBlobsByObjectId(tx, *objectEntity.Id)
+	err = sms.blobRepository.DeleteBlobsByObjectId(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +490,7 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(tx *sql.Tx, bucketName string,
 		}
 	}, blobEntities)
 
-	err = sms.objectRepository.DeleteObjectById(tx, *objectEntity.Id)
+	err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}

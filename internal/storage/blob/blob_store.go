@@ -1,13 +1,15 @@
 package blob
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"github.com/oklog/ulid/v2"
 	"io"
 	"os"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type BlobId = ulid.ULID
@@ -21,9 +23,9 @@ type PutBlobResult struct {
 type BlobStore interface {
 	Start() error
 	Stop() error
-	PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error)
-	GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
-	DeleteBlob(tx *sql.Tx, blobId BlobId) error
+	PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error)
+	GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
+	DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error
 }
 
 func GenerateBlobId() (*BlobId, error) {

@@ -2,9 +2,11 @@ package blob
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
-	"github.com/oklog/ulid/v2"
 	"io"
+
+	"github.com/oklog/ulid/v2"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
@@ -28,7 +30,7 @@ func (bs *SqlBlobStore) Stop() error {
 	return nil
 }
 
-func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
+func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
 	content, err := io.ReadAll(blob)
 	if err != nil {
 		return nil, err
@@ -37,7 +39,7 @@ func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*Put
 		Id:      (*ulid.ULID)(&blobId),
 		Content: content,
 	}
-	err = bs.blobContentRepository.PutBlobContent(tx, &blobContentEntity)
+	err = bs.blobContentRepository.PutBlobContent(ctx, tx, &blobContentEntity)
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +56,8 @@ func (bs *SqlBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*Put
 	}, nil
 }
 
-func (bs *SqlBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
-	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(tx, blobId)
+func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
+	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +69,7 @@ func (bs *SqlBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, e
 	return reader, nil
 }
 
-func (bs *SqlBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
-	err := bs.blobContentRepository.DeleteBlobContentById(tx, blobId)
+func (bs *SqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
+	err := bs.blobContentRepository.DeleteBlobContentById(ctx, tx, blobId)
 	return err
 }

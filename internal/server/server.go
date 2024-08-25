@@ -182,8 +182,9 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	log.Println("Listing Buckets")
-	buckets, err := s.storage.ListBuckets()
+	buckets, err := s.storage.ListBuckets(ctx)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -208,9 +209,10 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucketName := r.PathValue(bucketPath)
 	log.Printf("Head bucket %s\n", bucketName)
-	_, err := s.storage.HeadBucket(bucketName)
+	_, err := s.storage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -219,6 +221,7 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	query := r.URL.Query()
 	prefix := query.Get(prefixQuery)
@@ -232,7 +235,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	maxKeysInt := int(maxKeysI64)
 
 	log.Printf("Listing objects in bucket %s\n", bucket)
-	result, err := s.storage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeysInt)
+	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysInt)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -268,9 +271,10 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	log.Printf("Creating bucket %s\n", bucket)
-	err := s.storage.CreateBucket(bucket)
+	err := s.storage.CreateBucket(ctx, bucket)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -280,9 +284,10 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	log.Printf("Deleting bucket %s\n", bucket)
-	err := s.storage.DeleteBucket(bucket)
+	err := s.storage.DeleteBucket(ctx, bucket)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -291,10 +296,11 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
-	object, err := s.storage.HeadObject(bucket, key)
+	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -378,11 +384,12 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
-	object, err := s.storage.HeadObject(bucket, key)
+	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -409,7 +416,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 				sizes = append(sizes, size)
 				totalSize += size
 			}
-			rangeReader, err := s.storage.GetObject(bucket, key, byteRange.start, &end)
+			rangeReader, err := s.storage.GetObject(ctx, bucket, key, byteRange.start, &end)
 			if err != nil {
 				for _, rangeReader := range readers {
 					rangeReader.Close()
@@ -420,7 +427,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			readers = append(readers, rangeReader)
 		}
 	} else {
-		reader, err := s.storage.GetObject(bucket, key, nil, nil)
+		reader, err := s.storage.GetObject(ctx, bucket, key, nil, nil)
 		if err != nil {
 			handleError(err, w, r)
 			return
@@ -484,10 +491,11 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
-	result, err := s.storage.CreateMultipartUpload(bucket, key)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -505,12 +513,13 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	log.Printf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
-	result, err := s.storage.CompleteMultipartUpload(bucket, key, uploadId)
+	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -551,6 +560,7 @@ func (s *Server) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
@@ -571,7 +581,7 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	uploadPartResult, err := s.storage.UploadPart(bucket, key, uploadId, partNumberInt32, r.Body)
+	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberInt32, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -581,6 +591,7 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 
@@ -588,7 +599,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	err := s.storage.PutObject(bucket, key, r.Body)
+	err := s.storage.PutObject(ctx, bucket, key, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -611,12 +622,13 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	log.Printf("AbortMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
-	err := s.storage.AbortMultipartUpload(bucket, key, uploadId)
+	err := s.storage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -625,10 +637,11 @@ func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
-	err := s.storage.DeleteObject(bucket, key)
+	err := s.storage.DeleteObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
 		return

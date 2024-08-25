@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"log"
@@ -54,19 +55,19 @@ var ErrNoSuchKey error = metadata.ErrNoSuchKey
 type Storage interface {
 	Start() error
 	Stop() error
-	CreateBucket(bucket string) error
-	DeleteBucket(bucket string) error
-	ListBuckets() ([]Bucket, error)
-	HeadBucket(bucket string) (*Bucket, error)
-	ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
-	HeadObject(bucket string, key string) (*Object, error)
-	GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
-	PutObject(bucket string, key string, data io.Reader) error
-	DeleteObject(bucket string, key string) error
-	CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error)
-	UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error)
-	CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(bucket string, key string, uploadId string) error
+	CreateBucket(ctx context.Context, bucket string) error
+	DeleteBucket(ctx context.Context, bucket string) error
+	ListBuckets(ctx context.Context) ([]Bucket, error)
+	HeadBucket(ctx context.Context, bucket string) (*Bucket, error)
+	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
+	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
+	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error)
+	PutObject(ctx context.Context, bucket string, key string, data io.Reader) error
+	DeleteObject(ctx context.Context, bucket string, key string) error
+	CreateMultipartUpload(ctx context.Context, bucket string, key string) (*InitiateMultipartUploadResult, error)
+	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 }
 
 func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {

@@ -1,6 +1,7 @@
 package blob
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"io"
@@ -46,7 +47,7 @@ func (bs *FilesystemBlobStore) Stop() error {
 	return nil
 }
 
-func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
+func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
 	filename := bs.getFilename(blobId)
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -74,13 +75,13 @@ func (bs *FilesystemBlobStore) PutBlob(tx *sql.Tx, blobId BlobId, blob io.Reader
 	}, nil
 }
 
-func (bs *FilesystemBlobStore) GetBlob(tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
+func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	return f, err
 }
 
-func (bs *FilesystemBlobStore) DeleteBlob(tx *sql.Tx, blobId BlobId) error {
+func (bs *FilesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
 	filename := bs.getFilename(blobId)
 	err := os.Remove(filename)
 	if err != nil {

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -42,8 +43,8 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*BlobContentEntity,
 	}, nil
 }
 
-func (bcr *BlobContentRepository) FindBlobContentById(tx *sql.Tx, blobContentId ulid.ULID) (*BlobContentEntity, error) {
-	row := tx.QueryRow("SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = ?", blobContentId.String())
+func (bcr *BlobContentRepository) FindBlobContentById(ctx context.Context, tx *sql.Tx, blobContentId ulid.ULID) (*BlobContentEntity, error) {
+	row := tx.QueryRowContext(ctx, "SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = ?", blobContentId.String())
 	blobContentEntity, err := convertRowToBlobContentEntity(row)
 	if err != nil {
 		return nil, err
@@ -51,33 +52,33 @@ func (bcr *BlobContentRepository) FindBlobContentById(tx *sql.Tx, blobContentId 
 	return blobContentEntity, nil
 }
 
-func (bcr *BlobContentRepository) PutBlobContent(tx *sql.Tx, blobContent *BlobContentEntity) error {
-	_, err := tx.Exec("DELETE FROM blob_contents WHERE id = ?", blobContent.Id.String())
+func (bcr *BlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *BlobContentEntity) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM blob_contents WHERE id = ?", blobContent.Id.String())
 	if err != nil {
 		return err
 	}
 	blobContent.CreatedAt = time.Now()
 	blobContent.UpdatedAt = blobContent.CreatedAt
-	_, err = tx.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
+	_, err = tx.ExecContext(ctx, "INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
 	return err
 }
 
-func (bcr *BlobContentRepository) SaveBlobContent(tx *sql.Tx, blobContent *BlobContentEntity) error {
+func (bcr *BlobContentRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, blobContent *BlobContentEntity) error {
 	if blobContent.Id == nil {
 		id := ulid.Make()
 		blobContent.Id = &id
 		blobContent.CreatedAt = time.Now()
 		blobContent.UpdatedAt = blobContent.CreatedAt
-		_, err := tx.Exec("INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
+		_, err := tx.ExecContext(ctx, "INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)", blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
 		return err
 	}
 
 	blobContent.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE blob_contents SET content = ?, updated_at = ? WHERE id = ?", blobContent.Content, blobContent.UpdatedAt, blobContent.Id.String())
+	_, err := tx.ExecContext(ctx, "UPDATE blob_contents SET content = ?, updated_at = ? WHERE id = ?", blobContent.Content, blobContent.UpdatedAt, blobContent.Id.String())
 	return err
 }
 
-func (bcr *BlobContentRepository) DeleteBlobContentById(tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.Exec("DELETE FROM blob_contents WHERE id = ?", id.String())
+func (bcr *BlobContentRepository) DeleteBlobContentById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM blob_contents WHERE id = ?", id.String())
 	return err
 }

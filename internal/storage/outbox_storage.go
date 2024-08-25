@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"io"
 	"log"
@@ -31,14 +32,14 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 	return os, nil
 }
 
-func (os *OutboxStorage) maybeProcessOutboxEntries() {
+func (os *OutboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	processedOutboxEntryCount := 0
-	tx, err := os.db.Begin()
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return
 	}
 	for {
-		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(tx)
+		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			time.Sleep(5 * time.Second)
@@ -50,28 +51,28 @@ func (os *OutboxStorage) maybeProcessOutboxEntries() {
 
 		switch storageOutboxEntry.Operation {
 		case repository.CreateBucketStorageOperation:
-			err = os.innerStorage.CreateBucket(storageOutboxEntry.Bucket)
+			err = os.innerStorage.CreateBucket(ctx, storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.DeleteBucketStorageOperation:
-			err = os.innerStorage.DeleteBucket(storageOutboxEntry.Bucket)
+			err = os.innerStorage.DeleteBucket(ctx, storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.PutObjectStorageOperation:
-			err = os.innerStorage.PutObject(storageOutboxEntry.Bucket, storageOutboxEntry.Key, bytes.NewReader(storageOutboxEntry.Data))
+			err = os.innerStorage.PutObject(ctx, storageOutboxEntry.Bucket, storageOutboxEntry.Key, bytes.NewReader(storageOutboxEntry.Data))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		case repository.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(storageOutboxEntry.Bucket, storageOutboxEntry.Key)
+			err = os.innerStorage.DeleteObject(ctx, storageOutboxEntry.Bucket, storageOutboxEntry.Key)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -83,7 +84,7 @@ func (os *OutboxStorage) maybeProcessOutboxEntries() {
 			time.Sleep(5 * time.Second)
 			return
 		}
-		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(tx, *storageOutboxEntry.Id)
+		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx, *storageOutboxEntry.Id)
 		if err != nil {
 			tx.Rollback()
 			return
@@ -114,6 +115,7 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 }
 
 func (os *OutboxStorage) processOutboxLoop() {
+	ctx := context.Background()
 out:
 	for {
 		select {
@@ -124,7 +126,7 @@ out:
 			}
 		case <-time.After(1 * time.Second):
 		}
-		os.maybeProcessOutboxEntries()
+		os.maybeProcessOutboxEntries(ctx)
 	}
 	os.outboxProcessingStopped.Done()
 }
@@ -144,8 +146,8 @@ func (os *OutboxStorage) Stop() error {
 	return os.innerStorage.Stop()
 }
 
-func (os *OutboxStorage) storeStorageOutboxEntry(tx *sql.Tx, operation string, bucket string, key string, data []byte) error {
-	ordinal, err := os.storageOutboxEntryRepository.NextOrdinal(tx)
+func (os *OutboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucket string, key string, data []byte) error {
+	ordinal, err := os.storageOutboxEntryRepository.NextOrdinal(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -156,7 +158,7 @@ func (os *OutboxStorage) storeStorageOutboxEntry(tx *sql.Tx, operation string, b
 		Data:      data,
 		Ordinal:   *ordinal,
 	}
-	err = os.storageOutboxEntryRepository.SaveStorageOutboxEntry(tx, &storageOutboxEntry)
+	err = os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &storageOutboxEntry)
 	if err != nil {
 		return err
 	}
@@ -170,29 +172,12 @@ func (os *OutboxStorage) storeStorageOutboxEntry(tx *sql.Tx, operation string, b
 	return nil
 }
 
-func (os *OutboxStorage) CreateBucket(bucket string) error {
-	tx, err := os.db.Begin()
+func (os *OutboxStorage) CreateBucket(ctx context.Context, bucket string) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(tx, repository.CreateBucketStorageOperation, bucket, "", []byte{})
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (os *OutboxStorage) DeleteBucket(bucket string) error {
-	tx, err := os.db.Begin()
-	if err != nil {
-		return err
-	}
-	err = os.storeStorageOutboxEntry(tx, repository.DeleteBucketStorageOperation, bucket, "", []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, repository.CreateBucketStorageOperation, bucket, "", []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -204,12 +189,29 @@ func (os *OutboxStorage) DeleteBucket(bucket string) error {
 	return nil
 }
 
-func (os *OutboxStorage) waitForAllOutboxEntriesOfBucket(bucket string) error {
-	tx, err := os.db.Begin()
+func (os *OutboxStorage) DeleteBucket(ctx context.Context, bucket string) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
-	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(tx, bucket)
+	err = os.storeStorageOutboxEntry(ctx, tx, repository.DeleteBucketStorageOperation, bucket, "", []byte{})
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (os *OutboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bucket string) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return err
+	}
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(ctx, tx, bucket)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -225,11 +227,11 @@ func (os *OutboxStorage) waitForAllOutboxEntriesOfBucket(bucket string) error {
 	lastOrdinal := lastStorageOutboxEntry.Ordinal
 
 	for {
-		tx, err := os.db.Begin()
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 		if err != nil {
 			return err
 		}
-		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(tx, bucket)
+		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(ctx, tx, bucket)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -248,12 +250,12 @@ func (os *OutboxStorage) waitForAllOutboxEntriesOfBucket(bucket string) error {
 	}
 }
 
-func (os *OutboxStorage) waitForAllOutboxEntries() error {
-	tx, err := os.db.Begin()
+func (os *OutboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
-	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(tx)
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(ctx, tx)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -269,11 +271,11 @@ func (os *OutboxStorage) waitForAllOutboxEntries() error {
 	lastOrdinal := lastStorageOutboxEntry.Ordinal
 
 	for {
-		tx, err := os.db.Begin()
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 		if err != nil {
 			return err
 		}
-		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(tx)
+		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -292,53 +294,53 @@ func (os *OutboxStorage) waitForAllOutboxEntries() error {
 	}
 }
 
-func (os *OutboxStorage) ListBuckets() ([]Bucket, error) {
-	err := os.waitForAllOutboxEntries()
+func (os *OutboxStorage) ListBuckets(ctx context.Context) ([]Bucket, error) {
+	err := os.waitForAllOutboxEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.ListBuckets()
+	return os.innerStorage.ListBuckets(ctx)
 }
 
-func (os *OutboxStorage) HeadBucket(bucket string) (*Bucket, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) HeadBucket(ctx context.Context, bucket string) (*Bucket, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.HeadBucket(bucket)
+	return os.innerStorage.HeadBucket(ctx, bucket)
 }
 
-func (os *OutboxStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
+	return os.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (os *OutboxStorage) HeadObject(bucket string, key string) (*Object, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) HeadObject(ctx context.Context, bucket string, key string) (*Object, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.HeadObject(bucket, key)
+	return os.innerStorage.HeadObject(ctx, bucket, key)
 }
 
-func (os *OutboxStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.GetObject(bucket, key, startByte, endByte)
+	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *OutboxStorage) PutObject(bucket string, key string, reader io.Reader) error {
-	tx, err := os.db.Begin()
+func (os *OutboxStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -347,7 +349,7 @@ func (os *OutboxStorage) PutObject(bucket string, key string, reader io.Reader) 
 		tx.Rollback()
 		return err
 	}
-	err = os.storeStorageOutboxEntry(tx, repository.PutObjectStorageOperation, bucket, key, data)
+	err = os.storeStorageOutboxEntry(ctx, tx, repository.PutObjectStorageOperation, bucket, key, data)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -359,12 +361,12 @@ func (os *OutboxStorage) PutObject(bucket string, key string, reader io.Reader) 
 	return nil
 }
 
-func (os *OutboxStorage) DeleteObject(bucket string, key string) error {
-	tx, err := os.db.Begin()
+func (os *OutboxStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(tx, repository.DeleteObjectStorageOperation, bucket, key, []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, repository.DeleteObjectStorageOperation, bucket, key, []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -376,37 +378,37 @@ func (os *OutboxStorage) DeleteObject(bucket string, key string) error {
 	return nil
 }
 
-func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	return os.innerStorage.CreateMultipartUpload(bucket, key)
+	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key)
 }
 
-func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
-	if err != nil {
-		return nil, err
-	}
-
-	return os.innerStorage.UploadPart(bucket, key, uploadId, partNumber, data)
-}
-
-func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.CompleteMultipartUpload(bucket, key, uploadId)
+	return os.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data)
 }
 
-func (os *OutboxStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	err := os.waitForAllOutboxEntriesOfBucket(bucket)
+func (os *OutboxStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+}
+
+func (os *OutboxStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return err
 	}
 
-	return os.innerStorage.AbortMultipartUpload(bucket, key, uploadId)
+	return os.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
