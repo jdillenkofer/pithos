@@ -9,7 +9,8 @@ CREATE TABLE objects2 (
   upload_id TEXT,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
-  FOREIGN KEY(bucket_name) REFERENCES buckets(name)
+  FOREIGN KEY(bucket_name) REFERENCES buckets(name),
+  UNIQUE(bucket_name, key)
 );
 
 INSERT INTO objects2 SELECT * FROM objects;

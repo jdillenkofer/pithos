@@ -9,14 +9,14 @@ CREATE TABLE objects2 (
   upload_id TEXT,
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
-  FOREIGN KEY(bucket_name) REFERENCES buckets(name),
-  UNIQUE(bucket_name, key)
+  FOREIGN KEY(bucket_name) REFERENCES buckets(name)
 );
 
 INSERT INTO objects2 SELECT * FROM objects;
 DROP TABLE objects;
 
 ALTER TABLE objects2 RENAME TO objects;
-CREATE UNIQUE INDEX objects_completed_unique ON objects (bucket_name, key, upload_status) WHERE upload_status = 'COMPLETED';
+CREATE UNIQUE INDEX objects_completed_unique ON objects (bucket_name, key, upload_status)
+WHERE upload_status = 'COMPLETED';
 CREATE UNIQUE INDEX objects_pending_unique_upload_id ON objects (bucket_name, key, upload_status, upload_id)
 WHERE upload_status = 'PENDING';
