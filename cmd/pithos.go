@@ -14,6 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -59,6 +60,11 @@ func main() {
 		}
 	}
 
+	store, err = storage.NewPrometheusStorageMiddleware(store, prometheus.DefaultRegisterer)
+	if err != nil {
+		log.Fatal("Could not create prometheusStorageMiddleware")
+	}
+
 	err = store.Start(ctx)
 	if err != nil {
 		log.Fatal("Couldn't start storage")
@@ -75,13 +81,25 @@ func main() {
 		}
 	}()
 
-	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
+	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		Addr:        addr,
-		Handler:     server,
+		Handler:     handler,
 	}
+
+	metricHandler := server.SetupMetricServer()
+	metricsAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MetricPort())
+	httpMetricServer := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return ctx },
+		Addr:        metricsAddr,
+		Handler:     metricHandler,
+	}
+	go (func() {
+		log.Printf("Listening with metrics api on http://%v\n", metricsAddr)
+		httpMetricServer.ListenAndServe()
+	})()
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
 	log.Fatal(httpServer.ListenAndServe())

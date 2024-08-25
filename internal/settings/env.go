@@ -15,6 +15,7 @@ const regionEnvKey string = envKeyPrefix + "_REGION"
 const domainEnvKey string = envKeyPrefix + "_DOMAIN"
 const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey string = envKeyPrefix + "_PORT"
+const metricPortEnvKey string = envKeyPrefix + "_METRIC_PORT"
 const storagePathEnvKey string = envKeyPrefix + "_STORAGE_PATH"
 const useFilesystemBlobStoreEnvKey string = envKeyPrefix + "_USE_FILESYSTEM_BLOB_STORE"
 const wrapBlobStoreWithOutboxEnvKey string = envKeyPrefix + "_WRAP_BLOB_STORE_WITH_OUTBOX"
@@ -80,6 +81,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
 	port := getIntFromEnv(portEnvKey)
+	metricPort := getIntFromEnv(metricPortEnvKey)
 	storagePath := getStringFromEnv(storagePathEnvKey)
 	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey)
 	wrapBlobStoreWithOutbox := getBoolFromEnv(wrapBlobStoreWithOutboxEnvKey)
@@ -94,6 +96,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		domain:                  domain,
 		bindAddress:             bindAddress,
 		port:                    port,
+		metricPort:              metricPort,
 		storagePath:             storagePath,
 		useFilesystemBlobStore:  useFilesystemBlobStore,
 		wrapBlobStoreWithOutbox: wrapBlobStoreWithOutbox,
