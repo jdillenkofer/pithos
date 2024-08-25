@@ -91,6 +91,24 @@ func (sor *StorageOutboxEntryRepository) FindLastStorageOutboxEntry(tx *sql.Tx) 
 	return storageOutboxEntryEntity, nil
 }
 
+func (sor *StorageOutboxEntryRepository) FindFirstStorageOutboxEntryForBucket(tx *sql.Tx, bucket string) (*StorageOutboxEntryEntity, error) {
+	row := tx.QueryRow("SELECT id, operation, bucket, key, data, ordinal, created_at, updated_at FROM storage_outbox_entries WHERE bucket = ? ORDER BY ordinal ASC LIMIT 1", bucket)
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
+func (sor *StorageOutboxEntryRepository) FindLastStorageOutboxEntryForBucket(tx *sql.Tx, bucket string) (*StorageOutboxEntryEntity, error) {
+	row := tx.QueryRow("SELECT id, operation, bucket, key, data, ordinal, created_at, updated_at FROM storage_outbox_entries WHERE bucket = ? ORDER BY ordinal DESC LIMIT 1", bucket)
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
 func (sor *StorageOutboxEntryRepository) SaveStorageOutboxEntry(tx *sql.Tx, storageOutboxEntry *StorageOutboxEntryEntity) error {
 	if storageOutboxEntry.Id == nil {
 		id := ulid.Make()
