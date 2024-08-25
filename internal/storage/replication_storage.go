@@ -159,16 +159,16 @@ func (rs *ReplicationStorage) CreateMultipartUpload(bucket string, key string) (
 	return initiateMultipartUploadResult, nil
 }
 
-func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, reader io.Reader) error {
+func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*UploadPartResult, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	err = rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, byteReadSeekCloser)
+	uploadPartResult, err := rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, byteReadSeekCloser)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	rs.mapMutex.Lock()
@@ -178,14 +178,14 @@ func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId str
 	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		err := secondaryStorage.UploadPart(bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
+		_, err = secondaryStorage.UploadPart(bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return uploadPartResult, nil
 }
 
 func (rs *ReplicationStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {

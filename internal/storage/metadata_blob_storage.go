@@ -363,21 +363,21 @@ func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string)
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
 	tx, err := mbs.db.Begin()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	blobId, err := blob.GenerateBlobId()
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	err = mbs.metadataStore.UploadPart(tx, bucket, key, uploadId, partNumber, metadata.Blob{
 		Id:   putBlobResult.BlobId,
@@ -386,13 +386,15 @@ func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId s
 	})
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	err = tx.Commit()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &UploadPartResult{
+		ETag: putBlobResult.ETag,
+	}, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadata.CompleteMultipartUploadResult) CompleteMultipartUploadResult {
