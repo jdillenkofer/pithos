@@ -17,6 +17,7 @@ import (
 	"time"
 
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -68,6 +69,7 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 
 func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (s3Client *s3.Client, cleanup func()) {
 	ctx := context.Background()
+	registry := prometheus.NewRegistry()
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
@@ -80,6 +82,14 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		log.Fatalf("Couldn't open database: %s", err)
 	}
 	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
+
+	if !useReplication {
+		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
+		if err != nil {
+			log.Fatal("Could not create prometheusStorageMiddleware")
+		}
+	}
+
 	err = store.Start(ctx)
 	if err != nil {
 		log.Fatal("Couldn't start storage")
@@ -140,6 +150,11 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		store, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store)
 		if err != nil {
 			log.Fatal("Error during TracingStorageMiddleware: ", err)
+		}
+
+		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
+		if err != nil {
+			log.Fatal("Could not create prometheusStorageMiddleware")
 		}
 
 		err = store.Start(ctx)

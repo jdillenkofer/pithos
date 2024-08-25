@@ -9,6 +9,7 @@ const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
+const defaultMetricPort = 9001
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
 const defaultWrapBlobStoreWithOutbox = false
@@ -31,6 +32,7 @@ type Settings struct {
 	domain                  *string              `mergable:""`
 	bindAddress             *string              `mergable:""`
 	port                    *int                 `mergable:""`
+	metricPort              *int                 `mergable:""`
 	storagePath             *string              `mergable:""`
 	useFilesystemBlobStore  *bool                `mergable:""`
 	wrapBlobStoreWithOutbox *bool                `mergable:""`
@@ -66,6 +68,10 @@ func (s *Settings) BindAddress() string {
 
 func (s *Settings) Port() int {
 	return valueOrDefault(s.port, defaultPort)
+}
+
+func (s *Settings) MetricPort() int {
+	return valueOrDefault(s.metricPort, defaultMetricPort)
 }
 
 func (s *Settings) StoragePath() string {

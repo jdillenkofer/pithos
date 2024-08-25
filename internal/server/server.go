@@ -13,6 +13,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/middlewares"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 )
@@ -43,6 +44,13 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	if accessKeyId != "" && secretAccessKey != "" {
 		rootHandler = middlewares.MakeSignatureMiddleware(accessKeyId, secretAccessKey, region, rootHandler)
 	}
+	return rootHandler
+}
+
+func SetupMetricServer() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	var rootHandler http.Handler = mux
 	return rootHandler
 }
 
