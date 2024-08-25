@@ -26,24 +26,24 @@ func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, bl
 	}, nil
 }
 
-func (mbs *MetadataBlobStorage) Start() error {
-	err := mbs.metadataStore.Start()
+func (mbs *MetadataBlobStorage) Start(ctx context.Context) error {
+	err := mbs.metadataStore.Start(ctx)
 	if err != nil {
 		return err
 	}
-	err = mbs.blobStore.Start()
+	err = mbs.blobStore.Start(ctx)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (mbs *MetadataBlobStorage) Stop() error {
-	err := mbs.metadataStore.Stop()
+func (mbs *MetadataBlobStorage) Stop(ctx context.Context) error {
+	err := mbs.metadataStore.Stop(ctx)
 	if err != nil {
 		return err
 	}
-	err = mbs.blobStore.Stop()
+	err = mbs.blobStore.Stop(ctx)
 	if err != nil {
 		return err
 	}

@@ -59,8 +59,8 @@ var ErrNoSuchKey error = errors.New("NoSuchKey")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 
 type MetadataStore interface {
-	Start() error
-	Stop() error
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)

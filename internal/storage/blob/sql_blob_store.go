@@ -22,11 +22,11 @@ func NewSqlBlobStore() (*SqlBlobStore, error) {
 	}, nil
 }
 
-func (bs *SqlBlobStore) Start() error {
+func (bs *SqlBlobStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (bs *SqlBlobStore) Stop() error {
+func (bs *SqlBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 

@@ -25,13 +25,13 @@ func NewReplicationStorage(primaryStorage Storage, secondaryStorages ...Storage)
 	}, nil
 }
 
-func (rs *ReplicationStorage) Start() error {
-	err := rs.primaryStorage.Start()
+func (rs *ReplicationStorage) Start(ctx context.Context) error {
+	err := rs.primaryStorage.Start(ctx)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.Start()
+		err = secondaryStorage.Start(ctx)
 		if err != nil {
 			return err
 		}
@@ -39,13 +39,13 @@ func (rs *ReplicationStorage) Start() error {
 	return nil
 }
 
-func (rs *ReplicationStorage) Stop() error {
-	err := rs.primaryStorage.Stop()
+func (rs *ReplicationStorage) Stop(ctx context.Context) error {
+	err := rs.primaryStorage.Stop(ctx)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.Stop()
+		err = secondaryStorage.Stop(ctx)
 		if err != nil {
 			return err
 		}

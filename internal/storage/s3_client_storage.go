@@ -25,11 +25,11 @@ func NewS3ClientStorage(s3Client *s3.Client) (*S3ClientStorage, error) {
 	}, nil
 }
 
-func (rs *S3ClientStorage) Start() error {
+func (rs *S3ClientStorage) Start(ctx context.Context) error {
 	return nil
 }
 
-func (rs *S3ClientStorage) Stop() error {
+func (rs *S3ClientStorage) Stop(ctx context.Context) error {
 	return nil
 }
 

@@ -28,11 +28,11 @@ func NewSqlMetadataStore() (*SqlMetadataStore, error) {
 	}, nil
 }
 
-func (sms *SqlMetadataStore) Start() error {
+func (sms *SqlMetadataStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) Stop() error {
+func (sms *SqlMetadataStore) Stop(ctx context.Context) error {
 	return nil
 }
 

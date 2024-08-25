@@ -131,19 +131,19 @@ out:
 	os.outboxProcessingStopped.Done()
 }
 
-func (os *OutboxStorage) Start() error {
+func (os *OutboxStorage) Start(ctx context.Context) error {
 	os.outboxProcessingStopped.Add(1)
 	go os.processOutboxLoop()
-	return os.innerStorage.Start()
+	return os.innerStorage.Start(ctx)
 }
 
-func (os *OutboxStorage) Stop() error {
+func (os *OutboxStorage) Stop(ctx context.Context) error {
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
 		waitWithTimeout(&os.outboxProcessingStopped, 5*time.Second)
 		os.triggerChannelClosed = true
 	}
-	return os.innerStorage.Stop()
+	return os.innerStorage.Stop(ctx)
 }
 
 func (os *OutboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucket string, key string, data []byte) error {
