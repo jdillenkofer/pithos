@@ -53,8 +53,8 @@ var ErrBucketNotEmpty error = metadata.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadata.ErrNoSuchKey
 
 type Storage interface {
-	Start() error
-	Stop() error
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
 	CreateBucket(ctx context.Context, bucket string) error
 	DeleteBucket(ctx context.Context, bucket string) error
 	ListBuckets(ctx context.Context) ([]Bucket, error)

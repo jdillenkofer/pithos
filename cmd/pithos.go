@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
 	settings, err := settings.LoadSettings()
 	if err != nil {
 		log.Fatal("Error while loading settings: ", err)
@@ -30,7 +32,7 @@ func main() {
 
 	replication := settings.Replication()
 	if replication != nil {
-		cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
 
 		if err != nil {
 			log.Fatal("Couldn't create s3Client config")
@@ -57,13 +59,13 @@ func main() {
 		}
 	}
 
-	err = store.Start()
+	err = store.Start(ctx)
 	if err != nil {
 		log.Fatal("Couldn't start storage")
 	}
 
 	defer func() {
-		err := store.Stop()
+		err := store.Stop(ctx)
 		if err != nil {
 			log.Fatal("Couldn't stop storage")
 		}
@@ -75,7 +77,11 @@ func main() {
 
 	server := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
-	httpServer := &http.Server{Addr: addr, Handler: server}
+	httpServer := &http.Server{
+		BaseContext: func(net.Listener) context.Context { return ctx },
+		Addr:        addr,
+		Handler:     server,
+	}
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
 	log.Fatal(httpServer.ListenAndServe())

@@ -60,6 +60,7 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) (s3Client *s3.Client, cleanup func()) {
+	ctx := context.Background()
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
@@ -72,12 +73,12 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		log.Fatalf("Couldn't open database: %s", err)
 	}
 	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
-	err = store.Start()
+	err = store.Start(ctx)
 	if err != nil {
 		log.Fatal("Couldn't start storage")
 	}
 	closeStorage := func() {
-		err := store.Stop()
+		err := store.Stop(ctx)
 		if err != nil {
 			log.Fatal("Couldn't stop storage")
 		}
@@ -118,7 +119,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			log.Fatal("Could not create replicationStorage")
 		}
 
-		err = store.Start()
+		err = store.Start(ctx)
 		if err != nil {
 			log.Fatal("Couldn't start storage")
 		}
@@ -126,7 +127,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		closeStorage = func() {
 			originalTs.Close()
 			originalCloseStorage()
-			store.Stop()
+			store.Stop(ctx)
 			db2.Close()
 			err = os.RemoveAll(storagePath2)
 			if err != nil {

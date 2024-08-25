@@ -118,19 +118,19 @@ out:
 	obs.outboxProcessingStopped.Done()
 }
 
-func (obs *OutboxBlobStore) Start() error {
+func (obs *OutboxBlobStore) Start(ctx context.Context) error {
 	obs.outboxProcessingStopped.Add(1)
 	go obs.processOutboxLoop()
-	return obs.innerBlobStore.Start()
+	return obs.innerBlobStore.Start(ctx)
 }
 
-func (obs *OutboxBlobStore) Stop() error {
+func (obs *OutboxBlobStore) Stop(ctx context.Context) error {
 	if !obs.triggerChannelClosed {
 		close(obs.triggerChannel)
 		waitWithTimeout(&obs.outboxProcessingStopped, 5*time.Second)
 		obs.triggerChannelClosed = true
 	}
-	return obs.innerBlobStore.Stop()
+	return obs.innerBlobStore.Stop(ctx)
 }
 
 func (obs *OutboxBlobStore) storeBlobOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, blobId BlobId, content []byte) error {

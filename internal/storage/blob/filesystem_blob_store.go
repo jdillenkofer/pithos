@@ -39,11 +39,11 @@ func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
 	return bs, nil
 }
 
-func (bs *FilesystemBlobStore) Start() error {
+func (bs *FilesystemBlobStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (bs *FilesystemBlobStore) Stop() error {
+func (bs *FilesystemBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
