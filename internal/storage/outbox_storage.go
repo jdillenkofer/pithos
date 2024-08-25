@@ -204,7 +204,51 @@ func (os *OutboxStorage) DeleteBucket(bucket string) error {
 	return nil
 }
 
-func (os *OutboxStorage) flushOutboxEntries() error {
+func (os *OutboxStorage) waitForAllOutboxEntriesOfBucket(bucket string) error {
+	tx, err := os.db.Begin()
+	if err != nil {
+		return err
+	}
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(tx, bucket)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	if lastStorageOutboxEntry == nil {
+		return nil
+	}
+
+	lastOrdinal := lastStorageOutboxEntry.Ordinal
+
+	for {
+		tx, err := os.db.Begin()
+		if err != nil {
+			return err
+		}
+		storageOutboxEntry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(tx, bucket)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		err = tx.Commit()
+		if err != nil {
+			return err
+		}
+		if storageOutboxEntry == nil {
+			return nil
+		}
+		if storageOutboxEntry.Ordinal > lastOrdinal {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func (os *OutboxStorage) waitForAllOutboxEntries() error {
 	tx, err := os.db.Begin()
 	if err != nil {
 		return err
@@ -249,7 +293,7 @@ func (os *OutboxStorage) flushOutboxEntries() error {
 }
 
 func (os *OutboxStorage) ListBuckets() ([]Bucket, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntries()
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +302,7 @@ func (os *OutboxStorage) ListBuckets() ([]Bucket, error) {
 }
 
 func (os *OutboxStorage) HeadBucket(bucket string) (*Bucket, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +311,7 @@ func (os *OutboxStorage) HeadBucket(bucket string) (*Bucket, error) {
 }
 
 func (os *OutboxStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +320,7 @@ func (os *OutboxStorage) ListObjects(bucket string, prefix string, delimiter str
 }
 
 func (os *OutboxStorage) HeadObject(bucket string, key string) (*Object, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +329,7 @@ func (os *OutboxStorage) HeadObject(bucket string, key string) (*Object, error) 
 }
 
 func (os *OutboxStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +377,7 @@ func (os *OutboxStorage) DeleteObject(bucket string, key string) error {
 }
 
 func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +385,7 @@ func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*Init
 }
 
 func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return err
 	}
@@ -350,7 +394,7 @@ func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, 
 }
 
 func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +403,7 @@ func (os *OutboxStorage) CompleteMultipartUpload(bucket string, key string, uplo
 }
 
 func (os *OutboxStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	err := os.flushOutboxEntries()
+	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
 		return err
 	}
