@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -40,8 +41,8 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*BucketEntity, error) {
 	return &bucketEntity, nil
 }
 
-func (br *BucketRepository) FindAllBuckets(tx *sql.Tx) ([]BucketEntity, error) {
-	bucketRows, err := tx.Query("SELECT id, name, created_at, updated_at FROM buckets")
+func (br *BucketRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]BucketEntity, error) {
+	bucketRows, err := tx.QueryContext(ctx, "SELECT id, name, created_at, updated_at FROM buckets")
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +58,8 @@ func (br *BucketRepository) FindAllBuckets(tx *sql.Tx) ([]BucketEntity, error) {
 	return buckets, nil
 }
 
-func (br *BucketRepository) FindBucketByName(tx *sql.Tx, bucketName string) (*BucketEntity, error) {
-	bucketRows, err := tx.Query("SELECT id, name, created_at, updated_at FROM buckets WHERE name = ?", bucketName)
+func (br *BucketRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*BucketEntity, error) {
+	bucketRows, err := tx.QueryContext(ctx, "SELECT id, name, created_at, updated_at FROM buckets WHERE name = ?", bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -73,22 +74,22 @@ func (br *BucketRepository) FindBucketByName(tx *sql.Tx, bucketName string) (*Bu
 	return bucketEntity, nil
 }
 
-func (br *BucketRepository) SaveBucket(tx *sql.Tx, bucket *BucketEntity) error {
+func (br *BucketRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *BucketEntity) error {
 	if bucket.Id == nil {
 		id := ulid.Make()
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.Exec("INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)", bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, "INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)", bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?", bucket.Name, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, "UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?", bucket.Name, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 
-func (br *BucketRepository) ExistsBucketByName(tx *sql.Tx, bucketName string) (*bool, error) {
-	bucketRows, err := tx.Query("SELECT id FROM buckets WHERE name = ?", bucketName)
+func (br *BucketRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
+	bucketRows, err := tx.QueryContext(ctx, "SELECT id FROM buckets WHERE name = ?", bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func (br *BucketRepository) ExistsBucketByName(tx *sql.Tx, bucketName string) (*
 	return &exists, nil
 }
 
-func (br *BucketRepository) DeleteBucketByName(tx *sql.Tx, bucketName string) error {
-	_, err := tx.Exec("DELETE FROM buckets WHERE name = ?", bucketName)
+func (br *BucketRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM buckets WHERE name = ?", bucketName)
 	return err
 }

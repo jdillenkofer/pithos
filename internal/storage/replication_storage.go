@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"io"
 	"sync"
 
@@ -52,13 +53,13 @@ func (rs *ReplicationStorage) Stop() error {
 	return nil
 }
 
-func (rs *ReplicationStorage) CreateBucket(bucket string) error {
-	err := rs.primaryStorage.CreateBucket(bucket)
+func (rs *ReplicationStorage) CreateBucket(ctx context.Context, bucket string) error {
+	err := rs.primaryStorage.CreateBucket(ctx, bucket)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.CreateBucket(bucket)
+		err = secondaryStorage.CreateBucket(ctx, bucket)
 		if err != nil {
 			return err
 		}
@@ -66,13 +67,13 @@ func (rs *ReplicationStorage) CreateBucket(bucket string) error {
 	return nil
 }
 
-func (rs *ReplicationStorage) DeleteBucket(bucket string) error {
-	err := rs.primaryStorage.DeleteBucket(bucket)
+func (rs *ReplicationStorage) DeleteBucket(ctx context.Context, bucket string) error {
+	err := rs.primaryStorage.DeleteBucket(ctx, bucket)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteBucket(bucket)
+		err = secondaryStorage.DeleteBucket(ctx, bucket)
 		if err != nil {
 			return err
 		}
@@ -80,34 +81,34 @@ func (rs *ReplicationStorage) DeleteBucket(bucket string) error {
 	return nil
 }
 
-func (rs *ReplicationStorage) ListBuckets() ([]Bucket, error) {
-	return rs.primaryStorage.ListBuckets()
+func (rs *ReplicationStorage) ListBuckets(ctx context.Context) ([]Bucket, error) {
+	return rs.primaryStorage.ListBuckets(ctx)
 }
 
-func (rs *ReplicationStorage) HeadBucket(bucket string) (*Bucket, error) {
-	return rs.primaryStorage.HeadBucket(bucket)
+func (rs *ReplicationStorage) HeadBucket(ctx context.Context, bucket string) (*Bucket, error) {
+	return rs.primaryStorage.HeadBucket(ctx, bucket)
 }
 
-func (rs *ReplicationStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	return rs.primaryStorage.ListObjects(bucket, prefix, delimiter, startAfter, maxKeys)
+func (rs *ReplicationStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	return rs.primaryStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (rs *ReplicationStorage) HeadObject(bucket string, key string) (*Object, error) {
-	return rs.primaryStorage.HeadObject(bucket, key)
+func (rs *ReplicationStorage) HeadObject(ctx context.Context, bucket string, key string) (*Object, error) {
+	return rs.primaryStorage.HeadObject(ctx, bucket, key)
 }
 
-func (rs *ReplicationStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
-	return rs.primaryStorage.GetObject(bucket, key, startByte, endByte)
+func (rs *ReplicationStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+	return rs.primaryStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Reader) error {
+func (rs *ReplicationStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	err = rs.primaryStorage.PutObject(bucket, key, byteReadSeekCloser)
+	err = rs.primaryStorage.PutObject(ctx, bucket, key, byteReadSeekCloser)
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Rea
 		if err != nil {
 			return err
 		}
-		err = secondaryStorage.PutObject(bucket, key, byteReadSeekCloser)
+		err = secondaryStorage.PutObject(ctx, bucket, key, byteReadSeekCloser)
 		if err != nil {
 			return err
 		}
@@ -124,13 +125,13 @@ func (rs *ReplicationStorage) PutObject(bucket string, key string, reader io.Rea
 	return nil
 }
 
-func (rs *ReplicationStorage) DeleteObject(bucket string, key string) error {
-	err := rs.primaryStorage.DeleteObject(bucket, key)
+func (rs *ReplicationStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
+	err := rs.primaryStorage.DeleteObject(ctx, bucket, key)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObject(bucket, key)
+		err = secondaryStorage.DeleteObject(ctx, bucket, key)
 		if err != nil {
 			return err
 		}
@@ -138,14 +139,14 @@ func (rs *ReplicationStorage) DeleteObject(bucket string, key string) error {
 	return nil
 }
 
-func (rs *ReplicationStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(bucket, key)
+func (rs *ReplicationStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(ctx, bucket, key)
 	if err != nil {
 		return nil, err
 	}
 	var secondaryUploadIds []string = []string{}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(bucket, key)
+		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucket, key)
 		if err != nil {
 			return nil, err
 		}
@@ -159,14 +160,14 @@ func (rs *ReplicationStorage) CreateMultipartUpload(bucket string, key string) (
 	return initiateMultipartUploadResult, nil
 }
 
-func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*UploadPartResult, error) {
+func (rs *ReplicationStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*UploadPartResult, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	uploadPartResult, err := rs.primaryStorage.UploadPart(bucket, key, uploadId, partNumber, byteReadSeekCloser)
+	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, byteReadSeekCloser)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +181,7 @@ func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId str
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.UploadPart(bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
+		_, err = secondaryStorage.UploadPart(ctx, bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
 		if err != nil {
 			return nil, err
 		}
@@ -188,15 +189,15 @@ func (rs *ReplicationStorage) UploadPart(bucket string, key string, uploadId str
 	return uploadPartResult, nil
 }
 
-func (rs *ReplicationStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(bucket, key, uploadId)
+func (rs *ReplicationStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
 		return nil, err
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err := secondaryStorage.CompleteMultipartUpload(bucket, key, secondaryUploadIds[i])
+		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucket, key, secondaryUploadIds[i])
 		if err != nil {
 			return nil, err
 		}
@@ -206,15 +207,15 @@ func (rs *ReplicationStorage) CompleteMultipartUpload(bucket string, key string,
 	return completeMultipartUploadResult, nil
 }
 
-func (rs *ReplicationStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	err := rs.primaryStorage.AbortMultipartUpload(bucket, key, uploadId)
+func (rs *ReplicationStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
+	err := rs.primaryStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
 		return err
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	for i, secondaryStorage := range rs.secondaryStorages {
-		err := secondaryStorage.AbortMultipartUpload(bucket, key, secondaryUploadIds[i])
+		err := secondaryStorage.AbortMultipartUpload(ctx, bucket, key, secondaryUploadIds[i])
 		if err != nil {
 			return err
 		}

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -29,22 +30,22 @@ type ObjectEntity struct {
 	UpdatedAt    time.Time
 }
 
-func (or *ObjectRepository) SaveObject(tx *sql.Tx, object *ObjectEntity) error {
+func (or *ObjectRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *ObjectEntity) error {
 	if object.Id == nil {
 		id := ulid.Make()
 		object.Id = &id
 		object.CreatedAt = time.Now()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.Exec("INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", object.Id.String(), object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.ExecContext(ctx, "INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)", object.Id.String(), object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE objects SET bucket_name = ?, key = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?", object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.ExecContext(ctx, "UPDATE objects SET bucket_name = ?, key = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?", object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 
-func (or *ObjectRepository) ContainsBucketObjectsByBucketName(tx *sql.Tx, bucketName string) (*bool, error) {
-	objectRows, err := tx.Query("SELECT id FROM objects WHERE bucket_name = ?", bucketName)
+func (or *ObjectRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
+	objectRows, err := tx.QueryContext(ctx, "SELECT id FROM objects WHERE bucket_name = ?", bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +83,8 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*ObjectEntity, error) {
 	return &objectEntity, nil
 }
 
-func (or *ObjectRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]ObjectEntity, error) {
-	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC", bucketName, prefix, startAfter, UploadStatusCompleted)
+func (or *ObjectRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]ObjectEntity, error) {
+	objectRows, err := tx.QueryContext(ctx, "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC", bucketName, prefix, startAfter, UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +100,8 @@ func (or *ObjectRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 	return objects, nil
 }
 
-func (or *ObjectRepository) FindObjectByBucketNameAndKeyAndUploadId(tx *sql.Tx, bucketName string, key string, uploadId string) (*ObjectEntity, error) {
-	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?", bucketName, key, uploadId, UploadStatusPending)
+func (or *ObjectRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*ObjectEntity, error) {
+	objectRows, err := tx.QueryContext(ctx, "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?", bucketName, key, uploadId, UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +117,8 @@ func (or *ObjectRepository) FindObjectByBucketNameAndKeyAndUploadId(tx *sql.Tx, 
 	return nil, nil
 }
 
-func (or *ObjectRepository) FindObjectByBucketNameAndKey(tx *sql.Tx, bucketName string, key string) (*ObjectEntity, error) {
-	objectRows, err := tx.Query("SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?", bucketName, key, UploadStatusCompleted)
+func (or *ObjectRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*ObjectEntity, error) {
+	objectRows, err := tx.QueryContext(ctx, "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?", bucketName, key, UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +134,8 @@ func (or *ObjectRepository) FindObjectByBucketNameAndKey(tx *sql.Tx, bucketName 
 	return nil, nil
 }
 
-func (or *ObjectRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
-	keyCountRow := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_status = ?", bucketName, prefix, startAfter, UploadStatusCompleted)
+func (or *ObjectRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
+	keyCountRow := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_status = ?", bucketName, prefix, startAfter, UploadStatusCompleted)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {
@@ -143,7 +144,7 @@ func (or *ObjectRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(tx *s
 	return &keyCount, nil
 }
 
-func (or *ObjectRepository) DeleteObjectById(tx *sql.Tx, objectId ulid.ULID) error {
-	_, err := tx.Exec("DELETE FROM objects WHERE id = ?", objectId.String())
+func (or *ObjectRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM objects WHERE id = ?", objectId.String())
 	return err
 }

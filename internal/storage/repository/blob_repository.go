@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -52,8 +53,8 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
 	return &blobEntity, nil
 }
 
-func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(tx *sql.Tx, objectId ulid.ULID) ([]BlobEntity, error) {
-	blobRows, err := tx.Query("SELECT id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId.String())
+func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]BlobEntity, error) {
+	blobRows, err := tx.QueryContext(ctx, "SELECT id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId.String())
 	if err != nil {
 		return nil, err
 	}
@@ -69,22 +70,22 @@ func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(tx *sql.Tx
 	return blobs, nil
 }
 
-func (br *BlobRepository) SaveBlob(tx *sql.Tx, blob *BlobEntity) error {
+func (br *BlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *BlobEntity) error {
 	if blob.Id == nil {
 		id := ulid.Make()
 		blob.Id = &id
 		blob.CreatedAt = time.Now()
 		blob.UpdatedAt = blob.CreatedAt
-		_, err := tx.Exec("INSERT INTO blobs (id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
+		_, err := tx.ExecContext(ctx, "INSERT INTO blobs (id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
 		return err
 	}
 
 	blob.UpdatedAt = time.Now()
-	_, err := tx.Exec("UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?", blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
+	_, err := tx.ExecContext(ctx, "UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?", blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
 	return err
 }
 
-func (br *BlobRepository) DeleteBlobsByObjectId(tx *sql.Tx, objectId ulid.ULID) error {
-	_, err := tx.Exec("DELETE FROM blobs WHERE object_id = ?", objectId.String())
+func (br *BlobRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, "DELETE FROM blobs WHERE object_id = ?", objectId.String())
 	return err
 }

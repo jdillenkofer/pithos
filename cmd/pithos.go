@@ -30,7 +30,7 @@ func main() {
 
 	replication := settings.Replication()
 	if replication != nil {
-		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
+		cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
 
 		if err != nil {
 			log.Fatal("Couldn't create s3Client config")

@@ -33,8 +33,8 @@ func (rs *S3ClientStorage) Stop() error {
 	return nil
 }
 
-func (rs *S3ClientStorage) CreateBucket(bucket string) error {
-	_, err := rs.s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+func (rs *S3ClientStorage) CreateBucket(ctx context.Context, bucket string) error {
+	_, err := rs.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	var bucketAlreadyExistsError *types.BucketAlreadyExists
@@ -47,8 +47,8 @@ func (rs *S3ClientStorage) CreateBucket(bucket string) error {
 	return nil
 }
 
-func (rs *S3ClientStorage) DeleteBucket(bucket string) error {
-	_, err := rs.s3Client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+func (rs *S3ClientStorage) DeleteBucket(ctx context.Context, bucket string) error {
+	_, err := rs.s3Client.DeleteBucket(ctx, &s3.DeleteBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	var ae smithy.APIError
@@ -64,8 +64,8 @@ func (rs *S3ClientStorage) DeleteBucket(bucket string) error {
 	return nil
 }
 
-func (rs *S3ClientStorage) ListBuckets() ([]Bucket, error) {
-	listBucketsResult, err := rs.s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{})
+func (rs *S3ClientStorage) ListBuckets(ctx context.Context) ([]Bucket, error) {
+	listBucketsResult, err := rs.s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
 		return nil, err
 	}
@@ -78,8 +78,8 @@ func (rs *S3ClientStorage) ListBuckets() ([]Bucket, error) {
 	return buckets, nil
 }
 
-func (rs *S3ClientStorage) HeadBucket(bucket string) (*Bucket, error) {
-	_, err := rs.s3Client.HeadBucket(context.TODO(), &s3.HeadBucketInput{
+func (rs *S3ClientStorage) HeadBucket(ctx context.Context, bucket string) (*Bucket, error) {
+	_, err := rs.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	var notFoundError *types.NotFound
@@ -95,8 +95,8 @@ func (rs *S3ClientStorage) HeadBucket(bucket string) (*Bucket, error) {
 	}, nil
 }
 
-func (rs *S3ClientStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	listObjectsResult, err := rs.s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+func (rs *S3ClientStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	listObjectsResult, err := rs.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:     aws.String(bucket),
 		Prefix:     aws.String(prefix),
 		Delimiter:  aws.String(delimiter),
@@ -128,8 +128,8 @@ func (rs *S3ClientStorage) ListObjects(bucket string, prefix string, delimiter s
 	}, nil
 }
 
-func (rs *S3ClientStorage) HeadObject(bucket string, key string) (*Object, error) {
-	headObjectResult, err := rs.s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+func (rs *S3ClientStorage) HeadObject(ctx context.Context, bucket string, key string) (*Object, error) {
+	headObjectResult, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -148,7 +148,7 @@ func (rs *S3ClientStorage) HeadObject(bucket string, key string) (*Object, error
 	}, nil
 }
 
-func (rs *S3ClientStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (rs *S3ClientStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
 	var byteRange *string = nil
 	if startByte != nil && endByte != nil {
 		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
@@ -160,7 +160,7 @@ func (rs *S3ClientStorage) GetObject(bucket string, key string, startByte *int64
 		r := fmt.Sprintf("bytes=-%d", *endByte-1)
 		byteRange = &r
 	}
-	getObjectResult, err := rs.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+	getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Range:  byteRange,
@@ -180,12 +180,12 @@ func (rs *S3ClientStorage) GetObject(bucket string, key string, startByte *int64
 	return ioutils.NewByteReadSeekCloser(data), nil
 }
 
-func (rs *S3ClientStorage) PutObject(bucket string, key string, reader io.Reader) error {
+func (rs *S3ClientStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
-	_, err = rs.s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err = rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   ioutils.NewByteReadSeekCloser(data),
@@ -198,8 +198,8 @@ func (rs *S3ClientStorage) PutObject(bucket string, key string, reader io.Reader
 	return err
 }
 
-func (rs *S3ClientStorage) DeleteObject(bucket string, key string) error {
-	_, err := rs.s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+func (rs *S3ClientStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
+	_, err := rs.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -213,8 +213,8 @@ func (rs *S3ClientStorage) DeleteObject(bucket string, key string) error {
 	return nil
 }
 
-func (rs *S3ClientStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+func (rs *S3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
@@ -230,8 +230,8 @@ func (rs *S3ClientStorage) CreateMultipartUpload(bucket string, key string) (*In
 	}, nil
 }
 
-func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
-	uploadPartResult, err := rs.s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+func (rs *S3ClientStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
+	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucket),
 		Key:        aws.String(key),
 		UploadId:   aws.String(uploadId),
@@ -250,8 +250,8 @@ func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string
 	}, nil
 }
 
-func (rs *S3ClientStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+func (rs *S3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucket),
 		Key:      aws.String(key),
 		UploadId: aws.String(uploadId),
@@ -273,8 +273,8 @@ func (rs *S3ClientStorage) CompleteMultipartUpload(bucket string, key string, up
 	}, nil
 }
 
-func (rs *S3ClientStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	_, err := rs.s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
+func (rs *S3ClientStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
+	_, err := rs.s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(bucket),
 		Key:      aws.String(key),
 		UploadId: aws.String(uploadId),

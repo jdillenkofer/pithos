@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"time"
@@ -49,13 +50,13 @@ func (mbs *MetadataBlobStorage) Stop() error {
 	return nil
 }
 
-func (mbs *MetadataBlobStorage) CreateBucket(bucket string) error {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) CreateBucket(ctx context.Context, bucket string) error {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
-	err = mbs.metadataStore.CreateBucket(tx, bucket)
+	err = mbs.metadataStore.CreateBucket(ctx, tx, bucket)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -69,13 +70,13 @@ func (mbs *MetadataBlobStorage) CreateBucket(bucket string) error {
 	return nil
 }
 
-func (mbs *MetadataBlobStorage) DeleteBucket(bucket string) error {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) DeleteBucket(ctx context.Context, bucket string) error {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
-	err = mbs.metadataStore.DeleteBucket(tx, bucket)
+	err = mbs.metadataStore.DeleteBucket(ctx, tx, bucket)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -96,13 +97,13 @@ func convertBucket(mBucket metadata.Bucket) Bucket {
 	}
 }
 
-func (mbs *MetadataBlobStorage) ListBuckets() ([]Bucket, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) ListBuckets(ctx context.Context) ([]Bucket, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	mBuckets, err := mbs.metadataStore.ListBuckets(tx)
+	mBuckets, err := mbs.metadataStore.ListBuckets(ctx, tx)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -116,13 +117,13 @@ func (mbs *MetadataBlobStorage) ListBuckets() ([]Bucket, error) {
 	return sliceutils.Map(convertBucket, mBuckets), nil
 }
 
-func (mbs *MetadataBlobStorage) HeadBucket(bucket string) (*Bucket, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) HeadBucket(ctx context.Context, bucket string) (*Bucket, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	mBucket, err := mbs.metadataStore.HeadBucket(tx, bucket)
+	mBucket, err := mbs.metadataStore.HeadBucket(ctx, tx, bucket)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -154,13 +155,13 @@ func convertListBucketResult(mListBucketResult metadata.ListBucketResult) ListBu
 	}
 }
 
-func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	mListBucketResult, err := mbs.metadataStore.ListObjects(tx, bucket, prefix, delimiter, startAfter, maxKeys)
+	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx, bucket, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -175,13 +176,13 @@ func (mbs *MetadataBlobStorage) ListObjects(bucket string, prefix string, delimi
 	return &listBucketResult, nil
 }
 
-func (mbs *MetadataBlobStorage) HeadObject(bucket string, key string) (*Object, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) HeadObject(ctx context.Context, bucket string, key string) (*Object, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	mObject, err := mbs.metadataStore.HeadObject(tx, bucket, key)
+	mObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucket, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -196,13 +197,13 @@ func (mbs *MetadataBlobStorage) HeadObject(bucket string, key string) (*Object, 
 	return &o, err
 }
 
-func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	object, err := mbs.metadataStore.HeadObject(tx, bucket, key)
+	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucket, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -210,7 +211,7 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 
 	blobReaders := []io.ReadSeekCloser{}
 	for _, blob := range object.Blobs {
-		blobReader, err := mbs.blobStore.GetBlob(tx, blob.Id)
+		blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -241,22 +242,22 @@ func (mbs *MetadataBlobStorage) GetObject(bucket string, key string, startByte *
 	return reader, nil
 }
 
-func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.Reader) error {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
 	// if we already have such an object,
 	// remove all previous blobs
-	previousObject, err := mbs.metadataStore.HeadObject(tx, bucket, key)
+	previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucket, key)
 	if err != nil && err != ErrNoSuchKey {
 		tx.Rollback()
 		return err
 	}
 	if previousObject != nil {
 		for _, blob := range previousObject.Blobs {
-			err = mbs.blobStore.DeleteBlob(tx, blob.Id)
+			err = mbs.blobStore.DeleteBlob(ctx, tx, blob.Id)
 			if err != nil {
 				tx.Rollback()
 				return err
@@ -270,7 +271,7 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		return err
 	}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, reader)
+	putBlobResult, err := mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -290,7 +291,7 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 		},
 	}
 
-	err = mbs.metadataStore.PutObject(tx, bucket, &object)
+	err = mbs.metadataStore.PutObject(ctx, tx, bucket, &object)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -304,27 +305,27 @@ func (mbs *MetadataBlobStorage) PutObject(bucket string, key string, reader io.R
 	return nil
 }
 
-func (mbs *MetadataBlobStorage) DeleteObject(bucket string, key string) error {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
-	object, err := mbs.metadataStore.HeadObject(tx, bucket, key)
+	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucket, key)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
 	for _, blob := range object.Blobs {
-		err = mbs.blobStore.DeleteBlob(tx, blob.Id)
+		err = mbs.blobStore.DeleteBlob(ctx, tx, blob.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
 
-	err = mbs.metadataStore.DeleteObject(tx, bucket, key)
+	err = mbs.metadataStore.DeleteObject(ctx, tx, bucket, key)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -344,13 +345,13 @@ func convertInitiateMultipartUploadResult(result metadata.InitiateMultipartUploa
 	}
 }
 
-func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string) (*InitiateMultipartUploadResult, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*InitiateMultipartUploadResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CreateMultipartUpload(tx, bucket, key)
+	result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx, bucket, key)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -363,8 +364,8 @@ func (mbs *MetadataBlobStorage) CreateMultipartUpload(bucket string, key string)
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -375,11 +376,11 @@ func (mbs *MetadataBlobStorage) UploadPart(bucket string, key string, uploadId s
 		return nil, err
 	}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(tx, *blobId, data)
+	putBlobResult, err := mbs.blobStore.PutBlob(ctx, tx, *blobId, data)
 	if err != nil {
 		return nil, err
 	}
-	err = mbs.metadataStore.UploadPart(tx, bucket, key, uploadId, partNumber, metadata.Blob{
+	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadata.Blob{
 		Id:   putBlobResult.BlobId,
 		ETag: putBlobResult.ETag,
 		Size: putBlobResult.Size,
@@ -408,20 +409,20 @@ func convertCompleteMultipartUploadResult(result metadata.CompleteMultipartUploa
 	}
 }
 
-func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CompleteMultipartUpload(tx, bucket, key, uploadId)
+	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucket, key, uploadId)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 	deletedBlobs := result.DeletedBlobs
 	for _, deletedBlob := range deletedBlobs {
-		err = mbs.blobStore.DeleteBlob(tx, deletedBlob.Id)
+		err = mbs.blobStore.DeleteBlob(ctx, tx, deletedBlob.Id)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -435,20 +436,20 @@ func (mbs *MetadataBlobStorage) CompleteMultipartUpload(bucket string, key strin
 	return &completeMultipartUploadResult, nil
 }
 
-func (mbs *MetadataBlobStorage) AbortMultipartUpload(bucket string, key string, uploadId string) error {
-	tx, err := mbs.db.Begin()
+func (mbs *MetadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
-	abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(tx, bucket, key, uploadId)
+	abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx, bucket, key, uploadId)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	deletedBlobs := abortMultipartUploadResult.DeletedBlobs
 	for _, deletedBlob := range deletedBlobs {
-		err = mbs.blobStore.DeleteBlob(tx, deletedBlob.Id)
+		err = mbs.blobStore.DeleteBlob(ctx, tx, deletedBlob.Id)
 		if err != nil {
 			tx.Rollback()
 			return err
