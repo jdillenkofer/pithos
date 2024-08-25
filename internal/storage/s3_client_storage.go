@@ -230,8 +230,8 @@ func (rs *S3ClientStorage) CreateMultipartUpload(bucket string, key string) (*In
 	}, nil
 }
 
-func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
-	_, err := rs.s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
+	uploadPartResult, err := rs.s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
 		Bucket:     aws.String(bucket),
 		Key:        aws.String(key),
 		UploadId:   aws.String(uploadId),
@@ -240,12 +240,14 @@ func (rs *S3ClientStorage) UploadPart(bucket string, key string, uploadId string
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
-		return ErrNoSuchBucket
+		return nil, ErrNoSuchBucket
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &UploadPartResult{
+		ETag: *uploadPartResult.ETag,
+	}, nil
 }
 
 func (rs *S3ClientStorage) CompleteMultipartUpload(bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {

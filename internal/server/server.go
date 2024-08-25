@@ -571,11 +571,12 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	err = s.storage.UploadPart(bucket, key, uploadId, partNumberInt32, r.Body)
+	uploadPartResult, err := s.storage.UploadPart(bucket, key, uploadId, partNumberInt32, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
+	w.Header().Add(etagHeader, uploadPartResult.ETag)
 	w.WriteHeader(200)
 }
 

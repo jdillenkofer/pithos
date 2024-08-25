@@ -384,10 +384,10 @@ func (os *OutboxStorage) CreateMultipartUpload(bucket string, key string) (*Init
 	return os.innerStorage.CreateMultipartUpload(bucket, key)
 }
 
-func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) error {
+func (os *OutboxStorage) UploadPart(bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(bucket)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	return os.innerStorage.UploadPart(bucket, key, uploadId, partNumber, data)
