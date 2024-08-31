@@ -3,6 +3,9 @@ package storage
 import (
 	"context"
 	"io"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -11,6 +14,9 @@ type PrometheusStorageMiddleware struct {
 	registerer              prometheus.Registerer
 	failedApiOpsCounter     *prometheus.CounterVec
 	successfulApiOpsCounter *prometheus.CounterVec
+	totalSizeByBucket       *prometheus.GaugeVec
+	metricsMeasuringStopped sync.WaitGroup
+	stopMetricsMeasuring    atomic.Bool
 	innerStorage            Storage
 }
 
@@ -35,17 +41,84 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		[]string{"type"},
 	)
 
+	totalSizeByBucket := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "pithos",
+			Subsystem: "storage",
+			Name:      "pithos_total_size",
+			Help:      "Total size by bucket",
+		},
+		[]string{"bucket"},
+	)
+
 	return &PrometheusStorageMiddleware{
 		registerer:              registerer,
 		failedApiOpsCounter:     failedApiOpsCounter,
 		successfulApiOpsCounter: successfulApiOpsCounter,
+		totalSizeByBucket:       totalSizeByBucket,
+		stopMetricsMeasuring:    atomic.Bool{},
 		innerStorage:            innerStorage,
 	}, nil
+}
+
+func (psm *PrometheusStorageMiddleware) measureMetrics(ctx context.Context) {
+	buckets, err := psm.innerStorage.ListBuckets(ctx)
+	if err != nil {
+		return
+	}
+	for _, bucket := range buckets {
+		totalSize, err := psm.getTotalSizeByBucket(ctx, bucket)
+		if err != nil {
+			return
+		}
+		psm.totalSizeByBucket.With(prometheus.Labels{"bucket": bucket.Name}).Set(float64(*totalSize))
+	}
+}
+
+func (psm *PrometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context, bucket Bucket) (*int64, error) {
+	var totalSize int64 = 0
+	var startAfter string = ""
+	truncated := true
+
+	for truncated {
+		listBucketResult, err := psm.innerStorage.ListObjects(ctx, bucket.Name, "", "", startAfter, 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, object := range listBucketResult.Objects {
+			totalSize += object.Size
+		}
+		truncated = listBucketResult.IsTruncated
+		if len(listBucketResult.Objects) > 0 {
+			startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key
+		}
+	}
+	return &totalSize, nil
+}
+
+func (psm *PrometheusStorageMiddleware) measureMetricsLoop() {
+	ctx := context.Background()
+out:
+	for {
+		psm.measureMetrics(ctx)
+		for range 30 * 4 {
+			time.Sleep(250 * time.Millisecond)
+			if psm.stopMetricsMeasuring.Load() {
+				break out
+			}
+		}
+	}
+	psm.metricsMeasuringStopped.Done()
 }
 
 func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
 	psm.registerer.MustRegister(psm.failedApiOpsCounter)
 	psm.registerer.MustRegister(psm.successfulApiOpsCounter)
+	psm.registerer.MustRegister(psm.totalSizeByBucket)
+
+	psm.metricsMeasuringStopped.Add(1)
+	go psm.measureMetricsLoop()
+
 	err := psm.innerStorage.Start(ctx)
 	if err != nil {
 		return err
@@ -54,8 +127,15 @@ func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
 }
 
 func (psm *PrometheusStorageMiddleware) Stop(ctx context.Context) error {
+	psm.registerer.Unregister(psm.totalSizeByBucket)
 	psm.registerer.Unregister(psm.successfulApiOpsCounter)
 	psm.registerer.Unregister(psm.failedApiOpsCounter)
+
+	if !psm.stopMetricsMeasuring.Load() {
+		psm.stopMetricsMeasuring.Store(true)
+		waitWithTimeout(&psm.metricsMeasuringStopped, 5*time.Second)
+	}
+
 	err := psm.innerStorage.Stop(ctx)
 	if err != nil {
 		return err
