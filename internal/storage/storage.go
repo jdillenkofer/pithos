@@ -71,9 +71,14 @@ type Storage interface {
 }
 
 func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
+	var metadataStore metadata.MetadataStore
 	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
+	}
+	metadataStore, err = metadata.NewTracingMetadataStoreMiddleware("SqlMetadataStore", metadataStore)
+	if err != nil {
+		log.Fatal("Error during TracingMetadataStoreMiddleware: ", err)
 	}
 	var blobStore blob.BlobStore
 	if useFilesystemBlobStore {
@@ -81,10 +86,18 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		if err != nil {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
 		}
+		blobStore, err = blob.NewTracingBlobStoreMiddleware("FilesystemBlobStore", blobStore)
+		if err != nil {
+			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
+		}
 	} else {
 		blobStore, err = blob.NewSqlBlobStore()
 		if err != nil {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
+		}
+		blobStore, err = blob.NewTracingBlobStoreMiddleware("SqlBlobStore", blobStore)
+		if err != nil {
+			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
 		}
 	}
 	if wrapBlobStoreWithOutbox {
@@ -92,11 +105,21 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		if err != nil {
 			log.Fatal("Error during NewOutboxBlobStore: ", err)
 		}
+		blobStore, err = blob.NewTracingBlobStoreMiddleware("OutboxBlobStore", blobStore)
+		if err != nil {
+			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
+		}
 	}
-	storage, err := NewMetadataBlobStorage(db, metadataStore, blobStore)
+	var store Storage
+	store, err = NewMetadataBlobStorage(db, metadataStore, blobStore)
 	if err != nil {
 		log.Fatal("Error during NewMetadataBlobStorage: ", err)
 	}
 
-	return storage
+	store, err = NewTracingStorageMiddleware("MetadataBlobStorage", store)
+	if err != nil {
+		log.Fatal("Error during TracingStorageMiddleware: ", err)
+	}
+
+	return store
 }

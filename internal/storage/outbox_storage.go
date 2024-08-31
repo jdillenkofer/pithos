@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"io"
 	"log"
+	"runtime/trace"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 }
 
 func (os *OutboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
+	defer trace.StartRegion(ctx, "OutboxStorage.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -116,6 +118,8 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 
 func (os *OutboxStorage) processOutboxLoop() {
 	ctx := context.Background()
+	ctx, task := trace.NewTask(ctx, "OutboxStorage.processOutboxLoop()")
+	defer task.End()
 out:
 	for {
 		select {
