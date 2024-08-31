@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"io"
 	"log"
+	"runtime/trace"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore,
 }
 
 func (obs *OutboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
+	defer trace.StartRegion(ctx, "OutboxBlobStore.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -103,6 +105,8 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 
 func (obs *OutboxBlobStore) processOutboxLoop() {
 	ctx := context.Background()
+	ctx, task := trace.NewTask(ctx, "OutboxBlobStore.processOutboxLoop()")
+	defer task.End()
 out:
 	for {
 		select {

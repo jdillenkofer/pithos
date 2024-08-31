@@ -104,19 +104,35 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, wrapBlobStoreWithOutbox)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
-		s3ClientStorage, err := storage.NewS3ClientStorage(s3Client)
+		var s3ClientStorage storage.Storage
+		s3ClientStorage, err = storage.NewS3ClientStorage(s3Client)
 		if err != nil {
 			log.Fatal("Could not create s3ClientStorage")
 		}
+		s3ClientStorage, err = storage.NewTracingStorageMiddleware("S3ClientStorage", s3ClientStorage)
+		if err != nil {
+			log.Fatal("Error during TracingStorageMiddleware: ", err)
+		}
 
-		outboxStorage, err := storage.NewOutboxStorage(db2, s3ClientStorage)
+		var outboxStorage storage.Storage
+		outboxStorage, err = storage.NewOutboxStorage(db2, s3ClientStorage)
 		if err != nil {
 			log.Fatal("Could not create outboxStorage")
+		}
+
+		outboxStorage, err = storage.NewTracingStorageMiddleware("OutboxStorage", outboxStorage)
+		if err != nil {
+			log.Fatal("Error during TracingStorageMiddleware: ", err)
 		}
 
 		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
 		if err != nil {
 			log.Fatal("Could not create replicationStorage")
+		}
+
+		store, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store)
+		if err != nil {
+			log.Fatal("Error during TracingStorageMiddleware: ", err)
 		}
 
 		err = store.Start(ctx)

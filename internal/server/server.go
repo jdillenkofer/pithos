@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/trace"
 	"strconv"
 	"strings"
 	"time"
@@ -182,7 +183,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.listBucketHandler()")
+	defer task.End()
 	log.Println("Listing Buckets")
 	buckets, err := s.storage.ListBuckets(ctx)
 	if err != nil {
@@ -209,7 +211,8 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.headBucketHandler()")
+	defer task.End()
 	bucketName := r.PathValue(bucketPath)
 	log.Printf("Head bucket %s\n", bucketName)
 	_, err := s.storage.HeadBucket(ctx, bucketName)
@@ -221,7 +224,8 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsHandler()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	query := r.URL.Query()
 	prefix := query.Get(prefixQuery)
@@ -271,7 +275,8 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.createBucketHandler()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	log.Printf("Creating bucket %s\n", bucket)
 	err := s.storage.CreateBucket(ctx, bucket)
@@ -284,7 +289,8 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.deleteBucketHandler()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	log.Printf("Deleting bucket %s\n", bucket)
 	err := s.storage.DeleteBucket(ctx, bucket)
@@ -296,7 +302,8 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.headObjectHandler()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
@@ -384,7 +391,8 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.getObjectHandler()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	rangeHeaderValue := r.Header.Get(rangeHeader)
@@ -491,7 +499,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.createMultipartUpload()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
@@ -513,7 +522,8 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.completeMultipartUpload()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
@@ -560,7 +570,8 @@ func (s *Server) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.uploadPart()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
@@ -591,7 +602,8 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.putObject()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 
@@ -622,7 +634,8 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.abortMultipartUpload()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
@@ -637,7 +650,8 @@ func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, task := trace.NewTask(r.Context(), "Server.deleteObject()")
+	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
