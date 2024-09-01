@@ -7,17 +7,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type PrometheusStorageMiddleware struct {
-	registerer              prometheus.Registerer
-	failedApiOpsCounter     *prometheus.CounterVec
-	successfulApiOpsCounter *prometheus.CounterVec
-	totalSizeByBucket       *prometheus.GaugeVec
-	metricsMeasuringStopped sync.WaitGroup
-	stopMetricsMeasuring    atomic.Bool
-	innerStorage            Storage
+	registerer                   prometheus.Registerer
+	failedApiOpsCounter          *prometheus.CounterVec
+	successfulApiOpsCounter      *prometheus.CounterVec
+	totalSizeByBucket            *prometheus.GaugeVec
+	totalBytesUploadedByBucket   *prometheus.CounterVec
+	totalBytesDownloadedByBucket *prometheus.CounterVec
+	metricsMeasuringStopped      sync.WaitGroup
+	stopMetricsMeasuring         atomic.Bool
+	innerStorage                 Storage
 }
 
 func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.Registerer) (*PrometheusStorageMiddleware, error) {
@@ -51,13 +54,35 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		[]string{"bucket"},
 	)
 
+	totalBytesUploadedByBucket := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "storage",
+			Name:      "pithos_bytes_uploaded_total",
+			Help:      "Total bytes uploaded by bucket",
+		},
+		[]string{"bucket"},
+	)
+
+	totalBytesDownloadedByBucket := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "storage",
+			Name:      "pithos_bytes_downloaded_total",
+			Help:      "Total bytes downloaded by bucket",
+		},
+		[]string{"bucket"},
+	)
+
 	return &PrometheusStorageMiddleware{
-		registerer:              registerer,
-		failedApiOpsCounter:     failedApiOpsCounter,
-		successfulApiOpsCounter: successfulApiOpsCounter,
-		totalSizeByBucket:       totalSizeByBucket,
-		stopMetricsMeasuring:    atomic.Bool{},
-		innerStorage:            innerStorage,
+		registerer:                   registerer,
+		failedApiOpsCounter:          failedApiOpsCounter,
+		successfulApiOpsCounter:      successfulApiOpsCounter,
+		totalSizeByBucket:            totalSizeByBucket,
+		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
+		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
+		stopMetricsMeasuring:         atomic.Bool{},
+		innerStorage:                 innerStorage,
 	}, nil
 }
 
@@ -115,6 +140,8 @@ func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
 	psm.registerer.MustRegister(psm.failedApiOpsCounter)
 	psm.registerer.MustRegister(psm.successfulApiOpsCounter)
 	psm.registerer.MustRegister(psm.totalSizeByBucket)
+	psm.registerer.MustRegister(psm.totalBytesUploadedByBucket)
+	psm.registerer.MustRegister(psm.totalBytesDownloadedByBucket)
 
 	psm.metricsMeasuringStopped.Add(1)
 	go psm.measureMetricsLoop()
@@ -127,6 +154,8 @@ func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
 }
 
 func (psm *PrometheusStorageMiddleware) Stop(ctx context.Context) error {
+	psm.registerer.Unregister(psm.totalBytesDownloadedByBucket)
+	psm.registerer.Unregister(psm.totalBytesUploadedByBucket)
 	psm.registerer.Unregister(psm.totalSizeByBucket)
 	psm.registerer.Unregister(psm.successfulApiOpsCounter)
 	psm.registerer.Unregister(psm.failedApiOpsCounter)
@@ -223,12 +252,23 @@ func (psm *PrometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 		return nil, err
 	}
 
+	bytesDownloaded := 0
+	reader = ioutils.NewStatsReadSeekCloser(reader, func(n int) {
+		bytesDownloaded += n
+	})
+
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
+	psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesDownloaded))
 
 	return reader, nil
 }
 
 func (psm *PrometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+	bytesUploaded := 0
+	reader = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
+		bytesUploaded += n
+	})
+
 	err := psm.innerStorage.PutObject(ctx, bucket, key, reader)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
@@ -236,6 +276,7 @@ func (psm *PrometheusStorageMiddleware) PutObject(ctx context.Context, bucket st
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
+	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
 
 	return nil
 }
@@ -265,6 +306,11 @@ func (psm *PrometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 }
 
 func (psm *PrometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
+	bytesUploaded := 0
+	data = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(data), func(n int) {
+		bytesUploaded += n
+	})
+
 	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
@@ -272,6 +318,7 @@ func (psm *PrometheusStorageMiddleware) UploadPart(ctx context.Context, bucket s
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
+	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
 
 	return uploadPartResult, nil
 }
