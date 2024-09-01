@@ -252,21 +252,21 @@ func (psm *PrometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 		return nil, err
 	}
 
-	bytesDownloaded := 0
+	var bytesDownloaded atomic.Int64 = atomic.Int64{}
 	reader = ioutils.NewStatsReadSeekCloser(reader, func(n int) {
-		bytesDownloaded += n
+		bytesDownloaded.Add(int64(n))
 	})
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
-	psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesDownloaded))
+	psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesDownloaded.Load()))
 
 	return reader, nil
 }
 
 func (psm *PrometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
-	bytesUploaded := 0
+	var bytesUploaded atomic.Int64 = atomic.Int64{}
 	reader = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
-		bytesUploaded += n
+		bytesUploaded.Add(int64(n))
 	})
 
 	err := psm.innerStorage.PutObject(ctx, bucket, key, reader)
@@ -276,7 +276,7 @@ func (psm *PrometheusStorageMiddleware) PutObject(ctx context.Context, bucket st
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
-	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
+	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded.Load()))
 
 	return nil
 }
@@ -306,9 +306,9 @@ func (psm *PrometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 }
 
 func (psm *PrometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error) {
-	bytesUploaded := 0
+	var bytesUploaded atomic.Int64 = atomic.Int64{}
 	data = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(data), func(n int) {
-		bytesUploaded += n
+		bytesUploaded.Add(int64(n))
 	})
 
 	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data)
@@ -318,7 +318,7 @@ func (psm *PrometheusStorageMiddleware) UploadPart(ctx context.Context, bucket s
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
-	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
+	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded.Load()))
 
 	return uploadPartResult, nil
 }
