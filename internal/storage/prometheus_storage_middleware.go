@@ -28,7 +28,7 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		prometheus.CounterOpts{
 			Namespace: "pithos",
 			Subsystem: "storage",
-			Name:      "pithos_failed_api_ops_total",
+			Name:      "failed_api_ops_total",
 			Help:      "No of failed api operations handled by Pithos partitioned by type",
 		},
 		[]string{"type"},
@@ -38,7 +38,7 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		prometheus.CounterOpts{
 			Namespace: "pithos",
 			Subsystem: "storage",
-			Name:      "pithos_successful_api_ops_total",
+			Name:      "successful_api_ops_total",
 			Help:      "No of successful api operations handled by Pithos partitioned by type",
 		},
 		[]string{"type"},
@@ -48,7 +48,7 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		prometheus.GaugeOpts{
 			Namespace: "pithos",
 			Subsystem: "storage",
-			Name:      "pithos_total_size",
+			Name:      "total_size",
 			Help:      "Total size by bucket",
 		},
 		[]string{"bucket"},
@@ -58,7 +58,7 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		prometheus.CounterOpts{
 			Namespace: "pithos",
 			Subsystem: "storage",
-			Name:      "pithos_bytes_uploaded_total",
+			Name:      "bytes_uploaded_total",
 			Help:      "Total bytes uploaded by bucket",
 		},
 		[]string{"bucket"},
@@ -68,7 +68,7 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		prometheus.CounterOpts{
 			Namespace: "pithos",
 			Subsystem: "storage",
-			Name:      "pithos_bytes_downloaded_total",
+			Name:      "bytes_downloaded_total",
 			Help:      "Total bytes downloaded by bucket",
 		},
 		[]string{"bucket"},
