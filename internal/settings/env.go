@@ -18,6 +18,7 @@ const portEnvKey string = envKeyPrefix + "_PORT"
 const metricPortEnvKey string = envKeyPrefix + "_METRIC_PORT"
 const storagePathEnvKey string = envKeyPrefix + "_STORAGE_PATH"
 const useFilesystemBlobStoreEnvKey string = envKeyPrefix + "_USE_FILESYSTEM_BLOB_STORE"
+const useEncryptedBlobStoreEnvKey string = envKeyPrefix + "_USE_ENCRYPTED_BLOB_STORE"
 const wrapBlobStoreWithOutboxEnvKey string = envKeyPrefix + "_WRAP_BLOB_STORE_WITH_OUTBOX"
 const replicationAccessKeyIdEnvKey string = replicationEnvKeyPrefix + "_ACCESS_KEY_ID"
 const replicationSecretAccessKeyEnvKey string = replicationEnvKeyPrefix + "_SECRET_ACCESS_KEY"
@@ -84,6 +85,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	metricPort := getIntFromEnv(metricPortEnvKey)
 	storagePath := getStringFromEnv(storagePathEnvKey)
 	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey)
+	useEncryptedBlobStore := getBoolFromEnv(useEncryptedBlobStoreEnvKey)
 	wrapBlobStoreWithOutbox := getBoolFromEnv(wrapBlobStoreWithOutboxEnvKey)
 	replication, err := loadReplicationSettingsFromEnv()
 	if err != nil {
@@ -99,6 +101,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		metricPort:              metricPort,
 		storagePath:             storagePath,
 		useFilesystemBlobStore:  useFilesystemBlobStore,
+		useEncryptedBlobStore:   useEncryptedBlobStore,
 		wrapBlobStoreWithOutbox: wrapBlobStoreWithOutbox,
 		replication:             replication,
 	}, nil
