@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
-	store := storage.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.WrapBlobStoreWithOutbox())
+	store := storage.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.UseEncryptedBlobStore(), settings.WrapBlobStoreWithOutbox())
 
 	replication := settings.Replication()
 	if replication != nil {

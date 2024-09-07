@@ -70,7 +70,7 @@ type Storage interface {
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 }
 
-func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
+func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
 	var metadataStore metadata.MetadataStore
 	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
@@ -78,7 +78,7 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 	}
 	metadataStore, err = metadata.NewTracingMetadataStoreMiddleware("SqlMetadataStore", metadataStore)
 	if err != nil {
-		log.Fatal("Error during TracingMetadataStoreMiddleware: ", err)
+		log.Fatal("Error during NewTracingMetadataStoreMiddleware: ", err)
 	}
 	var blobStore blob.BlobStore
 	if useFilesystemBlobStore {
@@ -88,7 +88,7 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		}
 		blobStore, err = blob.NewTracingBlobStoreMiddleware("FilesystemBlobStore", blobStore)
 		if err != nil {
-			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
+			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	} else {
 		blobStore, err = blob.NewSqlBlobStore()
@@ -97,7 +97,17 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		}
 		blobStore, err = blob.NewTracingBlobStoreMiddleware("SqlBlobStore", blobStore)
 		if err != nil {
-			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
+			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
+		}
+	}
+	if encryptBlobStore {
+		blobStore, err = blob.NewEncryptionBlobStoreMiddleware("test", blobStore)
+		if err != nil {
+			log.Fatal("Error during NewEncryptionBlobStoreMiddleware: ", err)
+		}
+		blobStore, err = blob.NewTracingBlobStoreMiddleware("EncryptionBlobStoreMiddleware", blobStore)
+		if err != nil {
+			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	}
 	if wrapBlobStoreWithOutbox {
@@ -107,7 +117,7 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		}
 		blobStore, err = blob.NewTracingBlobStoreMiddleware("OutboxBlobStore", blobStore)
 		if err != nil {
-			log.Fatal("Error during TracingBlobStoreMiddleware: ", err)
+			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	}
 	var store Storage
@@ -118,7 +128,7 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 
 	store, err = NewTracingStorageMiddleware("MetadataBlobStorage", store)
 	if err != nil {
-		log.Fatal("Error during TracingStorageMiddleware: ", err)
+		log.Fatal("Error during NewTracingStorageMiddleware: ", err)
 	}
 
 	return store

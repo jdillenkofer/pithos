@@ -12,6 +12,7 @@ const defaultPort = 9000
 const defaultMetricPort = 9001
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
+const defaultUseEncryptedBlobStore = false
 const defaultWrapBlobStoreWithOutbox = false
 const defaultReplicationUseOutbox = true
 
@@ -35,6 +36,7 @@ type Settings struct {
 	metricPort              *int                 `mergable:""`
 	storagePath             *string              `mergable:""`
 	useFilesystemBlobStore  *bool                `mergable:""`
+	useEncryptedBlobStore   *bool                `mergable:""`
 	wrapBlobStoreWithOutbox *bool                `mergable:""`
 	replication             *ReplicationSettings `mergable:""`
 }
@@ -80,6 +82,10 @@ func (s *Settings) StoragePath() string {
 
 func (s *Settings) UseFilesystemBlobStore() bool {
 	return valueOrDefault(s.useFilesystemBlobStore, defaultUseFilesystemBlobStore)
+}
+
+func (s *Settings) UseEncryptedBlobStore() bool {
+	return valueOrDefault(s.useEncryptedBlobStore, defaultUseEncryptedBlobStore)
 }
 
 func (s *Settings) WrapBlobStoreWithOutbox() bool {
