@@ -31,8 +31,8 @@ var (
 	ErrPlaintextNotAMultipleOfBlockSize  = errors.New("plaintext is not a multiple of the block size")
 )
 
-func NewEncryptionBlobStoreMiddleware(passphrase string, innerBlobStore BlobStore) (*EncryptionBlobStoreMiddleware, error) {
-	key, err := scrypt.Key([]byte(passphrase), []byte("pithos"), 1<<16, 8, 1, 32)
+func NewEncryptionBlobStoreMiddleware(password string, innerBlobStore BlobStore) (*EncryptionBlobStoreMiddleware, error) {
+	key, err := scrypt.Key([]byte(password), []byte("pithos"), 1<<16, 8, 1, 32)
 	if err != nil {
 		return nil, err
 	}

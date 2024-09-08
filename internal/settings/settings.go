@@ -12,7 +12,7 @@ const defaultPort = 9000
 const defaultMetricPort = 9001
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
-const defaultUseEncryptedBlobStore = false
+const defaultBlobStoreEncryptionPassword = ""
 const defaultWrapBlobStoreWithOutbox = false
 const defaultReplicationUseOutbox = true
 
@@ -27,18 +27,18 @@ type ReplicationSettings struct {
 }
 
 type Settings struct {
-	accessKeyId             *string              `mergable:""`
-	secretAccessKey         *string              `mergable:""`
-	region                  *string              `mergable:""`
-	domain                  *string              `mergable:""`
-	bindAddress             *string              `mergable:""`
-	port                    *int                 `mergable:""`
-	metricPort              *int                 `mergable:""`
-	storagePath             *string              `mergable:""`
-	useFilesystemBlobStore  *bool                `mergable:""`
-	useEncryptedBlobStore   *bool                `mergable:""`
-	wrapBlobStoreWithOutbox *bool                `mergable:""`
-	replication             *ReplicationSettings `mergable:""`
+	accessKeyId                 *string              `mergable:""`
+	secretAccessKey             *string              `mergable:""`
+	region                      *string              `mergable:""`
+	domain                      *string              `mergable:""`
+	bindAddress                 *string              `mergable:""`
+	port                        *int                 `mergable:""`
+	metricPort                  *int                 `mergable:""`
+	storagePath                 *string              `mergable:""`
+	useFilesystemBlobStore      *bool                `mergable:""`
+	blobStoreEncryptionPassword *string              `mergable:""`
+	wrapBlobStoreWithOutbox     *bool                `mergable:""`
+	replication                 *ReplicationSettings `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -84,8 +84,8 @@ func (s *Settings) UseFilesystemBlobStore() bool {
 	return valueOrDefault(s.useFilesystemBlobStore, defaultUseFilesystemBlobStore)
 }
 
-func (s *Settings) UseEncryptedBlobStore() bool {
-	return valueOrDefault(s.useEncryptedBlobStore, defaultUseEncryptedBlobStore)
+func (s *Settings) BlobStoreEncryptionPassword() string {
+	return valueOrDefault(s.blobStoreEncryptionPassword, defaultBlobStoreEncryptionPassword)
 }
 
 func (s *Settings) WrapBlobStoreWithOutbox() bool {

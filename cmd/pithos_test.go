@@ -33,6 +33,7 @@ import (
 const accessKeyId string = "AKIAIOSFODNN7EXAMPLE"
 const secretAccessKey string = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 const region string = "eu-central-1"
+const blobStoreEncryptionPassword = "test"
 
 var bucketName *string = aws.String("test")
 var bucketName2 *string = aws.String("test2")
@@ -81,7 +82,11 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if err != nil {
 		log.Fatalf("Couldn't open database: %s", err)
 	}
-	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+	encryptionPassword := ""
+	if encryptBlobStore {
+		encryptionPassword = blobStoreEncryptionPassword
+	}
+	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
 
 	if !useReplication {
 		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
@@ -118,7 +123,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}
-		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
 		var s3ClientStorage storage.Storage
