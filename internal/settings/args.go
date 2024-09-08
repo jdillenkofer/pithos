@@ -65,7 +65,7 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	metricPortAccessor := registerIntFlag("metricPort", defaultMetricPort, "the metric port of pithos")
 	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
 	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "store blobs in the filesystem instead of the sqlite database")
-	useEncryptedBlobStoreAccessor := registerBoolFlag("useEncryptedBlobStore", defaultUseEncryptedBlobStore, "encrypt blobs before storing them")
+	blobStoreEncryptionPasswordAccessor := registerStringFlag("blobStoreEncryptionPassword", defaultBlobStoreEncryptionPassword, "password to encrypt blobs before storing them (default is empty, which means no encryption)")
 	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", defaultWrapBlobStoreWithOutbox, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
 
 	replicationAccessKeyIdAccessor := registerStringFlag("replicationAccessKeyId", "", "the replication access key id")
@@ -94,17 +94,17 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	}
 
 	return &Settings{
-		accessKeyId:             accessKeyIdAccessor(),
-		secretAccessKey:         secretAccessKeyAccessor(),
-		region:                  regionAccessor(),
-		domain:                  domainAccessor(),
-		bindAddress:             bindAddressAccessor(),
-		port:                    portAccessor(),
-		metricPort:              metricPortAccessor(),
-		storagePath:             storagePathAccessor(),
-		useFilesystemBlobStore:  useFilesystemBlobStoreAccessor(),
-		useEncryptedBlobStore:   useEncryptedBlobStoreAccessor(),
-		wrapBlobStoreWithOutbox: wrapBlobStoreWithOutboxAccessor(),
-		replication:             replication,
+		accessKeyId:                 accessKeyIdAccessor(),
+		secretAccessKey:             secretAccessKeyAccessor(),
+		region:                      regionAccessor(),
+		domain:                      domainAccessor(),
+		bindAddress:                 bindAddressAccessor(),
+		port:                        portAccessor(),
+		metricPort:                  metricPortAccessor(),
+		storagePath:                 storagePathAccessor(),
+		useFilesystemBlobStore:      useFilesystemBlobStoreAccessor(),
+		blobStoreEncryptionPassword: blobStoreEncryptionPasswordAccessor(),
+		wrapBlobStoreWithOutbox:     wrapBlobStoreWithOutboxAccessor(),
+		replication:                 replication,
 	}, nil
 }

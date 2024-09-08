@@ -70,7 +70,7 @@ type Storage interface {
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 }
 
-func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) Storage {
+func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) Storage {
 	var metadataStore metadata.MetadataStore
 	metadataStore, err := metadata.NewSqlMetadataStore()
 	if err != nil {
@@ -100,8 +100,8 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	}
-	if encryptBlobStore {
-		blobStore, err = blob.NewEncryptionBlobStoreMiddleware("test", blobStore)
+	if blobStoreEncryptionPassword != "" {
+		blobStore, err = blob.NewEncryptionBlobStoreMiddleware(blobStoreEncryptionPassword, blobStore)
 		if err != nil {
 			log.Fatal("Error during NewEncryptionBlobStoreMiddleware: ", err)
 		}
