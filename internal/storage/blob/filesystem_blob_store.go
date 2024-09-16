@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -78,6 +80,12 @@ func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId B
 func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, ErrBlobNotFound
+		}
+		return nil, err
+	}
 	return f, err
 }
 

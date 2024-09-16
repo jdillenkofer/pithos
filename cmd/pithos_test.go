@@ -27,6 +27,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -78,7 +79,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 
 	baseEndpoint := "localhost"
 
-	db, err := storage.OpenDatabase(storagePath)
+	db, err := database.OpenDatabase(storagePath)
 	if err != nil {
 		log.Fatalf("Couldn't open database: %s", err)
 	}
@@ -119,7 +120,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Could not create temp directory: %s", err)
 		}
-		db2, err := storage.OpenDatabase(storagePath2)
+		db2, err := database.OpenDatabase(storagePath2)
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}
