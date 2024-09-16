@@ -62,7 +62,7 @@ func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) 
 		return nil, err
 	}
 	if blobContentEntity == nil {
-		return nil, nil
+		return nil, ErrBlobNotFound
 	}
 	reader := ioutils.NewByteReadSeekCloser(blobContentEntity.Content)
 

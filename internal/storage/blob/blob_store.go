@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 
@@ -19,6 +20,8 @@ type PutBlobResult struct {
 	Size   int64
 	ETag   string
 }
+
+var ErrBlobNotFound error = errors.New("blob not found")
 
 type BlobStore interface {
 	Start(ctx context.Context) error

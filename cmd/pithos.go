@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -25,7 +26,7 @@ func main() {
 	}
 
 	storagePath := settings.StoragePath()
-	db, err := storage.OpenDatabase(storagePath)
+	db, err := database.OpenDatabase(storagePath)
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
