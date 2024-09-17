@@ -11,7 +11,7 @@ require (
 	github.com/golang-migrate/migrate/v4 v4.18.1
 	github.com/mattn/go-sqlite3 v1.14.23
 	github.com/oklog/ulid/v2 v2.1.0
-	github.com/prometheus/client_golang v1.20.3
+	github.com/prometheus/client_golang v1.20.4
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/crypto v0.27.0
 )
