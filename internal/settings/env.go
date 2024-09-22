@@ -15,7 +15,7 @@ const regionEnvKey string = envKeyPrefix + "_REGION"
 const domainEnvKey string = envKeyPrefix + "_DOMAIN"
 const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey string = envKeyPrefix + "_PORT"
-const metricPortEnvKey string = envKeyPrefix + "_METRIC_PORT"
+const monitoringPortEnvKey string = envKeyPrefix + "_MONITORING_PORT"
 const storagePathEnvKey string = envKeyPrefix + "_STORAGE_PATH"
 const useFilesystemBlobStoreEnvKey string = envKeyPrefix + "_USE_FILESYSTEM_BLOB_STORE"
 const blobStoreEncryptionPasswordEnvKey string = envKeyPrefix + "_BLOB_STORE_ENCRYPTION_PASSWORD"
@@ -82,7 +82,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
 	port := getIntFromEnv(portEnvKey)
-	metricPort := getIntFromEnv(metricPortEnvKey)
+	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
 	storagePath := getStringFromEnv(storagePathEnvKey)
 	useFilesystemBlobStore := getBoolFromEnv(useFilesystemBlobStoreEnvKey)
 	blobStoreEncryptionPassword := getStringFromEnv(blobStoreEncryptionPasswordEnvKey)
@@ -98,7 +98,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		domain:                      domain,
 		bindAddress:                 bindAddress,
 		port:                        port,
-		metricPort:                  metricPort,
+		monitoringPort:              monitoringPort,
 		storagePath:                 storagePath,
 		useFilesystemBlobStore:      useFilesystemBlobStore,
 		blobStoreEncryptionPassword: blobStoreEncryptionPassword,

@@ -62,7 +62,7 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	domainAccessor := registerStringFlag("domain", defaultDomain, "the domain for the s3 api")
 	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
-	metricPortAccessor := registerIntFlag("metricPort", defaultMetricPort, "the metric port of pithos")
+	monitoringPortAccessor := registerIntFlag("monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
 	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "store blobs in the filesystem instead of the sqlite database")
 	blobStoreEncryptionPasswordAccessor := registerStringFlag("blobStoreEncryptionPassword", defaultBlobStoreEncryptionPassword, "password to encrypt blobs before storing them (default is empty, which means no encryption)")
@@ -100,7 +100,7 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 		domain:                      domainAccessor(),
 		bindAddress:                 bindAddressAccessor(),
 		port:                        portAccessor(),
-		metricPort:                  metricPortAccessor(),
+		monitoringPort:              monitoringPortAccessor(),
 		storagePath:                 storagePathAccessor(),
 		useFilesystemBlobStore:      useFilesystemBlobStoreAccessor(),
 		blobStoreEncryptionPassword: blobStoreEncryptionPasswordAccessor(),
