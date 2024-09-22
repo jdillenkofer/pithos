@@ -13,6 +13,12 @@ import (
 
 func BlobStoreTester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	ctx := context.Background()
+	err := blobStore.Start(ctx)
+	if err != nil {
+		return err
+	}
+	defer blobStore.Stop(ctx)
+
 	blobId := BlobId(ulid.Make())
 	blob := ioutils.NewByteReadSeekCloser(content)
 
