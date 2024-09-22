@@ -9,7 +9,7 @@ const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
-const defaultMetricPort = 9001
+const defaultMonitoringPort = 9090
 const defaultStoragePath = "./data"
 const defaultUseFilesystemBlobStore = false
 const defaultBlobStoreEncryptionPassword = ""
@@ -33,7 +33,7 @@ type Settings struct {
 	domain                      *string              `mergable:""`
 	bindAddress                 *string              `mergable:""`
 	port                        *int                 `mergable:""`
-	metricPort                  *int                 `mergable:""`
+	monitoringPort              *int                 `mergable:""`
 	storagePath                 *string              `mergable:""`
 	useFilesystemBlobStore      *bool                `mergable:""`
 	blobStoreEncryptionPassword *string              `mergable:""`
@@ -72,8 +72,8 @@ func (s *Settings) Port() int {
 	return valueOrDefault(s.port, defaultPort)
 }
 
-func (s *Settings) MetricPort() int {
-	return valueOrDefault(s.metricPort, defaultMetricPort)
+func (s *Settings) MonitoringPort() int {
+	return valueOrDefault(s.monitoringPort, defaultMonitoringPort)
 }
 
 func (s *Settings) StoragePath() string {

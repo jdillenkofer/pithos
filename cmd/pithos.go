@@ -90,16 +90,16 @@ func main() {
 		Handler:     handler,
 	}
 
-	metricHandler := server.SetupMetricServer()
-	metricsAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MetricPort())
-	httpMetricServer := &http.Server{
+	monitoringHandler := server.SetupMonitoringServer(db)
+	monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
+	httpMonitoringServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
-		Addr:        metricsAddr,
-		Handler:     metricHandler,
+		Addr:        monitoringAddr,
+		Handler:     monitoringHandler,
 	}
 	go (func() {
-		log.Printf("Listening with metrics api on http://%v\n", metricsAddr)
-		httpMetricServer.ListenAndServe()
+		log.Printf("Listening with monitoring api on http://%v\n", monitoringAddr)
+		httpMonitoringServer.ListenAndServe()
 	})()
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)

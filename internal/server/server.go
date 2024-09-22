@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -47,9 +48,19 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	return rootHandler
 }
 
-func SetupMetricServer() http.Handler {
+func SetupMonitoringServer(db *sql.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		err := db.Ping()
+		if err != nil {
+			w.WriteHeader(503)
+			w.Write([]byte("Unhealthy"))
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte("Healthy"))
+	})
 	var rootHandler http.Handler = mux
 	return rootHandler
 }
