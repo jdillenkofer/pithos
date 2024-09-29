@@ -7,7 +7,7 @@ var (
 )
 
 type Cache interface {
-	Put(key string, data []byte) error
+	Set(key string, data []byte) error
 	Get(key string) ([]byte, error)
-	Delete(key string) error
+	Remove(key string) error
 }
