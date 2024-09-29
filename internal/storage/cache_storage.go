@@ -108,7 +108,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 			return nil, err
 		}
 
-		err = cs.cache.Put(cacheKey, data)
+		err = cs.cache.Set(cacheKey, data)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +139,7 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string
 	}
 
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
-	err = cs.cache.Put(cacheKey, data)
+	err = cs.cache.Set(cacheKey, data)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucket string, key str
 	}
 
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
-	err = cs.cache.Delete(cacheKey)
+	err = cs.cache.Remove(cacheKey)
 	if err != nil {
 		return err
 	}
