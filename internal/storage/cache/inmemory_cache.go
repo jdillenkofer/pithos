@@ -2,38 +2,47 @@ package cache
 
 import "sync"
 
+type cacheEntry struct {
+	key string
+	val []byte
+}
+
 type InMemoryCache struct {
-	mu            sync.Mutex
-	keyToValueMap map[string][]byte
+	mu                 sync.Mutex
+	keyToCacheEntryMap map[string]cacheEntry
 }
 
 func NewInMemoryCache() (*InMemoryCache, error) {
 	return &InMemoryCache{
-		mu:            sync.Mutex{},
-		keyToValueMap: make(map[string][]byte),
+		mu:                 sync.Mutex{},
+		keyToCacheEntryMap: make(map[string]cacheEntry),
 	}, nil
 }
 
-func (c *InMemoryCache) PutKey(key string, data []byte) error {
+func (c *InMemoryCache) Put(key string, val []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.keyToValueMap[key] = data
+	entry := cacheEntry{
+		key: key,
+		val: val,
+	}
+	c.keyToCacheEntryMap[key] = entry
 	return nil
 }
 
-func (c *InMemoryCache) GetKey(key string) ([]byte, error) {
+func (c *InMemoryCache) Get(key string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, ok := c.keyToValueMap[key]
+	entry, ok := c.keyToCacheEntryMap[key]
 	if !ok {
-		return nil, ErrKeyNotInCache
+		return nil, ErrCacheMiss
 	}
-	return data, nil
+	return entry.val, nil
 }
 
-func (c *InMemoryCache) DeleteKey(key string) error {
+func (c *InMemoryCache) Delete(key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.keyToValueMap, key)
+	delete(c.keyToCacheEntryMap, key)
 	return nil
 }

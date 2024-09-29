@@ -3,11 +3,11 @@ package cache
 import "errors"
 
 var (
-	ErrKeyNotInCache = errors.New("key not in cache")
+	ErrCacheMiss = errors.New("cache miss")
 )
 
 type Cache interface {
-	PutKey(key string, data []byte) error
-	GetKey(key string) ([]byte, error)
-	DeleteKey(key string) error
+	Put(key string, data []byte) error
+	Get(key string) ([]byte, error)
+	Delete(key string) error
 }
