@@ -91,12 +91,12 @@ func (cs *CacheStorage) HeadObject(ctx context.Context, bucket string, key strin
 func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
 	var reader io.ReadSeekCloser
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
-	data, err := cs.cache.GetKey(cacheKey)
-	if err != nil && err != cache.ErrKeyNotInCache {
+	data, err := cs.cache.Get(cacheKey)
+	if err != nil && err != cache.ErrCacheMiss {
 		return nil, err
 	}
 
-	if err == cache.ErrKeyNotInCache {
+	if err == cache.ErrCacheMiss {
 		reader, err := cs.innerStorage.GetObject(ctx, bucket, key, nil, nil)
 		if err != nil {
 			return nil, err
@@ -108,7 +108,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 			return nil, err
 		}
 
-		err = cs.cache.PutKey(cacheKey, data)
+		err = cs.cache.Put(cacheKey, data)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +139,7 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string
 	}
 
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
-	err = cs.cache.PutKey(cacheKey, data)
+	err = cs.cache.Put(cacheKey, data)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucket string, key str
 	}
 
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
-	err = cs.cache.DeleteKey(cacheKey)
+	err = cs.cache.Delete(cacheKey)
 	if err != nil {
 		return err
 	}
