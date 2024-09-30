@@ -47,9 +47,18 @@ func TestCacheStorage(t *testing.T) {
 		log.Fatalf("Could not create MetadataBlobStorage: %s", err)
 	}
 
-	cachePersistor, err := cache.NewInMemoryCachePersistor()
+	var cachePersistor cache.CachePersistor
+	/*
+		cachePersistor, err = cache.NewInMemoryCachePersistor()
+		if err != nil {
+			log.Fatalf("Could not create InMemoryCacheStorage: %s", err)
+		}
+	*/
+
+	tmpDir := os.TempDir()
+	cachePersistor, err = cache.NewFilesystemCachePersistor(tmpDir)
 	if err != nil {
-		log.Fatalf("Could not create InMemoryCacheStorage: %s", err)
+		log.Fatalf("Could not create FilesystemCachePersistor: %s", err)
 	}
 
 	fixedSizeLimitEvictionChecker, err := cache.NewFixedSizeLimitEvictionChecker(2000000000)
