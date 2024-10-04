@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.31.0
 	github.com/aws/aws-sdk-go-v2/config v1.27.40
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.38
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.64.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.64.1
 	github.com/aws/smithy-go v1.22.0
 	github.com/golang-migrate/migrate/v4 v4.18.1
 	github.com/mattn/go-sqlite3 v1.14.24
