@@ -7,20 +7,21 @@ import (
 	"io"
 	"log"
 	"runtime/trace"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	"github.com/jdillenkofer/pithos/internal/task"
 )
 
 type OutboxBlobStore struct {
-	db                        *sql.DB
-	triggerChannel            chan struct{}
-	triggerChannelClosed      bool
-	outboxProcessingStopped   sync.WaitGroup
-	innerBlobStore            BlobStore
-	blobOutboxEntryRepository repository.BlobOutboxEntryRepository
+	db                         *sql.DB
+	triggerChannel             chan struct{}
+	triggerChannelClosed       bool
+	outboxProcessingTaskHandle *task.TaskHandle
+	innerBlobStore             BlobStore
+	blobOutboxEntryRepository  repository.BlobOutboxEntryRepository
 }
 
 func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore, error) {
@@ -89,20 +90,6 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 	}
 }
 
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		wg.Wait()
-	}()
-	select {
-	case <-c:
-		return false
-	case <-time.After(timeout):
-		return true
-	}
-}
-
 func (obs *OutboxBlobStore) processOutboxLoop() {
 	ctx := context.Background()
 	ctx, task := trace.NewTask(ctx, "OutboxBlobStore.processOutboxLoop()")
@@ -119,19 +106,19 @@ out:
 		}
 		obs.maybeProcessOutboxEntries(ctx)
 	}
-	obs.outboxProcessingStopped.Done()
 }
 
 func (obs *OutboxBlobStore) Start(ctx context.Context) error {
-	obs.outboxProcessingStopped.Add(1)
-	go obs.processOutboxLoop()
+	obs.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
+		obs.processOutboxLoop()
+	})
 	return obs.innerBlobStore.Start(ctx)
 }
 
 func (obs *OutboxBlobStore) Stop(ctx context.Context) error {
 	if !obs.triggerChannelClosed {
 		close(obs.triggerChannel)
-		waitWithTimeout(&obs.outboxProcessingStopped, 5*time.Second)
+		obs.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
 		obs.triggerChannelClosed = true
 	}
 	return obs.innerBlobStore.Stop(ctx)
