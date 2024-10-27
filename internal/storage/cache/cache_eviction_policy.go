@@ -157,19 +157,20 @@ func NewLFUCacheEvictionPolicy(evictionChecker EvictionChecker) (*LFUCacheEvicti
 
 func (lfu *LFUCacheEvictionPolicy) TrackSetAndReturnEvictedKeys(key string, val []byte) []string {
 	lfu.evictionChecker.TrackSet(key, val)
-	lfu.minLFUCacheHeap.Push(&LFUCacheEntry{
+
+	evictedKeys := []string{}
+	for lfu.evictionChecker.ShouldEvict() {
+		cacheEntryToEvict := heap.Pop(&lfu.minLFUCacheHeap).(*LFUCacheEntry)
+		lfu.evictionChecker.TrackRemove(cacheEntryToEvict.key)
+		evictedKeys = append(evictedKeys, cacheEntryToEvict.key)
+	}
+
+	heap.Push(&lfu.minLFUCacheHeap, &LFUCacheEntry{
 		key:          key,
 		frequency:    0,
 		lastAccessTs: time.Now(),
 		index:        -1,
 	})
-
-	evictedKeys := []string{}
-	for lfu.evictionChecker.ShouldEvict() {
-		keyToEvict := lfu.minLFUCacheHeap.Pop().(string)
-		lfu.evictionChecker.TrackRemove(keyToEvict)
-		evictedKeys = append(evictedKeys, keyToEvict)
-	}
 	return evictedKeys
 }
 
