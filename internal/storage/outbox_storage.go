@@ -131,7 +131,9 @@ func (os *OutboxStorage) Start(ctx context.Context) error {
 func (os *OutboxStorage) Stop(ctx context.Context) error {
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
-		os.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+		if os.outboxProcessingTaskHandle != nil {
+			os.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+		}
 		os.triggerChannelClosed = true
 	}
 	return os.innerStorage.Stop(ctx)
