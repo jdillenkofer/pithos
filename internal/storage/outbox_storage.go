@@ -7,17 +7,18 @@ import (
 	"io"
 	"log"
 	"runtime/trace"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	"github.com/jdillenkofer/pithos/internal/task"
 )
 
 type OutboxStorage struct {
 	db                           *sql.DB
 	triggerChannel               chan struct{}
 	triggerChannelClosed         bool
-	outboxProcessingStopped      sync.WaitGroup
+	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
 	storageOutboxEntryRepository repository.StorageOutboxEntryRepository
 }
@@ -102,20 +103,6 @@ func (os *OutboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	}
 }
 
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		wg.Wait()
-	}()
-	select {
-	case <-c:
-		return false
-	case <-time.After(timeout):
-		return true
-	}
-}
-
 func (os *OutboxStorage) processOutboxLoop() {
 	ctx := context.Background()
 	ctx, task := trace.NewTask(ctx, "OutboxStorage.processOutboxLoop()")
@@ -132,19 +119,19 @@ out:
 		}
 		os.maybeProcessOutboxEntries(ctx)
 	}
-	os.outboxProcessingStopped.Done()
 }
 
 func (os *OutboxStorage) Start(ctx context.Context) error {
-	os.outboxProcessingStopped.Add(1)
-	go os.processOutboxLoop()
+	os.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
+		os.processOutboxLoop()
+	})
 	return os.innerStorage.Start(ctx)
 }
 
 func (os *OutboxStorage) Stop(ctx context.Context) error {
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
-		waitWithTimeout(&os.outboxProcessingStopped, 5*time.Second)
+		os.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
 		os.triggerChannelClosed = true
 	}
 	return os.innerStorage.Stop(ctx)

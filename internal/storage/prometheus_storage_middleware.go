@@ -3,11 +3,11 @@ package storage
 import (
 	"context"
 	"io"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -18,8 +18,7 @@ type PrometheusStorageMiddleware struct {
 	totalSizeByBucket            *prometheus.GaugeVec
 	totalBytesUploadedByBucket   *prometheus.CounterVec
 	totalBytesDownloadedByBucket *prometheus.CounterVec
-	metricsMeasuringStopped      sync.WaitGroup
-	stopMetricsMeasuring         atomic.Bool
+	metricsMeasuringTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
 }
 
@@ -81,7 +80,6 @@ func NewPrometheusStorageMiddleware(innerStorage Storage, registerer prometheus.
 		totalSizeByBucket:            totalSizeByBucket,
 		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
 		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
-		stopMetricsMeasuring:         atomic.Bool{},
 		innerStorage:                 innerStorage,
 	}, nil
 }
@@ -121,19 +119,18 @@ func (psm *PrometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 	return &totalSize, nil
 }
 
-func (psm *PrometheusStorageMiddleware) measureMetricsLoop() {
+func (psm *PrometheusStorageMiddleware) measureMetricsLoop(cancelMetricsMeasuring *atomic.Bool) {
 	ctx := context.Background()
 out:
 	for {
 		psm.measureMetrics(ctx)
 		for range 30 * 4 {
 			time.Sleep(250 * time.Millisecond)
-			if psm.stopMetricsMeasuring.Load() {
+			if cancelMetricsMeasuring.Load() {
 				break out
 			}
 		}
 	}
-	psm.metricsMeasuringStopped.Done()
 }
 
 func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
@@ -143,8 +140,9 @@ func (psm *PrometheusStorageMiddleware) Start(ctx context.Context) error {
 	psm.registerer.MustRegister(psm.totalBytesUploadedByBucket)
 	psm.registerer.MustRegister(psm.totalBytesDownloadedByBucket)
 
-	psm.metricsMeasuringStopped.Add(1)
-	go psm.measureMetricsLoop()
+	psm.metricsMeasuringTaskHandle = task.Start(func(cancelTask *atomic.Bool) {
+		psm.measureMetricsLoop(cancelTask)
+	})
 
 	err := psm.innerStorage.Start(ctx)
 	if err != nil {
@@ -160,9 +158,9 @@ func (psm *PrometheusStorageMiddleware) Stop(ctx context.Context) error {
 	psm.registerer.Unregister(psm.successfulApiOpsCounter)
 	psm.registerer.Unregister(psm.failedApiOpsCounter)
 
-	if !psm.stopMetricsMeasuring.Load() {
-		psm.stopMetricsMeasuring.Store(true)
-		waitWithTimeout(&psm.metricsMeasuringStopped, 5*time.Second)
+	if !psm.metricsMeasuringTaskHandle.IsCancelled() {
+		psm.metricsMeasuringTaskHandle.Cancel()
+		psm.metricsMeasuringTaskHandle.JoinWithTimeout(5 * time.Second)
 	}
 
 	err := psm.innerStorage.Stop(ctx)
