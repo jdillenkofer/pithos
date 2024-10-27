@@ -158,7 +158,7 @@ func (psm *PrometheusStorageMiddleware) Stop(ctx context.Context) error {
 	psm.registerer.Unregister(psm.successfulApiOpsCounter)
 	psm.registerer.Unregister(psm.failedApiOpsCounter)
 
-	if !psm.metricsMeasuringTaskHandle.IsCancelled() {
+	if psm.metricsMeasuringTaskHandle != nil && !psm.metricsMeasuringTaskHandle.IsCancelled() {
 		psm.metricsMeasuringTaskHandle.Cancel()
 		psm.metricsMeasuringTaskHandle.JoinWithTimeout(5 * time.Second)
 	}

@@ -118,7 +118,9 @@ func (obs *OutboxBlobStore) Start(ctx context.Context) error {
 func (obs *OutboxBlobStore) Stop(ctx context.Context) error {
 	if !obs.triggerChannelClosed {
 		close(obs.triggerChannel)
-		obs.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+		if obs.outboxProcessingTaskHandle != nil {
+			obs.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+		}
 		obs.triggerChannelClosed = true
 	}
 	return obs.innerBlobStore.Stop(ctx)
