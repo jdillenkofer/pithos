@@ -163,6 +163,10 @@ func (ebsm *EncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 	return byteReadSeekCloser, nil
 }
 
+func (ebsm *EncryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+	return ebsm.innerBlobStore.GetBlobIds(ctx, tx)
+}
+
 func (ebsm *EncryptionBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
 	return ebsm.innerBlobStore.DeleteBlob(ctx, tx, blobId)
 }

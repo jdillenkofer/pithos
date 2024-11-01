@@ -69,6 +69,10 @@ func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) 
 	return reader, nil
 }
 
+func (bs *SqlBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+	return bs.blobContentRepository.FindBlobContentIds(ctx, tx)
+}
+
 func (bs *SqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
 	err := bs.blobContentRepository.DeleteBlobContentById(ctx, tx, blobId)
 	return err

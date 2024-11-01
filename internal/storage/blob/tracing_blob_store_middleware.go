@@ -44,6 +44,12 @@ func (tbsm *TracingBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx,
 	return tbsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 }
 
+func (tbsm *TracingBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+	defer trace.StartRegion(ctx, tbsm.regionName+".GetBlobIds()").End()
+
+	return tbsm.innerBlobStore.GetBlobIds(ctx, tx)
+}
+
 func (tbsm *TracingBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
 	defer trace.StartRegion(ctx, tbsm.regionName+".DeleteBlob()").End()
 

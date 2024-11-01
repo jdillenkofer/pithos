@@ -28,6 +28,7 @@ type BlobStore interface {
 	Stop(ctx context.Context) error
 	PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error)
 	GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
+	GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error)
 	DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error
 }
 

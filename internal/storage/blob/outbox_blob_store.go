@@ -188,6 +188,10 @@ func (obs *OutboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 	return obs.innerBlobStore.GetBlob(ctx, tx, blobId)
 }
 
+func (obs *OutboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+	return obs.innerBlobStore.GetBlobIds(ctx, tx)
+}
+
 func (obs *OutboxBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
 	err := obs.storeBlobOutboxEntry(ctx, tx, repository.DeleteBlobOperation, blobId, []byte{})
 	if err != nil {
