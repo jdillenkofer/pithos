@@ -52,6 +52,25 @@ func (bcr *BlobContentRepository) FindBlobContentById(ctx context.Context, tx *s
 	return blobContentEntity, nil
 }
 
+func (bcr *BlobContentRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+	blobIdRows, err := tx.QueryContext(ctx, "SELECT id FROM blob_contents")
+	if err != nil {
+		return nil, err
+	}
+	defer blobIdRows.Close()
+	blobIds := []ulid.ULID{}
+	for blobIdRows.Next() {
+		var blobIdStr string
+		err := blobIdRows.Scan(&blobIdStr)
+		if err != nil {
+			return nil, err
+		}
+		blobId := ulid.MustParse(blobIdStr)
+		blobIds = append(blobIds, blobId)
+	}
+	return blobIds, nil
+}
+
 func (bcr *BlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *BlobContentEntity) error {
 	_, err := tx.ExecContext(ctx, "DELETE FROM blob_contents WHERE id = ?", blobContent.Id.String())
 	if err != nil {

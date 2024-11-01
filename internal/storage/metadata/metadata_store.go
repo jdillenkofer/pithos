@@ -61,6 +61,7 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 type MetadataStore interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
+	GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blob.BlobId, error)
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)

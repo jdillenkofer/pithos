@@ -53,6 +53,25 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
 	return &blobEntity, nil
 }
 
+func (br *BlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+	blobIdRows, err := tx.QueryContext(ctx, "SELECT blob_id FROM blobs")
+	if err != nil {
+		return nil, err
+	}
+	defer blobIdRows.Close()
+	blobIds := []ulid.ULID{}
+	for blobIdRows.Next() {
+		var blobIdStr string
+		err := blobIdRows.Scan(&blobIdStr)
+		if err != nil {
+			return nil, err
+		}
+		blobId := ulid.MustParse(blobIdStr)
+		blobIds = append(blobIds, blobId)
+	}
+	return blobIds, nil
+}
+
 func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]BlobEntity, error) {
 	blobRows, err := tx.QueryContext(ctx, "SELECT id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC", objectId.String())
 	if err != nil {

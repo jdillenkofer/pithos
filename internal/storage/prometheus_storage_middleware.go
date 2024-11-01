@@ -121,13 +121,12 @@ func (psm *PrometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 
 func (psm *PrometheusStorageMiddleware) measureMetricsLoop(cancelMetricsMeasuring *atomic.Bool) {
 	ctx := context.Background()
-out:
 	for {
 		psm.measureMetrics(ctx)
 		for range 30 * 4 {
 			time.Sleep(250 * time.Millisecond)
 			if cancelMetricsMeasuring.Load() {
-				break out
+				return
 			}
 		}
 	}
