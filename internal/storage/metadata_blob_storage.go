@@ -24,6 +24,16 @@ type BlobGarbageCollector struct {
 	writeOperations atomic.Int64
 }
 
+func NewBlobGarbageCollector(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blob.BlobStore) (*BlobGarbageCollector, error) {
+	return &BlobGarbageCollector{
+		db:              db,
+		collectionMutex: sync.RWMutex{},
+		writeOperations: atomic.Int64{},
+		metadataStore:   metadataStore,
+		blobStore:       blobStore,
+	}, nil
+}
+
 func (blobGC *BlobGarbageCollector) BlockIfGCIsRunning() func() {
 	blobGC.writeOperations.Add(1)
 	blobGC.collectionMutex.RLock()
@@ -106,16 +116,14 @@ type MetadataBlobStorage struct {
 }
 
 func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blob.BlobStore) (*MetadataBlobStorage, error) {
+	blobGC, err := NewBlobGarbageCollector(db, metadataStore, blobStore)
+	if err != nil {
+		return nil, err
+	}
 	return &MetadataBlobStorage{
-		db:           db,
-		gcTaskHandle: nil,
-		blobGC: &BlobGarbageCollector{
-			db:              db,
-			collectionMutex: sync.RWMutex{},
-			writeOperations: atomic.Int64{},
-			metadataStore:   metadataStore,
-			blobStore:       blobStore,
-		},
+		db:            db,
+		gcTaskHandle:  nil,
+		blobGC:        blobGC,
 		metadataStore: metadataStore,
 		blobStore:     blobStore,
 	}, nil
