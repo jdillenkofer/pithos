@@ -90,6 +90,8 @@ func (blobGC *BlobGarbageCollector) RunGC() error {
 		inUseBlobIdMap[inUseBlobId] = struct{}{}
 	}
 
+	numDeletedBlobs := 0
+
 	for _, existingBlobId := range existingBlobIds {
 		if _, hasKey := inUseBlobIdMap[existingBlobId]; !hasKey {
 			err = blobGC.blobStore.DeleteBlob(ctx, tx, existingBlobId)
@@ -97,8 +99,12 @@ func (blobGC *BlobGarbageCollector) RunGC() error {
 				tx.Rollback()
 				return err
 			}
+
+			numDeletedBlobs += 1
 		}
 	}
+
+	log.Printf("Garbage Collection deleted %d blobs\n", numDeletedBlobs)
 
 	err = tx.Commit()
 	if err != nil {
