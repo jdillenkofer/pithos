@@ -105,6 +105,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatal("Couldn't stop storage")
 		}
+	}
+	closeDatabase := func() {
 		err = db.Close()
 		if err != nil {
 			log.Fatal("Couldn't close database")
@@ -116,6 +118,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if useReplication {
 		originalTs := ts
 		originalCloseStorage := closeStorage
+		originalCloseDatabase := closeDatabase
 		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
 		if err != nil {
 			log.Fatalf("Could not create temp directory: %s", err)
@@ -172,6 +175,9 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			originalTs.Close()
 			originalCloseStorage()
 			store.Stop(ctx)
+		}
+		closeDatabase = func() {
+			originalCloseDatabase()
 			db2.Close()
 			err = os.RemoveAll(storagePath2)
 			if err != nil {
@@ -186,7 +192,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	cleanup = func() {
 		ts.Close()
 		closeStorage()
-
+		closeDatabase()
 		err = os.RemoveAll(storagePath)
 		if err != nil {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
