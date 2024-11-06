@@ -132,7 +132,12 @@ func (os *OutboxStorage) Stop(ctx context.Context) error {
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
 		if os.outboxProcessingTaskHandle != nil {
-			os.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+			joinedWithTimeout := os.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
+			if joinedWithTimeout {
+				log.Println("OutboxStorage.outboxProcessingTaskHandle joined with timeout of 30s")
+			} else {
+				log.Println("OutboxStorage.outboxProcessingTaskHandle joined without timeout")
+			}
 		}
 		os.triggerChannelClosed = true
 	}

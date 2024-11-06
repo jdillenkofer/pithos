@@ -119,7 +119,12 @@ func (obs *OutboxBlobStore) Stop(ctx context.Context) error {
 	if !obs.triggerChannelClosed {
 		close(obs.triggerChannel)
 		if obs.outboxProcessingTaskHandle != nil {
-			obs.outboxProcessingTaskHandle.JoinWithTimeout(5 * time.Second)
+			joinedWithTimeout := obs.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
+			if joinedWithTimeout {
+				log.Println("OutboxBlobStore.outboxProcessingTaskHandle joined with timeout of 30s")
+			} else {
+				log.Println("OutboxBlobStore.outboxProcessingTaskHandle joined without timeout")
+			}
 		}
 		obs.triggerChannelClosed = true
 	}

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -159,7 +160,12 @@ func (psm *PrometheusStorageMiddleware) Stop(ctx context.Context) error {
 
 	if psm.metricsMeasuringTaskHandle != nil && !psm.metricsMeasuringTaskHandle.IsCancelled() {
 		psm.metricsMeasuringTaskHandle.Cancel()
-		psm.metricsMeasuringTaskHandle.JoinWithTimeout(5 * time.Second)
+		joinedWithTimeout := psm.metricsMeasuringTaskHandle.JoinWithTimeout(30 * time.Second)
+		if joinedWithTimeout {
+			log.Println("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined with timeout of 30s")
+		} else {
+			log.Println("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined without timeout")
+		}
 	}
 
 	err := psm.innerStorage.Stop(ctx)

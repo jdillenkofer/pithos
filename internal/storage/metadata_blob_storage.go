@@ -153,7 +153,12 @@ func (mbs *MetadataBlobStorage) Start(ctx context.Context) error {
 func (mbs *MetadataBlobStorage) Stop(ctx context.Context) error {
 	if mbs.gcTaskHandle != nil {
 		mbs.gcTaskHandle.Cancel()
-		mbs.gcTaskHandle.JoinWithTimeout(5 * time.Second)
+		joinedWithTimeout := mbs.gcTaskHandle.JoinWithTimeout(30 * time.Second)
+		if joinedWithTimeout {
+			log.Println("GCLoop joined with timeout of 30s")
+		} else {
+			log.Println("GCLoop joined without timeout")
+		}
 	}
 	err := mbs.metadataStore.Stop(ctx)
 	if err != nil {
