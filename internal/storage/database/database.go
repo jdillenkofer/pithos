@@ -28,6 +28,26 @@ func enableAutoVacuumFullMode(db *sql.DB) error {
 	return nil
 }
 
+func enableWALJournalMode(db *sql.DB) error {
+	enableWalJournalModeStmt := "PRAGMA journal_mode = WAL;"
+
+	_, err := db.Exec(enableWalJournalModeStmt)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func enableNormalSynchronous(db *sql.DB) error {
+	enableNormalSynchronousStmt := "PRAGMA synchronous = NORMAL;"
+
+	_, err := db.Exec(enableNormalSynchronousStmt)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func enableForeignKeyConstraints(db *sql.DB) error {
 	enableForeignKeysStmt := "PRAGMA foreign_keys = ON;"
 
@@ -64,7 +84,7 @@ func OpenDatabase(storagePath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db?cache=shared"))
+	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db?mode=rwc"))
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +98,14 @@ func OpenDatabase(storagePath string) (*sql.DB, error) {
 
 func SetupDatabase(db *sql.DB) error {
 	err := enableAutoVacuumFullMode(db)
+	if err != nil {
+		return err
+	}
+	err = enableWALJournalMode(db)
+	if err != nil {
+		return err
+	}
+	err = enableNormalSynchronous(db)
 	if err != nil {
 		return err
 	}
