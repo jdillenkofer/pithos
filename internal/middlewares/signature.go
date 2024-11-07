@@ -51,7 +51,7 @@ func generateCanonicalURI(r *http.Request) string {
 
 func uriEncode(input string) string {
 	output := url.QueryEscape(input)
-	/* TODO: make sure that the uriEncode follows AWS guidelines (non standard)
+	/* @TODO: make sure that the uriEncode follows AWS guidelines (non standard)
 	   if ("+".equals(replacement)) {
 	       replacement = "%20";
 	   } else if ("*".equals(replacement)) {
@@ -265,7 +265,7 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 
 	scope := createScope(expectedDate, region, service, request)
 
-	// TODO: check if the difference between timestamp and now is small enough
+	// @TODO: check if the difference between timestamp and now is small enough
 	timestamp := r.Header.Get("x-amz-date")
 	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray)
 	signingKey := createSigningKey(expectedSecretAccessKey, expectedDate, region, expectedService, expectedRequest)
