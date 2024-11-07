@@ -194,6 +194,7 @@ func (obs *OutboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 }
 
 func (obs *OutboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+	// @TODO: Union of innerBlobStore with outboxBlobStore ids
 	return obs.innerBlobStore.GetBlobIds(ctx, tx)
 }
 
