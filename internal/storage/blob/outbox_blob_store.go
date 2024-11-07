@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
 	"github.com/jdillenkofer/pithos/internal/task"
+	"github.com/oklog/ulid/v2"
 )
 
 type OutboxBlobStore struct {
@@ -196,8 +197,41 @@ func (obs *OutboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 }
 
 func (obs *OutboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
-	// @TODO: Union of innerBlobStore with outboxBlobStore ids
-	return obs.innerBlobStore.GetBlobIds(ctx, tx)
+	// We get the lastOutboxEntry for each blobId
+	lastOutboxEntryGroupedByBlobId, err := obs.blobOutboxEntryRepository.FindLastBlobOutboxEntryGroupedByBlobId(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	// These are the blobIds already committed to the innerStorage
+	// might be more than we actually currently have...
+	innerBlobIds, err := obs.innerBlobStore.GetBlobIds(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
+	allBlobIds := make(map[ulid.ULID]struct{})
+	// write them all into the set
+	for _, blobId := range innerBlobIds {
+		allBlobIds[blobId] = struct{}{}
+	}
+
+	// then remove the once that were deleted in the outbox
+	// and add the once that were added to the outbox
+	for _, outboxEntry := range lastOutboxEntryGroupedByBlobId {
+		switch outboxEntry.Operation {
+		case repository.DeleteBlobOperation:
+			delete(allBlobIds, outboxEntry.BlobId)
+		case repository.PutBlobOperation:
+			allBlobIds[outboxEntry.BlobId] = struct{}{}
+		}
+	}
+
+	// convert the set back to a list
+	blobIds := []BlobId{}
+	for blobId := range allBlobIds {
+		blobIds = append(blobIds, blobId)
+	}
+	return blobIds, nil
 }
 
 func (obs *OutboxBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
