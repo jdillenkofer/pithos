@@ -12,10 +12,13 @@ const UploadStatusPending = "PENDING"
 const UploadStatusCompleted = "COMPLETED"
 
 type ObjectRepository struct {
+	db *sql.DB
 }
 
-func NewObjectRepository() ObjectRepository {
-	return ObjectRepository{}
+func NewObjectRepository(db *sql.DB) ObjectRepository {
+	return ObjectRepository{
+		db: db,
+	}
 }
 
 type ObjectEntity struct {

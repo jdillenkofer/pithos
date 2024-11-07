@@ -35,7 +35,7 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 		triggerChannel:               make(chan struct{}, 16),
 		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
-		storageOutboxEntryRepository: repository.NewStorageOutboxEntryRepository(),
+		storageOutboxEntryRepository: repository.NewStorageOutboxEntryRepository(db),
 		startStopValidator:           startStopValidator,
 	}
 	return os, nil

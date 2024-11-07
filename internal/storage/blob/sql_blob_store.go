@@ -16,9 +16,9 @@ type SqlBlobStore struct {
 	blobContentRepository repository.BlobContentRepository
 }
 
-func NewSqlBlobStore() (*SqlBlobStore, error) {
+func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
 	return &SqlBlobStore{
-		blobContentRepository: repository.NewBlobContentRepository(),
+		blobContentRepository: repository.NewBlobContentRepository(db),
 	}, nil
 }
 

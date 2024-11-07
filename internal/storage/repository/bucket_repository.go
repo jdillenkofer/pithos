@@ -9,10 +9,13 @@ import (
 )
 
 type BucketRepository struct {
+	db *sql.DB
 }
 
-func NewBucketRepository() BucketRepository {
-	return BucketRepository{}
+func NewBucketRepository(db *sql.DB) BucketRepository {
+	return BucketRepository{
+		db: db,
+	}
 }
 
 type BucketEntity struct {

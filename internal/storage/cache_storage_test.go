@@ -32,12 +32,12 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobStore, err := blob.NewSqlBlobStore()
+	blobStore, err := blob.NewSqlBlobStore(db)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	metadataStore, err := metadata.NewSqlMetadataStore()
+	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

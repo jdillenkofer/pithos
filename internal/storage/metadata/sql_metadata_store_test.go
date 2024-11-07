@@ -28,7 +28,7 @@ func TestSqlMetadataStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	sqlMetadataStore, err := NewSqlMetadataStore()
+	sqlMetadataStore, err := NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

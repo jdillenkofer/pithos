@@ -28,7 +28,7 @@ func TestSqlBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	sqlBlobStore, err := NewSqlBlobStore()
+	sqlBlobStore, err := NewSqlBlobStore(db)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
