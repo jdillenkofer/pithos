@@ -57,6 +57,36 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*BlobOutboxEntry
 		UpdatedAt: updatedAt,
 	}, nil
 }
+
+// @TODO: CodeDuplication See convertRowToBlobOutboxEntryEntity
+func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*BlobOutboxEntryEntity, error) {
+	var id string
+	var operation string
+	var blobId string
+	var content []byte
+	var ordinal int
+	var createdAt time.Time
+	var updatedAt time.Time
+	err := blobOutboxRows.Scan(&id, &operation, &blobId, &content, &ordinal, &createdAt, &updatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ulidId := ulid.MustParse(id)
+	ulidBlobId := ulid.MustParse(blobId)
+	return &BlobOutboxEntryEntity{
+		Id:        &ulidId,
+		Operation: operation,
+		BlobId:    ulidBlobId,
+		Content:   content,
+		Ordinal:   ordinal,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}, nil
+}
+
 func (bor *BlobOutboxEntryRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
 	row := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM blob_outbox_entries")
 	var ordinal int
@@ -77,6 +107,23 @@ func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryByBlobId(ctx contex
 		return nil, err
 	}
 	return blobOutboxEntryEntity, nil
+}
+
+func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Context, tx *sql.Tx) ([]BlobOutboxEntryEntity, error) {
+	blobOutboxEntryRows, err := tx.QueryContext(ctx, "SELECT id, operation, blob_id, content, MAX(ordinal), created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id")
+	if err != nil {
+		return nil, err
+	}
+	defer blobOutboxEntryRows.Close()
+	blobOutboxEntryEntities := []BlobOutboxEntryEntity{}
+	for blobOutboxEntryRows.Next() {
+		blobOutboxEntryEntity, err := convertRowsToBlobOutboxEntryEntity(blobOutboxEntryRows)
+		if err != nil {
+			return nil, err
+		}
+		blobOutboxEntryEntities = append(blobOutboxEntryEntities, *blobOutboxEntryEntity)
+	}
+	return blobOutboxEntryEntities, nil
 }
 
 func (bor *BlobOutboxEntryRepository) FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*BlobOutboxEntryEntity, error) {
