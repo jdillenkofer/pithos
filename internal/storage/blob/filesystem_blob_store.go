@@ -92,7 +92,7 @@ func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId B
 func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
 	return []BlobId{}, nil
 	// @TODO: implement me
-	// return nil, errors.New("not implemented yeterino")
+	// return nil, errors.New("not implemented yet")
 }
 
 func (bs *FilesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
