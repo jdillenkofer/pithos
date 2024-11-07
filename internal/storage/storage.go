@@ -72,7 +72,7 @@ type Storage interface {
 
 func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) Storage {
 	var metadataStore metadata.MetadataStore
-	metadataStore, err := metadata.NewSqlMetadataStore()
+	metadataStore, err := metadata.NewSqlMetadataStore(db)
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
 	}
@@ -91,7 +91,7 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	} else {
-		blobStore, err = blob.NewSqlBlobStore()
+		blobStore, err = blob.NewSqlBlobStore(db)
 		if err != nil {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
 		}

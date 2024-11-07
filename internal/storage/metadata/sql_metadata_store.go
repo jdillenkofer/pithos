@@ -21,11 +21,11 @@ type SqlMetadataStore struct {
 	blobRepository   repository.BlobRepository
 }
 
-func NewSqlMetadataStore() (*SqlMetadataStore, error) {
+func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
 	return &SqlMetadataStore{
-		bucketRepository: repository.NewBucketRepository(),
-		objectRepository: repository.NewObjectRepository(),
-		blobRepository:   repository.NewBlobRepository(),
+		bucketRepository: repository.NewBucketRepository(db),
+		objectRepository: repository.NewObjectRepository(db),
+		blobRepository:   repository.NewBlobRepository(db),
 	}, nil
 }
 

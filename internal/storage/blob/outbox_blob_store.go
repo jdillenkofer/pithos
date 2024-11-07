@@ -31,7 +31,7 @@ func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
-		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(),
+		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(db),
 	}
 	return obs, nil
 }

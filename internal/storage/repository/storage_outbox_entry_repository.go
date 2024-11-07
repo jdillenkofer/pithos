@@ -9,10 +9,13 @@ import (
 )
 
 type StorageOutboxEntryRepository struct {
+	db *sql.DB
 }
 
-func NewStorageOutboxEntryRepository() StorageOutboxEntryRepository {
-	return StorageOutboxEntryRepository{}
+func NewStorageOutboxEntryRepository(db *sql.DB) StorageOutboxEntryRepository {
+	return StorageOutboxEntryRepository{
+		db: db,
+	}
 }
 
 const (
