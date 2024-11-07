@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
@@ -21,15 +22,21 @@ type OutboxStorage struct {
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
 	storageOutboxEntryRepository repository.StorageOutboxEntryRepository
+	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
 func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) {
+	startStopValidator, err := startstopvalidator.New("OutboxStorage")
+	if err != nil {
+		return nil, err
+	}
 	os := &OutboxStorage{
 		db:                           db,
 		triggerChannel:               make(chan struct{}, 16),
 		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: repository.NewStorageOutboxEntryRepository(),
+		startStopValidator:           startStopValidator,
 	}
 	return os, nil
 }
@@ -122,13 +129,25 @@ out:
 }
 
 func (os *OutboxStorage) Start(ctx context.Context) error {
+	err := os.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
 	os.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
 		os.processOutboxLoop()
 	})
-	return os.innerStorage.Start(ctx)
+	err = os.innerStorage.Start(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (os *OutboxStorage) Stop(ctx context.Context) error {
+	err := os.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
 	if !os.triggerChannelClosed {
 		close(os.triggerChannel)
 		if os.outboxProcessingTaskHandle != nil {
@@ -141,7 +160,11 @@ func (os *OutboxStorage) Stop(ctx context.Context) error {
 		}
 		os.triggerChannelClosed = true
 	}
-	return os.innerStorage.Stop(ctx)
+	err = os.innerStorage.Stop(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (os *OutboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucket string, key string, data []byte) error {

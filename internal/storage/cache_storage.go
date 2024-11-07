@@ -6,17 +6,24 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type CacheStorage struct {
-	cache        cache.Cache
-	innerStorage Storage
+	cache              cache.Cache
+	innerStorage       Storage
+	startStopValidator *startstopvalidator.StartStopValidator
 }
 
 func NewCacheStorage(cache cache.Cache, innerStorage Storage) (*CacheStorage, error) {
+	startStopValidator, err := startstopvalidator.New("CacheStorage")
+	if err != nil {
+		return nil, err
+	}
 	return &CacheStorage{
-		cache:        cache,
-		innerStorage: innerStorage,
+		cache:              cache,
+		innerStorage:       innerStorage,
+		startStopValidator: startStopValidator,
 	}, nil
 }
 
@@ -25,7 +32,11 @@ func getObjectCacheKeyForBucketAndKey(bucket string, key string) string {
 }
 
 func (cs *CacheStorage) Start(ctx context.Context) error {
-	err := cs.innerStorage.Start(ctx)
+	err := cs.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
+	err = cs.innerStorage.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -33,7 +44,11 @@ func (cs *CacheStorage) Start(ctx context.Context) error {
 }
 
 func (cs *CacheStorage) Stop(ctx context.Context) error {
-	err := cs.innerStorage.Stop(ctx)
+	err := cs.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
+	err = cs.innerStorage.Stop(ctx)
 	if err != nil {
 		return err
 	}

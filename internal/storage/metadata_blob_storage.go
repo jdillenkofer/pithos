@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
@@ -114,11 +115,12 @@ func (blobGC *BlobGarbageCollector) RunGC() error {
 }
 
 type MetadataBlobStorage struct {
-	db            *sql.DB
-	gcTaskHandle  *task.TaskHandle
-	blobGC        *BlobGarbageCollector
-	metadataStore metadata.MetadataStore
-	blobStore     blob.BlobStore
+	db                 *sql.DB
+	gcTaskHandle       *task.TaskHandle
+	blobGC             *BlobGarbageCollector
+	metadataStore      metadata.MetadataStore
+	blobStore          blob.BlobStore
+	startStopValidator *startstopvalidator.StartStopValidator
 }
 
 func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blob.BlobStore) (*MetadataBlobStorage, error) {
@@ -126,17 +128,26 @@ func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, bl
 	if err != nil {
 		return nil, err
 	}
+	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
+	if err != nil {
+		return nil, err
+	}
 	return &MetadataBlobStorage{
-		db:            db,
-		gcTaskHandle:  nil,
-		blobGC:        blobGC,
-		metadataStore: metadataStore,
-		blobStore:     blobStore,
+		db:                 db,
+		gcTaskHandle:       nil,
+		blobGC:             blobGC,
+		metadataStore:      metadataStore,
+		blobStore:          blobStore,
+		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (mbs *MetadataBlobStorage) Start(ctx context.Context) error {
-	err := mbs.metadataStore.Start(ctx)
+	err := mbs.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
+	err = mbs.metadataStore.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -151,6 +162,11 @@ func (mbs *MetadataBlobStorage) Start(ctx context.Context) error {
 }
 
 func (mbs *MetadataBlobStorage) Stop(ctx context.Context) error {
+	err := mbs.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
+	log.Println("Stopping GCLoop task")
 	if mbs.gcTaskHandle != nil {
 		mbs.gcTaskHandle.Cancel()
 		joinedWithTimeout := mbs.gcTaskHandle.JoinWithTimeout(30 * time.Second)
@@ -160,7 +176,7 @@ func (mbs *MetadataBlobStorage) Stop(ctx context.Context) error {
 			log.Println("GCLoop joined without timeout")
 		}
 	}
-	err := mbs.metadataStore.Stop(ctx)
+	err = mbs.metadataStore.Stop(ctx)
 	if err != nil {
 		return err
 	}

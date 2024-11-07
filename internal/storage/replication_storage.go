@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type ReplicationStorage struct {
@@ -13,20 +14,32 @@ type ReplicationStorage struct {
 	secondaryStorages                   []Storage
 	primaryUploadIdToSecondaryUploadIds map[string][]string
 	mapMutex                            sync.Mutex
+	startStopValidator                  *startstopvalidator.StartStopValidator
 }
 
 func NewReplicationStorage(primaryStorage Storage, secondaryStorages ...Storage) (*ReplicationStorage, error) {
 	primaryUploadIdToSecondaryUploadIds := make(map[string][]string)
+
+	startStopValidator, err := startstopvalidator.New("ReplicationStorage")
+	if err != nil {
+		return nil, err
+	}
+
 	return &ReplicationStorage{
 		primaryStorage:                      primaryStorage,
 		secondaryStorages:                   secondaryStorages,
 		primaryUploadIdToSecondaryUploadIds: primaryUploadIdToSecondaryUploadIds,
 		mapMutex:                            sync.Mutex{},
+		startStopValidator:                  startStopValidator,
 	}, nil
 }
 
 func (rs *ReplicationStorage) Start(ctx context.Context) error {
-	err := rs.primaryStorage.Start(ctx)
+	err := rs.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
+	err = rs.primaryStorage.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -40,7 +53,11 @@ func (rs *ReplicationStorage) Start(ctx context.Context) error {
 }
 
 func (rs *ReplicationStorage) Stop(ctx context.Context) error {
-	err := rs.primaryStorage.Stop(ctx)
+	err := rs.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
+	err = rs.primaryStorage.Stop(ctx)
 	if err != nil {
 		return err
 	}
