@@ -151,22 +151,23 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
-		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
+		var store2 storage.Storage
+		store2, err = storage.NewReplicationStorage(localStore, outboxStorage)
 		if err != nil {
 			log.Fatalf("Could not create replicationStorage: %s", err)
 		}
 
-		store, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store)
+		store2, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store2)
 		if err != nil {
 			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
-		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
+		store2, err = storage.NewPrometheusStorageMiddleware(store2, registry)
 		if err != nil {
 			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
 		}
 
-		err = store.Start(ctx)
+		err = store2.Start(ctx)
 		if err != nil {
 			log.Fatalf("Couldn't start storage: %s", err)
 		}
@@ -174,7 +175,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		closeStorage = func() {
 			originalTs.Close()
 			originalCloseStorage()
-			store.Stop(ctx)
+			store2.Stop(ctx)
 		}
 		closeDatabase = func() {
 			originalCloseDatabase()
@@ -184,7 +185,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
 			}
 		}
-		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
+		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store2))
 	}
 
 	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)
