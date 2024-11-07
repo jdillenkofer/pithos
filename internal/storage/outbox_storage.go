@@ -21,7 +21,7 @@ type OutboxStorage struct {
 	triggerChannelClosed         bool
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
-	storageOutboxEntryRepository repository.StorageOutboxEntryRepository
+	storageOutboxEntryRepository *repository.StorageOutboxEntryRepository
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
@@ -30,12 +30,16 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 	if err != nil {
 		return nil, err
 	}
+	storageOutboxEntryRepository, err := repository.NewStorageOutboxEntryRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	os := &OutboxStorage{
 		db:                           db,
 		triggerChannel:               make(chan struct{}, 16),
 		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
-		storageOutboxEntryRepository: repository.NewStorageOutboxEntryRepository(db),
+		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		startStopValidator:           startStopValidator,
 	}
 	return os, nil

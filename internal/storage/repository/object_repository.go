@@ -15,10 +15,10 @@ type ObjectRepository struct {
 	db *sql.DB
 }
 
-func NewObjectRepository(db *sql.DB) ObjectRepository {
-	return ObjectRepository{
+func NewObjectRepository(db *sql.DB) (*ObjectRepository, error) {
+	return &ObjectRepository{
 		db: db,
-	}
+	}, nil
 }
 
 type ObjectEntity struct {

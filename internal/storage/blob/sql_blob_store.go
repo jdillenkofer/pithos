@@ -13,12 +13,16 @@ import (
 )
 
 type SqlBlobStore struct {
-	blobContentRepository repository.BlobContentRepository
+	blobContentRepository *repository.BlobContentRepository
 }
 
 func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
+	blobContentRepository, err := repository.NewBlobContentRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &SqlBlobStore{
-		blobContentRepository: repository.NewBlobContentRepository(db),
+		blobContentRepository: blobContentRepository,
 	}, nil
 }
 
