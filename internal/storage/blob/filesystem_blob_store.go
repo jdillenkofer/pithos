@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type FilesystemBlobStore struct {
@@ -24,6 +26,20 @@ func (bs *FilesystemBlobStore) ensureRootDir() error {
 func (bs *FilesystemBlobStore) getFilename(blobId BlobId) string {
 	blobFilename := hex.EncodeToString(blobId[:])
 	return filepath.Join(bs.root, blobFilename)
+}
+
+func (bs *FilesystemBlobStore) getBlobId(filename string) (*BlobId, error) {
+	if len(filename) != 32 {
+		return nil, errors.New("invalid blobId")
+	}
+	blobIdBytes, err := hex.DecodeString(filename)
+	if err != nil {
+		return nil, err
+	}
+	return &ulid.ULID{
+		blobIdBytes[0], blobIdBytes[1], blobIdBytes[2], blobIdBytes[3], blobIdBytes[4], blobIdBytes[5], blobIdBytes[6], blobIdBytes[7],
+		blobIdBytes[8], blobIdBytes[9], blobIdBytes[10], blobIdBytes[11], blobIdBytes[12], blobIdBytes[13], blobIdBytes[14], blobIdBytes[15],
+	}, nil
 }
 
 func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
@@ -90,9 +106,20 @@ func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId B
 }
 
 func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
-	return []BlobId{}, nil
-	// @TODO: implement me
-	// return nil, errors.New("not implemented yet")
+	dirEntries, err := os.ReadDir(bs.root)
+	if err != nil {
+		return nil, err
+	}
+	blobIds := []BlobId{}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			continue
+		}
+		if ulidPtr, err := bs.getBlobId(dirEntry.Name()); err == nil {
+			blobIds = append(blobIds, *ulidPtr)
+		}
+	}
+	return blobIds, nil
 }
 
 func (bs *FilesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
