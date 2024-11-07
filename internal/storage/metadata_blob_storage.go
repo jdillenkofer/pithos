@@ -49,7 +49,7 @@ func (blobGC *BlobGarbageCollector) RunGCLoop(stopRunning *atomic.Bool) {
 			log.Println("Running blob garbage collector")
 			err := blobGC.RunGC()
 			if err != nil {
-				log.Println(err)
+				log.Printf("Failure while running garbage collector: %s\n", err)
 			} else {
 				log.Println("Ran blob garbage collector successfully")
 			}
