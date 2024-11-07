@@ -188,6 +188,8 @@ func (obs *OutboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 		switch lastBlobOutboxEntry.Operation {
 		case repository.PutBlobOperation:
 			return ioutils.NewByteReadSeekCloser(lastBlobOutboxEntry.Content), nil
+		case repository.DeleteBlobOperation:
+			return nil, ErrBlobNotFound
 		}
 	}
 	return obs.innerBlobStore.GetBlob(ctx, tx, blobId)
