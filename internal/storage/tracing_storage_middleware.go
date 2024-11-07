@@ -4,30 +4,57 @@ import (
 	"context"
 	"io"
 	"runtime/trace"
+
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type TracingStorageMiddleware struct {
-	regionName   string
-	innerStorage Storage
+	regionName         string
+	innerStorage       Storage
+	startStopValidator *startstopvalidator.StartStopValidator
 }
 
 func NewTracingStorageMiddleware(regionName string, primaryStorage Storage) (*TracingStorageMiddleware, error) {
+	startStopValidator, err := startstopvalidator.New("TracingStorageMiddleware")
+	if err != nil {
+		return nil, err
+	}
+
 	return &TracingStorageMiddleware{
-		regionName:   regionName,
-		innerStorage: primaryStorage,
+		regionName:         regionName,
+		innerStorage:       primaryStorage,
+		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (tsm *TracingStorageMiddleware) Start(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".Start()").End()
 
-	return tsm.innerStorage.Start(ctx)
+	err := tsm.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
+
+	err = tsm.innerStorage.Start(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (tsm *TracingStorageMiddleware) Stop(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".Stop()").End()
 
-	return tsm.innerStorage.Stop(ctx)
+	err := tsm.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
+
+	err = tsm.innerStorage.Stop(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (tsm *TracingStorageMiddleware) CreateBucket(ctx context.Context, bucket string) error {

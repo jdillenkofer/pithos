@@ -92,24 +92,24 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if !useReplication {
 		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
 		if err != nil {
-			log.Fatal("Could not create prometheusStorageMiddleware")
+			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
 		}
 	}
 
 	err = store.Start(ctx)
 	if err != nil {
-		log.Fatal("Couldn't start storage")
+		log.Fatalf("Couldn't start storage: %s", err)
 	}
 	closeStorage := func() {
 		err := store.Stop(ctx)
 		if err != nil {
-			log.Fatal("Couldn't stop storage")
+			log.Fatalf("Couldn't stop storage: %s", err)
 		}
 	}
 	closeDatabase := func() {
 		err = db.Close()
 		if err != nil {
-			log.Fatal("Couldn't close database")
+			log.Fatalf("Couldn't close database: %s", err)
 		}
 	}
 
@@ -133,42 +133,42 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		var s3ClientStorage storage.Storage
 		s3ClientStorage, err = storage.NewS3ClientStorage(s3Client)
 		if err != nil {
-			log.Fatal("Could not create s3ClientStorage")
+			log.Fatalf("Could not create s3ClientStorage: %s", err)
 		}
 		s3ClientStorage, err = storage.NewTracingStorageMiddleware("S3ClientStorage", s3ClientStorage)
 		if err != nil {
-			log.Fatal("Error during TracingStorageMiddleware: ", err)
+			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
 		var outboxStorage storage.Storage
 		outboxStorage, err = storage.NewOutboxStorage(db2, s3ClientStorage)
 		if err != nil {
-			log.Fatal("Could not create outboxStorage")
+			log.Fatalf("Could not create outboxStorage: %s", err)
 		}
 
 		outboxStorage, err = storage.NewTracingStorageMiddleware("OutboxStorage", outboxStorage)
 		if err != nil {
-			log.Fatal("Error during TracingStorageMiddleware: ", err)
+			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
 		store, err = storage.NewReplicationStorage(localStore, outboxStorage)
 		if err != nil {
-			log.Fatal("Could not create replicationStorage")
+			log.Fatalf("Could not create replicationStorage: %s", err)
 		}
 
 		store, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store)
 		if err != nil {
-			log.Fatal("Error during TracingStorageMiddleware: ", err)
+			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
 		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
 		if err != nil {
-			log.Fatal("Could not create prometheusStorageMiddleware")
+			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
 		}
 
 		err = store.Start(ctx)
 		if err != nil {
-			log.Fatal("Couldn't start storage")
+			log.Fatalf("Couldn't start storage: %s", err)
 		}
 
 		closeStorage = func() {

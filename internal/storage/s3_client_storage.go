@@ -13,23 +13,39 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
+	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type S3ClientStorage struct {
-	s3Client *s3.Client
+	s3Client           *s3.Client
+	startStopValidator *startstopvalidator.StartStopValidator
 }
 
 func NewS3ClientStorage(s3Client *s3.Client) (*S3ClientStorage, error) {
+	startStopValidator, err := startstopvalidator.New("S3ClientStorage")
+	if err != nil {
+		return nil, err
+	}
+
 	return &S3ClientStorage{
-		s3Client: s3Client,
+		s3Client:           s3Client,
+		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (rs *S3ClientStorage) Start(ctx context.Context) error {
+	err := rs.startStopValidator.Start()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (rs *S3ClientStorage) Stop(ctx context.Context) error {
+	err := rs.startStopValidator.Stop()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
