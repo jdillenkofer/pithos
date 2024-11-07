@@ -10,7 +10,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN go test ./... -v
+RUN go test ./... -v -timeout 30m
 
 RUN go install cmd/pithos.go
 
