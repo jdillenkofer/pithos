@@ -12,10 +12,10 @@ type BlobRepository struct {
 	db *sql.DB
 }
 
-func NewBlobRepository(db *sql.DB) BlobRepository {
-	return BlobRepository{
+func NewBlobRepository(db *sql.DB) (*BlobRepository, error) {
+	return &BlobRepository{
 		db: db,
-	}
+	}, nil
 }
 
 type BlobEntity struct {

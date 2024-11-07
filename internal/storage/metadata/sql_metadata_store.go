@@ -16,16 +16,28 @@ import (
 )
 
 type SqlMetadataStore struct {
-	bucketRepository repository.BucketRepository
-	objectRepository repository.ObjectRepository
-	blobRepository   repository.BlobRepository
+	bucketRepository *repository.BucketRepository
+	objectRepository *repository.ObjectRepository
+	blobRepository   *repository.BlobRepository
 }
 
 func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
+	bucketRepository, err := repository.NewBucketRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	objectRepository, err := repository.NewObjectRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	blobRepository, err := repository.NewBlobRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &SqlMetadataStore{
-		bucketRepository: repository.NewBucketRepository(db),
-		objectRepository: repository.NewObjectRepository(db),
-		blobRepository:   repository.NewBlobRepository(db),
+		bucketRepository: bucketRepository,
+		objectRepository: objectRepository,
+		blobRepository:   blobRepository,
 	}, nil
 }
 

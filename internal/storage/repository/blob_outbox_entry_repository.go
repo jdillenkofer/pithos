@@ -12,10 +12,10 @@ type BlobOutboxEntryRepository struct {
 	db *sql.DB
 }
 
-func NewBlobOutboxEntryRepository(db *sql.DB) BlobOutboxEntryRepository {
-	return BlobOutboxEntryRepository{
+func NewBlobOutboxEntryRepository(db *sql.DB) (*BlobOutboxEntryRepository, error) {
+	return &BlobOutboxEntryRepository{
 		db: db,
-	}
+	}, nil
 }
 
 const (

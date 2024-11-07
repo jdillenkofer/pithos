@@ -22,16 +22,20 @@ type OutboxBlobStore struct {
 	triggerChannelClosed       bool
 	outboxProcessingTaskHandle *task.TaskHandle
 	innerBlobStore             BlobStore
-	blobOutboxEntryRepository  repository.BlobOutboxEntryRepository
+	blobOutboxEntryRepository  *repository.BlobOutboxEntryRepository
 }
 
 func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore, error) {
+	blobOutboxEntryRepository, err := repository.NewBlobOutboxEntryRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	obs := &OutboxBlobStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
-		blobOutboxEntryRepository: repository.NewBlobOutboxEntryRepository(db),
+		blobOutboxEntryRepository: blobOutboxEntryRepository,
 	}
 	return obs, nil
 }

@@ -12,10 +12,10 @@ type BucketRepository struct {
 	db *sql.DB
 }
 
-func NewBucketRepository(db *sql.DB) BucketRepository {
-	return BucketRepository{
+func NewBucketRepository(db *sql.DB) (*BucketRepository, error) {
+	return &BucketRepository{
 		db: db,
-	}
+	}, nil
 }
 
 type BucketEntity struct {
