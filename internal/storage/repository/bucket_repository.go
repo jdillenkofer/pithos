@@ -9,12 +9,57 @@ import (
 )
 
 type BucketRepository struct {
-	db *sql.DB
+	db                             *sql.DB
+	findAllBucketsPreparedStmt     *sql.Stmt
+	findBucketByNamePreparedStmt   *sql.Stmt
+	insertBucketPreparedStmt       *sql.Stmt
+	updateBucketByIdPreparedStmt   *sql.Stmt
+	existsBucketByNamePreparedStmt *sql.Stmt
+	deleteBucketByNamePreparedStmt *sql.Stmt
 }
 
+const (
+	findAllBucketsStmt     = "SELECT id, name, created_at, updated_at FROM buckets"
+	findBucketByNameStmt   = "SELECT id, name, created_at, updated_at FROM buckets WHERE name = ?"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?"
+	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = ?"
+	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = ?"
+)
+
 func NewBucketRepository(db *sql.DB) (*BucketRepository, error) {
+	findAllBucketsPreparedStmt, err := db.Prepare(findAllBucketsStmt)
+	if err != nil {
+		return nil, err
+	}
+	findBucketByNamePreparedStmt, err := db.Prepare(findBucketByNameStmt)
+	if err != nil {
+		return nil, err
+	}
+	insertBucketPreparedStmt, err := db.Prepare(insertBucketStmt)
+	if err != nil {
+		return nil, err
+	}
+	updateBucketByIdPreparedStmt, err := db.Prepare(updateBucketByIdStmt)
+	if err != nil {
+		return nil, err
+	}
+	existsBucketByNamePreparedStmt, err := db.Prepare(existsBucketByNameStmt)
+	if err != nil {
+		return nil, err
+	}
+	deleteBucketByNamePreparedStmt, err := db.Prepare(deleteBucketByNameStmt)
+	if err != nil {
+		return nil, err
+	}
 	return &BucketRepository{
-		db: db,
+		db:                             db,
+		findAllBucketsPreparedStmt:     findAllBucketsPreparedStmt,
+		findBucketByNamePreparedStmt:   findBucketByNamePreparedStmt,
+		insertBucketPreparedStmt:       insertBucketPreparedStmt,
+		updateBucketByIdPreparedStmt:   updateBucketByIdPreparedStmt,
+		existsBucketByNamePreparedStmt: existsBucketByNamePreparedStmt,
+		deleteBucketByNamePreparedStmt: deleteBucketByNamePreparedStmt,
 	}, nil
 }
 
@@ -45,7 +90,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*BucketEntity, error) {
 }
 
 func (br *BucketRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]BucketEntity, error) {
-	bucketRows, err := tx.QueryContext(ctx, "SELECT id, name, created_at, updated_at FROM buckets")
+	bucketRows, err := tx.StmtContext(ctx, br.findAllBucketsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +107,7 @@ func (br *BucketRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]B
 }
 
 func (br *BucketRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*BucketEntity, error) {
-	bucketRows, err := tx.QueryContext(ctx, "SELECT id, name, created_at, updated_at FROM buckets WHERE name = ?", bucketName)
+	bucketRows, err := tx.StmtContext(ctx, br.findBucketByNamePreparedStmt).QueryContext(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -83,16 +128,16 @@ func (br *BucketRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, "INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)", bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.StmtContext(ctx, br.insertBucketPreparedStmt).ExecContext(ctx, bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now()
-	_, err := tx.ExecContext(ctx, "UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?", bucket.Name, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.StmtContext(ctx, br.updateBucketByIdPreparedStmt).ExecContext(ctx, bucket.Name, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 
 func (br *BucketRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
-	bucketRows, err := tx.QueryContext(ctx, "SELECT id FROM buckets WHERE name = ?", bucketName)
+	bucketRows, err := tx.StmtContext(ctx, br.existsBucketByNamePreparedStmt).QueryContext(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +147,6 @@ func (br *BucketRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, 
 }
 
 func (br *BucketRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) error {
-	_, err := tx.ExecContext(ctx, "DELETE FROM buckets WHERE name = ?", bucketName)
+	_, err := tx.StmtContext(ctx, br.deleteBucketByNamePreparedStmt).ExecContext(ctx, bucketName)
 	return err
 }
