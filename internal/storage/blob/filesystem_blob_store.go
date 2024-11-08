@@ -28,18 +28,20 @@ func (bs *FilesystemBlobStore) getFilename(blobId BlobId) string {
 	return filepath.Join(bs.root, blobFilename)
 }
 
-func (bs *FilesystemBlobStore) getBlobId(filename string) (*BlobId, error) {
+func (bs *FilesystemBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *BlobId, ok bool) {
 	if len(filename) != 32 {
-		return nil, errors.New("invalid blobId")
+		return nil, false
 	}
 	blobIdBytes, err := hex.DecodeString(filename)
 	if err != nil {
-		return nil, err
+		return nil, false
 	}
 	return &ulid.ULID{
-		blobIdBytes[0], blobIdBytes[1], blobIdBytes[2], blobIdBytes[3], blobIdBytes[4], blobIdBytes[5], blobIdBytes[6], blobIdBytes[7],
-		blobIdBytes[8], blobIdBytes[9], blobIdBytes[10], blobIdBytes[11], blobIdBytes[12], blobIdBytes[13], blobIdBytes[14], blobIdBytes[15],
-	}, nil
+		blobIdBytes[0], blobIdBytes[1], blobIdBytes[2], blobIdBytes[3],
+		blobIdBytes[4], blobIdBytes[5], blobIdBytes[6], blobIdBytes[7],
+		blobIdBytes[8], blobIdBytes[9], blobIdBytes[10], blobIdBytes[11],
+		blobIdBytes[12], blobIdBytes[13], blobIdBytes[14], blobIdBytes[15],
+	}, true
 }
 
 func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
@@ -115,8 +117,8 @@ func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]Bl
 		if dirEntry.IsDir() {
 			continue
 		}
-		if ulidPtr, err := bs.getBlobId(dirEntry.Name()); err == nil {
-			blobIds = append(blobIds, *ulidPtr)
+		if blobId, ok := bs.tryGetBlobIdFromFilename(dirEntry.Name()); ok {
+			blobIds = append(blobIds, *blobId)
 		}
 	}
 	return blobIds, nil

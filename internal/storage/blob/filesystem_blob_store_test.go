@@ -14,8 +14,8 @@ func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
 	filesystemBlobStore := FilesystemBlobStore{"."}
 	blobId := ulid.Make()
 	filename := filesystemBlobStore.getFilename(blobId)
-	blobId2, err := filesystemBlobStore.getBlobId(filename)
-	assert.Nil(t, err)
+	blobId2, ok := filesystemBlobStore.tryGetBlobIdFromFilename(filename)
+	assert.True(t, ok)
 	assert.Equal(t, blobId, *blobId2)
 }
 
