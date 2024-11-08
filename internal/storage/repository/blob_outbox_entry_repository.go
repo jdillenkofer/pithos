@@ -10,7 +10,7 @@ import (
 
 type BlobOutboxEntryRepository struct {
 	db                                                 *sql.DB
-	nextOrdinalPreparedStmt                            *sql.Stmt
+	nextOrdinalBlobOutboxEntryPreparedStmt             *sql.Stmt
 	findLastBlobOutboxEntryByBlobIdPreparedStmt        *sql.Stmt
 	findLastBlobOutboxEntryGroupedByBlobIdPreparedStmt *sql.Stmt
 	findFirstBlobOutboxEntryPreparedStmt               *sql.Stmt
@@ -20,7 +20,7 @@ type BlobOutboxEntryRepository struct {
 }
 
 const (
-	nextOrdinalStmt                            = "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM blob_outbox_entries"
+	nextOrdinalBlobOutboxEntryStmt             = "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM blob_outbox_entries"
 	findLastBlobOutboxEntryByBlobIdStmt        = "SELECT id, operation, blob_id, content, ordinal, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = ? ORDER BY ordinal DESC LIMIT 1"
 	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT id, operation, blob_id, content, MAX(ordinal), created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
 	findFirstBlobOutboxEntryStmt               = "SELECT id, operation, blob_id, content, ordinal, created_at, updated_at FROM blob_outbox_entries ORDER BY ordinal ASC LIMIT 1"
@@ -30,7 +30,7 @@ const (
 )
 
 func NewBlobOutboxEntryRepository(db *sql.DB) (*BlobOutboxEntryRepository, error) {
-	nextOrdinalPreparedStmt, err := db.Prepare(nextOrdinalStmt)
+	nextOrdinalBlobOutboxEntryPreparedStmt, err := db.Prepare(nextOrdinalBlobOutboxEntryStmt)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +59,8 @@ func NewBlobOutboxEntryRepository(db *sql.DB) (*BlobOutboxEntryRepository, error
 		return nil, err
 	}
 	return &BlobOutboxEntryRepository{
-		db:                      db,
-		nextOrdinalPreparedStmt: nextOrdinalPreparedStmt,
+		db:                                     db,
+		nextOrdinalBlobOutboxEntryPreparedStmt: nextOrdinalBlobOutboxEntryPreparedStmt,
 		findLastBlobOutboxEntryByBlobIdPreparedStmt:        findLastBlobOutboxEntryByBlobIdPreparedStmt,
 		findLastBlobOutboxEntryGroupedByBlobIdPreparedStmt: findLastBlobOutboxEntryGroupedByBlobIdPreparedStmt,
 		findFirstBlobOutboxEntryPreparedStmt:               findFirstBlobOutboxEntryPreparedStmt,
@@ -143,7 +143,7 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*BlobOutboxEn
 }
 
 func (bor *BlobOutboxEntryRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
-	row := tx.StmtContext(ctx, bor.nextOrdinalPreparedStmt).QueryRowContext(ctx)
+	row := tx.StmtContext(ctx, bor.nextOrdinalBlobOutboxEntryPreparedStmt).QueryRowContext(ctx)
 	var ordinal int
 	err := row.Scan(&ordinal)
 	if err != nil {
