@@ -1,14 +1,15 @@
-package bloboutboxentry
+package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry"
 	"github.com/oklog/ulid/v2"
 )
 
-type BlobOutboxEntryRepository struct {
+type sqliteBlobOutboxEntryRepository struct {
 	db                                                 *sql.DB
 	nextOrdinalBlobOutboxEntryPreparedStmt             *sql.Stmt
 	findLastBlobOutboxEntryByBlobIdPreparedStmt        *sql.Stmt
@@ -29,7 +30,7 @@ const (
 	deleteBlobOutboxEntryByIdStmt              = "DELETE FROM blob_outbox_entries WHERE id = ?"
 )
 
-func New(db *sql.DB) (*BlobOutboxEntryRepository, error) {
+func New(db *sql.DB) (bloboutboxentry.BlobOutboxEntryRepository, error) {
 	nextOrdinalBlobOutboxEntryPreparedStmt, err := db.Prepare(nextOrdinalBlobOutboxEntryStmt)
 	if err != nil {
 		return nil, err
@@ -58,7 +59,7 @@ func New(db *sql.DB) (*BlobOutboxEntryRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BlobOutboxEntryRepository{
+	return &sqliteBlobOutboxEntryRepository{
 		db:                                     db,
 		nextOrdinalBlobOutboxEntryPreparedStmt: nextOrdinalBlobOutboxEntryPreparedStmt,
 		findLastBlobOutboxEntryByBlobIdPreparedStmt:        findLastBlobOutboxEntryByBlobIdPreparedStmt,
@@ -70,22 +71,7 @@ func New(db *sql.DB) (*BlobOutboxEntryRepository, error) {
 	}, nil
 }
 
-const (
-	PutBlobOperation    = "PutBlob"
-	DeleteBlobOperation = "DeleteBlob"
-)
-
-type BlobOutboxEntryEntity struct {
-	Id        *ulid.ULID
-	Operation string
-	BlobId    ulid.ULID
-	Content   []byte
-	Ordinal   int
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*BlobOutboxEntryEntity, error) {
+func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry.BlobOutboxEntryEntity, error) {
 	var id string
 	var operation string
 	var blobId string
@@ -102,7 +88,7 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*BlobOutboxEntry
 	}
 	ulidId := ulid.MustParse(id)
 	ulidBlobId := ulid.MustParse(blobId)
-	return &BlobOutboxEntryEntity{
+	return &bloboutboxentry.BlobOutboxEntryEntity{
 		Id:        &ulidId,
 		Operation: operation,
 		BlobId:    ulidBlobId,
@@ -114,7 +100,7 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*BlobOutboxEntry
 }
 
 // @TODO: CodeDuplication See convertRowToBlobOutboxEntryEntity
-func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*BlobOutboxEntryEntity, error) {
+func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxentry.BlobOutboxEntryEntity, error) {
 	var id string
 	var operation string
 	var blobId string
@@ -131,7 +117,7 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*BlobOutboxEn
 	}
 	ulidId := ulid.MustParse(id)
 	ulidBlobId := ulid.MustParse(blobId)
-	return &BlobOutboxEntryEntity{
+	return &bloboutboxentry.BlobOutboxEntryEntity{
 		Id:        &ulidId,
 		Operation: operation,
 		BlobId:    ulidBlobId,
@@ -142,7 +128,7 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*BlobOutboxEn
 	}, nil
 }
 
-func (bor *BlobOutboxEntryRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
+func (bor *sqliteBlobOutboxEntryRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
 	row := tx.StmtContext(ctx, bor.nextOrdinalBlobOutboxEntryPreparedStmt).QueryRowContext(ctx)
 	var ordinal int
 	err := row.Scan(&ordinal)
@@ -155,7 +141,7 @@ func (bor *BlobOutboxEntryRepository) NextOrdinal(ctx context.Context, tx *sql.T
 	return &ordinal, nil
 }
 
-func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*BlobOutboxEntryEntity, error) {
+func (bor *sqliteBlobOutboxEntryRepository) FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*bloboutboxentry.BlobOutboxEntryEntity, error) {
 	row := tx.StmtContext(ctx, bor.findLastBlobOutboxEntryByBlobIdPreparedStmt).QueryRowContext(ctx, blobId.String())
 	blobOutboxEntryEntity, err := convertRowToBlobOutboxEntryEntity(row)
 	if err != nil {
@@ -164,13 +150,13 @@ func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryByBlobId(ctx contex
 	return blobOutboxEntryEntity, nil
 }
 
-func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Context, tx *sql.Tx) ([]BlobOutboxEntryEntity, error) {
+func (bor *sqliteBlobOutboxEntryRepository) FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Context, tx *sql.Tx) ([]bloboutboxentry.BlobOutboxEntryEntity, error) {
 	blobOutboxEntryRows, err := tx.StmtContext(ctx, bor.findLastBlobOutboxEntryGroupedByBlobIdPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer blobOutboxEntryRows.Close()
-	blobOutboxEntryEntities := []BlobOutboxEntryEntity{}
+	blobOutboxEntryEntities := []bloboutboxentry.BlobOutboxEntryEntity{}
 	for blobOutboxEntryRows.Next() {
 		blobOutboxEntryEntity, err := convertRowsToBlobOutboxEntryEntity(blobOutboxEntryRows)
 		if err != nil {
@@ -181,7 +167,7 @@ func (bor *BlobOutboxEntryRepository) FindLastBlobOutboxEntryGroupedByBlobId(ctx
 	return blobOutboxEntryEntities, nil
 }
 
-func (bor *BlobOutboxEntryRepository) FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*BlobOutboxEntryEntity, error) {
+func (bor *sqliteBlobOutboxEntryRepository) FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*bloboutboxentry.BlobOutboxEntryEntity, error) {
 	row := tx.StmtContext(ctx, bor.findFirstBlobOutboxEntryPreparedStmt).QueryRowContext(ctx)
 	blobOutboxEntryEntity, err := convertRowToBlobOutboxEntryEntity(row)
 	if err != nil {
@@ -190,7 +176,7 @@ func (bor *BlobOutboxEntryRepository) FindFirstBlobOutboxEntry(ctx context.Conte
 	return blobOutboxEntryEntity, nil
 }
 
-func (bor *BlobOutboxEntryRepository) SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx, blobOutboxEntry *BlobOutboxEntryEntity) error {
+func (bor *sqliteBlobOutboxEntryRepository) SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx, blobOutboxEntry *bloboutboxentry.BlobOutboxEntryEntity) error {
 	if blobOutboxEntry.Id == nil {
 		id := ulid.Make()
 		blobOutboxEntry.Id = &id
@@ -205,7 +191,7 @@ func (bor *BlobOutboxEntryRepository) SaveBlobOutboxEntry(ctx context.Context, t
 	return err
 }
 
-func (bor *BlobOutboxEntryRepository) DeleteBlobOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
+func (bor *sqliteBlobOutboxEntryRepository) DeleteBlobOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
 	_, err := tx.StmtContext(ctx, bor.deleteBlobOutboxEntryByIdPreparedStmt).ExecContext(ctx, id.String())
 	return err
 }

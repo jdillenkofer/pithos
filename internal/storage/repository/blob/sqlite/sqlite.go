@@ -1,14 +1,15 @@
-package blob
+package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/repository/blob"
 	"github.com/oklog/ulid/v2"
 )
 
-type BlobRepository struct {
+type sqliteBlobRepository struct {
 	db                                                      *sql.DB
 	findInUseBlobIdsPreparedStmt                            *sql.Stmt
 	findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt *sql.Stmt
@@ -25,7 +26,7 @@ const (
 	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
 )
 
-func New(db *sql.DB) (*BlobRepository, error) {
+func New(db *sql.DB) (blob.BlobRepository, error) {
 	findInUseBlobIdsPreparedStmt, err := db.Prepare(findInUseBlobIdsStmt)
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func New(db *sql.DB) (*BlobRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BlobRepository{
+	return &sqliteBlobRepository{
 		db:                           db,
 		findInUseBlobIdsPreparedStmt: findInUseBlobIdsPreparedStmt,
 		findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt: findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt,
@@ -56,18 +57,7 @@ func New(db *sql.DB) (*BlobRepository, error) {
 	}, nil
 }
 
-type BlobEntity struct {
-	Id             *ulid.ULID
-	BlobId         ulid.ULID
-	ObjectId       ulid.ULID
-	ETag           string
-	Size           int64
-	SequenceNumber int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-}
-
-func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
+func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.BlobEntity, error) {
 	var id string
 	var blobId string
 	var objectId string
@@ -81,7 +71,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	blobEntity := BlobEntity{
+	blobEntity := blob.BlobEntity{
 		Id:             &ulidId,
 		BlobId:         ulid.MustParse(blobId),
 		ObjectId:       ulid.MustParse(objectId),
@@ -94,7 +84,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*BlobEntity, error) {
 	return &blobEntity, nil
 }
 
-func (br *BlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+func (br *sqliteBlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
 	blobIdRows, err := tx.StmtContext(ctx, br.findInUseBlobIdsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
@@ -113,13 +103,13 @@ func (br *BlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]u
 	return blobIds, nil
 }
 
-func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]BlobEntity, error) {
+func (br *sqliteBlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]blob.BlobEntity, error) {
 	blobRows, err := tx.StmtContext(ctx, br.findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt).QueryContext(ctx, objectId.String())
 	if err != nil {
 		return nil, err
 	}
 	defer blobRows.Close()
-	blobs := []BlobEntity{}
+	blobs := []blob.BlobEntity{}
 	for blobRows.Next() {
 		blobEntity, err := convertRowToBlobEntity(blobRows)
 		if err != nil {
@@ -130,7 +120,7 @@ func (br *BlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx contex
 	return blobs, nil
 }
 
-func (br *BlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *BlobEntity) error {
+func (br *sqliteBlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob.BlobEntity) error {
 	if blob.Id == nil {
 		id := ulid.Make()
 		blob.Id = &id
@@ -145,7 +135,7 @@ func (br *BlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *BlobEn
 	return err
 }
 
-func (br *BlobRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+func (br *sqliteBlobRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
 	_, err := tx.StmtContext(ctx, br.deleteBlobByObjectIdPreparedStmt).ExecContext(ctx, objectId.String())
 	return err
 }

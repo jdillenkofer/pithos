@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
-	"github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry"
+	blobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry"
+	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
 )
@@ -22,11 +23,11 @@ type OutboxBlobStore struct {
 	triggerChannelClosed       bool
 	outboxProcessingTaskHandle *task.TaskHandle
 	innerBlobStore             BlobStore
-	blobOutboxEntryRepository  *bloboutboxentry.BlobOutboxEntryRepository
+	blobOutboxEntryRepository  blobOutboxEntryRepository.BlobOutboxEntryRepository
 }
 
 func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore, error) {
-	blobOutboxEntryRepository, err := bloboutboxentry.New(db)
+	blobOutboxEntryRepository, err := sqliteBlobOutboxEntryRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
@@ -59,14 +60,14 @@ func (obs *OutboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 
 		switch blobOutboxEntry.Operation {
-		case bloboutboxentry.PutBlobOperation:
+		case blobOutboxEntryRepository.PutBlobOperation:
 			_, err := obs.innerBlobStore.PutBlob(ctx, tx, blobOutboxEntry.BlobId, bytes.NewReader(blobOutboxEntry.Content))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
-		case bloboutboxentry.DeleteBlobOperation:
+		case blobOutboxEntryRepository.DeleteBlobOperation:
 			err = obs.innerBlobStore.DeleteBlob(ctx, tx, blobOutboxEntry.BlobId)
 			if err != nil {
 				tx.Rollback()
@@ -141,7 +142,7 @@ func (obs *OutboxBlobStore) storeBlobOutboxEntry(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return err
 	}
-	blobOutboxEntry := bloboutboxentry.BlobOutboxEntryEntity{
+	blobOutboxEntry := blobOutboxEntryRepository.BlobOutboxEntryEntity{
 		Operation: operation,
 		BlobId:    blobId,
 		Content:   content,
@@ -167,7 +168,7 @@ func (obs *OutboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 		return nil, err
 	}
 
-	err = obs.storeBlobOutboxEntry(ctx, tx, bloboutboxentry.PutBlobOperation, blobId, content)
+	err = obs.storeBlobOutboxEntry(ctx, tx, blobOutboxEntryRepository.PutBlobOperation, blobId, content)
 	if err != nil {
 		return nil, err
 	}
@@ -191,9 +192,9 @@ func (obs *OutboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId Blob
 	}
 	if lastBlobOutboxEntry != nil {
 		switch lastBlobOutboxEntry.Operation {
-		case bloboutboxentry.PutBlobOperation:
+		case blobOutboxEntryRepository.PutBlobOperation:
 			return ioutils.NewByteReadSeekCloser(lastBlobOutboxEntry.Content), nil
-		case bloboutboxentry.DeleteBlobOperation:
+		case blobOutboxEntryRepository.DeleteBlobOperation:
 			return nil, ErrBlobNotFound
 		}
 	}
@@ -223,9 +224,9 @@ func (obs *OutboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobI
 	// and add the once that were added to the outbox
 	for _, outboxEntry := range lastOutboxEntryGroupedByBlobId {
 		switch outboxEntry.Operation {
-		case bloboutboxentry.DeleteBlobOperation:
+		case blobOutboxEntryRepository.DeleteBlobOperation:
 			delete(allBlobIds, outboxEntry.BlobId)
-		case bloboutboxentry.PutBlobOperation:
+		case blobOutboxEntryRepository.PutBlobOperation:
 			allBlobIds[outboxEntry.BlobId] = struct{}{}
 		}
 	}
@@ -239,7 +240,7 @@ func (obs *OutboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobI
 }
 
 func (obs *OutboxBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
-	err := obs.storeBlobOutboxEntry(ctx, tx, bloboutboxentry.DeleteBlobOperation, blobId, []byte{})
+	err := obs.storeBlobOutboxEntry(ctx, tx, blobOutboxEntryRepository.DeleteBlobOperation, blobId, []byte{})
 	if err != nil {
 		return err
 	}
