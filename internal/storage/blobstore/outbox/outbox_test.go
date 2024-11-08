@@ -1,10 +1,12 @@
-package blob
+package outbox
 
 import (
 	"log"
 	"os"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +31,7 @@ func TestOutboxBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	filesystemBlobStore, err := NewFilesystemBlobStore(storagePath)
+	filesystemBlobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
 		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
@@ -37,11 +39,11 @@ func TestOutboxBlobStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobOutboxEntryRepository: %s", err)
 	}
-	outboxBlobStore, err := NewOutboxBlobStore(db, filesystemBlobStore, blobOutboxEntryRepository)
+	outboxBlobStore, err := New(db, filesystemBlobStore, blobOutboxEntryRepository)
 	if err != nil {
 		log.Fatalf("Could not create OutboxBlobStore: %s", err)
 	}
 	content := []byte("OutboxBlobStore")
-	err = BlobStoreTester(outboxBlobStore, db, content)
+	err = blobstore.Tester(outboxBlobStore, db, content)
 	assert.Nil(t, err)
 }

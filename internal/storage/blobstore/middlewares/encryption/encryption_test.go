@@ -1,16 +1,17 @@
-package blob
+package encryption
 
 import (
 	"log"
 	"os"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSqlBlobStore(t *testing.T) {
+func TestEncryptionBlobStore(t *testing.T) {
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
@@ -29,15 +30,15 @@ func TestSqlBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	blobContentRepository, err := sqliteBlobContentRepository.New(db)
+	filesystemBlobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
-		log.Fatalf("Could not create BlobContentRepository: %s", err)
+		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
-	sqlBlobStore, err := NewSqlBlobStore(db, blobContentRepository)
+	encryptionBlobStoreMiddleware, err := New("password", filesystemBlobStore)
 	if err != nil {
-		log.Fatalf("Could not create SqlBlobStore: %s", err)
+		log.Fatalf("Could not create EncryptionBlobStoreMiddleware: %s", err)
 	}
-	content := []byte("SqlBlobStore")
-	err = BlobStoreTester(sqlBlobStore, db, content)
+	content := []byte("EncryptionBlobStoreMiddleware")
+	err = blobstore.Tester(encryptionBlobStoreMiddleware, db, content)
 	assert.Nil(t, err)
 }

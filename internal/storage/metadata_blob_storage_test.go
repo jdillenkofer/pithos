@@ -5,7 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
+	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
@@ -39,7 +40,7 @@ func TestMetadataBlobStorageWithSql(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobContentRepository: %s", err)
 	}
-	blobStore, err := blob.NewSqlBlobStore(db, blobContentRepository)
+	blobStore, err := sqlBlobStore.New(db, blobContentRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
@@ -90,7 +91,7 @@ func TestMetadataBlobStorageWithFilesystem(t *testing.T) {
 		}
 	}()
 
-	blobStore, err := blob.NewFilesystemBlobStore(storagePath)
+	blobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}

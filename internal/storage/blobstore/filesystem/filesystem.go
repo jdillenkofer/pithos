@@ -1,4 +1,4 @@
-package blob
+package filesystem
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -23,12 +24,12 @@ func (bs *FilesystemBlobStore) ensureRootDir() error {
 	return err
 }
 
-func (bs *FilesystemBlobStore) getFilename(blobId BlobId) string {
+func (bs *FilesystemBlobStore) getFilename(blobId blobstore.BlobId) string {
 	blobFilename := hex.EncodeToString(blobId[:])
 	return filepath.Join(bs.root, blobFilename)
 }
 
-func (bs *FilesystemBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *BlobId, ok bool) {
+func (bs *FilesystemBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *blobstore.BlobId, ok bool) {
 	if len(filename) != 32 {
 		return nil, false
 	}
@@ -44,7 +45,7 @@ func (bs *FilesystemBlobStore) tryGetBlobIdFromFilename(filename string) (blobId
 	}, true
 }
 
-func NewFilesystemBlobStore(root string) (*FilesystemBlobStore, error) {
+func New(root string) (*FilesystemBlobStore, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -67,7 +68,7 @@ func (bs *FilesystemBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
+func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
 	filename := bs.getFilename(blobId)
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -75,12 +76,12 @@ func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId B
 			return nil, err
 		}
 		defer f.Close()
-		_, err = io.Copy(f, blob)
+		_, err = io.Copy(f, reader)
 		if err != nil {
 			return nil, err
 		}
 	}
-	etag, err := calculateETagFromPath(filename)
+	etag, err := blobstore.CalculateETagFromPath(filename)
 	if err != nil {
 		return nil, err
 	}
@@ -88,31 +89,31 @@ func (bs *FilesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId B
 	if err != nil {
 		return nil, err
 	}
-	return &PutBlobResult{
+	return &blobstore.PutBlobResult{
 		BlobId: blobId,
 		ETag:   *etag,
 		Size:   stat.Size(),
 	}, nil
 }
 
-func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
+func (bs *FilesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, ErrBlobNotFound
+			return nil, blobstore.ErrBlobNotFound
 		}
 		return nil, err
 	}
 	return f, err
 }
 
-func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	dirEntries, err := os.ReadDir(bs.root)
 	if err != nil {
 		return nil, err
 	}
-	blobIds := []BlobId{}
+	blobIds := []blobstore.BlobId{}
 	for _, dirEntry := range dirEntries {
 		if dirEntry.IsDir() {
 			continue
@@ -124,7 +125,7 @@ func (bs *FilesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]Bl
 	return blobIds, nil
 }
 
-func (bs *FilesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
+func (bs *FilesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
 	filename := bs.getFilename(blobId)
 	err := os.Remove(filename)
 	if err != nil {

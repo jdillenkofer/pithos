@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
@@ -40,7 +40,7 @@ func TestCacheStorage(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobContentRepository: %s", err)
 	}
-	blobStore, err := blob.NewSqlBlobStore(db, blobContentRepository)
+	blobStore, err := sqlBlobStore.New(db, blobContentRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}

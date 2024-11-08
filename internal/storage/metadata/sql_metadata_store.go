@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	blobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob"
 	bucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket"
 	objectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object"
@@ -39,7 +39,7 @@ func (sms *SqlMetadataStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blob.BlobId, error) {
+func (sms *SqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	return sms.blobRepository.FindInUseBlobIds(ctx, tx)
 }
 

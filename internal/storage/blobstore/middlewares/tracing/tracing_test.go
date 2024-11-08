@@ -1,25 +1,17 @@
-package blob
+package tracing
 
 import (
 	"log"
 	"os"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
-	filesystemBlobStore := FilesystemBlobStore{"."}
-	blobId := ulid.Make()
-	filename := filesystemBlobStore.getFilename(blobId)
-	blobId2, ok := filesystemBlobStore.tryGetBlobIdFromFilename(filename)
-	assert.True(t, ok)
-	assert.Equal(t, blobId, *blobId2)
-}
-
-func TestFilesystemBlobStore(t *testing.T) {
+func TestTracingBlobStore(t *testing.T) {
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
@@ -38,11 +30,15 @@ func TestFilesystemBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	filesystemBlobStore, err := NewFilesystemBlobStore(storagePath)
+	filesystemBlobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
 		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
-	content := []byte("FilesystemBlobStore")
-	err = BlobStoreTester(filesystemBlobStore, db, content)
+	tracingBlobStoreMiddleware, err := New("filesystemBlobStore", filesystemBlobStore)
+	if err != nil {
+		log.Fatalf("Could not create TracingBlobStoreMiddleware: %s", err)
+	}
+	content := []byte("TracingBlobStoreMiddleware")
+	err = blobstore.Tester(tracingBlobStoreMiddleware, db, content)
 	assert.Nil(t, err)
 }
