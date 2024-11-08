@@ -11,7 +11,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
@@ -21,11 +21,11 @@ type BlobGarbageCollector struct {
 	db              *sql.DB
 	collectionMutex sync.RWMutex
 	metadataStore   metadata.MetadataStore
-	blobStore       blob.BlobStore
+	blobStore       blobstore.BlobStore
 	writeOperations atomic.Int64
 }
 
-func NewBlobGarbageCollector(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blob.BlobStore) (*BlobGarbageCollector, error) {
+func NewBlobGarbageCollector(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blobstore.BlobStore) (*BlobGarbageCollector, error) {
 	return &BlobGarbageCollector{
 		db:              db,
 		collectionMutex: sync.RWMutex{},
@@ -81,7 +81,7 @@ func (blobGC *BlobGarbageCollector) RunGC() error {
 		return err
 	}
 
-	inUseBlobIdMap := make(map[blob.BlobId]struct{})
+	inUseBlobIdMap := make(map[blobstore.BlobId]struct{})
 	inUseBlobIds, err := blobGC.metadataStore.GetInUseBlobIds(ctx, tx)
 	if err != nil {
 		tx.Rollback()
@@ -119,11 +119,11 @@ type MetadataBlobStorage struct {
 	gcTaskHandle       *task.TaskHandle
 	blobGC             *BlobGarbageCollector
 	metadataStore      metadata.MetadataStore
-	blobStore          blob.BlobStore
+	blobStore          blobstore.BlobStore
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
-func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blob.BlobStore) (*MetadataBlobStorage, error) {
+func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blobstore.BlobStore) (*MetadataBlobStorage, error) {
 	blobGC, err := NewBlobGarbageCollector(db, metadataStore, blobStore)
 	if err != nil {
 		return nil, err
@@ -408,7 +408,7 @@ func (mbs *MetadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		}
 	}
 
-	blobId, err := blob.GenerateBlobId()
+	blobId, err := blobstore.GenerateBlobId()
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -519,7 +519,7 @@ func (mbs *MetadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	blobId, err := blob.GenerateBlobId()
+	blobId, err := blobstore.GenerateBlobId()
 	if err != nil {
 		tx.Rollback()
 		return nil, err

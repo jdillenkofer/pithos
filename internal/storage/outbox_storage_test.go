@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
@@ -35,7 +35,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		}
 	}()
 
-	blobStore, err := blob.NewFilesystemBlobStore(storagePath)
+	blobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}

@@ -1,4 +1,4 @@
-package blob
+package sql
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
 )
 
@@ -16,7 +17,7 @@ type SqlBlobStore struct {
 	blobContentRepository blobContentRepository.BlobContentRepository
 }
 
-func NewSqlBlobStore(db *sql.DB, blobContentRepository blobContentRepository.BlobContentRepository) (*SqlBlobStore, error) {
+func New(db *sql.DB, blobContentRepository blobContentRepository.BlobContentRepository) (*SqlBlobStore, error) {
 	return &SqlBlobStore{
 		blobContentRepository: blobContentRepository,
 	}, nil
@@ -30,8 +31,8 @@ func (bs *SqlBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
-	content, err := io.ReadAll(blob)
+func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -44,36 +45,36 @@ func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, 
 		return nil, err
 	}
 
-	etag, err := calculateETag(bytes.NewReader(content))
+	etag, err := blobstore.CalculateETag(bytes.NewReader(content))
 	if err != nil {
 		return nil, err
 	}
 
-	return &PutBlobResult{
+	return &blobstore.PutBlobResult{
 		BlobId: blobId,
 		ETag:   *etag,
 		Size:   int64(len(content)),
 	}, nil
 }
 
-func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
+func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
 	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
 	}
 	if blobContentEntity == nil {
-		return nil, ErrBlobNotFound
+		return nil, blobstore.ErrBlobNotFound
 	}
 	reader := ioutils.NewByteReadSeekCloser(blobContentEntity.Content)
 
 	return reader, nil
 }
 
-func (bs *SqlBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+func (bs *SqlBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	return bs.blobContentRepository.FindBlobContentIds(ctx, tx)
 }
 
-func (bs *SqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
+func (bs *SqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
 	err := bs.blobContentRepository.DeleteBlobContentById(ctx, tx, blobId)
 	return err
 }

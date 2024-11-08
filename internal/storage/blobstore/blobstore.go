@@ -1,17 +1,87 @@
-package blob
+package blobstore
 
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/oklog/ulid/v2"
 )
 
-func BlobStoreTester(blobStore BlobStore, db *sql.DB, content []byte) error {
+type BlobId = ulid.ULID
+
+type PutBlobResult struct {
+	BlobId BlobId
+	Size   int64
+	ETag   string
+}
+
+var ErrBlobNotFound error = errors.New("blob not found")
+
+type BlobStore interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, reader io.Reader) (*PutBlobResult, error)
+	GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error)
+	GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error)
+	DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error
+}
+
+func GenerateBlobId() (*BlobId, error) {
+	blobIdBytes := make([]byte, 8)
+	_, err := rand.Read(blobIdBytes)
+	if err != nil {
+		return nil, err
+	}
+	blobId := BlobId(ulid.Make())
+	return &blobId, nil
+}
+
+func calculateMd5Sum(reader io.Reader) (*string, error) {
+	hash := md5.New()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	_, err = hash.Write(data)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
+func CalculateETag(reader io.Reader) (*string, error) {
+	md5Sum, err := calculateMd5Sum(reader)
+	if err != nil {
+		return nil, err
+	}
+	etag := "\"" + *md5Sum + "\""
+	return &etag, nil
+}
+
+func CalculateETagFromPath(path string) (*string, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	etag, err := CalculateETag(f)
+	if err != nil {
+		return nil, err
+	}
+	return etag, nil
+}
+
+func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	ctx := context.Background()
 	err := blobStore.Start(ctx)
 	if err != nil {

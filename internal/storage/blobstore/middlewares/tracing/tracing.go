@@ -1,18 +1,20 @@
-package blob
+package tracing
 
 import (
 	"context"
 	"database/sql"
 	"io"
 	"runtime/trace"
+
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 )
 
 type TracingBlobStoreMiddleware struct {
 	regionName     string
-	innerBlobStore BlobStore
+	innerBlobStore blobstore.BlobStore
 }
 
-func NewTracingBlobStoreMiddleware(regionName string, innerBlobStore BlobStore) (*TracingBlobStoreMiddleware, error) {
+func New(regionName string, innerBlobStore blobstore.BlobStore) (*TracingBlobStoreMiddleware, error) {
 	tbsm := &TracingBlobStoreMiddleware{
 		regionName:     regionName,
 		innerBlobStore: innerBlobStore,
@@ -32,25 +34,25 @@ func (tbsm *TracingBlobStoreMiddleware) Stop(ctx context.Context) error {
 	return tbsm.innerBlobStore.Stop(ctx)
 }
 
-func (tbsm *TracingBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, blob io.Reader) (*PutBlobResult, error) {
+func (tbsm *TracingBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
 	defer trace.StartRegion(ctx, tbsm.regionName+".PutBlob()").End()
 
-	return tbsm.innerBlobStore.PutBlob(ctx, tx, blobId, blob)
+	return tbsm.innerBlobStore.PutBlob(ctx, tx, blobId, reader)
 }
 
-func (tbsm *TracingBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadSeekCloser, error) {
+func (tbsm *TracingBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
 	defer trace.StartRegion(ctx, tbsm.regionName+".GetBlob()").End()
 
 	return tbsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 }
 
-func (tbsm *TracingBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error) {
+func (tbsm *TracingBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	defer trace.StartRegion(ctx, tbsm.regionName+".GetBlobIds()").End()
 
 	return tbsm.innerBlobStore.GetBlobIds(ctx, tx)
 }
 
-func (tbsm *TracingBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error {
+func (tbsm *TracingBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
 	defer trace.StartRegion(ctx, tbsm.regionName+".DeleteBlob()").End()
 
 	return tbsm.innerBlobStore.DeleteBlob(ctx, tx, blobId)

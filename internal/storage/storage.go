@@ -8,7 +8,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
+	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
+	encryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/blobstore/middlewares/encryption"
+	tracingBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/blobstore/middlewares/tracing"
+	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/outbox"
+	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
 	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
@@ -100,13 +105,13 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		log.Fatal("Error during NewTracingMetadataStoreMiddleware: ", err)
 	}
 
-	var blobStore blob.BlobStore
+	var blobStore blobstore.BlobStore
 	if useFilesystemBlobStore {
-		blobStore, err = blob.NewFilesystemBlobStore(filepath.Join(storagePath, "blobs"))
+		blobStore, err = filesystemBlobStore.New(filepath.Join(storagePath, "blobs"))
 		if err != nil {
 			log.Fatal("Error during NewFilesystemBlobStore: ", err)
 		}
-		blobStore, err = blob.NewTracingBlobStoreMiddleware("FilesystemBlobStore", blobStore)
+		blobStore, err = tracingBlobStoreMiddleware.New("FilesystemBlobStore", blobStore)
 		if err != nil {
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
@@ -115,21 +120,21 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		if err != nil {
 			log.Fatalf("Could not create BlobContentRepository: %s", err)
 		}
-		blobStore, err = blob.NewSqlBlobStore(db, blobContentRepository)
+		blobStore, err = sqlBlobStore.New(db, blobContentRepository)
 		if err != nil {
 			log.Fatal("Error during NewSqlBlobStore: ", err)
 		}
-		blobStore, err = blob.NewTracingBlobStoreMiddleware("SqlBlobStore", blobStore)
+		blobStore, err = tracingBlobStoreMiddleware.New("SqlBlobStore", blobStore)
 		if err != nil {
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
 	}
 	if blobStoreEncryptionPassword != "" {
-		blobStore, err = blob.NewEncryptionBlobStoreMiddleware(blobStoreEncryptionPassword, blobStore)
+		blobStore, err = encryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
 		if err != nil {
 			log.Fatal("Error during NewEncryptionBlobStoreMiddleware: ", err)
 		}
-		blobStore, err = blob.NewTracingBlobStoreMiddleware("EncryptionBlobStoreMiddleware", blobStore)
+		blobStore, err = tracingBlobStoreMiddleware.New("EncryptionBlobStoreMiddleware", blobStore)
 		if err != nil {
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}
@@ -139,11 +144,11 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 		if err != nil {
 			log.Fatalf("Could not create BlobOutboxEntryRepository: %s", err)
 		}
-		blobStore, err = blob.NewOutboxBlobStore(db, blobStore, blobOutboxEntryRepository)
+		blobStore, err = outboxBlobStore.New(db, blobStore, blobOutboxEntryRepository)
 		if err != nil {
 			log.Fatal("Error during NewOutboxBlobStore: ", err)
 		}
-		blobStore, err = blob.NewTracingBlobStoreMiddleware("OutboxBlobStore", blobStore)
+		blobStore, err = tracingBlobStoreMiddleware.New("OutboxBlobStore", blobStore)
 		if err != nil {
 			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
 		}

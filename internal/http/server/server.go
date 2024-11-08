@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/middlewares"
+	"github.com/jdillenkofer/pithos/internal/http/middlewares"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -356,7 +356,7 @@ func (br byteRange) generateContentRangeValue(length int64) string {
 	return contentRangeValue
 }
 
-var errInvalidByteRange error = fmt.Errorf("Invalid byte range")
+var errInvalidByteRange error = fmt.Errorf("invalid byte range")
 
 func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]byteRange, error) {
 	byteRanges := []byteRange{}

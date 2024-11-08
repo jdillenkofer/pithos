@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -145,7 +145,7 @@ func MetadataStoreTester(metadataStore MetadataStore, db *sql.DB) error {
 		return err
 	}
 	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Blob{
-		Id:   blob.BlobId(ulid.Make()),
+		Id:   blobstore.BlobId(ulid.Make()),
 		Size: 0,
 		ETag: "",
 	})
@@ -193,7 +193,7 @@ func MetadataStoreTester(metadataStore MetadataStore, db *sql.DB) error {
 		return err
 	}
 	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Blob{
-		Id:   blob.BlobId(ulid.Make()),
+		Id:   blobstore.BlobId(ulid.Make()),
 		Size: 0,
 		ETag: "",
 	})

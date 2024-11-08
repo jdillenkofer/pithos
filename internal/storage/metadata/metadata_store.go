@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 )
 
 type Bucket struct {
@@ -29,7 +29,7 @@ type ListBucketResult struct {
 }
 
 type Blob struct {
-	Id   blob.BlobId
+	Id   blobstore.BlobId
 	Size int64
 	ETag string
 }
@@ -61,7 +61,7 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 type MetadataStore interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
-	GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blob.BlobId, error)
+	GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error)
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)

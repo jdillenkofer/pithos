@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"runtime/trace"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 )
 
 type TracingMetadataStoreMiddleware struct {
@@ -30,7 +30,7 @@ func (tmsm *TracingMetadataStoreMiddleware) Stop(ctx context.Context) error {
 	return tmsm.innerMetadataStore.Stop(ctx)
 }
 
-func (tmsm *TracingMetadataStoreMiddleware) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blob.BlobId, error) {
+func (tmsm *TracingMetadataStoreMiddleware) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".GetInUseBlobIds()").End()
 	return tmsm.innerMetadataStore.GetInUseBlobIds(ctx, tx)
 }
