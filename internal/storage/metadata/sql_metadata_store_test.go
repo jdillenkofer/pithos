@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
+	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
+	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,7 +31,20 @@ func TestSqlMetadataStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	sqlMetadataStore, err := NewSqlMetadataStore(db)
+
+	bucketRepository, err := sqliteBucketRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BucketRepository: %s", err)
+	}
+	objectRepository, err := sqliteObjectRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create ObjectRepository: %s", err)
+	}
+	blobRepository, err := sqliteBlobRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobRepository: %s", err)
+	}
+	sqlMetadataStore, err := NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

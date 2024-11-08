@@ -12,11 +12,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	blobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob"
-	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
 	bucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket"
-	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
 	objectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object"
-	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -26,19 +23,7 @@ type SqlMetadataStore struct {
 	blobRepository   blobRepository.BlobRepository
 }
 
-func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
-	bucketRepository, err := sqliteBucketRepository.New(db)
-	if err != nil {
-		return nil, err
-	}
-	objectRepository, err := sqliteObjectRepository.New(db)
-	if err != nil {
-		return nil, err
-	}
-	blobRepository, err := sqliteBlobRepository.New(db)
-	if err != nil {
-		return nil, err
-	}
+func NewSqlMetadataStore(db *sql.DB, bucketRepository bucketRepository.BucketRepository, objectRepository objectRepository.ObjectRepository, blobRepository blobRepository.BlobRepository) (*SqlMetadataStore, error) {
 	return &SqlMetadataStore{
 		bucketRepository: bucketRepository,
 		objectRepository: objectRepository,

@@ -28,6 +28,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -141,7 +142,12 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		}
 
 		var outboxStorage storage.Storage
-		outboxStorage, err = storage.NewOutboxStorage(db2, s3ClientStorage)
+		storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db2)
+		if err != nil {
+			log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
+
+		}
+		outboxStorage, err = storage.NewOutboxStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
 		if err != nil {
 			log.Fatalf("Could not create outboxStorage: %s", err)
 		}

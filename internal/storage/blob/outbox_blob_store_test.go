@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,7 +33,11 @@ func TestOutboxBlobStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
-	outboxBlobStore, err := NewOutboxBlobStore(db, filesystemBlobStore)
+	blobOutboxEntryRepository, err := sqliteBlobOutboxEntryRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobOutboxEntryRepository: %s", err)
+	}
+	outboxBlobStore, err := NewOutboxBlobStore(db, filesystemBlobStore, blobOutboxEntryRepository)
 	if err != nil {
 		log.Fatalf("Could not create OutboxBlobStore: %s", err)
 	}

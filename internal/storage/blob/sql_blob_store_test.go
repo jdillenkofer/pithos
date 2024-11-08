@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,7 +29,11 @@ func TestSqlBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	sqlBlobStore, err := NewSqlBlobStore(db)
+	blobContentRepository, err := sqliteBlobContentRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobContentRepository: %s", err)
+	}
+	sqlBlobStore, err := NewSqlBlobStore(db, blobContentRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}

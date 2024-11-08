@@ -10,18 +10,13 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
-	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
 )
 
 type SqlBlobStore struct {
 	blobContentRepository blobContentRepository.BlobContentRepository
 }
 
-func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
-	blobContentRepository, err := sqliteBlobContentRepository.New(db)
-	if err != nil {
-		return nil, err
-	}
+func NewSqlBlobStore(db *sql.DB, blobContentRepository blobContentRepository.BlobContentRepository) (*SqlBlobStore, error) {
 	return &SqlBlobStore{
 		blobContentRepository: blobContentRepository,
 	}, nil
