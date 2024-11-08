@@ -11,7 +11,6 @@ import (
 	"time"
 
 	storageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry"
-	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
@@ -26,12 +25,8 @@ type OutboxStorage struct {
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
-func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) {
+func NewOutboxStorage(db *sql.DB, innerStorage Storage, storageOutboxEntryRepository storageOutboxEntryRepository.StorageOutboxEntryRepository) (*OutboxStorage, error) {
 	startStopValidator, err := startstopvalidator.New("OutboxStorage")
-	if err != nil {
-		return nil, err
-	}
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db)
 	if err != nil {
 		return nil, err
 	}

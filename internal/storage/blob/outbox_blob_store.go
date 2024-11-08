@@ -12,7 +12,6 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	blobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry"
-	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
 )
@@ -26,19 +25,14 @@ type OutboxBlobStore struct {
 	blobOutboxEntryRepository  blobOutboxEntryRepository.BlobOutboxEntryRepository
 }
 
-func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore) (*OutboxBlobStore, error) {
-	blobOutboxEntryRepository, err := sqliteBlobOutboxEntryRepository.New(db)
-	if err != nil {
-		return nil, err
-	}
-	obs := &OutboxBlobStore{
+func NewOutboxBlobStore(db *sql.DB, innerBlobStore BlobStore, blobOutboxEntryRepository blobOutboxEntryRepository.BlobOutboxEntryRepository) (*OutboxBlobStore, error) {
+	return &OutboxBlobStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
 		blobOutboxEntryRepository: blobOutboxEntryRepository,
-	}
-	return obs, nil
+	}, nil
 }
 
 func (obs *OutboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {

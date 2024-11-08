@@ -9,6 +9,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
+	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
+	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
+	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,12 +36,28 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobStore, err := blob.NewSqlBlobStore(db)
+	blobContentRepository, err := sqliteBlobContentRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobContentRepository: %s", err)
+	}
+	blobStore, err := blob.NewSqlBlobStore(db, blobContentRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	metadataStore, err := metadata.NewSqlMetadataStore(db)
+	bucketRepository, err := sqliteBucketRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BucketRepository: %s", err)
+	}
+	objectRepository, err := sqliteObjectRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create ObjectRepository: %s", err)
+	}
+	blobRepository, err := sqliteBlobRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobRepository: %s", err)
+	}
+	metadataStore, err := metadata.NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

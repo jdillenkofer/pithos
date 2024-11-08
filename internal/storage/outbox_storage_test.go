@@ -8,6 +8,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
+	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
+	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
+	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,7 +40,19 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	metadataStore, err := metadata.NewSqlMetadataStore(db)
+	bucketRepository, err := sqliteBucketRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BucketRepository: %s", err)
+	}
+	objectRepository, err := sqliteObjectRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create ObjectRepository: %s", err)
+	}
+	blobRepository, err := sqliteBlobRepository.New(db)
+	if err != nil {
+		log.Fatalf("Could not create BlobRepository: %s", err)
+	}
+	metadataStore, err := metadata.NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}
@@ -70,7 +86,12 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	// metadataBlobStorage would open separate transactions, we would deadlock the test.
 	// To avoid this each storage type gets its own db.
 	// In the future i want to redesign storage implementations to use the already open transaction.
-	outboxStorage, err := NewOutboxStorage(db2, metadataBlobStorage)
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db2)
+	if err != nil {
+		log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
+
+	}
+	outboxStorage, err := NewOutboxStorage(db2, metadataBlobStorage, storageOutboxEntryRepository)
 	if err != nil {
 		log.Fatalf("Could not create OutboxStorage: %s", err)
 	}
