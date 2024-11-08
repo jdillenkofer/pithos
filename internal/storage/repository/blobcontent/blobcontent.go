@@ -1,4 +1,4 @@
-package repository
+package blobcontent
 
 import (
 	"context"
@@ -25,7 +25,7 @@ const (
 	deleteBlobContentByIdStmt = "DELETE FROM blob_contents WHERE id = ?"
 )
 
-func NewBlobContentRepository(db *sql.DB) (*BlobContentRepository, error) {
+func New(db *sql.DB) (*BlobContentRepository, error) {
 	findBlobContentByIdPreparedStmt, err := db.Prepare(findBlobContentByIdStmt)
 	if err != nil {
 		return nil, err

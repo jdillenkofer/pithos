@@ -1,4 +1,4 @@
-package repository
+package bloboutboxentry
 
 import (
 	"context"
@@ -29,7 +29,7 @@ const (
 	deleteBlobOutboxEntryByIdStmt              = "DELETE FROM blob_outbox_entries WHERE id = ?"
 )
 
-func NewBlobOutboxEntryRepository(db *sql.DB) (*BlobOutboxEntryRepository, error) {
+func New(db *sql.DB) (*BlobOutboxEntryRepository, error) {
 	nextOrdinalBlobOutboxEntryPreparedStmt, err := db.Prepare(nextOrdinalBlobOutboxEntryStmt)
 	if err != nil {
 		return nil, err

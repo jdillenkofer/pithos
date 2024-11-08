@@ -11,26 +11,28 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blob"
-	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	blobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob"
+	bucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket"
+	objectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object"
 	"github.com/oklog/ulid/v2"
 )
 
 type SqlMetadataStore struct {
-	bucketRepository *repository.BucketRepository
-	objectRepository *repository.ObjectRepository
-	blobRepository   *repository.BlobRepository
+	bucketRepository *bucketRepository.BucketRepository
+	objectRepository *objectRepository.ObjectRepository
+	blobRepository   *blobRepository.BlobRepository
 }
 
 func NewSqlMetadataStore(db *sql.DB) (*SqlMetadataStore, error) {
-	bucketRepository, err := repository.NewBucketRepository(db)
+	bucketRepository, err := bucketRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
-	objectRepository, err := repository.NewObjectRepository(db)
+	objectRepository, err := objectRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
-	blobRepository, err := repository.NewBlobRepository(db)
+	blobRepository, err := blobRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +64,7 @@ func (sms *SqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 		return ErrBucketAlreadyExists
 	}
 
-	err = sms.bucketRepository.SaveBucket(ctx, tx, &repository.BucketEntity{
+	err = sms.bucketRepository.SaveBucket(ctx, tx, &bucketRepository.BucketEntity{
 		Name: bucketName,
 	})
 	if err != nil {
@@ -102,7 +104,7 @@ func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]Buc
 	if err != nil {
 		return nil, err
 	}
-	buckets := sliceutils.Map(func(bucketEntity repository.BucketEntity) Bucket {
+	buckets := sliceutils.Map(func(bucketEntity bucketRepository.BucketEntity) Bucket {
 		return Bucket{
 			Name:         bucketEntity.Name,
 			CreationDate: bucketEntity.CreatedAt,
@@ -228,7 +230,7 @@ func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	if err != nil {
 		return nil, err
 	}
-	blobs := sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+	blobs := sliceutils.Map(func(blobEntity blobRepository.BlobEntity) Blob {
 		return Blob{
 			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,
@@ -270,12 +272,12 @@ func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 			return err
 		}
 	}
-	objectEntity := repository.ObjectEntity{
+	objectEntity := objectRepository.ObjectEntity{
 		BucketName:   bucketName,
 		Key:          object.Key,
 		ETag:         object.ETag,
 		Size:         object.Size,
-		UploadStatus: repository.UploadStatusCompleted,
+		UploadStatus: objectRepository.UploadStatusCompleted,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	objectId := objectEntity.Id
@@ -284,7 +286,7 @@ func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 	sequenceNumber := 0
 	for _, blobStruc := range object.Blobs {
-		blobEntity := repository.BlobEntity{
+		blobEntity := blobRepository.BlobEntity{
 			BlobId:         blobStruc.Id,
 			ObjectId:       *objectId,
 			ETag:           blobStruc.ETag,
@@ -339,13 +341,13 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		return nil, ErrNoSuchBucket
 	}
 
-	objectEntity := repository.ObjectEntity{
+	objectEntity := objectRepository.ObjectEntity{
 		BucketName:   bucketName,
 		Key:          key,
 		ETag:         "",
 		Size:         -1,
 		UploadId:     ulid.Make().String(),
-		UploadStatus: repository.UploadStatusPending,
+		UploadStatus: objectRepository.UploadStatusPending,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
@@ -374,7 +376,7 @@ func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 		return ErrNoSuchKey
 	}
 
-	blobEntity := repository.BlobEntity{
+	blobEntity := blobRepository.BlobEntity{
 		BlobId:         blob.Id,
 		ObjectId:       *objectEntity.Id,
 		ETag:           blob.ETag,
@@ -444,7 +446,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, err
 		}
 
-		deletedBlobs = sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+		deletedBlobs = sliceutils.Map(func(blobEntity blobRepository.BlobEntity) Blob {
 			return Blob{
 				Id:   blobEntity.BlobId,
 				ETag: blobEntity.ETag,
@@ -458,7 +460,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
-	objectEntity.UploadStatus = repository.UploadStatusCompleted
+	objectEntity.UploadStatus = objectRepository.UploadStatusCompleted
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
@@ -499,7 +501,7 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
-	blobs := sliceutils.Map(func(blobEntity repository.BlobEntity) Blob {
+	blobs := sliceutils.Map(func(blobEntity blobRepository.BlobEntity) Blob {
 		return Blob{
 			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,

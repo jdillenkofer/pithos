@@ -1,4 +1,4 @@
-package repository
+package blob
 
 import (
 	"context"
@@ -25,7 +25,7 @@ const (
 	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
 )
 
-func NewBlobRepository(db *sql.DB) (*BlobRepository, error) {
+func New(db *sql.DB) (*BlobRepository, error) {
 	findInUseBlobIdsPreparedStmt, err := db.Prepare(findInUseBlobIdsStmt)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package repository
+package storageoutboxentry
 
 import (
 	"context"
@@ -31,7 +31,7 @@ const (
 	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = ?"
 )
 
-func NewStorageOutboxEntryRepository(db *sql.DB) (*StorageOutboxEntryRepository, error) {
+func New(db *sql.DB) (*StorageOutboxEntryRepository, error) {
 	nextOrdinalStorageOutboxEntryPreparedStmt, err := db.Prepare(nextOrdinalStorageOutboxEntryStmt)
 	if err != nil {
 		return nil, err

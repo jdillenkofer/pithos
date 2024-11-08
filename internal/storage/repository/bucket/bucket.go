@@ -1,4 +1,4 @@
-package repository
+package bucket
 
 import (
 	"context"
@@ -27,7 +27,7 @@ const (
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = ?"
 )
 
-func NewBucketRepository(db *sql.DB) (*BucketRepository, error) {
+func New(db *sql.DB) (*BucketRepository, error) {
 	findAllBucketsPreparedStmt, err := db.Prepare(findAllBucketsStmt)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,4 @@
-package repository
+package object
 
 import (
 	"context"
@@ -34,7 +34,7 @@ const (
 	deleteObjectByIdStmt                                           = "DELETE FROM objects WHERE id = ?"
 )
 
-func NewObjectRepository(db *sql.DB) (*ObjectRepository, error) {
+func New(db *sql.DB) (*ObjectRepository, error) {
 	insertObjectPreparedStmt, err := db.Prepare(insertObjectStmt)
 	if err != nil {
 		return nil, err

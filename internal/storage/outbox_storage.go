@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/repository"
+	storageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
@@ -21,7 +21,7 @@ type OutboxStorage struct {
 	triggerChannelClosed         bool
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
-	storageOutboxEntryRepository *repository.StorageOutboxEntryRepository
+	storageOutboxEntryRepository *storageOutboxEntryRepository.StorageOutboxEntryRepository
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
@@ -30,7 +30,7 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 	if err != nil {
 		return nil, err
 	}
-	storageOutboxEntryRepository, err := repository.NewStorageOutboxEntryRepository(db)
+	storageOutboxEntryRepository, err := storageOutboxEntryRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
@@ -64,28 +64,28 @@ func (os *OutboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 
 		switch storageOutboxEntry.Operation {
-		case repository.CreateBucketStorageOperation:
+		case storageOutboxEntryRepository.CreateBucketStorageOperation:
 			err = os.innerStorage.CreateBucket(ctx, storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
-		case repository.DeleteBucketStorageOperation:
+		case storageOutboxEntryRepository.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(ctx, storageOutboxEntry.Bucket)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
-		case repository.PutObjectStorageOperation:
+		case storageOutboxEntryRepository.PutObjectStorageOperation:
 			err = os.innerStorage.PutObject(ctx, storageOutboxEntry.Bucket, storageOutboxEntry.Key, bytes.NewReader(storageOutboxEntry.Data))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
-		case repository.DeleteObjectStorageOperation:
+		case storageOutboxEntryRepository.DeleteObjectStorageOperation:
 			err = os.innerStorage.DeleteObject(ctx, storageOutboxEntry.Bucket, storageOutboxEntry.Key)
 			if err != nil {
 				tx.Rollback()
@@ -176,7 +176,7 @@ func (os *OutboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 	if err != nil {
 		return err
 	}
-	storageOutboxEntry := repository.StorageOutboxEntryEntity{
+	storageOutboxEntry := storageOutboxEntryRepository.StorageOutboxEntryEntity{
 		Operation: operation,
 		Bucket:    bucket,
 		Key:       key,
@@ -202,7 +202,7 @@ func (os *OutboxStorage) CreateBucket(ctx context.Context, bucket string) error 
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, repository.CreateBucketStorageOperation, bucket, "", []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntryRepository.CreateBucketStorageOperation, bucket, "", []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -219,7 +219,7 @@ func (os *OutboxStorage) DeleteBucket(ctx context.Context, bucket string) error 
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, repository.DeleteBucketStorageOperation, bucket, "", []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntryRepository.DeleteBucketStorageOperation, bucket, "", []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -374,7 +374,7 @@ func (os *OutboxStorage) PutObject(ctx context.Context, bucket string, key strin
 		tx.Rollback()
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, repository.PutObjectStorageOperation, bucket, key, data)
+	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntryRepository.PutObjectStorageOperation, bucket, key, data)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -391,7 +391,7 @@ func (os *OutboxStorage) DeleteObject(ctx context.Context, bucket string, key st
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, repository.DeleteObjectStorageOperation, bucket, key, []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntryRepository.DeleteObjectStorageOperation, bucket, key, []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
