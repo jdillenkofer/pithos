@@ -11,6 +11,7 @@ import (
 	"time"
 
 	storageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry"
+	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/storageoutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
@@ -21,7 +22,7 @@ type OutboxStorage struct {
 	triggerChannelClosed         bool
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 Storage
-	storageOutboxEntryRepository *storageOutboxEntryRepository.StorageOutboxEntryRepository
+	storageOutboxEntryRepository storageOutboxEntryRepository.StorageOutboxEntryRepository
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
@@ -30,7 +31,7 @@ func NewOutboxStorage(db *sql.DB, innerStorage Storage) (*OutboxStorage, error) 
 	if err != nil {
 		return nil, err
 	}
-	storageOutboxEntryRepository, err := storageOutboxEntryRepository.New(db)
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db)
 	if err != nil {
 		return nil, err
 	}

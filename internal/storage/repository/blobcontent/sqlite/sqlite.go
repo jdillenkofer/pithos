@@ -1,14 +1,15 @@
-package blobcontent
+package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
 	"github.com/oklog/ulid/v2"
 )
 
-type BlobContentRepository struct {
+type sqliteBlobContentRepository struct {
 	db                                *sql.DB
 	findBlobContentByIdPreparedStmt   *sql.Stmt
 	findBlobContentIdsPreparedStmt    *sql.Stmt
@@ -25,7 +26,7 @@ const (
 	deleteBlobContentByIdStmt = "DELETE FROM blob_contents WHERE id = ?"
 )
 
-func New(db *sql.DB) (*BlobContentRepository, error) {
+func New(db *sql.DB) (blobcontent.BlobContentRepository, error) {
 	findBlobContentByIdPreparedStmt, err := db.Prepare(findBlobContentByIdStmt)
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func New(db *sql.DB) (*BlobContentRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BlobContentRepository{
+	return &sqliteBlobContentRepository{
 		db:                                db,
 		findBlobContentByIdPreparedStmt:   findBlobContentByIdPreparedStmt,
 		findBlobContentIdsPreparedStmt:    findBlobContentIdsPreparedStmt,
@@ -56,14 +57,7 @@ func New(db *sql.DB) (*BlobContentRepository, error) {
 	}, nil
 }
 
-type BlobContentEntity struct {
-	Id        *ulid.ULID
-	Content   []byte
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
-func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*BlobContentEntity, error) {
+func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.BlobContentEntity, error) {
 	var id string
 	var content []byte
 	var createdAt time.Time
@@ -76,7 +70,7 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*BlobContentEntity,
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	return &BlobContentEntity{
+	return &blobcontent.BlobContentEntity{
 		Id:        &ulidId,
 		Content:   content,
 		CreatedAt: createdAt,
@@ -84,7 +78,7 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*BlobContentEntity,
 	}, nil
 }
 
-func (bcr *BlobContentRepository) FindBlobContentById(ctx context.Context, tx *sql.Tx, blobContentId ulid.ULID) (*BlobContentEntity, error) {
+func (bcr *sqliteBlobContentRepository) FindBlobContentById(ctx context.Context, tx *sql.Tx, blobContentId ulid.ULID) (*blobcontent.BlobContentEntity, error) {
 	row := tx.StmtContext(ctx, bcr.findBlobContentByIdPreparedStmt).QueryRowContext(ctx, blobContentId.String())
 	blobContentEntity, err := convertRowToBlobContentEntity(row)
 	if err != nil {
@@ -93,7 +87,7 @@ func (bcr *BlobContentRepository) FindBlobContentById(ctx context.Context, tx *s
 	return blobContentEntity, nil
 }
 
-func (bcr *BlobContentRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+func (bcr *sqliteBlobContentRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
 	blobIdRows, err := tx.StmtContext(ctx, bcr.findBlobContentIdsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
@@ -112,7 +106,7 @@ func (bcr *BlobContentRepository) FindBlobContentIds(ctx context.Context, tx *sq
 	return blobIds, nil
 }
 
-func (bcr *BlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *BlobContentEntity) error {
+func (bcr *sqliteBlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.BlobContentEntity) error {
 	_, err := tx.StmtContext(ctx, bcr.deleteBlobContentByIdPreparedStmt).ExecContext(ctx, blobContent.Id.String())
 	if err != nil {
 		return err
@@ -123,7 +117,7 @@ func (bcr *BlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx
 	return err
 }
 
-func (bcr *BlobContentRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, blobContent *BlobContentEntity) error {
+func (bcr *sqliteBlobContentRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.BlobContentEntity) error {
 	if blobContent.Id == nil {
 		id := ulid.Make()
 		blobContent.Id = &id
@@ -138,7 +132,7 @@ func (bcr *BlobContentRepository) SaveBlobContent(ctx context.Context, tx *sql.T
 	return err
 }
 
-func (bcr *BlobContentRepository) DeleteBlobContentById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
+func (bcr *sqliteBlobContentRepository) DeleteBlobContentById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
 	_, err := tx.StmtContext(ctx, bcr.deleteBlobContentByIdPreparedStmt).ExecContext(ctx, id.String())
 	return err
 }

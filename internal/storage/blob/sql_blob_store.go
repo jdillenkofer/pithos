@@ -9,15 +9,16 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
-	"github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
+	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
+	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
 )
 
 type SqlBlobStore struct {
-	blobContentRepository *blobcontent.BlobContentRepository
+	blobContentRepository blobContentRepository.BlobContentRepository
 }
 
 func NewSqlBlobStore(db *sql.DB) (*SqlBlobStore, error) {
-	blobContentRepository, err := blobcontent.New(db)
+	blobContentRepository, err := sqliteBlobContentRepository.New(db)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +40,7 @@ func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, 
 	if err != nil {
 		return nil, err
 	}
-	blobContentEntity := blobcontent.BlobContentEntity{
+	blobContentEntity := blobContentRepository.BlobContentEntity{
 		Id:      (*ulid.ULID)(&blobId),
 		Content: content,
 	}
