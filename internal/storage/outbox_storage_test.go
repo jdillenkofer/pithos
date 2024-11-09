@@ -11,7 +11,7 @@ import (
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatastore/sql"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,7 +52,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
-	metadataStore, err := metadata.NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

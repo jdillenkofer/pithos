@@ -12,7 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
-	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
@@ -20,12 +20,12 @@ import (
 type BlobGarbageCollector struct {
 	db              *sql.DB
 	collectionMutex sync.RWMutex
-	metadataStore   metadata.MetadataStore
+	metadataStore   metadatastore.MetadataStore
 	blobStore       blobstore.BlobStore
 	writeOperations atomic.Int64
 }
 
-func NewBlobGarbageCollector(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blobstore.BlobStore) (*BlobGarbageCollector, error) {
+func NewBlobGarbageCollector(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (*BlobGarbageCollector, error) {
 	return &BlobGarbageCollector{
 		db:              db,
 		collectionMutex: sync.RWMutex{},
@@ -118,12 +118,12 @@ type MetadataBlobStorage struct {
 	db                 *sql.DB
 	gcTaskHandle       *task.TaskHandle
 	blobGC             *BlobGarbageCollector
-	metadataStore      metadata.MetadataStore
+	metadataStore      metadatastore.MetadataStore
 	blobStore          blobstore.BlobStore
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
-func NewMetadataBlobStorage(db *sql.DB, metadataStore metadata.MetadataStore, blobStore blobstore.BlobStore) (*MetadataBlobStorage, error) {
+func NewMetadataBlobStorage(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (*MetadataBlobStorage, error) {
 	blobGC, err := NewBlobGarbageCollector(db, metadataStore, blobStore)
 	if err != nil {
 		return nil, err
@@ -231,7 +231,7 @@ func (mbs *MetadataBlobStorage) DeleteBucket(ctx context.Context, bucket string)
 	return nil
 }
 
-func convertBucket(mBucket metadata.Bucket) Bucket {
+func convertBucket(mBucket metadatastore.Bucket) Bucket {
 	return Bucket{
 		Name:         mBucket.Name,
 		CreationDate: mBucket.CreationDate,
@@ -279,7 +279,7 @@ func (mbs *MetadataBlobStorage) HeadBucket(ctx context.Context, bucket string) (
 	return &b, err
 }
 
-func convertObject(mObject metadata.Object) Object {
+func convertObject(mObject metadatastore.Object) Object {
 	return Object{
 		Key:          mObject.Key,
 		LastModified: mObject.LastModified,
@@ -288,7 +288,7 @@ func convertObject(mObject metadata.Object) Object {
 	}
 }
 
-func convertListBucketResult(mListBucketResult metadata.ListBucketResult) ListBucketResult {
+func convertListBucketResult(mListBucketResult metadatastore.ListBucketResult) ListBucketResult {
 	return ListBucketResult{
 		Objects:        sliceutils.Map(convertObject, mListBucketResult.Objects),
 		CommonPrefixes: mListBucketResult.CommonPrefixes,
@@ -420,12 +420,12 @@ func (mbs *MetadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	object := metadata.Object{
+	object := metadatastore.Object{
 		Key:          key,
 		LastModified: time.Now(),
 		ETag:         putBlobResult.ETag,
 		Size:         putBlobResult.Size,
-		Blobs: []metadata.Blob{
+		Blobs: []metadatastore.Blob{
 			{
 				Id:   putBlobResult.BlobId,
 				ETag: putBlobResult.ETag,
@@ -484,7 +484,7 @@ func (mbs *MetadataBlobStorage) DeleteObject(ctx context.Context, bucket string,
 	return nil
 }
 
-func convertInitiateMultipartUploadResult(result metadata.InitiateMultipartUploadResult) InitiateMultipartUploadResult {
+func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipartUploadResult) InitiateMultipartUploadResult {
 	return InitiateMultipartUploadResult{
 		UploadId: result.UploadId,
 	}
@@ -529,7 +529,7 @@ func (mbs *MetadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 	if err != nil {
 		return nil, err
 	}
-	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadata.Blob{
+	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
 		Id:   putBlobResult.BlobId,
 		ETag: putBlobResult.ETag,
 		Size: putBlobResult.Size,
@@ -547,7 +547,7 @@ func (mbs *MetadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 	}, nil
 }
 
-func convertCompleteMultipartUploadResult(result metadata.CompleteMultipartUploadResult) CompleteMultipartUploadResult {
+func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) CompleteMultipartUploadResult {
 	return CompleteMultipartUploadResult{
 		Location:       result.Location,
 		ETag:           result.ETag,

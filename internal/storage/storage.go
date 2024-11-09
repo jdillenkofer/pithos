@@ -19,7 +19,9 @@ import (
 	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry/sqlite"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatastore"
+	tracingMetadataStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatastore/middlewares/tracing"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatastore/sql"
 )
 
 type Bucket struct {
@@ -57,10 +59,10 @@ type CompleteMultipartUploadResult struct {
 	ChecksumSHA256 string
 }
 
-var ErrNoSuchBucket error = metadata.ErrNoSuchBucket
-var ErrBucketAlreadyExists error = metadata.ErrBucketAlreadyExists
-var ErrBucketNotEmpty error = metadata.ErrBucketNotEmpty
-var ErrNoSuchKey error = metadata.ErrNoSuchKey
+var ErrNoSuchBucket error = metadatastore.ErrNoSuchBucket
+var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
+var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
+var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 
 type Storage interface {
 	Start(ctx context.Context) error
@@ -82,7 +84,7 @@ type Storage interface {
 
 func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) Storage {
 
-	var metadataStore metadata.MetadataStore
+	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := sqliteBucket.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
@@ -95,12 +97,12 @@ func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, 
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
-	metadataStore, err = metadata.NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatal("Error during NewSqlMetadataStore: ", err)
 	}
 
-	metadataStore, err = metadata.NewTracingMetadataStoreMiddleware("SqlMetadataStore", metadataStore)
+	metadataStore, err = tracingMetadataStoreMiddleware.New("SqlMetadataStore", metadataStore)
 	if err != nil {
 		log.Fatal("Error during NewTracingMetadataStoreMiddleware: ", err)
 	}
