@@ -29,6 +29,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
+	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
+	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
+	tracingStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
+	"github.com/jdillenkofer/pithos/internal/storage/outbox"
+	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -88,10 +94,10 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if encryptBlobStore {
 		encryptionPassword = blobStoreEncryptionPassword
 	}
-	store := storage.CreateStorage(storagePath, db, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
+	store := storageFactory.CreateStorage(storagePath, db, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
 
 	if !useReplication {
-		store, err = storage.NewPrometheusStorageMiddleware(store, registry)
+		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
 		if err != nil {
 			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
 		}
@@ -128,15 +134,15 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}
-		localStore := storage.CreateStorage(storagePath2, db2, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
+		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
 		var s3ClientStorage storage.Storage
-		s3ClientStorage, err = storage.NewS3ClientStorage(s3Client)
+		s3ClientStorage, err = s3client.NewStorage(s3Client)
 		if err != nil {
 			log.Fatalf("Could not create s3ClientStorage: %s", err)
 		}
-		s3ClientStorage, err = storage.NewTracingStorageMiddleware("S3ClientStorage", s3ClientStorage)
+		s3ClientStorage, err = tracingStorageMiddleware.NewStorageMiddleware("S3ClientStorage", s3ClientStorage)
 		if err != nil {
 			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
@@ -147,28 +153,28 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 
 		}
-		outboxStorage, err = storage.NewOutboxStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
+		outboxStorage, err = outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
 		if err != nil {
 			log.Fatalf("Could not create outboxStorage: %s", err)
 		}
 
-		outboxStorage, err = storage.NewTracingStorageMiddleware("OutboxStorage", outboxStorage)
+		outboxStorage, err = tracingStorageMiddleware.NewStorageMiddleware("OutboxStorage", outboxStorage)
 		if err != nil {
 			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
 		var store2 storage.Storage
-		store2, err = storage.NewReplicationStorage(localStore, outboxStorage)
+		store2, err = replication.NewStorage(localStore, outboxStorage)
 		if err != nil {
 			log.Fatalf("Could not create replicationStorage: %s", err)
 		}
 
-		store2, err = storage.NewTracingStorageMiddleware("ReplicationStorage", store2)
+		store2, err = tracingStorageMiddleware.NewStorageMiddleware("ReplicationStorage", store2)
 		if err != nil {
 			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
 		}
 
-		store2, err = storage.NewPrometheusStorageMiddleware(store2, registry)
+		store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
 		if err != nil {
 			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
 		}

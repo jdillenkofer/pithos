@@ -15,6 +15,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
+	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
+	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
+	"github.com/jdillenkofer/pithos/internal/storage/outbox"
+	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,43 +36,43 @@ func main() {
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
-	store := storage.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.BlobStoreEncryptionPassword(), settings.WrapBlobStoreWithOutbox())
+	store := storageFactory.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.BlobStoreEncryptionPassword(), settings.WrapBlobStoreWithOutbox())
 
-	replication := settings.Replication()
-	if replication != nil {
-		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(replication.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replication.AccessKeyId(), replication.SecretAccessKey(), "")))
+	replicationSettings := settings.Replication()
+	if replicationSettings != nil {
+		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(replicationSettings.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replicationSettings.AccessKeyId(), replicationSettings.SecretAccessKey(), "")))
 
 		if err != nil {
 			log.Fatal("Couldn't create s3Client config")
 		}
 
 		s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-			o.BaseEndpoint = replication.Endpoint()
+			o.BaseEndpoint = replicationSettings.Endpoint()
 		})
 
 		var s3ClientStorage storage.Storage
-		s3ClientStorage, err = storage.NewS3ClientStorage(s3Client)
+		s3ClientStorage, err = s3client.NewStorage(s3Client)
 		if err != nil {
 			log.Fatal("Could not create s3ClientStorage")
 		}
-		if replication.UseOutbox() {
+		if replicationSettings.UseOutbox() {
 			storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
 			if err != nil {
 				log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 
 			}
-			s3ClientStorage, err = storage.NewOutboxStorage(db, s3ClientStorage, storageOutboxEntryRepository)
+			s3ClientStorage, err = outbox.NewStorage(db, s3ClientStorage, storageOutboxEntryRepository)
 			if err != nil {
 				log.Fatal("Could not create outboxStorage")
 			}
 		}
-		store, err = storage.NewReplicationStorage(store, s3ClientStorage)
+		store, err = replication.NewStorage(store, s3ClientStorage)
 		if err != nil {
 			log.Fatal("Could not create replicationStorage")
 		}
 	}
 
-	store, err = storage.NewPrometheusStorageMiddleware(store, prometheus.DefaultRegisterer)
+	store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, prometheus.DefaultRegisterer)
 	if err != nil {
 		log.Fatal("Could not create prometheusStorageMiddleware")
 	}

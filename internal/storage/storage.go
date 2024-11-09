@@ -2,26 +2,13 @@ package storage
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"io"
-	"log"
-	"path/filepath"
+	"strconv"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
-	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
-	encryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/blobstore/middlewares/encryption"
-	tracingBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/blobstore/middlewares/tracing"
-	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/outbox"
-	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
-	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry/sqlite"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatastore"
-	tracingMetadataStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatastore/middlewares/tracing"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 )
 
 type Bucket struct {
@@ -82,89 +69,135 @@ type Storage interface {
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 }
 
-func CreateStorage(storagePath string, db *sql.DB, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) Storage {
+func Tester(storage Storage, content []byte) error {
+	ctx := context.Background()
+	err := storage.Start(ctx)
+	if err != nil {
+		return err
+	}
+	defer storage.Stop(ctx)
 
-	var metadataStore metadatastore.MetadataStore
-	bucketRepository, err := sqliteBucket.NewRepository(db)
+	bucketName := "bucket"
+	key := "test"
+	data := ioutils.NewByteReadSeekCloser(content)
+
+	err = storage.CreateBucket(ctx, bucketName)
 	if err != nil {
-		log.Fatalf("Could not create BucketRepository: %s", err)
-	}
-	objectRepository, err := sqliteObject.NewRepository(db)
-	if err != nil {
-		log.Fatalf("Could not create ObjectRepository: %s", err)
-	}
-	blobRepository, err := sqliteBlob.NewRepository(db)
-	if err != nil {
-		log.Fatalf("Could not create BlobRepository: %s", err)
-	}
-	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
-	if err != nil {
-		log.Fatal("Error during NewSqlMetadataStore: ", err)
+		return err
 	}
 
-	metadataStore, err = tracingMetadataStoreMiddleware.New("SqlMetadataStore", metadataStore)
+	bucket, err := storage.HeadBucket(ctx, bucketName)
 	if err != nil {
-		log.Fatal("Error during NewTracingMetadataStoreMiddleware: ", err)
+		return err
 	}
 
-	var blobStore blobstore.BlobStore
-	if useFilesystemBlobStore {
-		blobStore, err = filesystemBlobStore.New(filepath.Join(storagePath, "blobs"))
-		if err != nil {
-			log.Fatal("Error during NewFilesystemBlobStore: ", err)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("FilesystemBlobStore", blobStore)
-		if err != nil {
-			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
-		}
-	} else {
-		blobContentRepository, err := sqliteBlobContent.NewRepository(db)
-		if err != nil {
-			log.Fatalf("Could not create BlobContentRepository: %s", err)
-		}
-		blobStore, err = sqlBlobStore.New(db, blobContentRepository)
-		if err != nil {
-			log.Fatal("Error during NewSqlBlobStore: ", err)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("SqlBlobStore", blobStore)
-		if err != nil {
-			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
-		}
-	}
-	if blobStoreEncryptionPassword != "" {
-		blobStore, err = encryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
-		if err != nil {
-			log.Fatal("Error during NewEncryptionBlobStoreMiddleware: ", err)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("EncryptionBlobStoreMiddleware", blobStore)
-		if err != nil {
-			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
-		}
-	}
-	if wrapBlobStoreWithOutbox {
-		blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository(db)
-		if err != nil {
-			log.Fatalf("Could not create BlobOutboxEntryRepository: %s", err)
-		}
-		blobStore, err = outboxBlobStore.New(db, blobStore, blobOutboxEntryRepository)
-		if err != nil {
-			log.Fatal("Error during NewOutboxBlobStore: ", err)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("OutboxBlobStore", blobStore)
-		if err != nil {
-			log.Fatal("Error during NewTracingBlobStoreMiddleware: ", err)
-		}
-	}
-	var store Storage
-	store, err = NewMetadataBlobStorage(db, metadataStore, blobStore)
-	if err != nil {
-		log.Fatal("Error during NewMetadataBlobStorage: ", err)
+	if bucketName != bucket.Name {
+		return errors.New("invalid bucketName")
 	}
 
-	store, err = NewTracingStorageMiddleware("MetadataBlobStorage", store)
+	buckets, err := storage.ListBuckets(ctx)
 	if err != nil {
-		log.Fatal("Error during NewTracingStorageMiddleware: ", err)
+		return err
 	}
 
-	return store
+	if len(buckets) != 1 {
+		return errors.New("expected 1 bucket got " + strconv.Itoa(len(buckets)))
+	}
+
+	if bucketName != buckets[0].Name {
+		return errors.New("invalid bucketName")
+	}
+
+	err = storage.PutObject(ctx, bucketName, key, data)
+	if err != nil {
+		return err
+	}
+
+	object, err := storage.HeadObject(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+
+	if object.Size != int64(len(content)) {
+		return errors.New("invalid blob length")
+	}
+
+	listBucketResult, err := storage.ListObjects(ctx, bucketName, "", "", "", 1000)
+	if err != nil {
+		return err
+	}
+
+	if len(listBucketResult.Objects) != 1 {
+		return errors.New("invalid objects length")
+	}
+
+	if key != listBucketResult.Objects[0].Key {
+		return errors.New("invalid object key")
+	}
+
+	err = storage.DeleteObject(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+
+	initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+
+	_, err = data.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data)
+	if err != nil {
+		return err
+	}
+
+	_, err = storage.CompleteMultipartUpload(ctx, bucketName, key, initiateMultipartUploadResult.UploadId)
+	if err != nil {
+		return err
+	}
+
+	err = storage.DeleteObject(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+
+	initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+
+	_, err = data.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data)
+	if err != nil {
+		return err
+	}
+
+	err = storage.AbortMultipartUpload(ctx, bucketName, key, initiateMultipartUploadResult.UploadId)
+	if err != nil {
+		return err
+	}
+
+	err = storage.DeleteBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	buckets, err = storage.ListBuckets(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(buckets) != 0 {
+		return errors.New("expected 0 bucket got " + strconv.Itoa(len(buckets)))
+	}
+
+	return nil
 }
