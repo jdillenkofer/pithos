@@ -7,7 +7,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
+	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 

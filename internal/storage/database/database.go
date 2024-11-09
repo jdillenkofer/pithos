@@ -12,7 +12,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations/**/*.sql
 var migrationsFilesystem embed.FS
 
 // In auto-vacuum full mode freelist pages are moved to the end of the file
@@ -59,7 +59,7 @@ func enableForeignKeyConstraints(db *sql.DB) error {
 }
 
 func applyDatabaseMigrations(db *sql.DB) error {
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
+	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
 	if err != nil {
 		return err
 	}

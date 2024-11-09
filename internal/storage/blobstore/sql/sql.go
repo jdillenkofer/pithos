@@ -10,7 +10,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
-	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent"
+	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 )
 
 type SqlBlobStore struct {

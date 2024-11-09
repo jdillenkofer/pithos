@@ -8,7 +8,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bloboutboxentry/sqlite"
+	sqliteBlobOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
