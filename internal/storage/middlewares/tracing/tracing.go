@@ -15,7 +15,7 @@ type tracingStorageMiddleware struct {
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
-func NewStorageMiddleware(regionName string, primaryStorage storage.Storage) (storage.Storage, error) {
+func NewStorageMiddleware(regionName string, innerStorage storage.Storage) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("TracingStorageMiddleware")
 	if err != nil {
 		return nil, err
@@ -23,7 +23,7 @@ func NewStorageMiddleware(regionName string, primaryStorage storage.Storage) (st
 
 	return &tracingStorageMiddleware{
 		regionName:         regionName,
-		innerStorage:       primaryStorage,
+		innerStorage:       innerStorage,
 		startStopValidator: startStopValidator,
 	}, nil
 }
