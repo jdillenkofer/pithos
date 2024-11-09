@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/scrypt"
 )
 
-type EncryptionBlobStoreMiddleware struct {
+type encryptionBlobStoreMiddleware struct {
 	key            []byte
 	innerBlobStore blobstore.BlobStore
 }
@@ -32,27 +32,27 @@ var (
 	ErrPlaintextNotAMultipleOfBlockSize  = errors.New("plaintext is not a multiple of the block size")
 )
 
-func New(password string, innerBlobStore blobstore.BlobStore) (*EncryptionBlobStoreMiddleware, error) {
+func New(password string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
 	key, err := scrypt.Key([]byte(password), []byte("pithos"), 1<<16, 8, 1, 32)
 	if err != nil {
 		return nil, err
 	}
-	ebsm := &EncryptionBlobStoreMiddleware{
+	ebsm := &encryptionBlobStoreMiddleware{
 		key:            key,
 		innerBlobStore: innerBlobStore,
 	}
 	return ebsm, nil
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) Start(ctx context.Context) error {
+func (ebsm *encryptionBlobStoreMiddleware) Start(ctx context.Context) error {
 	return ebsm.innerBlobStore.Start(ctx)
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
+func (ebsm *encryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 	return ebsm.innerBlobStore.Stop(ctx)
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func validHMAC(message, messageMAC, key []byte) bool {
 	return hmac.Equal(messageMAC, expectedMAC)
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
 	readSeekCloser, err := ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
@@ -164,10 +164,10 @@ func (ebsm *EncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 	return byteReadSeekCloser, nil
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+func (ebsm *encryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	return ebsm.innerBlobStore.GetBlobIds(ctx, tx)
 }
 
-func (ebsm *EncryptionBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+func (ebsm *encryptionBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
 	return ebsm.innerBlobStore.DeleteBlob(ctx, tx, blobId)
 }

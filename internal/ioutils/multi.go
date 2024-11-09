@@ -5,7 +5,7 @@ import (
 	"io"
 )
 
-type MultiReadSeekCloser struct {
+type multiReadSeekCloser struct {
 	currentReadOffset int64
 	activeReaderIndex int
 	readSeekClosers   []io.ReadSeekCloser
@@ -13,7 +13,7 @@ type MultiReadSeekCloser struct {
 	readerSizeByIndex []int64
 }
 
-func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) (*MultiReadSeekCloser, error) {
+func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) (io.ReadSeekCloser, error) {
 	readerSizeByIndex := []int64{}
 	size := int64(0)
 	for _, readSeekCloser := range readSeekClosers {
@@ -33,7 +33,7 @@ func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) (*MultiReadSeek
 		size += n
 	}
 
-	return &MultiReadSeekCloser{
+	return &multiReadSeekCloser{
 		currentReadOffset: 0,
 		activeReaderIndex: 0,
 		readSeekClosers:   readSeekClosers,
@@ -42,7 +42,7 @@ func NewMultiReadSeekCloser(readSeekClosers []io.ReadSeekCloser) (*MultiReadSeek
 	}, nil
 }
 
-func (mrc *MultiReadSeekCloser) Read(p []byte) (int, error) {
+func (mrc *multiReadSeekCloser) Read(p []byte) (int, error) {
 	if mrc.activeReaderIndex >= len(mrc.readSeekClosers) {
 		return 0, io.EOF
 	}
@@ -55,7 +55,7 @@ func (mrc *MultiReadSeekCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (mrc *MultiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+func (mrc *multiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	switch whence {
 	case io.SeekStart:
 		mrc.currentReadOffset = offset
@@ -99,7 +99,7 @@ func (mrc *MultiReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	return mrc.currentReadOffset, nil
 }
 
-func (mrc *MultiReadSeekCloser) Close() error {
+func (mrc *multiReadSeekCloser) Close() error {
 	var err error
 	for _, readSeekCloser := range mrc.readSeekClosers {
 		innerErr := readSeekCloser.Close()

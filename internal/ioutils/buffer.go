@@ -5,16 +5,16 @@ import (
 	"io"
 )
 
-func NewByteReadSeekCloser(buffer []byte) ByteReadSeekCloser {
-	return ByteReadSeekCloser{
+func NewByteReadSeekCloser(buffer []byte) io.ReadSeekCloser {
+	return byteReadSeekCloser{
 		bytes.NewReader(buffer),
 	}
 }
 
-type ByteReadSeekCloser struct {
+type byteReadSeekCloser struct {
 	io.ReadSeeker
 }
 
-func (brsc ByteReadSeekCloser) Close() error {
+func (brsc byteReadSeekCloser) Close() error {
 	return nil
 }
