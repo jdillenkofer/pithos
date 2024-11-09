@@ -9,7 +9,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type sqliteBlobRepository struct {
+type sqliteRepository struct {
 	db                                                      *sql.DB
 	findInUseBlobIdsPreparedStmt                            *sql.Stmt
 	findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt *sql.Stmt
@@ -26,7 +26,7 @@ const (
 	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
 )
 
-func New(db *sql.DB) (blob.BlobRepository, error) {
+func NewRepository(db *sql.DB) (blob.Repository, error) {
 	findInUseBlobIdsPreparedStmt, err := db.Prepare(findInUseBlobIdsStmt)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func New(db *sql.DB) (blob.BlobRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sqliteBlobRepository{
+	return &sqliteRepository{
 		db:                           db,
 		findInUseBlobIdsPreparedStmt: findInUseBlobIdsPreparedStmt,
 		findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt: findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt,
@@ -57,7 +57,7 @@ func New(db *sql.DB) (blob.BlobRepository, error) {
 	}, nil
 }
 
-func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.BlobEntity, error) {
+func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 	var id string
 	var blobId string
 	var objectId string
@@ -71,7 +71,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.BlobEntity, error) {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	blobEntity := blob.BlobEntity{
+	blobEntity := blob.Entity{
 		Id:             &ulidId,
 		BlobId:         ulid.MustParse(blobId),
 		ObjectId:       ulid.MustParse(objectId),
@@ -84,7 +84,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.BlobEntity, error) {
 	return &blobEntity, nil
 }
 
-func (br *sqliteBlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+func (br *sqliteRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
 	blobIdRows, err := tx.StmtContext(ctx, br.findInUseBlobIdsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
@@ -103,13 +103,13 @@ func (br *sqliteBlobRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx
 	return blobIds, nil
 }
 
-func (br *sqliteBlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]blob.BlobEntity, error) {
+func (br *sqliteRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]blob.Entity, error) {
 	blobRows, err := tx.StmtContext(ctx, br.findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt).QueryContext(ctx, objectId.String())
 	if err != nil {
 		return nil, err
 	}
 	defer blobRows.Close()
-	blobs := []blob.BlobEntity{}
+	blobs := []blob.Entity{}
 	for blobRows.Next() {
 		blobEntity, err := convertRowToBlobEntity(blobRows)
 		if err != nil {
@@ -120,7 +120,7 @@ func (br *sqliteBlobRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx 
 	return blobs, nil
 }
 
-func (br *sqliteBlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob.BlobEntity) error {
+func (br *sqliteRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob.Entity) error {
 	if blob.Id == nil {
 		id := ulid.Make()
 		blob.Id = &id
@@ -135,7 +135,7 @@ func (br *sqliteBlobRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *
 	return err
 }
 
-func (br *sqliteBlobRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+func (br *sqliteRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
 	_, err := tx.StmtContext(ctx, br.deleteBlobByObjectIdPreparedStmt).ExecContext(ctx, objectId.String())
 	return err
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type sqliteBlobContentRepository struct {
+type sqliteRepository struct {
 	db                                *sql.DB
 	findBlobContentByIdPreparedStmt   *sql.Stmt
 	findBlobContentIdsPreparedStmt    *sql.Stmt
@@ -26,7 +26,7 @@ const (
 	deleteBlobContentByIdStmt = "DELETE FROM blob_contents WHERE id = ?"
 )
 
-func New(db *sql.DB) (blobcontent.BlobContentRepository, error) {
+func NewRepository(db *sql.DB) (blobcontent.Repository, error) {
 	findBlobContentByIdPreparedStmt, err := db.Prepare(findBlobContentByIdStmt)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func New(db *sql.DB) (blobcontent.BlobContentRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sqliteBlobContentRepository{
+	return &sqliteRepository{
 		db:                                db,
 		findBlobContentByIdPreparedStmt:   findBlobContentByIdPreparedStmt,
 		findBlobContentIdsPreparedStmt:    findBlobContentIdsPreparedStmt,
@@ -57,7 +57,7 @@ func New(db *sql.DB) (blobcontent.BlobContentRepository, error) {
 	}, nil
 }
 
-func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.BlobContentEntity, error) {
+func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.Entity, error) {
 	var id string
 	var content []byte
 	var createdAt time.Time
@@ -70,7 +70,7 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.BlobCo
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	return &blobcontent.BlobContentEntity{
+	return &blobcontent.Entity{
 		Id:        &ulidId,
 		Content:   content,
 		CreatedAt: createdAt,
@@ -78,7 +78,7 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.BlobCo
 	}, nil
 }
 
-func (bcr *sqliteBlobContentRepository) FindBlobContentById(ctx context.Context, tx *sql.Tx, blobContentId ulid.ULID) (*blobcontent.BlobContentEntity, error) {
+func (bcr *sqliteRepository) FindBlobContentById(ctx context.Context, tx *sql.Tx, blobContentId ulid.ULID) (*blobcontent.Entity, error) {
 	row := tx.StmtContext(ctx, bcr.findBlobContentByIdPreparedStmt).QueryRowContext(ctx, blobContentId.String())
 	blobContentEntity, err := convertRowToBlobContentEntity(row)
 	if err != nil {
@@ -87,7 +87,7 @@ func (bcr *sqliteBlobContentRepository) FindBlobContentById(ctx context.Context,
 	return blobContentEntity, nil
 }
 
-func (bcr *sqliteBlobContentRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+func (bcr *sqliteRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
 	blobIdRows, err := tx.StmtContext(ctx, bcr.findBlobContentIdsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func (bcr *sqliteBlobContentRepository) FindBlobContentIds(ctx context.Context, 
 	return blobIds, nil
 }
 
-func (bcr *sqliteBlobContentRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.BlobContentEntity) error {
+func (bcr *sqliteRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.Entity) error {
 	_, err := tx.StmtContext(ctx, bcr.deleteBlobContentByIdPreparedStmt).ExecContext(ctx, blobContent.Id.String())
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (bcr *sqliteBlobContentRepository) PutBlobContent(ctx context.Context, tx *
 	return err
 }
 
-func (bcr *sqliteBlobContentRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.BlobContentEntity) error {
+func (bcr *sqliteRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, blobContent *blobcontent.Entity) error {
 	if blobContent.Id == nil {
 		id := ulid.Make()
 		blobContent.Id = &id
@@ -132,7 +132,7 @@ func (bcr *sqliteBlobContentRepository) SaveBlobContent(ctx context.Context, tx 
 	return err
 }
 
-func (bcr *sqliteBlobContentRepository) DeleteBlobContentById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
+func (bcr *sqliteRepository) DeleteBlobContentById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
 	_, err := tx.StmtContext(ctx, bcr.deleteBlobContentByIdPreparedStmt).ExecContext(ctx, id.String())
 	return err
 }

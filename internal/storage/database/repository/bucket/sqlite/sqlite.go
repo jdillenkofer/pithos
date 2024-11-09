@@ -9,7 +9,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type sqliteBucketRepository struct {
+type sqliteRepository struct {
 	db                             *sql.DB
 	findAllBucketsPreparedStmt     *sql.Stmt
 	findBucketByNamePreparedStmt   *sql.Stmt
@@ -28,7 +28,7 @@ const (
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = ?"
 )
 
-func New(db *sql.DB) (bucket.BucketRepository, error) {
+func NewRepository(db *sql.DB) (bucket.Repository, error) {
 	findAllBucketsPreparedStmt, err := db.Prepare(findAllBucketsStmt)
 	if err != nil {
 		return nil, err
@@ -53,7 +53,7 @@ func New(db *sql.DB) (bucket.BucketRepository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &sqliteBucketRepository{
+	return &sqliteRepository{
 		db:                             db,
 		findAllBucketsPreparedStmt:     findAllBucketsPreparedStmt,
 		findBucketByNamePreparedStmt:   findBucketByNamePreparedStmt,
@@ -64,7 +64,7 @@ func New(db *sql.DB) (bucket.BucketRepository, error) {
 	}, nil
 }
 
-func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.BucketEntity, error) {
+func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	var id string
 	var name string
 	var createdAt time.Time
@@ -74,7 +74,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.BucketEntity, error
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	bucketEntity := bucket.BucketEntity{
+	bucketEntity := bucket.Entity{
 		Id:        &ulidId,
 		Name:      name,
 		CreatedAt: createdAt,
@@ -83,13 +83,13 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.BucketEntity, error
 	return &bucketEntity, nil
 }
 
-func (br *sqliteBucketRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]bucket.BucketEntity, error) {
+func (br *sqliteRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]bucket.Entity, error) {
 	bucketRows, err := tx.StmtContext(ctx, br.findAllBucketsPreparedStmt).QueryContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer bucketRows.Close()
-	buckets := []bucket.BucketEntity{}
+	buckets := []bucket.Entity{}
 	for bucketRows.Next() {
 		bucketEntity, err := convertRowToBucketEntity(bucketRows)
 		if err != nil {
@@ -100,7 +100,7 @@ func (br *sqliteBucketRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx
 	return buckets, nil
 }
 
-func (br *sqliteBucketRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bucket.BucketEntity, error) {
+func (br *sqliteRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bucket.Entity, error) {
 	bucketRows, err := tx.StmtContext(ctx, br.findBucketByNamePreparedStmt).QueryContext(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func (br *sqliteBucketRepository) FindBucketByName(ctx context.Context, tx *sql.
 	return bucketEntity, nil
 }
 
-func (br *sqliteBucketRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *bucket.BucketEntity) error {
+func (br *sqliteRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *bucket.Entity) error {
 	if bucket.Id == nil {
 		id := ulid.Make()
 		bucket.Id = &id
@@ -130,7 +130,7 @@ func (br *sqliteBucketRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bu
 	return err
 }
 
-func (br *sqliteBucketRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
+func (br *sqliteRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
 	bucketRows, err := tx.StmtContext(ctx, br.existsBucketByNamePreparedStmt).QueryContext(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -140,7 +140,7 @@ func (br *sqliteBucketRepository) ExistsBucketByName(ctx context.Context, tx *sq
 	return &exists, nil
 }
 
-func (br *sqliteBucketRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) error {
+func (br *sqliteRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) error {
 	_, err := tx.StmtContext(ctx, br.deleteBucketByNamePreparedStmt).ExecContext(ctx, bucketName)
 	return err
 }

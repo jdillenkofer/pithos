@@ -10,14 +10,14 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
-	blobContentRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
+	blobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 )
 
 type SqlBlobStore struct {
-	blobContentRepository blobContentRepository.BlobContentRepository
+	blobContentRepository blobContent.Repository
 }
 
-func New(db *sql.DB, blobContentRepository blobContentRepository.BlobContentRepository) (*SqlBlobStore, error) {
+func New(db *sql.DB, blobContentRepository blobContent.Repository) (*SqlBlobStore, error) {
 	return &SqlBlobStore{
 		blobContentRepository: blobContentRepository,
 	}, nil
@@ -36,7 +36,7 @@ func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	if err != nil {
 		return nil, err
 	}
-	blobContentEntity := blobContentRepository.BlobContentEntity{
+	blobContentEntity := blobContent.Entity{
 		Id:      (*ulid.ULID)(&blobId),
 		Content: content,
 	}

@@ -8,10 +8,10 @@ import (
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
-	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
-	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
-	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
+	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
+	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
+	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
+	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,7 +36,7 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobContentRepository, err := sqliteBlobContentRepository.New(db)
+	blobContentRepository, err := sqliteBlobContent.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BlobContentRepository: %s", err)
 	}
@@ -45,15 +45,15 @@ func TestCacheStorage(t *testing.T) {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	bucketRepository, err := sqliteBucketRepository.New(db)
+	bucketRepository, err := sqliteBucket.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
 	}
-	objectRepository, err := sqliteObjectRepository.New(db)
+	objectRepository, err := sqliteObject.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create ObjectRepository: %s", err)
 	}
-	blobRepository, err := sqliteBlobRepository.New(db)
+	blobRepository, err := sqliteBlob.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}

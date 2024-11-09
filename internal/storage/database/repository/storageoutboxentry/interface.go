@@ -8,17 +8,17 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type StorageOutboxEntryRepository interface {
+type Repository interface {
 	NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error)
-	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*StorageOutboxEntryEntity, error)
-	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*StorageOutboxEntryEntity, error)
-	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*StorageOutboxEntryEntity, error)
-	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*StorageOutboxEntryEntity, error)
-	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *StorageOutboxEntryEntity) error
+	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
+	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
+	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
+	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
+	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *Entity) error
 	DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error
 }
 
-type StorageOutboxEntryEntity struct {
+type Entity struct {
 	Id        *ulid.ULID
 	Operation string
 	Bucket    string
