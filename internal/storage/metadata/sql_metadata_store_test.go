@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
-	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
-	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
+	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
+	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
+	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 

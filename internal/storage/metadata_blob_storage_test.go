@@ -8,11 +8,11 @@ import (
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
+	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
+	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
+	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
-	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob/sqlite"
-	sqliteBlobContentRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blobcontent/sqlite"
-	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket/sqlite"
-	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 

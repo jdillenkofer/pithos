@@ -11,9 +11,9 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/blobstore"
-	blobRepository "github.com/jdillenkofer/pithos/internal/storage/repository/blob"
-	bucketRepository "github.com/jdillenkofer/pithos/internal/storage/repository/bucket"
-	objectRepository "github.com/jdillenkofer/pithos/internal/storage/repository/object"
+	blobRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
+	bucketRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
+	objectRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/oklog/ulid/v2"
 )
 

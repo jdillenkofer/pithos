@@ -15,7 +15,7 @@ func TestMigrateUp(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
+	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
@@ -34,7 +34,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
+	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
@@ -58,7 +58,7 @@ func TestMigrateUpAndDownAndUp(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations")
+	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})

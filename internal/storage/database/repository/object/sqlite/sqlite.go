@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/repository/object"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/oklog/ulid/v2"
 )
 
