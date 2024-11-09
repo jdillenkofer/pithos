@@ -7,10 +7,10 @@ import (
 
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
-	sqliteBucketRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
-	sqliteObjectRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
-	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
+	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
+	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
+	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
+	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadata"
 	"github.com/stretchr/testify/assert"
 )
@@ -40,15 +40,15 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	bucketRepository, err := sqliteBucketRepository.New(db)
+	bucketRepository, err := sqliteBucket.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
 	}
-	objectRepository, err := sqliteObjectRepository.New(db)
+	objectRepository, err := sqliteObject.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create ObjectRepository: %s", err)
 	}
-	blobRepository, err := sqliteBlobRepository.New(db)
+	blobRepository, err := sqliteBlob.NewRepository(db)
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
@@ -86,7 +86,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	// metadataBlobStorage would open separate transactions, we would deadlock the test.
 	// To avoid this each storage type gets its own db.
 	// In the future i want to redesign storage implementations to use the already open transaction.
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db2)
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db2)
 	if err != nil {
 		log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 

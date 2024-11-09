@@ -8,17 +8,17 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type ObjectRepository interface {
-	SaveObject(ctx context.Context, tx *sql.Tx, object *ObjectEntity) error
+type Repository interface {
+	SaveObject(ctx context.Context, tx *sql.Tx, object *Entity) error
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error)
-	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]ObjectEntity, error)
-	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*ObjectEntity, error)
-	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*ObjectEntity, error)
+	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]Entity, error)
+	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*Entity, error)
+	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Entity, error)
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
 }
 
-type ObjectEntity struct {
+type Entity struct {
 	Id           *ulid.ULID
 	BucketName   string
 	Key          string

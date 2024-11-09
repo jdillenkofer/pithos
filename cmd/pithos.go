@@ -14,7 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteStorageOutboxEntryRepository "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
+	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -51,7 +51,7 @@ func main() {
 			log.Fatal("Could not create s3ClientStorage")
 		}
 		if replication.UseOutbox() {
-			storageOutboxEntryRepository, err := sqliteStorageOutboxEntryRepository.New(db)
+			storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
 			if err != nil {
 				log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 
