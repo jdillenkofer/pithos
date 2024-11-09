@@ -1,4 +1,4 @@
-FROM golang:1.23.2-alpine3.20 AS app-builder
+FROM golang:1.23.3-alpine3.20 AS app-builder
 
 RUN apk add build-base
 
