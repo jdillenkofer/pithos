@@ -5,141 +5,43 @@ import (
 	"database/sql"
 	"io"
 	"log"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
-type BlobGarbageCollector struct {
-	db              *sql.DB
-	collectionMutex sync.RWMutex
-	metadataStore   metadatastore.MetadataStore
-	blobStore       blobstore.BlobStore
-	writeOperations atomic.Int64
-}
-
-func NewBlobGarbageCollector(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (*BlobGarbageCollector, error) {
-	return &BlobGarbageCollector{
-		db:              db,
-		collectionMutex: sync.RWMutex{},
-		writeOperations: atomic.Int64{},
-		metadataStore:   metadataStore,
-		blobStore:       blobStore,
-	}, nil
-}
-
-func (blobGC *BlobGarbageCollector) BlockIfGCIsRunning() func() {
-	blobGC.writeOperations.Add(1)
-	blobGC.collectionMutex.RLock()
-	return blobGC.collectionMutex.RUnlock
-}
-
-func (blobGC *BlobGarbageCollector) RunGCLoop(stopRunning *atomic.Bool) {
-	var lastWriteOperationCount int64 = 0
-	for !stopRunning.Load() {
-		newWriteOperationCount := blobGC.writeOperations.Load()
-		if newWriteOperationCount > lastWriteOperationCount {
-			log.Println("Running blob garbage collector")
-			err := blobGC.RunGC()
-			if err != nil {
-				log.Printf("Failure while running garbage collector: %s\n", err)
-			} else {
-				log.Println("Ran blob garbage collector successfully")
-			}
-		}
-		lastWriteOperationCount = newWriteOperationCount
-		for range 30 * 4 {
-			time.Sleep(250 * time.Millisecond)
-			if stopRunning.Load() {
-				return
-			}
-		}
-	}
-}
-
-func (blobGC *BlobGarbageCollector) RunGC() error {
-	blobGC.collectionMutex.Lock()
-	defer blobGC.collectionMutex.Unlock()
-
-	ctx := context.Background()
-
-	tx, err := blobGC.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return err
-	}
-
-	existingBlobIds, err := blobGC.blobStore.GetBlobIds(ctx, tx)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-
-	inUseBlobIdMap := make(map[blobstore.BlobId]struct{})
-	inUseBlobIds, err := blobGC.metadataStore.GetInUseBlobIds(ctx, tx)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	for _, inUseBlobId := range inUseBlobIds {
-		inUseBlobIdMap[inUseBlobId] = struct{}{}
-	}
-
-	numDeletedBlobs := 0
-
-	for _, existingBlobId := range existingBlobIds {
-		if _, hasKey := inUseBlobIdMap[existingBlobId]; !hasKey {
-			err = blobGC.blobStore.DeleteBlob(ctx, tx, existingBlobId)
-			if err != nil {
-				tx.Rollback()
-				return err
-			}
-
-			numDeletedBlobs += 1
-		}
-	}
-
-	log.Printf("Garbage Collection deleted %d blobs\n", numDeletedBlobs)
-
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 type metadataBlobStorage struct {
 	db                 *sql.DB
-	gcTaskHandle       *task.TaskHandle
-	blobGC             *BlobGarbageCollector
+	startStopValidator *startstopvalidator.StartStopValidator
 	metadataStore      metadatastore.MetadataStore
 	blobStore          blobstore.BlobStore
-	startStopValidator *startstopvalidator.StartStopValidator
+	blobGC             gc.BlobGarbageCollector
+	gcTaskHandle       *task.TaskHandle
 }
 
 func NewStorage(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (storage.Storage, error) {
-	blobGC, err := NewBlobGarbageCollector(db, metadataStore, blobStore)
+	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
 	if err != nil {
 		return nil, err
 	}
-	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
+	blobGC, err := gc.New(db, metadataStore, blobStore)
 	if err != nil {
 		return nil, err
 	}
 	return &metadataBlobStorage{
 		db:                 db,
-		gcTaskHandle:       nil,
-		blobGC:             blobGC,
+		startStopValidator: startStopValidator,
 		metadataStore:      metadataStore,
 		blobStore:          blobStore,
-		startStopValidator: startStopValidator,
+		blobGC:             blobGC,
+		gcTaskHandle:       nil,
 	}, nil
 }
 
@@ -189,7 +91,7 @@ func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
 }
 
 func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucket string) error {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -211,7 +113,7 @@ func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucket string)
 }
 
 func (mbs *metadataBlobStorage) DeleteBucket(ctx context.Context, bucket string) error {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -385,7 +287,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 }
 
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -450,7 +352,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 }
 
 func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -492,7 +394,7 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 }
 
 func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -513,7 +415,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 }
 
 func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -560,7 +462,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 }
 
 func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
@@ -589,7 +491,7 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 }
 
 func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
-	unblockGC := mbs.blobGC.BlockIfGCIsRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
