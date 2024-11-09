@@ -12,7 +12,7 @@ import (
 	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadata"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatastore/sql"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,7 +57,7 @@ func TestCacheStorage(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
-	metadataStore, err := metadata.NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}

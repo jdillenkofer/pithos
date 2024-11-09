@@ -1,4 +1,4 @@
-package metadata
+package sql
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatastore"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -23,7 +24,7 @@ type SqlMetadataStore struct {
 	blobRepository   blob.Repository
 }
 
-func NewSqlMetadataStore(db *sql.DB, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (*SqlMetadataStore, error) {
+func New(db *sql.DB, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (*SqlMetadataStore, error) {
 	return &SqlMetadataStore{
 		bucketRepository: bucketRepository,
 		objectRepository: objectRepository,
@@ -49,7 +50,7 @@ func (sms *SqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 	if *exists {
-		return ErrBucketAlreadyExists
+		return metadatastore.ErrBucketAlreadyExists
 	}
 
 	err = sms.bucketRepository.SaveBucket(ctx, tx, &bucket.Entity{
@@ -68,7 +69,7 @@ func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 	if !*exists {
-		return ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	containsBucketObjects, err := sms.objectRepository.ContainsBucketObjectsByBucketName(ctx, tx, bucketName)
@@ -76,7 +77,7 @@ func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 	if *containsBucketObjects {
-		return ErrBucketNotEmpty
+		return metadatastore.ErrBucketNotEmpty
 	}
 
 	err = sms.bucketRepository.DeleteBucketByName(ctx, tx, bucketName)
@@ -87,13 +88,13 @@ func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error) {
+func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
 	bucketEntities, err := sms.bucketRepository.FindAllBuckets(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	buckets := sliceutils.Map(func(bucketEntity bucket.Entity) Bucket {
-		return Bucket{
+	buckets := sliceutils.Map(func(bucketEntity bucket.Entity) metadatastore.Bucket {
+		return metadatastore.Bucket{
 			Name:         bucketEntity.Name,
 			CreationDate: bucketEntity.CreatedAt,
 		}
@@ -102,16 +103,16 @@ func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]Buc
 	return buckets, nil
 }
 
-func (sms *SqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*Bucket, error) {
+func (sms *SqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*metadatastore.Bucket, error) {
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if bucketEntity == nil {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	bucket := Bucket{
+	bucket := metadatastore.Bucket{
 		Name:         bucketEntity.Name,
 		CreationDate: bucketEntity.CreatedAt,
 	}
@@ -132,13 +133,13 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
 	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
 	}
 	commonPrefixes := []string{}
-	objects := []Object{}
+	objects := []metadatastore.Object{}
 	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -156,9 +157,9 @@ func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			if err != nil {
 				return nil, err
 			}
-			blobs := []Blob{}
+			blobs := []metadatastore.Blob{}
 			for _, blobEntity := range blobEntities {
-				blobStruc := Blob{
+				blobStruc := metadatastore.Blob{
 					Id:   blobEntity.BlobId,
 					ETag: blobEntity.ETag,
 					Size: blobEntity.Size,
@@ -167,7 +168,7 @@ func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			}
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key, prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
-				objects = append(objects, Object{
+				objects = append(objects, metadatastore.Object{
 					Key:          objectEntity.Key,
 					LastModified: objectEntity.UpdatedAt,
 					ETag:         objectEntity.ETag,
@@ -178,7 +179,7 @@ func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 		}
 	}
 
-	listBucketResult := ListBucketResult{
+	listBucketResult := metadatastore.ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
 		IsTruncated:    *keyCount > maxKeys,
@@ -186,25 +187,25 @@ func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	return &listBucketResult, nil
 }
 
-func (sms *SqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error) {
+func (sms *SqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if !*exists {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error) {
+func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.Object, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if !*exists {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
@@ -212,21 +213,21 @@ func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		return nil, err
 	}
 	if objectEntity == nil {
-		return nil, ErrNoSuchKey
+		return nil, metadatastore.ErrNoSuchKey
 	}
 	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
-	blobs := sliceutils.Map(func(blobEntity blob.Entity) Blob {
-		return Blob{
+	blobs := sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
+		return metadatastore.Blob{
 			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,
 			Size: blobEntity.Size,
 		}
 	}, blobEntities)
 
-	return &Object{
+	return &metadatastore.Object{
 		Key:          key,
 		LastModified: objectEntity.UpdatedAt,
 		ETag:         objectEntity.ETag,
@@ -235,13 +236,13 @@ func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, nil
 }
 
-func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, obj *Object) error {
+func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, obj *metadatastore.Object) error {
 	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
 	if !*existsBucket {
-		return ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
@@ -296,7 +297,7 @@ func (sms *SqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 	if !*exists {
-		return ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
@@ -319,13 +320,13 @@ func (sms *SqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*InitiateMultipartUploadResult, error) {
+func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if !*exists {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity := object.Entity{
@@ -341,18 +342,18 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		return nil, err
 	}
 
-	return &InitiateMultipartUploadResult{
+	return &metadatastore.InitiateMultipartUploadResult{
 		UploadId: objectEntity.UploadId,
 	}, nil
 }
 
-func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blb Blob) error {
+func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blb metadatastore.Blob) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
 	if !*exists {
-		return ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
@@ -360,7 +361,7 @@ func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 		return err
 	}
 	if objectEntity == nil {
-		return ErrNoSuchKey
+		return metadatastore.ErrNoSuchKey
 	}
 
 	blobEntity := blob.Entity{
@@ -377,13 +378,13 @@ func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	return nil
 }
 
-func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error) {
+func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.CompleteMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if !*exists {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
@@ -391,7 +392,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		return nil, err
 	}
 	if objectEntity == nil {
-		return nil, ErrNoSuchKey
+		return nil, metadatastore.ErrNoSuchKey
 	}
 
 	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
@@ -404,7 +405,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	hash := md5.New()
 	for i, blobEntity := range blobEntities {
 		if i+1 != blobEntity.SequenceNumber {
-			return nil, ErrUploadWithInvalidSequenceNumber
+			return nil, metadatastore.ErrUploadWithInvalidSequenceNumber
 		}
 		totalSize += blobEntity.Size
 
@@ -415,7 +416,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}
 	etag := "\"" + hex.EncodeToString(hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)) + "\""
 
-	deletedBlobs := []Blob{}
+	deletedBlobs := []metadatastore.Blob{}
 
 	// Remove old objects
 	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
@@ -433,8 +434,8 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, err
 		}
 
-		deletedBlobs = sliceutils.Map(func(blobEntity blob.Entity) Blob {
-			return Blob{
+		deletedBlobs = sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
+			return metadatastore.Blob{
 				Id:   blobEntity.BlobId,
 				ETag: blobEntity.ETag,
 				Size: blobEntity.Size,
@@ -455,19 +456,19 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		return nil, err
 	}
 
-	return &CompleteMultipartUploadResult{
+	return &metadatastore.CompleteMultipartUploadResult{
 		DeletedBlobs: deletedBlobs,
 		ETag:         etag,
 	}, nil
 }
 
-func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error) {
+func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.AbortMultipartResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if !*exists {
-		return nil, ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
@@ -475,7 +476,7 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 	if objectEntity == nil {
-		return nil, ErrNoSuchKey
+		return nil, metadatastore.ErrNoSuchKey
 	}
 
 	blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
@@ -488,8 +489,8 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
-	blobs := sliceutils.Map(func(blobEntity blob.Entity) Blob {
-		return Blob{
+	blobs := sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
+		return metadatastore.Blob{
 			Id:   blobEntity.BlobId,
 			ETag: blobEntity.ETag,
 			Size: blobEntity.Size,
@@ -501,7 +502,7 @@ func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
-	return &AbortMultipartResult{
+	return &metadatastore.AbortMultipartResult{
 		DeletedBlobs: blobs,
 	}, nil
 }

@@ -1,4 +1,4 @@
-package metadata
+package sql
 
 import (
 	"log"
@@ -9,6 +9,7 @@ import (
 	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatastore"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,10 +45,10 @@ func TestSqlMetadataStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
-	sqlMetadataStore, err := NewSqlMetadataStore(db, bucketRepository, objectRepository, blobRepository)
+	sqlMetadataStore, err := New(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}
-	err = MetadataStoreTester(sqlMetadataStore, db)
+	err = metadatastore.MetadataStoreTester(sqlMetadataStore, db)
 	assert.Nil(t, err)
 }
