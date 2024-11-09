@@ -49,6 +49,6 @@ func TestSqlMetadataStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create SqlMetadataStore: %s", err)
 	}
-	err = metadatastore.MetadataStoreTester(sqlMetadataStore, db)
+	err = metadatastore.Tester(sqlMetadataStore, db)
 	assert.Nil(t, err)
 }

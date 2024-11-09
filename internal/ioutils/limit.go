@@ -5,7 +5,7 @@ import (
 	"io"
 )
 
-type LimitedStartReadSeekCloser struct {
+type limitedStartReadSeekCloser struct {
 	isInitialized       bool
 	currentReadOffset   int64
 	startLimit          int64
@@ -13,8 +13,8 @@ type LimitedStartReadSeekCloser struct {
 	innerReadSeekCloser io.ReadSeekCloser
 }
 
-func NewLimitedStartReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, startLimit int64) *LimitedStartReadSeekCloser {
-	return &LimitedStartReadSeekCloser{
+func NewLimitedStartReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, startLimit int64) io.ReadSeekCloser {
+	return &limitedStartReadSeekCloser{
 		isInitialized:       false,
 		startLimit:          startLimit,
 		currentReadOffset:   -1,
@@ -23,7 +23,7 @@ func NewLimitedStartReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, startL
 	}
 }
 
-func (lrc *LimitedStartReadSeekCloser) maybeInitialize() error {
+func (lrc *limitedStartReadSeekCloser) maybeInitialize() error {
 	if !lrc.isInitialized {
 		var err error
 		lrc.size, err = lrc.innerReadSeekCloser.Seek(0, io.SeekEnd)
@@ -39,7 +39,7 @@ func (lrc *LimitedStartReadSeekCloser) maybeInitialize() error {
 	return nil
 }
 
-func (lrc *LimitedStartReadSeekCloser) Read(p []byte) (int, error) {
+func (lrc *limitedStartReadSeekCloser) Read(p []byte) (int, error) {
 	err := lrc.maybeInitialize()
 	if err != nil {
 		return 0, err
@@ -49,7 +49,7 @@ func (lrc *LimitedStartReadSeekCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (lrc *LimitedStartReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+func (lrc *limitedStartReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	err := lrc.maybeInitialize()
 	if err != nil {
 		return 0, err
@@ -75,7 +75,7 @@ func (lrc *LimitedStartReadSeekCloser) Seek(offset int64, whence int) (int64, er
 	return n - lrc.startLimit, err
 }
 
-func (lrc *LimitedStartReadSeekCloser) Close() error {
+func (lrc *limitedStartReadSeekCloser) Close() error {
 	err := lrc.innerReadSeekCloser.Close()
 	if err != nil {
 		return err
@@ -83,7 +83,7 @@ func (lrc *LimitedStartReadSeekCloser) Close() error {
 	return nil
 }
 
-type LimitedEndReadSeekCloser struct {
+type limitedEndReadSeekCloser struct {
 	isInitialized       bool
 	currentReadOffset   int64
 	endLimit            int64
@@ -91,8 +91,8 @@ type LimitedEndReadSeekCloser struct {
 	innerReadSeekCloser io.ReadSeekCloser
 }
 
-func NewLimitedEndReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, endLimit int64) *LimitedEndReadSeekCloser {
-	return &LimitedEndReadSeekCloser{
+func NewLimitedEndReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, endLimit int64) io.ReadSeekCloser {
+	return &limitedEndReadSeekCloser{
 		isInitialized:       false,
 		endLimit:            endLimit,
 		currentReadOffset:   -1,
@@ -101,7 +101,7 @@ func NewLimitedEndReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, endLimit
 	}
 }
 
-func (lrc *LimitedEndReadSeekCloser) maybeInitialize() error {
+func (lrc *limitedEndReadSeekCloser) maybeInitialize() error {
 	if !lrc.isInitialized {
 		offset, err := lrc.innerReadSeekCloser.Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -120,7 +120,7 @@ func (lrc *LimitedEndReadSeekCloser) maybeInitialize() error {
 	return nil
 }
 
-func (lrc *LimitedEndReadSeekCloser) Read(p []byte) (int, error) {
+func (lrc *limitedEndReadSeekCloser) Read(p []byte) (int, error) {
 	err := lrc.maybeInitialize()
 	if err != nil {
 		return 0, err
@@ -141,7 +141,7 @@ func (lrc *LimitedEndReadSeekCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (lrc *LimitedEndReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+func (lrc *limitedEndReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	err := lrc.maybeInitialize()
 	if err != nil {
 		return 0, err
@@ -170,7 +170,7 @@ func (lrc *LimitedEndReadSeekCloser) Seek(offset int64, whence int) (int64, erro
 	return n, err
 }
 
-func (lrc *LimitedEndReadSeekCloser) Close() error {
+func (lrc *limitedEndReadSeekCloser) Close() error {
 	err := lrc.innerReadSeekCloser.Close()
 	if err != nil {
 		return err

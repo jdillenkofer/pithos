@@ -78,7 +78,7 @@ type MetadataStore interface {
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
 }
 
-func MetadataStoreTester(metadataStore MetadataStore, db *sql.DB) error {
+func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	ctx := context.Background()
 	err := metadataStore.Start(ctx)
 	if err != nil {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
-	filesystemBlobStore := FilesystemBlobStore{"."}
+	filesystemBlobStore := filesystemBlobStore{"."}
 	blobId := ulid.Make()
 	filename := filesystemBlobStore.getFilename(blobId)
 	blobId2, ok := filesystemBlobStore.tryGetBlobIdFromFilename(filename)

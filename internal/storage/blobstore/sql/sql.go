@@ -13,25 +13,25 @@ import (
 	blobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 )
 
-type SqlBlobStore struct {
+type sqlBlobStore struct {
 	blobContentRepository blobContent.Repository
 }
 
-func New(db *sql.DB, blobContentRepository blobContent.Repository) (*SqlBlobStore, error) {
-	return &SqlBlobStore{
+func New(db *sql.DB, blobContentRepository blobContent.Repository) (blobstore.BlobStore, error) {
+	return &sqlBlobStore{
 		blobContentRepository: blobContentRepository,
 	}, nil
 }
 
-func (bs *SqlBlobStore) Start(ctx context.Context) error {
+func (bs *sqlBlobStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (bs *SqlBlobStore) Stop(ctx context.Context) error {
+func (bs *sqlBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
 	content, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func (bs *SqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	}, nil
 }
 
-func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (bs *sqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
 	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
@@ -70,11 +70,11 @@ func (bs *SqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	return reader, nil
 }
 
-func (bs *SqlBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+func (bs *sqlBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	return bs.blobContentRepository.FindBlobContentIds(ctx, tx)
 }
 
-func (bs *SqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+func (bs *sqlBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
 	err := bs.blobContentRepository.DeleteBlobContentById(ctx, tx, blobId)
 	return err
 }

@@ -18,33 +18,33 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-type SqlMetadataStore struct {
+type sqlMetadataStore struct {
 	bucketRepository bucket.Repository
 	objectRepository object.Repository
 	blobRepository   blob.Repository
 }
 
-func New(db *sql.DB, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (*SqlMetadataStore, error) {
-	return &SqlMetadataStore{
+func New(db *sql.DB, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (metadatastore.MetadataStore, error) {
+	return &sqlMetadataStore{
 		bucketRepository: bucketRepository,
 		objectRepository: objectRepository,
 		blobRepository:   blobRepository,
 	}, nil
 }
 
-func (sms *SqlMetadataStore) Start(ctx context.Context) error {
+func (sms *sqlMetadataStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) Stop(ctx context.Context) error {
+func (sms *sqlMetadataStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (sms *SqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+func (sms *sqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	return sms.blobRepository.FindInUseBlobIds(ctx, tx)
 }
 
-func (sms *SqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (sms *SqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -88,7 +88,7 @@ func (sms *SqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
+func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
 	bucketEntities, err := sms.bucketRepository.FindAllBuckets(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (sms *SqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]met
 	return buckets, nil
 }
 
-func (sms *SqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*metadatastore.Bucket, error) {
+func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*metadatastore.Bucket, error) {
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
 	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (sms *SqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	return &listBucketResult, nil
 }
 
-func (sms *SqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (sms *SqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.Object, error) {
+func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.Object, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -236,7 +236,7 @@ func (sms *SqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, nil
 }
 
-func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, obj *metadatastore.Object) error {
+func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, obj *metadatastore.Object) error {
 	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -291,7 +291,7 @@ func (sms *SqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	return nil
 }
 
-func (sms *SqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error {
+func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -320,7 +320,7 @@ func (sms *SqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -347,7 +347,7 @@ func (sms *SqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}, nil
 }
 
-func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blb metadatastore.Blob) error {
+func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blb metadatastore.Blob) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -378,7 +378,7 @@ func (sms *SqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	return nil
 }
 
-func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.CompleteMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.CompleteMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -462,7 +462,7 @@ func (sms *SqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}, nil
 }
 
-func (sms *SqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.AbortMultipartResult, error) {
+func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.AbortMultipartResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err

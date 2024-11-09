@@ -4,24 +4,24 @@ import (
 	"io"
 )
 
-type NopSeekCloser struct {
+type nopSeekCloser struct {
 	innerReader io.Reader
 }
 
-func NewNopSeekCloser(innerReader io.Reader) *NopSeekCloser {
-	return &NopSeekCloser{
+func NewNopSeekCloser(innerReader io.Reader) io.ReadSeekCloser {
+	return &nopSeekCloser{
 		innerReader: innerReader,
 	}
 }
 
-func (nsc *NopSeekCloser) Read(p []byte) (int, error) {
+func (nsc *nopSeekCloser) Read(p []byte) (int, error) {
 	return nsc.innerReader.Read(p)
 }
 
-func (nsc *NopSeekCloser) Seek(offset int64, whence int) (int64, error) {
+func (nsc *nopSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	panic("Called Seek in NopSeekCloser")
 }
 
-func (nsc *NopSeekCloser) Close() error {
+func (nsc *nopSeekCloser) Close() error {
 	panic("Called Close in NopSeekCloser")
 }
