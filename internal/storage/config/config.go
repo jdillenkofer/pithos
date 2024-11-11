@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
+	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
@@ -30,8 +31,8 @@ const (
 	S3ClientStorageType             = "S3ClientStorage"
 )
 
-type storageInstatiator interface {
-	Instatiate() (storage.Storage, error)
+type StorageInstantiator interface {
+	Instantiate() (storage.Storage, error)
 }
 
 type StorageConfiguration struct {
@@ -39,8 +40,10 @@ type StorageConfiguration struct {
 }
 
 type CacheStorageConfiguration struct {
-	InnerStorageInstatiator storageInstatiator `json:"-"`
-	RawInnerStorage         json.RawMessage    `json:"innerStorage"`
+	CacheInstantiator        cacheConfig.CacheInstantiator `json:"-"`
+	RawCache                 json.RawMessage               `json:"cache"`
+	InnerStorageInstantiator StorageInstantiator           `json:"-"`
+	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
 	StorageConfiguration
 }
 
@@ -50,32 +53,40 @@ func (c *CacheStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	c.InnerStorageInstatiator, err = createStorageInstatiatorFromJson(c.RawInnerStorage)
+	c.CacheInstantiator, err = cacheConfig.CreateCacheInstantiatorFromJson(c.RawCache)
+	if err != nil {
+		return err
+	}
+	c.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(c.RawInnerStorage)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *CacheStorageConfiguration) Instatiate() (storage.Storage, error) {
-	innerStorage, err := c.InnerStorageInstatiator.Instatiate()
+func (c *CacheStorageConfiguration) Instantiate() (storage.Storage, error) {
+	cacheImpl, err := c.CacheInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
-	return cache.New(nil, innerStorage)
+	innerStorage, err := c.InnerStorageInstantiator.Instantiate()
+	if err != nil {
+		return nil, err
+	}
+	return cache.New(cacheImpl, innerStorage)
 }
 
 type MetadataBlobStorageConfiguration struct {
 	StorageConfiguration
 }
 
-func (m *MetadataBlobStorageConfiguration) Instatiate() (storage.Storage, error) {
+func (m *MetadataBlobStorageConfiguration) Instantiate() (storage.Storage, error) {
 	return metadatablob.NewStorage(nil, nil, nil)
 }
 
 type PrometheusStorageMiddlewareConfiguration struct {
-	InnerStorageInstatiator storageInstatiator `json:"-"`
-	RawInnerStorage         json.RawMessage    `json:"innerStorage"`
+	InnerStorageInstantiator StorageInstantiator `json:"-"`
+	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
 	StorageConfiguration
 }
 
@@ -85,15 +96,15 @@ func (p *PrometheusStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error
 	if err != nil {
 		return err
 	}
-	p.InnerStorageInstatiator, err = createStorageInstatiatorFromJson(p.RawInnerStorage)
+	p.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(p.RawInnerStorage)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (p *PrometheusStorageMiddlewareConfiguration) Instatiate() (storage.Storage, error) {
-	innerStorage, err := p.InnerStorageInstatiator.Instatiate()
+func (p *PrometheusStorageMiddlewareConfiguration) Instantiate() (storage.Storage, error) {
+	innerStorage, err := p.InnerStorageInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +113,9 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instatiate() (storage.Storage
 }
 
 type TracingStorageMiddlewareConfiguration struct {
-	RegionName              string             `json:"regionName"`
-	InnerStorageInstatiator storageInstatiator `json:"-"`
-	RawInnerStorage         json.RawMessage    `json:"innerStorage"`
+	RegionName               string              `json:"regionName"`
+	InnerStorageInstantiator StorageInstantiator `json:"-"`
+	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
 	StorageConfiguration
 }
 
@@ -114,15 +125,15 @@ func (t *TracingStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	t.InnerStorageInstatiator, err = createStorageInstatiatorFromJson(t.RawInnerStorage)
+	t.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(t.RawInnerStorage)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (t *TracingStorageMiddlewareConfiguration) Instatiate() (storage.Storage, error) {
-	innerStorage, err := t.InnerStorageInstatiator.Instatiate()
+func (t *TracingStorageMiddlewareConfiguration) Instantiate() (storage.Storage, error) {
+	innerStorage, err := t.InnerStorageInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +141,8 @@ func (t *TracingStorageMiddlewareConfiguration) Instatiate() (storage.Storage, e
 }
 
 type OutboxStorageConfiguration struct {
-	InnerStorageInstatiator storageInstatiator `json:"-"`
-	RawInnerStorage         json.RawMessage    `json:"innerStorage"`
+	InnerStorageInstantiator StorageInstantiator `json:"-"`
+	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
 	StorageConfiguration
 }
 
@@ -141,15 +152,15 @@ func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	o.InnerStorageInstatiator, err = createStorageInstatiatorFromJson(o.RawInnerStorage)
+	o.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(o.RawInnerStorage)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (o *OutboxStorageConfiguration) Instatiate() (storage.Storage, error) {
-	innerStorage, err := o.InnerStorageInstatiator.Instatiate()
+func (o *OutboxStorageConfiguration) Instantiate() (storage.Storage, error) {
+	innerStorage, err := o.InnerStorageInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
@@ -157,10 +168,10 @@ func (o *OutboxStorageConfiguration) Instatiate() (storage.Storage, error) {
 }
 
 type ReplicationStorageConfiguration struct {
-	PrimaryStorageInstatiator    storageInstatiator   `json:"-"`
-	RawPrimaryStorage            json.RawMessage      `json:"primaryStorage"`
-	SecondaryStorageInstatiators []storageInstatiator `json:"-"`
-	RawSecondaryStorages         []json.RawMessage    `json:"secondaryStorages"`
+	PrimaryStorageInstantiator    StorageInstantiator   `json:"-"`
+	RawPrimaryStorage             json.RawMessage       `json:"primaryStorage"`
+	SecondaryStorageInstantiators []StorageInstantiator `json:"-"`
+	RawSecondaryStorages          []json.RawMessage     `json:"secondaryStorages"`
 	StorageConfiguration
 }
 
@@ -170,28 +181,28 @@ func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	r.PrimaryStorageInstatiator, err = createStorageInstatiatorFromJson(r.RawPrimaryStorage)
+	r.PrimaryStorageInstantiator, err = CreateStorageInstantiatorFromJson(r.RawPrimaryStorage)
 	if err != nil {
 		return err
 	}
 	for _, rawSecondaryStorage := range r.RawSecondaryStorages {
-		secondaryStorageInstatiator, err := createStorageInstatiatorFromJson(rawSecondaryStorage)
+		secondaryStorageInstantiator, err := CreateStorageInstantiatorFromJson(rawSecondaryStorage)
 		if err != nil {
 			return err
 		}
-		r.SecondaryStorageInstatiators = append(r.SecondaryStorageInstatiators, secondaryStorageInstatiator)
+		r.SecondaryStorageInstantiators = append(r.SecondaryStorageInstantiators, secondaryStorageInstantiator)
 	}
 	return nil
 }
 
-func (r *ReplicationStorageConfiguration) Instatiate() (storage.Storage, error) {
-	primaryStorage, err := r.PrimaryStorageInstatiator.Instatiate()
+func (r *ReplicationStorageConfiguration) Instantiate() (storage.Storage, error) {
+	primaryStorage, err := r.PrimaryStorageInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
 	secondaryStorages := []storage.Storage{}
-	for _, secondaryStorageInstatiator := range r.SecondaryStorageInstatiators {
-		secondaryStorage, err := secondaryStorageInstatiator.Instatiate()
+	for _, secondaryStorageInstantiator := range r.SecondaryStorageInstantiators {
+		secondaryStorage, err := secondaryStorageInstantiator.Instantiate()
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +220,7 @@ type S3ClientStorageConfiguration struct {
 	StorageConfiguration
 }
 
-func (s *S3ClientStorageConfiguration) Instatiate() (storage.Storage, error) {
+func (s *S3ClientStorageConfiguration) Instantiate() (storage.Storage, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(s.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId, s.SecretAccessKey, "")),
@@ -224,22 +235,14 @@ func (s *S3ClientStorageConfiguration) Instatiate() (storage.Storage, error) {
 	return s3client.NewStorage(s3Client)
 }
 
-func CreateStorageFromJson(b []byte) (storage.Storage, error) {
-	si, err := createStorageInstatiatorFromJson(b)
-	if err != nil {
-		return nil, err
-	}
-	return si.Instatiate()
-}
-
-func createStorageInstatiatorFromJson(b []byte) (storageInstatiator, error) {
+func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 	var sc StorageConfiguration
 	err := json.Unmarshal(b, &sc)
 	if err != nil {
 		return nil, err
 	}
 
-	var si storageInstatiator
+	var si StorageInstantiator
 	switch sc.Type {
 	case CacheStorageType:
 		si = &CacheStorageConfiguration{}
