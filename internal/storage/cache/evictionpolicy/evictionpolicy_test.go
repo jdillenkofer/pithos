@@ -1,13 +1,16 @@
-package cache
+package evictionpolicy_test
 
 import (
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFixedKeyLimitEvictionChecker(t *testing.T) {
-	ec, err := NewFixedKeyLimitEvictionChecker(3)
+	ec, err := fixedkeylimit.New(3)
 	assert.Nil(t, err)
 
 	assert.False(t, ec.ShouldEvict())
@@ -24,7 +27,7 @@ func TestFixedKeyLimitEvictionChecker(t *testing.T) {
 }
 
 func TestFixedSizeLimitEvictionChecker(t *testing.T) {
-	ec, err := NewFixedSizeLimitEvictionChecker(3)
+	ec, err := fixedsizelimit.New(3)
 	assert.Nil(t, err)
 
 	assert.False(t, ec.ShouldEvict())
@@ -39,10 +42,10 @@ func TestFixedSizeLimitEvictionChecker(t *testing.T) {
 }
 
 func TestLFUCacheEvictionPolicy(t *testing.T) {
-	ec, err := NewFixedSizeLimitEvictionChecker(3)
+	ec, err := fixedsizelimit.New(3)
 	assert.Nil(t, err)
 
-	lfuCacheEvictionPolicy, err := NewLFUCacheEvictionPolicy(ec)
+	lfuCacheEvictionPolicy, err := lfu.New(ec)
 	assert.Nil(t, err)
 
 	assert.Empty(t, lfuCacheEvictionPolicy.TrackSetAndReturnEvictedKeys("a", []byte{0x0}))
