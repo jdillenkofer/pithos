@@ -1,9 +1,15 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
@@ -195,12 +201,27 @@ func (r *ReplicationStorageConfiguration) Instatiate() (storage.Storage, error) 
 }
 
 type S3ClientStorageConfiguration struct {
+	BaseEndpoint    string `json:"baseEndpoint"`
+	Region          string `json:"region"`
+	AccessKeyId     string `json:"accessKeyId"`
+	SecretAccessKey string `json:"secretAccessKey"`
+	UsePathStyle    bool   `json:"usePathStyle"`
 	StorageConfiguration
 }
 
 func (s *S3ClientStorageConfiguration) Instatiate() (storage.Storage, error) {
-	// TODO: s3client
-	return s3client.NewStorage(nil)
+	cfg, err := config.LoadDefaultConfig(context.Background(),
+		config.WithRegion(s.Region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId, s.SecretAccessKey, "")),
+	)
+	if err != nil {
+		log.Fatalf("Could not loadDefaultConfig: %s", err)
+	}
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.UsePathStyle = s.UsePathStyle
+		o.BaseEndpoint = aws.String(s.BaseEndpoint)
+	})
+	return s3client.NewStorage(s3Client)
 }
 
 func CreateStorageFromJson(b []byte) (storage.Storage, error) {
