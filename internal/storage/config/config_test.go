@@ -96,7 +96,12 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 
 func TestCanCreateS3ClientStorageFromJson(t *testing.T) {
 	jsonData := `{
-	  "type": "S3ClientStorage"
+	  "type": "S3ClientStorage",
+	  "baseEndpoint": "http://localhost:9090/",
+	  "region": "eu-central-1",
+	  "accessKeyId": "abc",
+	  "secretAccessKey": "def",
+	  "usePathStyle": false
 	}`
 	storage, err := CreateStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
