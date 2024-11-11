@@ -6,6 +6,10 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
 	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
@@ -68,7 +72,7 @@ func TestCacheStorage(t *testing.T) {
 		log.Fatalf("Could not create MetadataBlobStorage: %s", err)
 	}
 
-	var cachePersistor CachePersistor
+	var cachePersistor persistor.CachePersistor
 	/*
 		cachePersistor, err = cache.NewInMemoryCachePersistor()
 		if err != nil {
@@ -77,16 +81,16 @@ func TestCacheStorage(t *testing.T) {
 	*/
 
 	tmpDir := os.TempDir()
-	cachePersistor, err = NewFilesystemCachePersistor(tmpDir)
+	cachePersistor, err = filesystem.New(tmpDir)
 	if err != nil {
 		log.Fatalf("Could not create FilesystemCachePersistor: %s", err)
 	}
 
-	fixedSizeLimitEvictionChecker, err := NewFixedSizeLimitEvictionChecker(2000000000)
+	fixedSizeLimitEvictionChecker, err := fixedsizelimit.New(2000000000)
 	if err != nil {
 		log.Fatalf("Could not create FixedSizeLimitEvictionChecker: %s", err)
 	}
-	lfuCacheEvictionPolicy, err := NewLFUCacheEvictionPolicy(fixedSizeLimitEvictionChecker)
+	lfuCacheEvictionPolicy, err := lfu.New(fixedSizeLimitEvictionChecker)
 	if err != nil {
 		log.Fatalf("Could not create LFUCacheEvictionPolicy: %s", err)
 	}

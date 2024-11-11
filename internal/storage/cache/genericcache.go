@@ -1,14 +1,19 @@
 package cache
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+)
 
 type GenericCache struct {
 	mu                  sync.Mutex
-	cachePersistor      CachePersistor
-	cacheEvictionPolicy CacheEvictionPolicy
+	cachePersistor      persistor.CachePersistor
+	cacheEvictionPolicy evictionpolicy.CacheEvictionPolicy
 }
 
-func NewGenericCache(cachePersistor CachePersistor, cacheEvictionPolicy CacheEvictionPolicy) (*GenericCache, error) {
+func NewGenericCache(cachePersistor persistor.CachePersistor, cacheEvictionPolicy evictionpolicy.CacheEvictionPolicy) (*GenericCache, error) {
 	return &GenericCache{
 		mu:                  sync.Mutex{},
 		cachePersistor:      cachePersistor,

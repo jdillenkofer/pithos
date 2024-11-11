@@ -1,101 +1,12 @@
-package cache
+package lfu
 
 import (
 	"container/heap"
 	"time"
+
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
+	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
 )
-
-type EvictionChecker interface {
-	ShouldEvict() bool
-	TrackSet(key string, val []byte)
-	TrackRemove(key string)
-}
-
-type FixedKeyLimitEvictionChecker struct {
-	maxKeyLimit int
-	keySet      map[string]struct{}
-}
-
-func NewFixedKeyLimitEvictionChecker(maxKeyLimit int) (*FixedKeyLimitEvictionChecker, error) {
-	return &FixedKeyLimitEvictionChecker{
-		maxKeyLimit: maxKeyLimit,
-		keySet:      make(map[string]struct{}),
-	}, nil
-}
-
-func (f *FixedKeyLimitEvictionChecker) ShouldEvict() bool {
-	return len(f.keySet) > f.maxKeyLimit
-}
-
-func (f *FixedKeyLimitEvictionChecker) TrackSet(key string, val []byte) {
-	_, ok := f.keySet[key]
-	if ok {
-		return
-	} else {
-		f.keySet[key] = struct{}{}
-	}
-}
-
-func (f *FixedKeyLimitEvictionChecker) TrackRemove(key string) {
-	delete(f.keySet, key)
-}
-
-type FixedSizeLimitEvictionChecker struct {
-	currentSize  int64
-	maxSizeLimit int64
-	keySet       map[string]int64
-}
-
-func NewFixedSizeLimitEvictionChecker(maxSizeLimit int64) (*FixedSizeLimitEvictionChecker, error) {
-	return &FixedSizeLimitEvictionChecker{
-		currentSize:  0,
-		maxSizeLimit: maxSizeLimit,
-		keySet:       make(map[string]int64),
-	}, nil
-}
-
-func (f *FixedSizeLimitEvictionChecker) ShouldEvict() bool {
-	return f.currentSize > f.maxSizeLimit
-}
-
-func (f *FixedSizeLimitEvictionChecker) TrackSet(key string, val []byte) {
-	newSize := int64(len(val))
-	oldSize, ok := f.keySet[key]
-	if ok {
-		f.currentSize -= oldSize
-	}
-	f.keySet[key] = newSize
-	f.currentSize += newSize
-}
-
-func (f *FixedSizeLimitEvictionChecker) TrackRemove(key string) {
-	oldSize, ok := f.keySet[key]
-	if ok {
-		f.currentSize -= oldSize
-	}
-	delete(f.keySet, key)
-}
-
-type CacheEvictionPolicy interface {
-	TrackSetAndReturnEvictedKeys(key string, val []byte) []string
-	TrackGet(key string)
-	TrackRemove(key string)
-}
-
-type EvictNothingPolicy struct {
-}
-
-func (*EvictNothingPolicy) TrackSetAndReturnEvictedKeys(key string, val []byte) []string {
-	return []string{}
-}
-
-func (*EvictNothingPolicy) TrackGet(key string) {
-
-}
-
-func (*EvictNothingPolicy) TrackRemove(key string) {
-
-}
 
 type LFUCacheEntry struct {
 	key          string
@@ -144,11 +55,11 @@ func (mh *MinLFUCacheHeap) update(entry *LFUCacheEntry, key string, frequency in
 }
 
 type LFUCacheEvictionPolicy struct {
-	evictionChecker EvictionChecker
+	evictionChecker evictionchecker.EvictionChecker
 	minLFUCacheHeap MinLFUCacheHeap
 }
 
-func NewLFUCacheEvictionPolicy(evictionChecker EvictionChecker) (*LFUCacheEvictionPolicy, error) {
+func New(evictionChecker evictionchecker.EvictionChecker) (evictionpolicy.CacheEvictionPolicy, error) {
 	return &LFUCacheEvictionPolicy{
 		evictionChecker: evictionChecker,
 		minLFUCacheHeap: MinLFUCacheHeap{},

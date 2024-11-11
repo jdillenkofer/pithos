@@ -1,9 +1,11 @@
 package cache
 
-import "errors"
+import (
+	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+)
 
 var (
-	ErrCacheMiss = errors.New("cache miss")
+	ErrCacheMiss = persistor.ErrCacheMiss
 )
 
 type Cache interface {
