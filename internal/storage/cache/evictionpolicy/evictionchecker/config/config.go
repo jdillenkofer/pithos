@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
@@ -14,17 +15,11 @@ const (
 	FixedSizeLimitType = "FixedSizeLimit"
 )
 
-type EvictionCheckerInstantiator interface {
-	Instantiate() (evictionchecker.EvictionChecker, error)
-}
-
-type EvictionCheckerConfiguration struct {
-	Type string `json:"type"`
-}
+type EvictionCheckerInstantiator = internalConfig.DynamicJsonInstantiator[evictionchecker.EvictionChecker]
 
 type FixedKeyLimitEvictionCheckerConfiguration struct {
 	MaxKeyLimit int `json:"maxKeyLimit"`
-	EvictionCheckerConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate() (evictionchecker.EvictionChecker, error) {
@@ -33,7 +28,7 @@ func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate() (evictioncheck
 
 type FixedSizeLimitEvictionCheckerConfiguration struct {
 	MaxSizeLimit int64 `json:"maxSizeLimit"`
-	EvictionCheckerConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate() (evictionchecker.EvictionChecker, error) {
@@ -41,7 +36,7 @@ func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate() (evictionchec
 }
 
 func CreateEvictionCheckerInstantiatorFromJson(b []byte) (EvictionCheckerInstantiator, error) {
-	var ecc EvictionCheckerConfiguration
+	var ecc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &ecc)
 	if err != nil {
 		return nil, err

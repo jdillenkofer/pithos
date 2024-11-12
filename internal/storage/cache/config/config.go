@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	evictionPolicyConfig "github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/config"
 	persistorConfig "github.com/jdillenkofer/pithos/internal/storage/cache/persistor/config"
@@ -13,20 +14,14 @@ const (
 	GenericCacheType = "GenericCache"
 )
 
-type CacheInstantiator interface {
-	Instantiate() (cache.Cache, error)
-}
-
-type CacheConfiguration struct {
-	Type string `json:"type"`
-}
+type CacheInstantiator = internalConfig.DynamicJsonInstantiator[cache.Cache]
 
 type GenericCacheConfiguration struct {
 	CachePersistorInstantiator      persistorConfig.CachePersistorInstantiator           `json:"-"`
 	RawCachePersistor               json.RawMessage                                      `json:"cachePesistor"`
 	CacheEvictionPolicyInstantiator evictionPolicyConfig.CacheEvictionPolicyInstantiator `json:"-"`
 	RawCacheEvictionPolicy          json.RawMessage                                      `json:"cacheEvictionPolicy"`
-	CacheConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (c *GenericCacheConfiguration) UnmarshalJSON(b []byte) error {
@@ -59,7 +54,7 @@ func (c *GenericCacheConfiguration) Instantiate() (cache.Cache, error) {
 }
 
 func CreateCacheInstantiatorFromJson(b []byte) (CacheInstantiator, error) {
-	var cc CacheConfiguration
+	var cc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &cc)
 	if err != nil {
 		return nil, err

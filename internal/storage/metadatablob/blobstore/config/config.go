@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
@@ -23,17 +24,11 @@ const (
 	SqlBlobStoreType                  = "SqlBlobStore"
 )
 
-type BlobStoreInstantiator interface {
-	Instantiate() (blobstore.BlobStore, error)
-}
-
-type BlobStoreConfiguration struct {
-	Type string `json:"type"`
-}
+type BlobStoreInstantiator = internalConfig.DynamicJsonInstantiator[blobstore.BlobStore]
 
 type FilesystemBlobStoreConfiguration struct {
 	Root string `json:"root"`
-	BlobStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (f *FilesystemBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
@@ -44,7 +39,7 @@ type EncryptionBlobStoreMiddlewareConfiguration struct {
 	Password                   string                `json:"password"`
 	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
 	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
-	BlobStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (e *EncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -72,7 +67,7 @@ type TracingBlobStoreMiddlewareConfiguration struct {
 	RegionName                 string                `json:"regionName"`
 	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
 	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
-	BlobStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (t *TracingBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -99,7 +94,7 @@ func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate() (blobstore.BlobS
 type OutboxBlobStoreConfiguration struct {
 	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
 	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
-	BlobStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
@@ -134,7 +129,7 @@ func (o *OutboxBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error
 }
 
 type SqlBlobStoreConfiguration struct {
-	BlobStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (s *SqlBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
@@ -152,7 +147,7 @@ func (s *SqlBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
 }
 
 func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error) {
-	var bc BlobStoreConfiguration
+	var bc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &bc)
 	if err != nil {
 		return nil, err

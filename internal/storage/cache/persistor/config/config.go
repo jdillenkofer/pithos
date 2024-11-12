@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/inmemory"
@@ -14,17 +15,11 @@ const (
 	InMemoryPersistorType   = "InMemoryPersistor"
 )
 
-type CachePersistorInstantiator interface {
-	Instantiate() (persistor.CachePersistor, error)
-}
-
-type CachePersistorConfiguration struct {
-	Type string `json:"type"`
-}
+type CachePersistorInstantiator = internalConfig.DynamicJsonInstantiator[persistor.CachePersistor]
 
 type FilesystemPersistorConfiguration struct {
 	Root string `json:"root"`
-	CachePersistorConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (c *FilesystemPersistorConfiguration) Instantiate() (persistor.CachePersistor, error) {
@@ -32,7 +27,7 @@ func (c *FilesystemPersistorConfiguration) Instantiate() (persistor.CachePersist
 }
 
 type InMemoryPersistorConfiguration struct {
-	CachePersistorConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (c *InMemoryPersistorConfiguration) Instantiate() (persistor.CachePersistor, error) {
@@ -40,7 +35,7 @@ func (c *InMemoryPersistorConfiguration) Instantiate() (persistor.CachePersistor
 }
 
 func CreateCachePersistorInstantiatorFromJson(b []byte) (CachePersistorInstantiator, error) {
-	var cpc CachePersistorConfiguration
+	var cpc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &cpc)
 	if err != nil {
 		return nil, err

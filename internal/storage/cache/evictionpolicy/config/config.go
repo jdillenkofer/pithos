@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictnothing"
@@ -15,18 +16,12 @@ const (
 	EvictNothingEvictionPolicyType = "EvictNothingEvictionPolicy"
 )
 
-type CacheEvictionPolicyInstantiator interface {
-	Instantiate() (evictionpolicy.CacheEvictionPolicy, error)
-}
-
-type EvictionPolicyConfiguration struct {
-	Type string `json:"type"`
-}
+type CacheEvictionPolicyInstantiator = internalConfig.DynamicJsonInstantiator[evictionpolicy.CacheEvictionPolicy]
 
 type LFUEvictionPolicyConfiguration struct {
 	EvictionCheckerInstantiator config.EvictionCheckerInstantiator `json:"-"`
 	RawEvictionChecker          json.RawMessage                    `json:"evictionChecker"`
-	EvictionPolicyConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (c *LFUEvictionPolicyConfiguration) UnmarshalJSON(b []byte) error {
@@ -51,7 +46,7 @@ func (l *LFUEvictionPolicyConfiguration) Instantiate() (evictionpolicy.CacheEvic
 }
 
 type EvictNothingEvictionPolicyConfiguration struct {
-	EvictionPolicyConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (*EvictNothingEvictionPolicyConfiguration) Instantiate() (evictionpolicy.CacheEvictionPolicy, error) {
@@ -59,7 +54,7 @@ func (*EvictNothingEvictionPolicyConfiguration) Instantiate() (evictionpolicy.Ca
 }
 
 func CreateCacheEvictionPolicyInstantiatorFromJson(b []byte) (CacheEvictionPolicyInstantiator, error) {
-	var epc EvictionPolicyConfiguration
+	var epc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &epc)
 	if err != nil {
 		return nil, err

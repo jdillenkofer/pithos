@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
@@ -35,20 +36,14 @@ const (
 	S3ClientStorageType             = "S3ClientStorage"
 )
 
-type StorageInstantiator interface {
-	Instantiate() (storage.Storage, error)
-}
-
-type StorageConfiguration struct {
-	Type string `json:"type"`
-}
+type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
 
 type CacheStorageConfiguration struct {
 	CacheInstantiator        cacheConfig.CacheInstantiator `json:"-"`
 	RawCache                 json.RawMessage               `json:"cache"`
 	InnerStorageInstantiator StorageInstantiator           `json:"-"`
 	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (c *CacheStorageConfiguration) UnmarshalJSON(b []byte) error {
@@ -85,7 +80,7 @@ type MetadataBlobStorageConfiguration struct {
 	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
 	BlobStoreInstantiator     blobStoreConfig.BlobStoreInstantiator         `json:"-"`
 	RawBlobStore              json.RawMessage                               `json:"blobStore"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
@@ -122,7 +117,7 @@ func (m *MetadataBlobStorageConfiguration) Instantiate() (storage.Storage, error
 type PrometheusStorageMiddlewareConfiguration struct {
 	InnerStorageInstantiator StorageInstantiator `json:"-"`
 	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (p *PrometheusStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -151,7 +146,7 @@ type TracingStorageMiddlewareConfiguration struct {
 	RegionName               string              `json:"regionName"`
 	InnerStorageInstantiator StorageInstantiator `json:"-"`
 	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (t *TracingStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -178,7 +173,7 @@ func (t *TracingStorageMiddlewareConfiguration) Instantiate() (storage.Storage, 
 type OutboxStorageConfiguration struct {
 	InnerStorageInstantiator StorageInstantiator `json:"-"`
 	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
@@ -217,7 +212,7 @@ type ReplicationStorageConfiguration struct {
 	RawPrimaryStorage             json.RawMessage       `json:"primaryStorage"`
 	SecondaryStorageInstantiators []StorageInstantiator `json:"-"`
 	RawSecondaryStorages          []json.RawMessage     `json:"secondaryStorages"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
@@ -262,7 +257,7 @@ type S3ClientStorageConfiguration struct {
 	AccessKeyId     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey"`
 	UsePathStyle    bool   `json:"usePathStyle"`
-	StorageConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (s *S3ClientStorageConfiguration) Instantiate() (storage.Storage, error) {
@@ -281,7 +276,7 @@ func (s *S3ClientStorageConfiguration) Instantiate() (storage.Storage, error) {
 }
 
 func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
-	var sc StorageConfiguration
+	var sc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &sc)
 	if err != nil {
 		return nil, err
