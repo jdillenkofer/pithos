@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
@@ -18,19 +19,13 @@ const (
 	SqlMetadataStoreType               = "SqlMetadataStore"
 )
 
-type MetadataStoreInstantiator interface {
-	Instantiate() (metadatastore.MetadataStore, error)
-}
-
-type MetadataStoreConfiguration struct {
-	Type string `json:"type"`
-}
+type MetadataStoreInstantiator = internalConfig.DynamicJsonInstantiator[metadatastore.MetadataStore]
 
 type TracingMetadataStoreMiddlewareConfiguration struct {
 	RegionName                     string                    `json:"regionName"`
 	InnerMetadataStoreInstantiator MetadataStoreInstantiator `json:"-"`
 	RawInnerMetadataStore          json.RawMessage           `json:"innerMetadataStore"`
-	MetadataStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (t *TracingMetadataStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -55,7 +50,7 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate() (metadatasto
 }
 
 type SqlMetadataStoreConfiguration struct {
-	MetadataStoreConfiguration
+	internalConfig.DynamicJsonType
 }
 
 func (s *SqlMetadataStoreConfiguration) Instantiate() (metadatastore.MetadataStore, error) {
@@ -89,7 +84,7 @@ func (s *SqlMetadataStoreConfiguration) Instantiate() (metadatastore.MetadataSto
 }
 
 func CreateMetadataStoreInstantiatorFromJson(b []byte) (MetadataStoreInstantiator, error) {
-	var mc MetadataStoreConfiguration
+	var mc internalConfig.DynamicJsonType
 	err := json.Unmarshal(b, &mc)
 	if err != nil {
 		return nil, err
