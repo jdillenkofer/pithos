@@ -3,16 +3,21 @@ package config
 import (
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/stretchr/testify/assert"
 )
 
 func createMetadataStoreFromJson(b []byte) (metadatastore.MetadataStore, error) {
+	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
 	mi, err := CreateMetadataStoreInstantiatorFromJson(b)
 	if err != nil {
 		return nil, err
 	}
-	return mi.Instantiate()
+	return mi.Instantiate(diContainer)
 }
 
 func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {

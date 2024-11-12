@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
@@ -31,7 +32,7 @@ type FilesystemBlobStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FilesystemBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
+func (f *FilesystemBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
 	return filesystem.New(f.Root)
 }
 
@@ -55,8 +56,8 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) err
 	return nil
 }
 
-func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate() (blobstore.BlobStore, error) {
-	innerBlobStore, err := e.InnerBlobStoreInstantiator.Instantiate()
+func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
+	innerBlobStore, err := e.InnerBlobStoreInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -83,8 +84,8 @@ func (t *TracingBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error 
 	return nil
 }
 
-func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate() (blobstore.BlobStore, error) {
-	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate()
+func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
+	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +111,7 @@ func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (o *OutboxBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
+func (o *OutboxBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository
@@ -121,7 +122,7 @@ func (o *OutboxBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error
 			return nil, err
 		}
 	*/
-	innerBlobStore, err := o.InnerBlobStoreInstantiator.Instantiate()
+	innerBlobStore, err := o.InnerBlobStoreInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +133,7 @@ type SqlBlobStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *SqlBlobStoreConfiguration) Instantiate() (blobstore.BlobStore, error) {
+func (s *SqlBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository

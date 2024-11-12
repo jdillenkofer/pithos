@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	evictionPolicyConfig "github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/config"
 	persistorConfig "github.com/jdillenkofer/pithos/internal/storage/cache/persistor/config"
@@ -41,12 +42,12 @@ func (c *GenericCacheConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (c *GenericCacheConfiguration) Instantiate() (cache.Cache, error) {
-	cachePersistor, err := c.CachePersistorInstantiator.Instantiate()
+func (c *GenericCacheConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (cache.Cache, error) {
+	cachePersistor, err := c.CachePersistorInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
-	cacheEvictionPolicy, err := c.CacheEvictionPolicyInstantiator.Instantiate()
+	cacheEvictionPolicy, err := c.CacheEvictionPolicyInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}

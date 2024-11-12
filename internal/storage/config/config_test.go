@@ -1,18 +1,26 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
 
 func createStorageFromJson(b []byte) (storage.Storage, error) {
+	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
+	diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.NewRegistry())
 	si, err := CreateStorageInstantiatorFromJson(b)
 	if err != nil {
 		return nil, err
 	}
-	return si.Instantiate()
+	return si.Instantiate(diContainer)
 }
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {

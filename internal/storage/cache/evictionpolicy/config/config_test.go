@@ -3,16 +3,21 @@ package config
 import (
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
 	"github.com/stretchr/testify/assert"
 )
 
 func createCacheEvictionPolicyFromJson(b []byte) (evictionpolicy.CacheEvictionPolicy, error) {
+	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
 	si, err := CreateCacheEvictionPolicyInstantiatorFromJson(b)
 	if err != nil {
 		return nil, err
 	}
-	return si.Instantiate()
+	return si.Instantiate(diContainer)
 }
 
 func TestCanCreateEvictNothingEvictionPolicyFromJson(t *testing.T) {
