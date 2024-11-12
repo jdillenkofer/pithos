@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
@@ -41,8 +42,8 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) er
 	return nil
 }
 
-func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate() (metadatastore.MetadataStore, error) {
-	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate()
+func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (metadatastore.MetadataStore, error) {
+	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ type SqlMetadataStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *SqlMetadataStoreConfiguration) Instantiate() (metadatastore.MetadataStore, error) {
+func (s *SqlMetadataStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (metadatastore.MetadataStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository

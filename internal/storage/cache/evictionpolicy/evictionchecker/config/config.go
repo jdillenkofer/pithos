@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
@@ -22,7 +23,7 @@ type FixedKeyLimitEvictionCheckerConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate() (evictionchecker.EvictionChecker, error) {
+func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionchecker.EvictionChecker, error) {
 	return fixedkeylimit.New(f.MaxKeyLimit)
 }
 
@@ -31,7 +32,7 @@ type FixedSizeLimitEvictionCheckerConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate() (evictionchecker.EvictionChecker, error) {
+func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionchecker.EvictionChecker, error) {
 	return fixedsizelimit.New(f.MaxSizeLimit)
 }
 

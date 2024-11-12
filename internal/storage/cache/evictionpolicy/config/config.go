@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/config"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictnothing"
@@ -37,8 +38,8 @@ func (c *LFUEvictionPolicyConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (l *LFUEvictionPolicyConfiguration) Instantiate() (evictionpolicy.CacheEvictionPolicy, error) {
-	evictionChecker, err := l.EvictionCheckerInstantiator.Instantiate()
+func (l *LFUEvictionPolicyConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionpolicy.CacheEvictionPolicy, error) {
+	evictionChecker, err := l.EvictionCheckerInstantiator.Instantiate(diContainer)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +50,7 @@ type EvictNothingEvictionPolicyConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (*EvictNothingEvictionPolicyConfiguration) Instantiate() (evictionpolicy.CacheEvictionPolicy, error) {
+func (*EvictNothingEvictionPolicyConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionpolicy.CacheEvictionPolicy, error) {
 	return evictnothing.New()
 }
 

@@ -3,16 +3,21 @@ package config
 import (
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/stretchr/testify/assert"
 )
 
 func createCacheFromJson(b []byte) (cache.Cache, error) {
+	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
 	ci, err := CreateCacheInstantiatorFromJson(b)
 	if err != nil {
 		return nil, err
 	}
-	return ci.Instantiate()
+	return ci.Instantiate(diContainer)
 }
 
 func TestCanCreateCacheFromJson(t *testing.T) {

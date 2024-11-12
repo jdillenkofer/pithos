@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/inmemory"
@@ -22,7 +23,7 @@ type FilesystemPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (c *FilesystemPersistorConfiguration) Instantiate() (persistor.CachePersistor, error) {
+func (c *FilesystemPersistorConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (persistor.CachePersistor, error) {
 	return filesystem.New(c.Root)
 }
 
@@ -30,7 +31,7 @@ type InMemoryPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (c *InMemoryPersistorConfiguration) Instantiate() (persistor.CachePersistor, error) {
+func (c *InMemoryPersistorConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (persistor.CachePersistor, error) {
 	return inmemory.New()
 }
 
