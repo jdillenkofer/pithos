@@ -17,7 +17,14 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	jsonData := `{
-	  "type": "MetadataBlobStorage"
+	  "type": "MetadataBlobStorage",
+	  "metadataStore": {
+		"type": "SqlMetadataStore"
+	  },
+	  "blobStore": {
+	    "type": "FilesystemBlobStore",
+		"root": "/"
+	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -37,7 +44,14 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 		}
 	  },
 	  "innerStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
@@ -49,7 +63,14 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "PrometheusStorageMiddleware",
 	  "innerStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
@@ -62,7 +83,14 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 	  "type": "TracingStorageMiddleware",
 	  "regionName": "metadataBlobStorage",
 	  "innerStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
@@ -74,7 +102,14 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "OutboxStorage",
 	  "innerStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
@@ -86,7 +121,14 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  },
 	  "secondaryStorages": []
 	}`
@@ -99,11 +141,25 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	jsonData := `{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
-	    "type": "MetadataBlobStorage"
+	    "type": "MetadataBlobStorage",
+	    "metadataStore": {
+		  "type": "SqlMetadataStore"
+	    },
+	    "blobStore": {
+	      "type": "FilesystemBlobStore",
+		  "root": "/"
+	    }
 	  },
 	  "secondaryStorages": [
 		{
-			"type": "MetadataBlobStorage"
+		  "type": "MetadataBlobStorage",
+		  "metadataStore": {
+			"type": "SqlMetadataStore"
+		  },
+		  "blobStore": {
+	        "type": "FilesystemBlobStore",
+		    "root": "/"
+	      }
 		} 
 	  ]
 	}`

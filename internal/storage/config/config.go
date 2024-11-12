@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -13,7 +14,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
+	blobStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/config"
+	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -77,11 +81,42 @@ func (c *CacheStorageConfiguration) Instantiate() (storage.Storage, error) {
 }
 
 type MetadataBlobStorageConfiguration struct {
+	MetadataStoreInstantiator metadataStoreConfig.MetadataStoreInstantiator `json:"-"`
+	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
+	BlobStoreInstantiator     blobStoreConfig.BlobStoreInstantiator         `json:"-"`
+	RawBlobStore              json.RawMessage                               `json:"blobStore"`
 	StorageConfiguration
 }
 
+func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
+	type metadataBlobStorageConfiguration MetadataBlobStorageConfiguration
+	err := json.Unmarshal(b, (*metadataBlobStorageConfiguration)(m))
+	if err != nil {
+		return err
+	}
+	m.MetadataStoreInstantiator, err = metadataStoreConfig.CreateMetadataStoreInstantiatorFromJson(m.RawMetadataStore)
+	if err != nil {
+		return err
+	}
+	m.BlobStoreInstantiator, err = blobStoreConfig.CreateBlobStoreInstantiatorFromJson(m.RawBlobStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *MetadataBlobStorageConfiguration) Instantiate() (storage.Storage, error) {
-	return metadatablob.NewStorage(nil, nil, nil)
+	// @TODO: use real db
+	var db *sql.DB = nil
+	metadataStore, err := m.MetadataStoreInstantiator.Instantiate()
+	if err != nil {
+		return nil, err
+	}
+	blobStore, err := m.BlobStoreInstantiator.Instantiate()
+	if err != nil {
+		return nil, err
+	}
+	return metadatablob.NewStorage(db, metadataStore, blobStore)
 }
 
 type PrometheusStorageMiddlewareConfiguration struct {
@@ -108,7 +143,7 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate() (storage.Storag
 	if err != nil {
 		return nil, err
 	}
-	// TODO: prometheus registerer
+	// @TODO: prometheus registerer
 	return prometheus.NewStorageMiddleware(innerStorage, nil)
 }
 
@@ -160,11 +195,21 @@ func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 }
 
 func (o *OutboxStorageConfiguration) Instantiate() (storage.Storage, error) {
+	// @TODO: use real db
+	var db *sql.DB = nil
 	innerStorage, err := o.InnerStorageInstantiator.Instantiate()
 	if err != nil {
 		return nil, err
 	}
-	return outbox.NewStorage(nil, innerStorage, nil)
+	// @TODO: use real repository
+	var storageOutboxEntryRepository storageoutboxentry.Repository = nil
+	/*
+		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
+		if err != nil {
+			return nil, err
+		}
+	*/
+	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository)
 }
 
 type ReplicationStorageConfiguration struct {
