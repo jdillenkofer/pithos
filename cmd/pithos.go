@@ -26,7 +26,7 @@ const defaultStorageConfig = `
 	"refName": "db",
 	"db": {
       "type": "SqliteDatabase",
-	  "storagePath": "./data"
+	  "dbPath": "./data/pithos.db"
 	}
   },
   "metadataStore": {
@@ -64,6 +64,8 @@ func main() {
 
 	storageConfig, err := os.ReadFile(settings.StorageJsonPath())
 	if err != nil {
+		log.Println("Couldn't load storageJson: ", err)
+		log.Println("Using defaultStorageConfig as fallback")
 		storageConfig = []byte(defaultStorageConfig)
 	}
 

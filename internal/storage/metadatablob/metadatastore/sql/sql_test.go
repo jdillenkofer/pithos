@@ -3,6 +3,7 @@ package sql
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -18,7 +19,8 @@ func TestSqlMetadataStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
 	}
-	db, err := database.OpenDatabase(storagePath)
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
