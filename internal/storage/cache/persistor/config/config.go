@@ -23,12 +23,20 @@ type FilesystemPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+func (c *FilesystemPersistorConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
 func (c *FilesystemPersistorConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (persistor.CachePersistor, error) {
 	return filesystem.New(c.Root)
 }
 
 type InMemoryPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
+}
+
+func (c *InMemoryPersistorConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
 }
 
 func (c *InMemoryPersistorConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (persistor.CachePersistor, error) {

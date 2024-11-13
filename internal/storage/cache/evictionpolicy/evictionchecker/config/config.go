@@ -23,6 +23,10 @@ type FixedKeyLimitEvictionCheckerConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+func (f *FixedKeyLimitEvictionCheckerConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
 func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {
 	return fixedkeylimit.New(f.MaxKeyLimit)
 }
@@ -30,6 +34,10 @@ func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diProvider depen
 type FixedSizeLimitEvictionCheckerConfiguration struct {
 	MaxSizeLimit int64 `json:"maxSizeLimit"`
 	internalConfig.DynamicJsonType
+}
+
+func (f *FixedSizeLimitEvictionCheckerConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
 }
 
 func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {

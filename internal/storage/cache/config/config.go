@@ -42,6 +42,18 @@ func (c *GenericCacheConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (c *GenericCacheConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := c.CachePersistorInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = c.CacheEvictionPolicyInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *GenericCacheConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (cache.Cache, error) {
 	cachePersistor, err := c.CachePersistorInstantiator.Instantiate(diProvider)
 	if err != nil {

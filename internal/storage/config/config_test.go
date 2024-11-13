@@ -23,6 +23,10 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = si.RegisterReferences(diContainer)
+	if err != nil {
+		return nil, err
+	}
 	return si.Instantiate(diContainer)
 }
 
@@ -30,14 +34,18 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "MetadataBlobStorage",
 	  "db": {
-	    "type": "SqliteDatabase",
-		"storagePath": "/tmp/pithos/"
-	  },
-	  "metadataStore": {
-		"type": "SqlMetadataStore",
+	    "type": "RegisterDatabaseReference",
+		"refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
 		  "storagePath": "/tmp/pithos/"
+	    }
+      },
+	  "metadataStore": {
+		"type": "SqlMetadataStore",
+		"db": {
+	      "type": "DatabaseReference",
+		  "refName": "db"
 	    }
 	  },
 	  "blobStore": {
@@ -65,14 +73,18 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
 		"db": {
-	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
+	      "type": "RegisterDatabaseReference",
+		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
 		    "storagePath": "/tmp/pithos/"
+	      }
+        },
+	    "metadataStore": {
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -92,14 +104,18 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
 		"db": {
-	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
+	      "type": "RegisterDatabaseReference",
+		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
 		    "storagePath": "/tmp/pithos/"
+	      }
+        },
+	    "metadataStore": {
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -120,14 +136,18 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
 		"db": {
-	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
+	      "type": "RegisterDatabaseReference",
+		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
 		    "storagePath": "/tmp/pithos/"
+	      }
+        },
+	    "metadataStore": {
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -145,20 +165,24 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "OutboxStorage",
 	  "db": {
-	    "type": "SqliteDatabase",
-		"storagePath": "/tmp/pithos/"
-	  },
-	  "innerStorage": {
-	    "type": "MetadataBlobStorage",
+	    "type": "RegisterDatabaseReference",
+	    "refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
 		  "storagePath": "/tmp/pithos/"
+	    }
+      },
+	  "innerStorage": {
+	    "type": "MetadataBlobStorage",
+		"db": {
+		  "type": "DatabaseReference",
+		  "refName": "db"
 	    },
 	    "metadataStore": {
 		  "type": "SqlMetadataStore",
 		  "db": {
-	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -178,14 +202,18 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
 		"db": {
-	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
+	      "type": "RegisterDatabaseReference",
+		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
 		    "storagePath": "/tmp/pithos/"
+	      }
+        },
+	    "metadataStore": {
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -206,14 +234,18 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
 		"db": {
-	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
+	      "type": "RegisterDatabaseReference",
+		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
 		    "storagePath": "/tmp/pithos/"
+	      }
+        },
+	    "metadataStore": {
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      }
 	    },
 	    "blobStore": {
@@ -225,14 +257,14 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 		{
 		  "type": "MetadataBlobStorage",
 		  "db": {
-	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+	        "type": "DatabaseReference",
+		    "refName": "db"
 	      },
 		  "metadataStore": {
 			"type": "SqlMetadataStore",
 		    "db": {
-	          "type": "SqliteDatabase",
-		      "storagePath": "/tmp/pithos/"
+	          "type": "DatabaseReference",
+		      "refName": "db"
 	        }
 		  },
 		  "blobStore": {

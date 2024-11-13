@@ -17,6 +17,10 @@ func createEvictionCheckerFromJson(b []byte) (evictionchecker.EvictionChecker, e
 	if err != nil {
 		return nil, err
 	}
+	err = si.RegisterReferences(diContainer)
+	if err != nil {
+		return nil, err
+	}
 	return si.Instantiate(diContainer)
 }
 

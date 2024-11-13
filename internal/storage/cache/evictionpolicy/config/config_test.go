@@ -17,6 +17,10 @@ func createCacheEvictionPolicyFromJson(b []byte) (evictionpolicy.CacheEvictionPo
 	if err != nil {
 		return nil, err
 	}
+	err = si.RegisterReferences(diContainer)
+	if err != nil {
+		return nil, err
+	}
 	return si.Instantiate(diContainer)
 }
 
