@@ -6,23 +6,45 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"reflect"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/settings"
-	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
-	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
-	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
-	"github.com/jdillenkofer/pithos/internal/storage/outbox"
-	"github.com/jdillenkofer/pithos/internal/storage/replication"
-	"github.com/jdillenkofer/pithos/internal/storage/s3client"
+	"github.com/jdillenkofer/pithos/internal/storage/config"
+	dbConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+const defaultStorageConfig = `
+{
+  "type": "MetadataBlobStorage",
+  "db": {
+    "type": "RegisterDatabaseReference",
+	"refName": "db",
+	"db": {
+      "type": "SqliteDatabase",
+	  "storagePath": "./data"
+	}
+  },
+  "metadataStore": {
+    "type": "SqlMetadataStore",
+	"db": {
+	  "type": "DatabaseReference",
+	  "refName": "db"
+	}
+  },
+  "blobStore": {
+    "type": "SqlBlobStore",
+	"db": {
+	  "type": "DatabaseReference",
+	  "refName": "db"
+	}
+  }
+}
+`
 
 func main() {
 	ctx := context.Background()
@@ -31,65 +53,56 @@ func main() {
 		log.Fatal("Error while loading settings: ", err)
 	}
 
-	storagePath := settings.StoragePath()
-	db, err := database.OpenDatabase(storagePath)
+	diContainer, err := dependencyinjection.NewContainer()
 	if err != nil {
-		log.Fatal("Couldn't open database")
+		log.Fatal("Error while creating diContainer: ", err)
 	}
-	store := storageFactory.CreateStorage(storagePath, db, settings.UseFilesystemBlobStore(), settings.BlobStoreEncryptionPassword(), settings.WrapBlobStoreWithOutbox())
-
-	replicationSettings := settings.Replication()
-	if replicationSettings != nil {
-		cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(replicationSettings.Region()), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(replicationSettings.AccessKeyId(), replicationSettings.SecretAccessKey(), "")))
-
-		if err != nil {
-			log.Fatal("Couldn't create s3Client config")
-		}
-
-		s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-			o.BaseEndpoint = replicationSettings.Endpoint()
-		})
-
-		var s3ClientStorage storage.Storage
-		s3ClientStorage, err = s3client.NewStorage(s3Client)
-		if err != nil {
-			log.Fatal("Could not create s3ClientStorage")
-		}
-		if replicationSettings.UseOutbox() {
-			storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
-			if err != nil {
-				log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
-
-			}
-			s3ClientStorage, err = outbox.NewStorage(db, s3ClientStorage, storageOutboxEntryRepository)
-			if err != nil {
-				log.Fatal("Could not create outboxStorage")
-			}
-		}
-		store, err = replication.NewStorage(store, s3ClientStorage)
-		if err != nil {
-			log.Fatal("Could not create replicationStorage")
-		}
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.DefaultRegisterer)
+	if err != nil {
+		log.Fatal("Error while registering prometheus.Registerer in diContainer: ", err)
 	}
 
-	store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, prometheus.DefaultRegisterer)
+	storageConfig, err := os.ReadFile(settings.StorageJsonPath())
 	if err != nil {
-		log.Fatal("Could not create prometheusStorageMiddleware")
+		storageConfig = []byte(defaultStorageConfig)
+	}
+
+	storageInstantiator, err := config.CreateStorageInstantiatorFromJson(storageConfig)
+	if err != nil {
+		log.Fatal("Error while creating storageInstantiator from json: ", err)
+	}
+	err = storageInstantiator.RegisterReferences(diContainer)
+	if err != nil {
+		log.Fatal("Error while registering references: ", err)
+	}
+	store, err := storageInstantiator.Instantiate(diContainer)
+	if err != nil {
+		log.Fatal("Error while instantiating storage: ", err)
+	}
+
+	di, err := diContainer.LookupByName("db")
+	if err != nil {
+		log.Fatal("Error expected primary db with reference name \"db\": ", err)
+	}
+	databaseInstantiator := di.(dbConfig.DatabaseInstantiator)
+	db, err := databaseInstantiator.Instantiate(diContainer)
+	if err != nil {
+		log.Fatal("Error expected db instantiation: ", err)
 	}
 
 	err = store.Start(ctx)
 	if err != nil {
-		log.Fatal("Couldn't start storage")
+		log.Fatal("Couldn't start storage: ", err)
 	}
 
 	defer func() {
 		err := store.Stop(ctx)
 		if err != nil {
-			log.Fatal("Couldn't stop storage")
+			log.Fatal("Couldn't stop storage: ", err)
 		}
 		err = db.Close()
 		if err != nil {
-			log.Fatal("Couldn't close database")
+			log.Fatal("Couldn't close database:", err)
 		}
 	}()
 
