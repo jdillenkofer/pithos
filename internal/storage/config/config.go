@@ -66,12 +66,12 @@ func (c *CacheStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (c *CacheStorageConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
-	cacheImpl, err := c.CacheInstantiator.Instantiate(diContainer)
+func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	cacheImpl, err := c.CacheInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
-	innerStorage, err := c.InnerStorageInstantiator.Instantiate(diContainer)
+	innerStorage, err := c.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -103,14 +103,14 @@ func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (m *MetadataBlobStorageConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
+func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
-	metadataStore, err := m.MetadataStoreInstantiator.Instantiate(diContainer)
+	metadataStore, err := m.MetadataStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
-	blobStore, err := m.BlobStoreInstantiator.Instantiate(diContainer)
+	blobStore, err := m.BlobStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -136,13 +136,13 @@ func (p *PrometheusStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error
 	return nil
 }
 
-func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
-	innerStorage, err := p.InnerStorageInstantiator.Instantiate(diContainer)
+func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	innerStorage, err := p.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
 	t := reflect.TypeOf((*prometheus.Registerer)(nil))
-	prometheusRegisterer, err := diContainer.LookupByType(t)
+	prometheusRegisterer, err := diProvider.LookupByType(t)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +169,8 @@ func (t *TracingStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (t *TracingStorageMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
-	innerStorage, err := t.InnerStorageInstantiator.Instantiate(diContainer)
+func (t *TracingStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	innerStorage, err := t.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -196,10 +196,10 @@ func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (o *OutboxStorageConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
+func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
-	innerStorage, err := o.InnerStorageInstantiator.Instantiate(diContainer)
+	innerStorage, err := o.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -242,14 +242,14 @@ func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (r *ReplicationStorageConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
-	primaryStorage, err := r.PrimaryStorageInstantiator.Instantiate(diContainer)
+func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	primaryStorage, err := r.PrimaryStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
 	secondaryStorages := []storage.Storage{}
 	for _, secondaryStorageInstantiator := range r.SecondaryStorageInstantiators {
-		secondaryStorage, err := secondaryStorageInstantiator.Instantiate(diContainer)
+		secondaryStorage, err := secondaryStorageInstantiator.Instantiate(diProvider)
 		if err != nil {
 			return nil, err
 		}
@@ -267,7 +267,7 @@ type S3ClientStorageConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *S3ClientStorageConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (storage.Storage, error) {
+func (s *S3ClientStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(s.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId, s.SecretAccessKey, "")),

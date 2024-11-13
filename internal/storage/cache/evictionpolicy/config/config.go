@@ -38,8 +38,8 @@ func (c *LFUEvictionPolicyConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (l *LFUEvictionPolicyConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionpolicy.CacheEvictionPolicy, error) {
-	evictionChecker, err := l.EvictionCheckerInstantiator.Instantiate(diContainer)
+func (l *LFUEvictionPolicyConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionpolicy.CacheEvictionPolicy, error) {
+	evictionChecker, err := l.EvictionCheckerInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ type EvictNothingEvictionPolicyConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (*EvictNothingEvictionPolicyConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionpolicy.CacheEvictionPolicy, error) {
+func (*EvictNothingEvictionPolicyConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionpolicy.CacheEvictionPolicy, error) {
 	return evictnothing.New()
 }
 

@@ -32,7 +32,7 @@ type FilesystemBlobStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FilesystemBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
+func (f *FilesystemBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	return filesystem.New(f.Root)
 }
 
@@ -56,8 +56,8 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) err
 	return nil
 }
 
-func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
-	innerBlobStore, err := e.InnerBlobStoreInstantiator.Instantiate(diContainer)
+func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
+	innerBlobStore, err := e.InnerBlobStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +84,8 @@ func (t *TracingBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error 
 	return nil
 }
 
-func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
-	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate(diContainer)
+func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
+	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (o *OutboxBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
+func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository
@@ -122,7 +122,7 @@ func (o *OutboxBlobStoreConfiguration) Instantiate(diContainer dependencyinjecti
 			return nil, err
 		}
 	*/
-	innerBlobStore, err := o.InnerBlobStoreInstantiator.Instantiate(diContainer)
+	innerBlobStore, err := o.InnerBlobStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ type SqlBlobStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *SqlBlobStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (blobstore.BlobStore, error) {
+func (s *SqlBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository

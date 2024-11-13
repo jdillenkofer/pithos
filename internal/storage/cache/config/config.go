@@ -42,12 +42,12 @@ func (c *GenericCacheConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (c *GenericCacheConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (cache.Cache, error) {
-	cachePersistor, err := c.CachePersistorInstantiator.Instantiate(diContainer)
+func (c *GenericCacheConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (cache.Cache, error) {
+	cachePersistor, err := c.CachePersistorInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
-	cacheEvictionPolicy, err := c.CacheEvictionPolicyInstantiator.Instantiate(diContainer)
+	cacheEvictionPolicy, err := c.CacheEvictionPolicyInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}

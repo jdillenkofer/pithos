@@ -42,8 +42,8 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) er
 	return nil
 }
 
-func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (metadatastore.MetadataStore, error) {
-	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate(diContainer)
+func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (metadatastore.MetadataStore, error) {
+	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ type SqlMetadataStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *SqlMetadataStoreConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (metadatastore.MetadataStore, error) {
+func (s *SqlMetadataStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (metadatastore.MetadataStore, error) {
 	// @TODO: use real db
 	var db *sql.DB = nil
 	// @TODO: use real repository
