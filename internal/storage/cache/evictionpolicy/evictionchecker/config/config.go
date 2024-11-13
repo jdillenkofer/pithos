@@ -23,7 +23,7 @@ type FixedKeyLimitEvictionCheckerConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionchecker.EvictionChecker, error) {
+func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {
 	return fixedkeylimit.New(f.MaxKeyLimit)
 }
 
@@ -32,7 +32,7 @@ type FixedSizeLimitEvictionCheckerConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (evictionchecker.EvictionChecker, error) {
+func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {
 	return fixedsizelimit.New(f.MaxSizeLimit)
 }
 

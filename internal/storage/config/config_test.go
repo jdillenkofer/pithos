@@ -15,7 +15,10 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.NewRegistry())
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.NewRegistry())
+	if err != nil {
+		return nil, err
+	}
 	si, err := CreateStorageInstantiatorFromJson(b)
 	if err != nil {
 		return nil, err

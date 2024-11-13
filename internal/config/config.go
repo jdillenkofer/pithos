@@ -7,5 +7,5 @@ type DynamicJsonType struct {
 }
 
 type DynamicJsonInstantiator[T any] interface {
-	Instantiate(diContainer dependencyinjection.DIContainer) (T, error)
+	Instantiate(diProvider dependencyinjection.DIProvider) (T, error)
 }

@@ -23,7 +23,7 @@ type FilesystemPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (c *FilesystemPersistorConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (persistor.CachePersistor, error) {
+func (c *FilesystemPersistorConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (persistor.CachePersistor, error) {
 	return filesystem.New(c.Root)
 }
 
@@ -31,7 +31,7 @@ type InMemoryPersistorConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (c *InMemoryPersistorConfiguration) Instantiate(diContainer dependencyinjection.DIContainer) (persistor.CachePersistor, error) {
+func (c *InMemoryPersistorConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (persistor.CachePersistor, error) {
 	return inmemory.New()
 }
 
