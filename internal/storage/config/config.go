@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -17,7 +16,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
+	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
+	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	blobStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/config"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
@@ -79,6 +79,8 @@ func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.D
 }
 
 type MetadataBlobStorageConfiguration struct {
+	DatabaseInstantiator      databaseConfig.DatabaseInstantiator           `json:"-"`
+	RawDatabase               json.RawMessage                               `json:"db"`
 	MetadataStoreInstantiator metadataStoreConfig.MetadataStoreInstantiator `json:"-"`
 	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
 	BlobStoreInstantiator     blobStoreConfig.BlobStoreInstantiator         `json:"-"`
@@ -89,6 +91,10 @@ type MetadataBlobStorageConfiguration struct {
 func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
 	type metadataBlobStorageConfiguration MetadataBlobStorageConfiguration
 	err := json.Unmarshal(b, (*metadataBlobStorageConfiguration)(m))
+	if err != nil {
+		return err
+	}
+	m.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(m.RawDatabase)
 	if err != nil {
 		return err
 	}
@@ -104,8 +110,10 @@ func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
 }
 
 func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	// @TODO: use real db
-	var db *sql.DB = nil
+	db, err := m.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
 	metadataStore, err := m.MetadataStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
@@ -178,14 +186,20 @@ func (t *TracingStorageMiddlewareConfiguration) Instantiate(diProvider dependenc
 }
 
 type OutboxStorageConfiguration struct {
-	InnerStorageInstantiator StorageInstantiator `json:"-"`
-	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
+	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase              json.RawMessage                     `json:"db"`
+	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
+	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
 	internalConfig.DynamicJsonType
 }
 
 func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 	type outboxStorageConfiguration OutboxStorageConfiguration
 	err := json.Unmarshal(b, (*outboxStorageConfiguration)(o))
+	if err != nil {
+		return err
+	}
+	o.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(o.RawDatabase)
 	if err != nil {
 		return err
 	}
@@ -197,20 +211,18 @@ func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 }
 
 func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	// @TODO: use real db
-	var db *sql.DB = nil
+	db, err := o.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
 	innerStorage, err := o.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
-	// @TODO: use real repository
-	var storageOutboxEntryRepository storageoutboxentry.Repository = nil
-	/*
-		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository)
 }
 

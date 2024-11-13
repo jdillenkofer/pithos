@@ -1,14 +1,14 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
+	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
+	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
+	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
@@ -93,14 +93,20 @@ func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diProvider depende
 }
 
 type OutboxBlobStoreConfiguration struct {
-	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
-	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
+	DatabaseInstantiator       databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase                json.RawMessage                     `json:"db"`
+	InnerBlobStoreInstantiator BlobStoreInstantiator               `json:"-"`
+	RawInnerBlobStore          json.RawMessage                     `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
 }
 
 func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 	type outboxBlobStoreConfiguration OutboxBlobStoreConfiguration
 	err := json.Unmarshal(b, (*outboxBlobStoreConfiguration)(o))
+	if err != nil {
+		return err
+	}
+	o.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(o.RawDatabase)
 	if err != nil {
 		return err
 	}
@@ -112,16 +118,14 @@ func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 }
 
 func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
-	// @TODO: use real db
-	var db *sql.DB = nil
-	// @TODO: use real repository
-	var blobOutboxEntryRepository bloboutboxentry.Repository = nil
-	/*
-		blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
+	db, err := o.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	innerBlobStore, err := o.InnerBlobStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
@@ -130,20 +134,33 @@ func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjectio
 }
 
 type SqlBlobStoreConfiguration struct {
+	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase          json.RawMessage                     `json:"db"`
 	internalConfig.DynamicJsonType
 }
 
+func (s *SqlBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type sqlBlobStoreConfiguration SqlBlobStoreConfiguration
+	err := json.Unmarshal(b, (*sqlBlobStoreConfiguration)(s))
+	if err != nil {
+		return err
+	}
+	s.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(s.RawDatabase)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *SqlBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
-	// @TODO: use real db
-	var db *sql.DB = nil
-	// @TODO: use real repository
-	var blobContentRepository blobcontent.Repository = nil
-	/*
-		blobContentRepository, err := sqliteBlobContent.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
+	db, err := s.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	blobContentRepository, err := sqliteBlobContent.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return sqlBlobStore.New(db, blobContentRepository)
 }
 

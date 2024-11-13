@@ -29,12 +29,20 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "MetadataBlobStorage",
+	  "db": {
+	    "type": "SqliteDatabase",
+		"storagePath": "/tmp/pithos/"
+	  },
 	  "metadataStore": {
-		"type": "SqlMetadataStore"
+		"type": "SqlMetadataStore",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    }
 	  },
 	  "blobStore": {
 	    "type": "FilesystemBlobStore",
-		"root": "/"
+		"root": "/tmp/pithos/"
 	  }
 	}`
 	storage, err := createStorageFromJson([]byte(jsonData))
@@ -56,12 +64,20 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 	  },
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  }
 	}`
@@ -75,12 +91,20 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	  "type": "PrometheusStorageMiddleware",
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  }
 	}`
@@ -95,12 +119,20 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 	  "regionName": "metadataBlobStorage",
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  }
 	}`
@@ -112,14 +144,26 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "OutboxStorage",
+	  "db": {
+	    "type": "SqliteDatabase",
+		"storagePath": "/tmp/pithos/"
+	  },
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  }
 	}`
@@ -133,12 +177,20 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  },
 	  "secondaryStorages": []
@@ -153,23 +205,39 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
+		"db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    },
 	    "metadataStore": {
-		  "type": "SqlMetadataStore"
+		  "type": "SqlMetadataStore",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      }
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/"
+		  "root": "/tmp/pithos/"
 	    }
 	  },
 	  "secondaryStorages": [
 		{
 		  "type": "MetadataBlobStorage",
+		  "db": {
+	        "type": "SqliteDatabase",
+		    "storagePath": "/tmp/pithos/"
+	      },
 		  "metadataStore": {
-			"type": "SqlMetadataStore"
+			"type": "SqlMetadataStore",
+		    "db": {
+	          "type": "SqliteDatabase",
+		      "storagePath": "/tmp/pithos/"
+	        }
 		  },
 		  "blobStore": {
 	        "type": "FilesystemBlobStore",
-		    "root": "/"
+		    "root": "/tmp/pithos/"
 	      }
 		} 
 	  ]
