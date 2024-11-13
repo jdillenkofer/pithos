@@ -34,6 +34,7 @@ func TestCanCreateInMemoryPersistorFromJson(t *testing.T) {
 }
 
 func TestCanCreateFilesystemPersistorFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "FilesystemPersistor",
 	  "root": "/tmp/pithos/"

@@ -25,6 +25,7 @@ func createMetadataStoreFromJson(b []byte) (metadatastore.MetadataStore, error) 
 }
 
 func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "SqlMetadataStore",
 	  "db": {
@@ -38,6 +39,7 @@ func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "TracingMetadataStoreMiddleware",
 	  "innerMetadataStore": {
