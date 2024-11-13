@@ -38,23 +38,6 @@ func registerIntFlag(name string, defaultValue int, description string) func() *
 	return accessor
 }
 
-func registerBoolFlag(name string, defaultValue bool, description string) func() *bool {
-	boolVar := flag.Bool(name, defaultValue, description)
-	accessor := func() *bool {
-		found := false
-		flag.Visit(func(f *flag.Flag) {
-			if f.Name == name {
-				found = true
-			}
-		})
-		if !found {
-			return nil
-		}
-		return boolVar
-	}
-	return accessor
-}
-
 func loadSettingsFromCmdArgs() (*Settings, error) {
 	accessKeyIdAccessor := registerStringFlag("accessKeyId", "", "the access key id")
 	secretAccessKeyAccessor := registerStringFlag("secretAccessKey", "", "the secret access key")
@@ -63,48 +46,18 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag("monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
-	storagePathAccessor := registerStringFlag("storagePath", defaultStoragePath, "the storagePath for metadata and blobs")
-	useFilesystemBlobStoreAccessor := registerBoolFlag("useFilesystemBlobStore", defaultUseFilesystemBlobStore, "store blobs in the filesystem instead of the sqlite database")
-	blobStoreEncryptionPasswordAccessor := registerStringFlag("blobStoreEncryptionPassword", defaultBlobStoreEncryptionPassword, "password to encrypt blobs before storing them (default is empty, which means no encryption)")
-	wrapBlobStoreWithOutboxAccessor := registerBoolFlag("wrapBlobStoreWithOutbox", defaultWrapBlobStoreWithOutbox, "allows you to use the transactional outbox pattern for storing blobs (default is true, when using the FileSystemBlobStore)")
-
-	replicationAccessKeyIdAccessor := registerStringFlag("replicationAccessKeyId", "", "the replication access key id")
-	replicationSecretAccessKeyAccessor := registerStringFlag("replicationSecretAccessKey", "", "the replication secret access key")
-	replicationRegionAccessor := registerStringFlag("replicationRegion", defaultRegion, "the replication region for the s3 api")
-	replicationEndpointAccessor := registerStringFlag("replicationEndpoint", "", "the replication endpoint for the s3 api")
-	replicationUseOutboxAccessor := registerBoolFlag("replicationUseOutbox", defaultReplicationUseOutbox, "use transactional outbox pattern for replication")
+	storageJsonPathAccessor := registerStringFlag("storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 
 	flag.Parse()
 
-	replicationAccessKeyId := replicationAccessKeyIdAccessor()
-	replicationSecretAccessKey := replicationSecretAccessKeyAccessor()
-	replicationRegion := replicationRegionAccessor()
-	replicationEndpoint := replicationEndpointAccessor()
-	replicationUseOutbox := replicationUseOutboxAccessor()
-
-	var replication *ReplicationSettings = nil
-	if replicationAccessKeyId != nil && replicationSecretAccessKey != nil && replicationRegion != nil {
-		replication = &ReplicationSettings{
-			accessKeyId:     replicationAccessKeyId,
-			secretAccessKey: replicationSecretAccessKey,
-			region:          replicationRegion,
-			endpoint:        replicationEndpoint,
-			useOutbox:       replicationUseOutbox,
-		}
-	}
-
 	return &Settings{
-		accessKeyId:                 accessKeyIdAccessor(),
-		secretAccessKey:             secretAccessKeyAccessor(),
-		region:                      regionAccessor(),
-		domain:                      domainAccessor(),
-		bindAddress:                 bindAddressAccessor(),
-		port:                        portAccessor(),
-		monitoringPort:              monitoringPortAccessor(),
-		storagePath:                 storagePathAccessor(),
-		useFilesystemBlobStore:      useFilesystemBlobStoreAccessor(),
-		blobStoreEncryptionPassword: blobStoreEncryptionPasswordAccessor(),
-		wrapBlobStoreWithOutbox:     wrapBlobStoreWithOutboxAccessor(),
-		replication:                 replication,
+		accessKeyId:     accessKeyIdAccessor(),
+		secretAccessKey: secretAccessKeyAccessor(),
+		region:          regionAccessor(),
+		domain:          domainAccessor(),
+		bindAddress:     bindAddressAccessor(),
+		port:            portAccessor(),
+		monitoringPort:  monitoringPortAccessor(),
+		storageJsonPath: storageJsonPathAccessor(),
 	}, nil
 }

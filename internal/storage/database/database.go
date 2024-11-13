@@ -84,6 +84,7 @@ func OpenDatabase(storagePath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// @TODO: refactor storagePath should contain db name
 	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db?mode=rwc"))
 	if err != nil {
 		return nil, err
