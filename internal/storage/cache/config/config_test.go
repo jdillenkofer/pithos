@@ -17,6 +17,10 @@ func createCacheFromJson(b []byte) (cache.Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = ci.RegisterReferences(diContainer)
+	if err != nil {
+		return nil, err
+	}
 	return ci.Instantiate(diContainer)
 }
 

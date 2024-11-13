@@ -42,6 +42,14 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) er
 	return nil
 }
 
+func (t *TracingMetadataStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := t.InnerMetadataStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (metadatastore.MetadataStore, error) {
 	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -63,6 +71,14 @@ func (s *SqlMetadataStoreConfiguration) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	s.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(s.RawDatabase)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SqlMetadataStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := s.DatabaseInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}

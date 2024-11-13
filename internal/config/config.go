@@ -7,5 +7,6 @@ type DynamicJsonType struct {
 }
 
 type DynamicJsonInstantiator[T any] interface {
+	RegisterReferences(diCollection dependencyinjection.DICollection) error
 	Instantiate(diProvider dependencyinjection.DIProvider) (T, error)
 }

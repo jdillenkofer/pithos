@@ -38,6 +38,14 @@ func (c *LFUEvictionPolicyConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (l *LFUEvictionPolicyConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := l.EvictionCheckerInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (l *LFUEvictionPolicyConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionpolicy.CacheEvictionPolicy, error) {
 	evictionChecker, err := l.EvictionCheckerInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -48,6 +56,10 @@ func (l *LFUEvictionPolicyConfiguration) Instantiate(diProvider dependencyinject
 
 type EvictNothingEvictionPolicyConfiguration struct {
 	internalConfig.DynamicJsonType
+}
+
+func (*EvictNothingEvictionPolicyConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
 }
 
 func (*EvictNothingEvictionPolicyConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionpolicy.CacheEvictionPolicy, error) {

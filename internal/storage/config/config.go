@@ -66,6 +66,18 @@ func (c *CacheStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (c *CacheStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := c.CacheInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = c.InnerStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	cacheImpl, err := c.CacheInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -109,6 +121,22 @@ func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (m *MetadataBlobStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := m.DatabaseInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = m.MetadataStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = m.BlobStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	db, err := m.DatabaseInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -138,6 +166,14 @@ func (p *PrometheusStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error
 		return err
 	}
 	p.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(p.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *PrometheusStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := p.InnerStorageInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}
@@ -177,6 +213,14 @@ func (t *TracingStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (t *TracingStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := t.InnerStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (t *TracingStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	innerStorage, err := t.InnerStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -204,6 +248,18 @@ func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	o.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(o.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *OutboxStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := o.DatabaseInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = o.InnerStorageInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}
@@ -254,6 +310,20 @@ func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (r *ReplicationStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := r.PrimaryStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorageInstantiator := range r.SecondaryStorageInstantiators {
+		err = secondaryStorageInstantiator.RegisterReferences(diCollection)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	primaryStorage, err := r.PrimaryStorageInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -277,6 +347,10 @@ type S3ClientStorageConfiguration struct {
 	SecretAccessKey string `json:"secretAccessKey"`
 	UsePathStyle    bool   `json:"usePathStyle"`
 	internalConfig.DynamicJsonType
+}
+
+func (s *S3ClientStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
 }
 
 func (s *S3ClientStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {

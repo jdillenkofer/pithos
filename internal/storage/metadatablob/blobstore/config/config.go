@@ -32,6 +32,10 @@ type FilesystemBlobStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+func (f *FilesystemBlobStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
 func (f *FilesystemBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	return filesystem.New(f.Root)
 }
@@ -50,6 +54,14 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) err
 		return err
 	}
 	e.InnerBlobStoreInstantiator, err = CreateBlobStoreInstantiatorFromJson(e.RawInnerBlobStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *EncryptionBlobStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := e.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}
@@ -78,6 +90,14 @@ func (t *TracingBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error 
 		return err
 	}
 	t.InnerBlobStoreInstantiator, err = CreateBlobStoreInstantiatorFromJson(t.RawInnerBlobStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *TracingBlobStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := t.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}
@@ -117,6 +137,18 @@ func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (o *OutboxBlobStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := o.DatabaseInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = o.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	db, err := o.DatabaseInstantiator.Instantiate(diProvider)
 	if err != nil {
@@ -146,6 +178,14 @@ func (s *SqlBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	s.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(s.RawDatabase)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SqlBlobStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := s.DatabaseInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}

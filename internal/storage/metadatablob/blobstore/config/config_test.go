@@ -17,6 +17,10 @@ func createBlobStoreFromJson(b []byte) (blobstore.BlobStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = mi.RegisterReferences(diContainer)
+	if err != nil {
+		return nil, err
+	}
 	return mi.Instantiate(diContainer)
 }
 
