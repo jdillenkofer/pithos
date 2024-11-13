@@ -25,6 +25,7 @@ func createBlobStoreFromJson(b []byte) (blobstore.BlobStore, error) {
 }
 
 func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "FilesystemBlobStore",
 	  "root": "/tmp/pithos/"
@@ -35,6 +36,7 @@ func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "EncryptionBlobStoreMiddleware",
 	  "innerBlobStore": {
@@ -48,6 +50,7 @@ func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "TracingBlobStoreMiddleware",
 	  "regionName": "FilesystemBlobStore",
@@ -62,6 +65,7 @@ func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "OutboxBlobStore",
 	  "db": {
@@ -79,6 +83,7 @@ func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "SqlBlobStore",
 	  "db": {

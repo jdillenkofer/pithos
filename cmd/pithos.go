@@ -82,6 +82,9 @@ func main() {
 		log.Fatal("Error while instantiating storage: ", err)
 	}
 
+	// @TODO @Hack: How to get dbs from storageInstatiator tree?
+	// There are more than one db
+	// Which one should we use when closing or monitoring?
 	di, err := diContainer.LookupByName("db")
 	if err != nil {
 		log.Fatal("Error expected primary db with reference name \"db\": ", err)

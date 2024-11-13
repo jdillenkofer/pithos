@@ -31,6 +31,7 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 }
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "MetadataBlobStorage",
 	  "db": {
@@ -59,6 +60,7 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateCacheStorageFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "CacheStorage",
 	  "cache": {
@@ -99,6 +101,7 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "PrometheusStorageMiddleware",
 	  "innerStorage": {
@@ -130,6 +133,7 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "TracingStorageMiddleware",
 	  "regionName": "metadataBlobStorage",
@@ -162,6 +166,7 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "OutboxStorage",
 	  "db": {
@@ -197,6 +202,7 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateReplicationStorageFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
@@ -229,6 +235,7 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) {
+	// @TODO: Generate tmpDir dynamically and delete after test
 	jsonData := `{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
