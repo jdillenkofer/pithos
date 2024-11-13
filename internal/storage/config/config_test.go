@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -12,6 +13,11 @@ import (
 
 func createStorageFromJson(b []byte) (storage.Storage, error) {
 	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
+	dbContainer := config.NewDbContainer()
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
 	if err != nil {
 		return nil, err
 	}

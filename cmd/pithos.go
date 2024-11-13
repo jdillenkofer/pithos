@@ -9,11 +9,11 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/settings"
-	"github.com/jdillenkofer/pithos/internal/storage/config"
-	dbConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
+	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -62,14 +62,20 @@ func main() {
 		log.Fatal("Error while registering prometheus.Registerer in diContainer: ", err)
 	}
 
-	storageConfig, err := os.ReadFile(settings.StorageJsonPath())
+	dbContainer := config.NewDbContainer()
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
+	if err != nil {
+		log.Fatal("Error while registering dbContainer in diContainer: ", err)
+	}
+
+	storageJsonConfig, err := os.ReadFile(settings.StorageJsonPath())
 	if err != nil {
 		log.Println("Couldn't load storageJson: ", err)
 		log.Println("Using defaultStorageConfig as fallback")
-		storageConfig = []byte(defaultStorageConfig)
+		storageJsonConfig = []byte(defaultStorageConfig)
 	}
 
-	storageInstantiator, err := config.CreateStorageInstantiatorFromJson(storageConfig)
+	storageInstantiator, err := storageConfig.CreateStorageInstantiatorFromJson(storageJsonConfig)
 	if err != nil {
 		log.Fatal("Error while creating storageInstantiator from json: ", err)
 	}
@@ -82,18 +88,7 @@ func main() {
 		log.Fatal("Error while instantiating storage: ", err)
 	}
 
-	// @TODO @Hack: How to get dbs from storageInstatiator tree?
-	// There are more than one db
-	// Which one should we use when closing or monitoring?
-	di, err := diContainer.LookupByName("db")
-	if err != nil {
-		log.Fatal("Error expected primary db with reference name \"db\": ", err)
-	}
-	databaseInstantiator := di.(dbConfig.DatabaseInstantiator)
-	db, err := databaseInstantiator.Instantiate(diContainer)
-	if err != nil {
-		log.Fatal("Error expected db instantiation: ", err)
-	}
+	dbs := dbContainer.Dbs()
 
 	err = store.Start(ctx)
 	if err != nil {
@@ -105,9 +100,11 @@ func main() {
 		if err != nil {
 			log.Fatal("Couldn't stop storage: ", err)
 		}
-		err = db.Close()
-		if err != nil {
-			log.Fatal("Couldn't close database:", err)
+		for _, db := range dbs {
+			err = db.Close()
+			if err != nil {
+				log.Fatal("Couldn't close database:", err)
+			}
 		}
 	}()
 
@@ -119,7 +116,7 @@ func main() {
 		Handler:     handler,
 	}
 
-	monitoringHandler := server.SetupMonitoringServer(db)
+	monitoringHandler := server.SetupMonitoringServer(dbs)
 	monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
 	httpMonitoringServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
