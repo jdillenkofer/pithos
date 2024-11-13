@@ -22,7 +22,11 @@ func createMetadataStoreFromJson(b []byte) (metadatastore.MetadataStore, error) 
 
 func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 	jsonData := `{
-	  "type": "SqlMetadataStore"
+	  "type": "SqlMetadataStore",
+	  "db": {
+	    "type": "SqliteDatabase",
+		"storagePath": "/tmp/pithos/"
+	  }
 	}`
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -33,7 +37,11 @@ func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "TracingMetadataStoreMiddleware",
 	  "innerMetadataStore": {
-	    "type": "SqlMetadataStore"
+	    "type": "SqlMetadataStore",
+	    "db": {
+	      "type": "SqliteDatabase",
+		  "storagePath": "/tmp/pithos/"
+	    }
 	  }
 	}`
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))

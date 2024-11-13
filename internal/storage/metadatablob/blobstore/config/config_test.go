@@ -23,7 +23,7 @@ func createBlobStoreFromJson(b []byte) (blobstore.BlobStore, error) {
 func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "FilesystemBlobStore",
-	  "root": "/"
+	  "root": "/tmp/pithos/"
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -35,7 +35,7 @@ func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 	  "type": "EncryptionBlobStoreMiddleware",
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/"
+	    "root": "/tmp/pithos/"
 	  }
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
@@ -49,7 +49,7 @@ func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 	  "regionName": "FilesystemBlobStore",
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/"
+	    "root": "/tmp/pithos/"
 	  }
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
@@ -60,9 +60,13 @@ func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "OutboxBlobStore",
+	  "db": {
+	    "type": "SqliteDatabase",
+		"storagePath": "/tmp/pithos/"
+	  },
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/"
+	    "root": "/tmp/pithos/"
 	  }
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
@@ -72,7 +76,11 @@ func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 
 func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
 	jsonData := `{
-	  "type": "SqlBlobStore"
+	  "type": "SqlBlobStore",
+	  "db": {
+	    "type": "SqliteDatabase",
+		"storagePath": "/tmp/pithos/"
+	  }
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)

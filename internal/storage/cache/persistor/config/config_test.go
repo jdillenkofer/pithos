@@ -32,7 +32,7 @@ func TestCanCreateInMemoryPersistorFromJson(t *testing.T) {
 func TestCanCreateFilesystemPersistorFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "FilesystemPersistor",
-	  "root": "/"
+	  "root": "/tmp/pithos/"
 	}`
 	cachePersistor, err := createCachePersistorFromJson([]byte(jsonData))
 	assert.Nil(t, err)

@@ -1,15 +1,15 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
+	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
+	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/repository/blob/sqlite"
+	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket/sqlite"
+	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/repository/object/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/middlewares/tracing"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
@@ -51,36 +51,41 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diProvider dep
 }
 
 type SqlMetadataStoreConfiguration struct {
+	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase          json.RawMessage                     `json:"db"`
 	internalConfig.DynamicJsonType
 }
 
+func (s *SqlMetadataStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type sqlMetadataStoreConfiguration SqlMetadataStoreConfiguration
+	err := json.Unmarshal(b, (*sqlMetadataStoreConfiguration)(s))
+	if err != nil {
+		return err
+	}
+	s.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(s.RawDatabase)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *SqlMetadataStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (metadatastore.MetadataStore, error) {
-	// @TODO: use real db
-	var db *sql.DB = nil
-	// @TODO: use real repository
-	var bucketRepository bucket.Repository = nil
-	/*
-		bucketRepository, err := sqliteBucket.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
-	// @TODO: use real repository
-	var objectRepository object.Repository = nil
-	/*
-		objectRepository, err := sqliteObject.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
-	// @TODO: use real repository
-	var blobRepository blob.Repository = nil
-	/*
-		blobRepository, err := sqliteBlob.NewRepository(db)
-		if err != nil {
-			return nil, err
-		}
-	*/
+	db, err := s.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	bucketRepository, err := sqliteBucket.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	objectRepository, err := sqliteObject.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	blobRepository, err := sqliteBlob.NewRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
 }
 
