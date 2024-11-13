@@ -1,8 +1,10 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
 	"github.com/stretchr/testify/assert"
@@ -10,6 +12,11 @@ import (
 
 func createEvictionCheckerFromJson(b []byte) (evictionchecker.EvictionChecker, error) {
 	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		return nil, err
+	}
+	dbContainer := config.NewDbContainer()
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
 	if err != nil {
 		return nil, err
 	}

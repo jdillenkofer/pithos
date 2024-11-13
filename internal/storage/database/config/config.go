@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -35,6 +36,13 @@ func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection
 			return nil, err
 		}
 		s.dbInstance = dbInstance
+
+		dc, err := diProvider.LookupByType(reflect.TypeOf((*internalConfig.DbContainer)(nil)))
+		if err != nil {
+			return nil, err
+		}
+		dbContainer := dc.(*internalConfig.DbContainer)
+		dbContainer.AddDb(dbInstance)
 	}
 	return s.dbInstance, nil
 }
