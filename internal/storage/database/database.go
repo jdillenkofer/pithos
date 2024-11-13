@@ -79,13 +79,13 @@ func applyDatabaseMigrations(db *sql.DB) error {
 	return nil
 }
 
-func OpenDatabase(storagePath string) (*sql.DB, error) {
+func OpenDatabase(dbPath string) (*sql.DB, error) {
+	storagePath := filepath.Dir(dbPath)
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
-	// @TODO: refactor storagePath should contain db name
-	db, err := sql.Open("sqlite3", filepath.Join(storagePath, "pithos.db?mode=rwc"))
+	db, err := sql.Open("sqlite3", dbPath+"?mode=rwc")
 	if err != nil {
 		return nil, err
 	}

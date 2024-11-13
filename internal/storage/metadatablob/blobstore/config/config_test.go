@@ -66,7 +66,7 @@ func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 	  "type": "OutboxBlobStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"storagePath": "/tmp/pithos/"
+		"dbPath": "/tmp/pithos/pithos.db"
 	  },
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
@@ -83,7 +83,7 @@ func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
 	  "type": "SqlBlobStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"storagePath": "/tmp/pithos/"
+		"dbPath": "/tmp/pithos/pithos.db"
 	  }
 	}`
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))

@@ -19,8 +19,8 @@ const (
 type DatabaseInstantiator = internalConfig.DynamicJsonInstantiator[*sql.DB]
 
 type SqliteDatabaseConfiguration struct {
-	dbInstance  *sql.DB
-	StoragePath string `json:"storagePath"`
+	dbInstance *sql.DB
+	DbPath     string `json:"dbPath"`
 	internalConfig.DynamicJsonType
 }
 
@@ -30,7 +30,7 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 
 func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
 	if s.dbInstance == nil {
-		dbInstance, err := database.OpenDatabase(s.StoragePath)
+		dbInstance, err := database.OpenDatabase(s.DbPath)
 		if err != nil {
 			return nil, err
 		}

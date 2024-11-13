@@ -3,6 +3,7 @@ package outbox
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -22,7 +23,8 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
 	}
-	db, err := database.OpenDatabase(storagePath)
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}
@@ -68,7 +70,8 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create temp directory: %s", err)
 	}
-	db2, err := database.OpenDatabase(storagePath2)
+	dbPath2 := filepath.Join(storagePath2, "pithos.db")
+	db2, err := database.OpenDatabase(dbPath2)
 	if err != nil {
 		log.Fatal("Couldn't open database")
 	}

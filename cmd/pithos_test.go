@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,7 +87,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 
 	baseEndpoint := "localhost"
 
-	db, err := database.OpenDatabase(storagePath)
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
 		log.Fatalf("Couldn't open database: %s", err)
 	}
@@ -130,7 +132,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		if err != nil {
 			log.Fatalf("Could not create temp directory: %s", err)
 		}
-		db2, err := database.OpenDatabase(storagePath2)
+		dbPath2 := filepath.Join(storagePath2, "pithos.db")
+		db2, err := database.OpenDatabase(dbPath2)
 		if err != nil {
 			log.Fatalf("Couldn't open database: %s", err)
 		}

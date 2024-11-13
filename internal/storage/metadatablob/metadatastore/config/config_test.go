@@ -29,7 +29,7 @@ func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 	  "type": "SqlMetadataStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"storagePath": "/tmp/pithos/"
+		"dbPath": "/tmp/pithos/pithos.db"
 	  }
 	}`
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
@@ -44,7 +44,7 @@ func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
 	    "type": "SqlMetadataStore",
 	    "db": {
 	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
+		  "dbPath": "/tmp/pithos/pithos.db"
 	    }
 	  }
 	}`

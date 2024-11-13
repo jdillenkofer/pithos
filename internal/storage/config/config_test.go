@@ -38,7 +38,7 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 		"refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
+	      "dbPath": "/tmp/pithos/pithos.db"
 	    }
       },
 	  "metadataStore": {
@@ -77,7 +77,7 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+		    "dbPath": "/tmp/pithos/pithos.db"
 	      }
         },
 	    "metadataStore": {
@@ -108,7 +108,7 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+		    "dbPath": "/tmp/pithos/pithos.db"
 	      }
         },
 	    "metadataStore": {
@@ -140,7 +140,7 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+		    "dbPath": "/tmp/pithos/pithos.db"
 	      }
         },
 	    "metadataStore": {
@@ -169,7 +169,7 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	    "refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
-		  "storagePath": "/tmp/pithos/"
+		  "dbPath": "/tmp/pithos/pithos.db"
 	    }
       },
 	  "innerStorage": {
@@ -206,7 +206,7 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+		    "dbPath": "/tmp/pithos/pithos.db"
 	      }
         },
 	    "metadataStore": {
@@ -238,7 +238,7 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "storagePath": "/tmp/pithos/"
+		    "dbPath": "/tmp/pithos/pithos.db"
 	      }
         },
 	    "metadataStore": {
