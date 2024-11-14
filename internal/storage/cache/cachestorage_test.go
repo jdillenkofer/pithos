@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
@@ -82,8 +83,10 @@ func TestCacheStorage(t *testing.T) {
 		}
 	*/
 
-	tmpDir := os.TempDir()
-	cachePersistor, err = filesystem.New(tmpDir)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+	cachePersistor, err = filesystem.New(*tempDir)
 	if err != nil {
 		log.Fatalf("Could not create FilesystemCachePersistor: %s", err)
 	}

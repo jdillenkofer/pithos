@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -32,72 +34,99 @@ func createBlobStoreFromJson(b []byte) (blobstore.BlobStore, error) {
 }
 
 func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
 	  "type": "FilesystemBlobStore",
-	  "root": "/tmp/pithos/"
-	}`
+	  "root": "%v"
+	}`, storagePath)
+
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, blobStore)
 }
 
 func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
 	  "type": "EncryptionBlobStoreMiddleware",
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/tmp/pithos/"
+	    "root": "%v"
 	  }
-	}`
+	}`, storagePath)
+
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, blobStore)
 }
 
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
 	  "type": "TracingBlobStoreMiddleware",
 	  "regionName": "FilesystemBlobStore",
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/tmp/pithos/"
+	    "root": "%v"
 	  }
-	}`
+	}`, storagePath)
+
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, blobStore)
 }
 
 func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "OutboxBlobStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"dbPath": "/tmp/pithos/pithos.db"
+		"dbPath": "%v"
 	  },
 	  "innerBlobStore": {
 	    "type": "FilesystemBlobStore",
-	    "root": "/tmp/pithos/"
+	    "root": "%v"
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, blobStore)
 }
 
 func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "SqlBlobStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"dbPath": "/tmp/pithos/pithos.db"
+		"dbPath": "%v"
 	  }
-	}`
+	}`, dbPath)
+
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, blobStore)
