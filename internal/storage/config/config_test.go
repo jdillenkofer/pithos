@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -37,15 +39,20 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 }
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "MetadataBlobStorage",
 	  "db": {
 	    "type": "RegisterDatabaseReference",
 		"refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
-	      "dbPath": "/tmp/pithos/pithos.db"
+	      "dbPath": "%v"
 	    }
       },
 	  "metadataStore": {
@@ -57,17 +64,23 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	  },
 	  "blobStore": {
 	    "type": "FilesystemBlobStore",
-		"root": "/tmp/pithos/"
+		"root": "%v"
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreateCacheStorageFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "CacheStorage",
 	  "cache": {
 	    "type": "GenericCache",
@@ -85,7 +98,7 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "dbPath": "/tmp/pithos/pithos.db"
+		    "dbPath": "%v"
 	      }
         },
 	    "metadataStore": {
@@ -97,18 +110,24 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "PrometheusStorageMiddleware",
 	  "innerStorage": {
 	    "type": "MetadataBlobStorage",
@@ -117,7 +136,7 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "dbPath": "/tmp/pithos/pithos.db"
+		    "dbPath": "%v"
 	      }
         },
 	    "metadataStore": {
@@ -129,18 +148,24 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "TracingStorageMiddleware",
 	  "regionName": "metadataBlobStorage",
 	  "innerStorage": {
@@ -150,7 +175,7 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "dbPath": "/tmp/pithos/pithos.db"
+		    "dbPath": "%v"
 	      }
         },
 	    "metadataStore": {
@@ -162,25 +187,31 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "OutboxStorage",
 	  "db": {
 	    "type": "RegisterDatabaseReference",
 	    "refName": "db",
 		"db": {
 	      "type": "SqliteDatabase",
-		  "dbPath": "/tmp/pithos/pithos.db"
+		  "dbPath": "%v"
 	    }
       },
 	  "innerStorage": {
@@ -198,18 +229,24 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  }
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreateReplicationStorageFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
@@ -218,7 +255,7 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "dbPath": "/tmp/pithos/pithos.db"
+		    "dbPath": "%v"
 	      }
         },
 	    "metadataStore": {
@@ -230,19 +267,25 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  },
 	  "secondaryStorages": []
-	}`
+	}`, dbPath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
 }
 
 func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "ReplicationStorage",
 	  "primaryStorage": {
 	    "type": "MetadataBlobStorage",
@@ -251,7 +294,7 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 		  "refName": "db",
 		  "db": {
 	        "type": "SqliteDatabase",
-		    "dbPath": "/tmp/pithos/pithos.db"
+		    "dbPath": "%v"
 	      }
         },
 	    "metadataStore": {
@@ -263,7 +306,7 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	    },
 	    "blobStore": {
 	      "type": "FilesystemBlobStore",
-		  "root": "/tmp/pithos/"
+		  "root": "%v"
 	    }
 	  },
 	  "secondaryStorages": [
@@ -282,11 +325,12 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 		  },
 		  "blobStore": {
 	        "type": "FilesystemBlobStore",
-		    "root": "/tmp/pithos/"
+		    "root": "%v"
 	      }
 		} 
 	  ]
-	}`
+	}`, dbPath, storagePath, storagePath)
+
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)

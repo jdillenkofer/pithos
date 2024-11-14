@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -32,31 +34,43 @@ func createMetadataStoreFromJson(b []byte) (metadatastore.MetadataStore, error) 
 }
 
 func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "SqlMetadataStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"dbPath": "/tmp/pithos/pithos.db"
+		"dbPath": "%v"
 	  }
-	}`
+	}`, dbPath)
+
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, metadataStore)
 }
 
 func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
 	  "type": "TracingMetadataStoreMiddleware",
 	  "innerMetadataStore": {
 	    "type": "SqlMetadataStore",
 	    "db": {
 	      "type": "SqliteDatabase",
-		  "dbPath": "/tmp/pithos/pithos.db"
+		  "dbPath": "%v"
 	    }
 	  }
-	}`
+	}`, dbPath)
+
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, metadataStore)

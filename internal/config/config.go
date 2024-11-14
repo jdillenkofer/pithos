@@ -2,6 +2,7 @@ package config
 
 import (
 	"database/sql"
+	"os"
 
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 )
@@ -29,4 +30,16 @@ func (dbContainer *DbContainer) AddDb(db *sql.DB) {
 
 func (dbContainer *DbContainer) Dbs() []*sql.DB {
 	return dbContainer.dbs
+}
+
+func CreateTempDir() (tempDir *string, cleanup func(), err error) {
+	d, err := os.MkdirTemp("", "pithos-test-data-")
+	if err != nil {
+		return nil, nil, err
+	}
+	tempDir = &d
+	cleanup = func() {
+		_ = os.RemoveAll(*tempDir)
+	}
+	return
 }

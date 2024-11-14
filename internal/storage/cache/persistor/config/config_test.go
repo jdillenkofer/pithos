@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -35,17 +36,23 @@ func TestCanCreateInMemoryPersistorFromJson(t *testing.T) {
 	jsonData := `{
 	  "type": "InMemoryPersistor"
 	}`
+
 	cachePersistor, err := createCachePersistorFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, cachePersistor)
 }
 
 func TestCanCreateFilesystemPersistorFromJson(t *testing.T) {
-	// @TODO: Generate tmpDir dynamically and delete after test
-	jsonData := `{
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
 	  "type": "FilesystemPersistor",
-	  "root": "/tmp/pithos/"
-	}`
+	  "root": "%v"
+	}`, storagePath)
+
 	cachePersistor, err := createCachePersistorFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, cachePersistor)
