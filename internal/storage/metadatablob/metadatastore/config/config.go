@@ -23,9 +23,9 @@ const (
 type MetadataStoreInstantiator = internalConfig.DynamicJsonInstantiator[metadatastore.MetadataStore]
 
 type TracingMetadataStoreMiddlewareConfiguration struct {
-	RegionName                     string                    `json:"regionName"`
-	InnerMetadataStoreInstantiator MetadataStoreInstantiator `json:"-"`
-	RawInnerMetadataStore          json.RawMessage           `json:"innerMetadataStore"`
+	RegionName                     internalConfig.StringProvider `json:"regionName"`
+	InnerMetadataStoreInstantiator MetadataStoreInstantiator     `json:"-"`
+	RawInnerMetadataStore          json.RawMessage               `json:"innerMetadataStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -55,7 +55,7 @@ func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diProvider dep
 	if err != nil {
 		return nil, err
 	}
-	return tracing.New(t.RegionName, innerMetadataStore)
+	return tracing.New(t.RegionName.Value(), innerMetadataStore)
 }
 
 type SqlMetadataStoreConfiguration struct {

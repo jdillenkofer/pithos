@@ -28,7 +28,7 @@ const (
 type BlobStoreInstantiator = internalConfig.DynamicJsonInstantiator[blobstore.BlobStore]
 
 type FilesystemBlobStoreConfiguration struct {
-	Root string `json:"root"`
+	Root internalConfig.StringProvider `json:"root"`
 	internalConfig.DynamicJsonType
 }
 
@@ -37,13 +37,13 @@ func (f *FilesystemBlobStoreConfiguration) RegisterReferences(diCollection depen
 }
 
 func (f *FilesystemBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
-	return filesystem.New(f.Root)
+	return filesystem.New(f.Root.Value())
 }
 
 type EncryptionBlobStoreMiddlewareConfiguration struct {
-	Password                   string                `json:"password"`
-	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
-	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
+	Password                   internalConfig.StringProvider `json:"password"`
+	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
+	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -73,13 +73,13 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider depe
 	if err != nil {
 		return nil, err
 	}
-	return encryption.New(e.Password, innerBlobStore)
+	return encryption.New(e.Password.Value(), innerBlobStore)
 }
 
 type TracingBlobStoreMiddlewareConfiguration struct {
-	RegionName                 string                `json:"regionName"`
-	InnerBlobStoreInstantiator BlobStoreInstantiator `json:"-"`
-	RawInnerBlobStore          json.RawMessage       `json:"innerBlobStore"`
+	RegionName                 internalConfig.StringProvider `json:"regionName"`
+	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
+	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -109,7 +109,7 @@ func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diProvider depende
 	if err != nil {
 		return nil, err
 	}
-	return tracing.New(t.RegionName, innerBlobStore)
+	return tracing.New(t.RegionName.Value(), innerBlobStore)
 }
 
 type OutboxBlobStoreConfiguration struct {

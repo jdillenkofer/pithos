@@ -194,9 +194,9 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider depend
 }
 
 type TracingStorageMiddlewareConfiguration struct {
-	RegionName               string              `json:"regionName"`
-	InnerStorageInstantiator StorageInstantiator `json:"-"`
-	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
+	RegionName               internalConfig.StringProvider `json:"regionName"`
+	InnerStorageInstantiator StorageInstantiator           `json:"-"`
+	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
 	internalConfig.DynamicJsonType
 }
 
@@ -226,7 +226,7 @@ func (t *TracingStorageMiddlewareConfiguration) Instantiate(diProvider dependenc
 	if err != nil {
 		return nil, err
 	}
-	return tracing.NewStorageMiddleware(t.RegionName, innerStorage)
+	return tracing.NewStorageMiddleware(t.RegionName.Value(), innerStorage)
 }
 
 type OutboxStorageConfiguration struct {
@@ -341,11 +341,11 @@ func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjec
 }
 
 type S3ClientStorageConfiguration struct {
-	BaseEndpoint    string `json:"baseEndpoint"`
-	Region          string `json:"region"`
-	AccessKeyId     string `json:"accessKeyId"`
-	SecretAccessKey string `json:"secretAccessKey"`
-	UsePathStyle    bool   `json:"usePathStyle"`
+	BaseEndpoint    internalConfig.StringProvider `json:"baseEndpoint"`
+	Region          internalConfig.StringProvider `json:"region"`
+	AccessKeyId     internalConfig.StringProvider `json:"accessKeyId"`
+	SecretAccessKey internalConfig.StringProvider `json:"secretAccessKey"`
+	UsePathStyle    bool                          `json:"usePathStyle"`
 	internalConfig.DynamicJsonType
 }
 
@@ -355,15 +355,15 @@ func (s *S3ClientStorageConfiguration) RegisterReferences(diCollection dependenc
 
 func (s *S3ClientStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRegion(s.Region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId, s.SecretAccessKey, "")),
+		config.WithRegion(s.Region.Value()),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId.Value(), s.SecretAccessKey.Value(), "")),
 	)
 	if err != nil {
 		log.Fatalf("Could not loadDefaultConfig: %s", err)
 	}
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = s.UsePathStyle
-		o.BaseEndpoint = aws.String(s.BaseEndpoint)
+		o.BaseEndpoint = aws.String(s.BaseEndpoint.Value())
 	})
 	return s3client.NewStorage(s3Client)
 }

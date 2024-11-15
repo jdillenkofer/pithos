@@ -19,7 +19,7 @@ const (
 type CachePersistorInstantiator = internalConfig.DynamicJsonInstantiator[persistor.CachePersistor]
 
 type FilesystemPersistorConfiguration struct {
-	Root string `json:"root"`
+	Root internalConfig.StringProvider `json:"root"`
 	internalConfig.DynamicJsonType
 }
 
@@ -28,7 +28,7 @@ func (c *FilesystemPersistorConfiguration) RegisterReferences(diCollection depen
 }
 
 func (c *FilesystemPersistorConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (persistor.CachePersistor, error) {
-	return filesystem.New(c.Root)
+	return filesystem.New(c.Root.Value())
 }
 
 type InMemoryPersistorConfiguration struct {

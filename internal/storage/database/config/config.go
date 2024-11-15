@@ -21,7 +21,7 @@ type DatabaseInstantiator = internalConfig.DynamicJsonInstantiator[*sql.DB]
 
 type SqliteDatabaseConfiguration struct {
 	dbInstance *sql.DB
-	DbPath     string `json:"dbPath"`
+	DbPath     internalConfig.StringProvider `json:"dbPath"`
 	internalConfig.DynamicJsonType
 }
 
@@ -31,7 +31,7 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 
 func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
 	if s.dbInstance == nil {
-		dbInstance, err := database.OpenDatabase(s.DbPath)
+		dbInstance, err := database.OpenDatabase(s.DbPath.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +48,7 @@ func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection
 }
 
 type DatabaseReferenceConfiguration struct {
-	RefName string `json:"refName"`
+	RefName internalConfig.StringProvider `json:"refName"`
 	internalConfig.DynamicJsonType
 }
 
@@ -57,7 +57,7 @@ func (ref *DatabaseReferenceConfiguration) RegisterReferences(diCollection depen
 }
 
 func (ref *DatabaseReferenceConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
-	di, err := diProvider.LookupByName(ref.RefName)
+	di, err := diProvider.LookupByName(ref.RefName.Value())
 	if err != nil {
 		return nil, err
 	}
@@ -70,9 +70,9 @@ func (ref *DatabaseReferenceConfiguration) Instantiate(diProvider dependencyinje
 }
 
 type RegisterDatabaseReferenceConfiguration struct {
-	RefName              string               `json:"refName"`
-	DatabaseInstantiator DatabaseInstantiator `json:"-"`
-	RawDatabase          json.RawMessage      `json:"db"`
+	RefName              internalConfig.StringProvider `json:"refName"`
+	DatabaseInstantiator DatabaseInstantiator          `json:"-"`
+	RawDatabase          json.RawMessage               `json:"db"`
 	internalConfig.DynamicJsonType
 }
 
@@ -90,7 +90,7 @@ func (regRef *RegisterDatabaseReferenceConfiguration) UnmarshalJSON(b []byte) er
 }
 
 func (regRef *RegisterDatabaseReferenceConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := diCollection.RegisterSingletonByName(regRef.RefName, regRef.DatabaseInstantiator)
+	err := diCollection.RegisterSingletonByName(regRef.RefName.Value(), regRef.DatabaseInstantiator)
 	if err != nil {
 		return err
 	}
