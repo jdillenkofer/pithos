@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	GenericCacheType = "GenericCache"
+	genericCacheType = "GenericCache"
 )
 
 type CacheInstantiator = internalConfig.DynamicJsonInstantiator[cache.Cache]
@@ -75,7 +75,7 @@ func CreateCacheInstantiatorFromJson(b []byte) (CacheInstantiator, error) {
 
 	var ci CacheInstantiator
 	switch cc.Type {
-	case GenericCacheType:
+	case genericCacheType:
 		ci = &GenericCacheConfiguration{}
 	default:
 		return nil, errors.New("unknown cache type")

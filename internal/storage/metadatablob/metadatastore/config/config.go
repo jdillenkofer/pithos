@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	TracingMetadataStoreMiddlewareType = "TracingMetadataStoreMiddleware"
-	SqlMetadataStoreType               = "SqlMetadataStore"
+	tracingMetadataStoreMiddlewareType = "TracingMetadataStoreMiddleware"
+	sqlMetadataStoreType               = "SqlMetadataStore"
 )
 
 type MetadataStoreInstantiator = internalConfig.DynamicJsonInstantiator[metadatastore.MetadataStore]
@@ -114,9 +114,9 @@ func CreateMetadataStoreInstantiatorFromJson(b []byte) (MetadataStoreInstantiato
 
 	var mi MetadataStoreInstantiator
 	switch mc.Type {
-	case TracingMetadataStoreMiddlewareType:
+	case tracingMetadataStoreMiddlewareType:
 		mi = &TracingMetadataStoreMiddlewareConfiguration{}
-	case SqlMetadataStoreType:
+	case sqlMetadataStoreType:
 		mi = &SqlMetadataStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown metadataStore type")

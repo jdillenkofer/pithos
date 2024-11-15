@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	SqliteDatabaseType            = "SqliteDatabase"
-	DatabaseReferenceType         = "DatabaseReference"
-	RegisterDatabaseReferenceType = "RegisterDatabaseReference"
+	sqliteDatabaseType            = "SqliteDatabase"
+	databaseReferenceType         = "DatabaseReference"
+	registerDatabaseReferenceType = "RegisterDatabaseReference"
 )
 
 type DatabaseInstantiator = internalConfig.DynamicJsonInstantiator[*sql.DB]
@@ -118,11 +118,11 @@ func CreateDatabaseInstantiatorFromJson(b []byte) (DatabaseInstantiator, error) 
 
 	var di DatabaseInstantiator
 	switch dc.Type {
-	case SqliteDatabaseType:
+	case sqliteDatabaseType:
 		di = &SqliteDatabaseConfiguration{}
-	case DatabaseReferenceType:
+	case databaseReferenceType:
 		di = &DatabaseReferenceConfiguration{}
-	case RegisterDatabaseReferenceType:
+	case registerDatabaseReferenceType:
 		di = &RegisterDatabaseReferenceConfiguration{}
 	default:
 		return nil, errors.New("unknown database type")
