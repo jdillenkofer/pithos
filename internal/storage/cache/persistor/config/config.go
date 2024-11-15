@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	FilesystemPersistorType = "FilesystemPersistor"
-	InMemoryPersistorType   = "InMemoryPersistor"
+	filesystemPersistorType = "FilesystemPersistor"
+	inMemoryPersistorType   = "InMemoryPersistor"
 )
 
 type CachePersistorInstantiator = internalConfig.DynamicJsonInstantiator[persistor.CachePersistor]
@@ -52,9 +52,9 @@ func CreateCachePersistorInstantiatorFromJson(b []byte) (CachePersistorInstantia
 
 	var cpi CachePersistorInstantiator
 	switch cpc.Type {
-	case FilesystemPersistorType:
+	case filesystemPersistorType:
 		cpi = &FilesystemPersistorConfiguration{}
-	case InMemoryPersistorType:
+	case inMemoryPersistorType:
 		cpi = &InMemoryPersistorConfiguration{}
 	default:
 		return nil, errors.New("unknown cachePersistor type")

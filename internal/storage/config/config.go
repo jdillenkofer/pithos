@@ -30,13 +30,13 @@ import (
 )
 
 const (
-	CacheStorageType                = "CacheStorage"
-	MetadataBlobStorageType         = "MetadataBlobStorage"
-	PrometheusStorageMiddlewareType = "PrometheusStorageMiddleware"
-	TracingStorageMiddlewareType    = "TracingStorageMiddleware"
-	OutboxStorageType               = "OutboxStorage"
-	ReplicationStorageType          = "ReplicationStorage"
-	S3ClientStorageType             = "S3ClientStorage"
+	cacheStorageType                = "CacheStorage"
+	metadataBlobStorageType         = "MetadataBlobStorage"
+	prometheusStorageMiddlewareType = "PrometheusStorageMiddleware"
+	tracingStorageMiddlewareType    = "TracingStorageMiddleware"
+	outboxStorageType               = "OutboxStorage"
+	replicationStorageType          = "ReplicationStorage"
+	s3ClientStorageType             = "S3ClientStorage"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -377,19 +377,19 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 
 	var si StorageInstantiator
 	switch sc.Type {
-	case CacheStorageType:
+	case cacheStorageType:
 		si = &CacheStorageConfiguration{}
-	case MetadataBlobStorageType:
+	case metadataBlobStorageType:
 		si = &MetadataBlobStorageConfiguration{}
-	case PrometheusStorageMiddlewareType:
+	case prometheusStorageMiddlewareType:
 		si = &PrometheusStorageMiddlewareConfiguration{}
-	case TracingStorageMiddlewareType:
+	case tracingStorageMiddlewareType:
 		si = &TracingStorageMiddlewareConfiguration{}
-	case OutboxStorageType:
+	case outboxStorageType:
 		si = &OutboxStorageConfiguration{}
-	case ReplicationStorageType:
+	case replicationStorageType:
 		si = &ReplicationStorageConfiguration{}
-	case S3ClientStorageType:
+	case s3ClientStorageType:
 		si = &S3ClientStorageConfiguration{}
 	default:
 		return nil, errors.New("unknown storage type")

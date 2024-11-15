@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	FilesystemBlobStoreType           = "FilesystemBlobStore"
-	EncryptionBlobStoreMiddlewareType = "EncryptionBlobStoreMiddleware"
-	TracingBlobStoreMiddlewareType    = "TracingBlobStoreMiddleware"
-	OutboxBlobStoreType               = "OutboxBlobStore"
-	SqlBlobStoreType                  = "SqlBlobStore"
+	filesystemBlobStoreType           = "FilesystemBlobStore"
+	encryptionBlobStoreMiddlewareType = "EncryptionBlobStoreMiddleware"
+	tracingBlobStoreMiddlewareType    = "TracingBlobStoreMiddleware"
+	outboxBlobStoreType               = "OutboxBlobStore"
+	sqlBlobStoreType                  = "SqlBlobStore"
 )
 
 type BlobStoreInstantiator = internalConfig.DynamicJsonInstantiator[blobstore.BlobStore]
@@ -213,15 +213,15 @@ func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error
 
 	var bi BlobStoreInstantiator
 	switch bc.Type {
-	case FilesystemBlobStoreType:
+	case filesystemBlobStoreType:
 		bi = &FilesystemBlobStoreConfiguration{}
-	case EncryptionBlobStoreMiddlewareType:
+	case encryptionBlobStoreMiddlewareType:
 		bi = &EncryptionBlobStoreMiddlewareConfiguration{}
-	case TracingBlobStoreMiddlewareType:
+	case tracingBlobStoreMiddlewareType:
 		bi = &TracingBlobStoreMiddlewareConfiguration{}
-	case OutboxBlobStoreType:
+	case outboxBlobStoreType:
 		bi = &OutboxBlobStoreConfiguration{}
-	case SqlBlobStoreType:
+	case sqlBlobStoreType:
 		bi = &SqlBlobStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown blobStore type")

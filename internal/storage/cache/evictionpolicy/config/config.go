@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	LFUEvictionPolicyType          = "LFUEvictionPolicy"
-	EvictNothingEvictionPolicyType = "EvictNothingEvictionPolicy"
+	lfuEvictionPolicyType          = "LFUEvictionPolicy"
+	evictNothingEvictionPolicyType = "EvictNothingEvictionPolicy"
 )
 
 type CacheEvictionPolicyInstantiator = internalConfig.DynamicJsonInstantiator[evictionpolicy.CacheEvictionPolicy]
@@ -75,9 +75,9 @@ func CreateCacheEvictionPolicyInstantiatorFromJson(b []byte) (CacheEvictionPolic
 
 	var cepi CacheEvictionPolicyInstantiator
 	switch epc.Type {
-	case LFUEvictionPolicyType:
+	case lfuEvictionPolicyType:
 		cepi = &LFUEvictionPolicyConfiguration{}
-	case EvictNothingEvictionPolicyType:
+	case evictNothingEvictionPolicyType:
 		cepi = &EvictNothingEvictionPolicyConfiguration{}
 	default:
 		return nil, errors.New("unknown cacheEvictionPolicy type")

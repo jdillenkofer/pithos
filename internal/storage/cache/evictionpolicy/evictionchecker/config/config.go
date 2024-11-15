@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	FixedKeyLimitType  = "FixedKeyLimit"
-	FixedSizeLimitType = "FixedSizeLimit"
+	fixedKeyLimitType  = "FixedKeyLimit"
+	fixedSizeLimitType = "FixedSizeLimit"
 )
 
 type EvictionCheckerInstantiator = internalConfig.DynamicJsonInstantiator[evictionchecker.EvictionChecker]
@@ -53,9 +53,9 @@ func CreateEvictionCheckerInstantiatorFromJson(b []byte) (EvictionCheckerInstant
 
 	var eci EvictionCheckerInstantiator
 	switch ecc.Type {
-	case FixedKeyLimitType:
+	case fixedKeyLimitType:
 		eci = &FixedKeyLimitEvictionCheckerConfiguration{}
-	case FixedSizeLimitType:
+	case fixedSizeLimitType:
 		eci = &FixedSizeLimitEvictionCheckerConfiguration{}
 	default:
 		return nil, errors.New("unknown evictionChecker type")
