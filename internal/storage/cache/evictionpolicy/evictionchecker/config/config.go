@@ -19,7 +19,7 @@ const (
 type EvictionCheckerInstantiator = internalConfig.DynamicJsonInstantiator[evictionchecker.EvictionChecker]
 
 type FixedKeyLimitEvictionCheckerConfiguration struct {
-	MaxKeyLimit int `json:"maxKeyLimit"`
+	MaxKeyLimit internalConfig.Int64Provider `json:"maxKeyLimit"`
 	internalConfig.DynamicJsonType
 }
 
@@ -28,11 +28,11 @@ func (f *FixedKeyLimitEvictionCheckerConfiguration) RegisterReferences(diCollect
 }
 
 func (f *FixedKeyLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {
-	return fixedkeylimit.New(f.MaxKeyLimit)
+	return fixedkeylimit.New(int(f.MaxKeyLimit.Value()))
 }
 
 type FixedSizeLimitEvictionCheckerConfiguration struct {
-	MaxSizeLimit int64 `json:"maxSizeLimit"`
+	MaxSizeLimit internalConfig.Int64Provider `json:"maxSizeLimit"`
 	internalConfig.DynamicJsonType
 }
 
@@ -41,7 +41,7 @@ func (f *FixedSizeLimitEvictionCheckerConfiguration) RegisterReferences(diCollec
 }
 
 func (f *FixedSizeLimitEvictionCheckerConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (evictionchecker.EvictionChecker, error) {
-	return fixedsizelimit.New(f.MaxSizeLimit)
+	return fixedsizelimit.New(f.MaxSizeLimit.Value())
 }
 
 func CreateEvictionCheckerInstantiatorFromJson(b []byte) (EvictionCheckerInstantiator, error) {
