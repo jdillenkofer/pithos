@@ -125,9 +125,8 @@ func mergeSettings(settings ...*Settings) *Settings {
 }
 
 func LoadSettings() (*Settings, error) {
-	jsonSettings, _ := loadSettingsFromJson("config.json")
 	cmdArgsSettings, _ := loadSettingsFromCmdArgs()
 	envSettings, _ := loadSettingsFromEnv()
-	settings := mergeSettings(jsonSettings, cmdArgsSettings, envSettings)
+	settings := mergeSettings(cmdArgsSettings, envSettings)
 	return settings, nil
 }
