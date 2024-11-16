@@ -38,6 +38,23 @@ func registerIntFlag(name string, defaultValue int, description string) func() *
 	return accessor
 }
 
+func registerBoolFlag(name string, defaultValue bool, description string) func() *bool {
+	boolVar := flag.Bool(name, defaultValue, description)
+	accessor := func() *bool {
+		found := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == name {
+				found = true
+			}
+		})
+		if !found {
+			return nil
+		}
+		return boolVar
+	}
+	return accessor
+}
+
 func loadSettingsFromCmdArgs() (*Settings, error) {
 	accessKeyIdAccessor := registerStringFlag("accessKeyId", "", "the access key id")
 	secretAccessKeyAccessor := registerStringFlag("secretAccessKey", "", "the secret access key")
@@ -46,18 +63,20 @@ func loadSettingsFromCmdArgs() (*Settings, error) {
 	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag("monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
+	monitoringPortEnabledAccessor := registerBoolFlag("monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag("storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 
 	flag.Parse()
 
 	return &Settings{
-		accessKeyId:     accessKeyIdAccessor(),
-		secretAccessKey: secretAccessKeyAccessor(),
-		region:          regionAccessor(),
-		domain:          domainAccessor(),
-		bindAddress:     bindAddressAccessor(),
-		port:            portAccessor(),
-		monitoringPort:  monitoringPortAccessor(),
-		storageJsonPath: storageJsonPathAccessor(),
+		accessKeyId:           accessKeyIdAccessor(),
+		secretAccessKey:       secretAccessKeyAccessor(),
+		region:                regionAccessor(),
+		domain:                domainAccessor(),
+		bindAddress:           bindAddressAccessor(),
+		port:                  portAccessor(),
+		monitoringPort:        monitoringPortAccessor(),
+		monitoringPortEnabled: monitoringPortEnabledAccessor(),
+		storageJsonPath:       storageJsonPathAccessor(),
 	}, nil
 }
