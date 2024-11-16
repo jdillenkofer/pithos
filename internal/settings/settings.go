@@ -10,19 +10,21 @@ const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultMonitoringPort = 9090
+const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 
 const mergableTagKey = "mergable"
 
 type Settings struct {
-	accessKeyId     *string `mergable:""`
-	secretAccessKey *string `mergable:""`
-	region          *string `mergable:""`
-	domain          *string `mergable:""`
-	bindAddress     *string `mergable:""`
-	port            *int    `mergable:""`
-	monitoringPort  *int    `mergable:""`
-	storageJsonPath *string `mergable:""`
+	accessKeyId           *string `mergable:""`
+	secretAccessKey       *string `mergable:""`
+	region                *string `mergable:""`
+	domain                *string `mergable:""`
+	bindAddress           *string `mergable:""`
+	port                  *int    `mergable:""`
+	monitoringPort        *int    `mergable:""`
+	monitoringPortEnabled *bool   `mergable:""`
+	storageJsonPath       *string `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -58,6 +60,10 @@ func (s *Settings) Port() int {
 
 func (s *Settings) MonitoringPort() int {
 	return valueOrDefault(s.monitoringPort, defaultMonitoringPort)
+}
+
+func (s *Settings) MonitoringPortEnabled() bool {
+	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
 }
 
 func (s *Settings) StorageJsonPath() string {
