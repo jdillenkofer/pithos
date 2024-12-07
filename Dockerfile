@@ -1,4 +1,4 @@
-FROM golang:1.23.3-alpine3.20 AS app-builder
+FROM golang:1.23.4-alpine3.21 AS app-builder
 
 RUN apk add build-base
 
@@ -14,7 +14,7 @@ RUN go test ./... -v -timeout 30m
 
 RUN go install cmd/pithos.go
 
-FROM alpine:3.20.3
+FROM alpine:3.21.0
 
 WORKDIR /app
 
