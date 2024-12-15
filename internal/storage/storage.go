@@ -69,6 +69,23 @@ type Storage interface {
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 }
 
+func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName string) ([]Object, error) {
+	allObjects := []Object{}
+	startAfter := ""
+	for {
+		listBucketResult, err := storage.ListObjects(ctx, bucketName, "", "", startAfter, 1000)
+		if err != nil {
+			return nil, err
+		}
+		allObjects = append(allObjects, listBucketResult.Objects...)
+		if !listBucketResult.IsTruncated {
+			break
+		}
+		startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key
+	}
+	return allObjects, nil
+}
+
 func Tester(storage Storage, content []byte) error {
 	ctx := context.Background()
 	err := storage.Start(ctx)
