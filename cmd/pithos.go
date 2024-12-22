@@ -13,7 +13,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/settings"
+	"github.com/jdillenkofer/pithos/internal/storage"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
+	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -46,47 +48,34 @@ const defaultStorageConfig = `
 }
 `
 
+const SUBCOMMAND_SERVE = "serve"
+const SUBCOMMAND_MIGRATE_STORAGE = "migrate-storage"
+
 func main() {
 	ctx := context.Background()
-	settings, err := settings.LoadSettings()
+	if len(os.Args) < 2 {
+		fmt.Printf("Usage: %s %s|%s [options]\n", os.Args[0], SUBCOMMAND_SERVE, SUBCOMMAND_MIGRATE_STORAGE)
+		os.Exit(1)
+	}
+
+	subcommand := os.Args[1]
+	switch subcommand {
+	case SUBCOMMAND_SERVE:
+		serve(ctx)
+	case SUBCOMMAND_MIGRATE_STORAGE:
+		migrateStorage(ctx)
+	default:
+		log.Fatalf("Invalid subcommand: %s. Expected one of '%s', '%s'.\n", subcommand, SUBCOMMAND_SERVE, SUBCOMMAND_MIGRATE_STORAGE)
+	}
+}
+
+func serve(ctx context.Context) {
+	settings, err := settings.LoadSettings(os.Args[2:])
 	if err != nil {
 		log.Fatal("Error while loading settings: ", err)
 	}
 
-	diContainer, err := dependencyinjection.NewContainer()
-	if err != nil {
-		log.Fatal("Error while creating diContainer: ", err)
-	}
-	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.DefaultRegisterer)
-	if err != nil {
-		log.Fatal("Error while registering prometheus.Registerer in diContainer: ", err)
-	}
-
-	dbContainer := config.NewDbContainer()
-	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
-	if err != nil {
-		log.Fatal("Error while registering dbContainer in diContainer: ", err)
-	}
-
-	storageJsonConfig, err := os.ReadFile(settings.StorageJsonPath())
-	if err != nil {
-		log.Println("Couldn't load storageJson: ", err)
-		log.Println("Using defaultStorageConfig as fallback")
-		storageJsonConfig = []byte(defaultStorageConfig)
-	}
-
-	storageInstantiator, err := storageConfig.CreateStorageInstantiatorFromJson(storageJsonConfig)
-	if err != nil {
-		log.Fatal("Error while creating storageInstantiator from json: ", err)
-	}
-	err = storageInstantiator.RegisterReferences(diContainer)
-	if err != nil {
-		log.Fatal("Error while registering references: ", err)
-	}
-	store, err := storageInstantiator.Instantiate(diContainer)
-	if err != nil {
-		log.Fatal("Error while instantiating storage: ", err)
-	}
+	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
 
 	dbs := dbContainer.Dbs()
 
@@ -132,4 +121,101 @@ func main() {
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
 	log.Fatal(httpServer.ListenAndServe())
+}
+
+func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
+	diContainer, err := dependencyinjection.NewContainer()
+	if err != nil {
+		log.Fatal("Error while creating diContainer: ", err)
+	}
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.DefaultRegisterer)
+	if err != nil {
+		log.Fatal("Error while registering prometheus.Registerer in diContainer: ", err)
+	}
+
+	dbContainer := config.NewDbContainer()
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
+	if err != nil {
+		log.Fatal("Error while registering dbContainer in diContainer: ", err)
+	}
+
+	storageJsonConfig, err := os.ReadFile(storageJsonPath)
+	if err != nil {
+		log.Println("Couldn't load storageJson: ", err)
+		log.Println("Using defaultStorageConfig as fallback")
+		storageJsonConfig = []byte(defaultStorageConfig)
+	}
+
+	storageInstantiator, err := storageConfig.CreateStorageInstantiatorFromJson(storageJsonConfig)
+	if err != nil {
+		log.Fatal("Error while creating storageInstantiator from json: ", err)
+	}
+	err = storageInstantiator.RegisterReferences(diContainer)
+	if err != nil {
+		log.Fatal("Error while registering references: ", err)
+	}
+	store, err := storageInstantiator.Instantiate(diContainer)
+	if err != nil {
+		log.Fatal("Error while instantiating storage: ", err)
+	}
+	return dbContainer, store
+}
+
+func migrateStorage(ctx context.Context) {
+	if len(os.Args) < 4 {
+		fmt.Printf("Usage: %s %s [source-config.json] [destination-config.json]\n", os.Args[0], SUBCOMMAND_MIGRATE_STORAGE)
+		os.Exit(1)
+	}
+	sourceStorageConfig := os.Args[2]
+	destinationStorageConfig := os.Args[3]
+
+	sourceDbContainer, sourceStorage := loadStorageConfiguration(sourceStorageConfig)
+
+	sourceDbs := sourceDbContainer.Dbs()
+
+	err := sourceStorage.Start(ctx)
+	if err != nil {
+		log.Fatal("Couldn't start storage: ", err)
+	}
+
+	defer func() {
+		err := sourceStorage.Stop(ctx)
+		if err != nil {
+			log.Fatal("Couldn't stop storage: ", err)
+		}
+		for _, db := range sourceDbs {
+			err = db.Close()
+			if err != nil {
+				log.Fatal("Couldn't close database:", err)
+			}
+		}
+	}()
+
+	destinationDbContainer, destinationStorage := loadStorageConfiguration(destinationStorageConfig)
+
+	destinationDbs := destinationDbContainer.Dbs()
+
+	err = destinationStorage.Start(ctx)
+	if err != nil {
+		log.Fatal("Couldn't start storage: ", err)
+	}
+
+	defer func() {
+		err := destinationStorage.Stop(ctx)
+		if err != nil {
+			log.Fatal("Couldn't stop storage: ", err)
+		}
+		for _, db := range destinationDbs {
+			err = db.Close()
+			if err != nil {
+				log.Fatal("Couldn't close database:", err)
+			}
+		}
+	}()
+
+	err = migrator.MigrateStorage(ctx, sourceStorage, destinationStorage)
+	if err != nil {
+		log.Fatal("Could not migrate storage:", err)
+	}
+	log.Println("Storage migration completed!")
 }

@@ -4,11 +4,11 @@ import (
 	"flag"
 )
 
-func registerStringFlag(name string, defaultValue string, description string) func() *string {
-	stringVar := flag.String(name, defaultValue, description)
+func registerStringFlag(flagSet *flag.FlagSet, name string, defaultValue string, description string) func() *string {
+	stringVar := flagSet.String(name, defaultValue, description)
 	accessor := func() *string {
 		found := false
-		flag.Visit(func(f *flag.Flag) {
+		flagSet.Visit(func(f *flag.Flag) {
 			if f.Name == name {
 				found = true
 			}
@@ -21,11 +21,11 @@ func registerStringFlag(name string, defaultValue string, description string) fu
 	return accessor
 }
 
-func registerIntFlag(name string, defaultValue int, description string) func() *int {
-	intVar := flag.Int(name, defaultValue, description)
+func registerIntFlag(flagSet *flag.FlagSet, name string, defaultValue int, description string) func() *int {
+	intVar := flagSet.Int(name, defaultValue, description)
 	accessor := func() *int {
 		found := false
-		flag.Visit(func(f *flag.Flag) {
+		flagSet.Visit(func(f *flag.Flag) {
 			if f.Name == name {
 				found = true
 			}
@@ -38,11 +38,11 @@ func registerIntFlag(name string, defaultValue int, description string) func() *
 	return accessor
 }
 
-func registerBoolFlag(name string, defaultValue bool, description string) func() *bool {
-	boolVar := flag.Bool(name, defaultValue, description)
+func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, description string) func() *bool {
+	boolVar := flagSet.Bool(name, defaultValue, description)
 	accessor := func() *bool {
 		found := false
-		flag.Visit(func(f *flag.Flag) {
+		flagSet.Visit(func(f *flag.Flag) {
 			if f.Name == name {
 				found = true
 			}
@@ -55,18 +55,22 @@ func registerBoolFlag(name string, defaultValue bool, description string) func()
 	return accessor
 }
 
-func loadSettingsFromCmdArgs() (*Settings, error) {
-	accessKeyIdAccessor := registerStringFlag("accessKeyId", "", "the access key id")
-	secretAccessKeyAccessor := registerStringFlag("secretAccessKey", "", "the secret access key")
-	regionAccessor := registerStringFlag("region", defaultRegion, "the region for the s3 api")
-	domainAccessor := registerStringFlag("domain", defaultDomain, "the domain for the s3 api")
-	bindAddressAccessor := registerStringFlag("bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
-	portAccessor := registerIntFlag("port", defaultPort, "the port for the s3 api")
-	monitoringPortAccessor := registerIntFlag("monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
-	monitoringPortEnabledAccessor := registerBoolFlag("monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
-	storageJsonPathAccessor := registerStringFlag("storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
+func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
+	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
+	accessKeyIdAccessor := registerStringFlag(serveCommand, "accessKeyId", "", "the access key id")
+	secretAccessKeyAccessor := registerStringFlag(serveCommand, "secretAccessKey", "", "the secret access key")
+	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
+	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
+	bindAddressAccessor := registerStringFlag(serveCommand, "bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
+	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
+	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
+	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 
-	flag.Parse()
+	err := serveCommand.Parse(cmdArgs)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Settings{
 		accessKeyId:           accessKeyIdAccessor(),

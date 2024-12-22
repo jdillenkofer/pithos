@@ -22,5 +22,5 @@ COPY --from=app-builder /go/bin/pithos ./pithos
 
 EXPOSE 9000
 
-ENTRYPOINT ["./pithos"]
+ENTRYPOINT ["./pithos", "serve"]
 

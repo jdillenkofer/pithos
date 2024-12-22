@@ -130,9 +130,15 @@ func mergeSettings(settings ...*Settings) *Settings {
 	return result
 }
 
-func LoadSettings() (*Settings, error) {
-	cmdArgsSettings, _ := loadSettingsFromCmdArgs()
-	envSettings, _ := loadSettingsFromEnv()
+func LoadSettings(cmdArgs []string) (*Settings, error) {
+	cmdArgsSettings, err := loadSettingsFromCmdArgs(cmdArgs)
+	if err != nil {
+		return nil, err
+	}
+	envSettings, err := loadSettingsFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	settings := mergeSettings(cmdArgsSettings, envSettings)
 	return settings, nil
 }
