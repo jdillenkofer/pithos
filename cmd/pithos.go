@@ -92,7 +92,7 @@ func serve(ctx context.Context) {
 		for _, db := range dbs {
 			err = db.Close()
 			if err != nil {
-				log.Fatal("Couldn't close database:", err)
+				log.Fatal("Couldn't close database: ", err)
 			}
 		}
 	}()
@@ -208,14 +208,15 @@ func migrateStorage(ctx context.Context) {
 		for _, db := range destinationDbs {
 			err = db.Close()
 			if err != nil {
-				log.Fatal("Couldn't close database:", err)
+				log.Fatal("Couldn't close database: ", err)
 			}
 		}
 	}()
 
+	log.Println("Storage migration started!")
 	err = migrator.MigrateStorage(ctx, sourceStorage, destinationStorage)
 	if err != nil {
-		log.Fatal("Could not migrate storage:", err)
+		log.Fatal("Could not migrate storage: ", err)
 	}
-	log.Println("Storage migration completed!")
+	log.Println("Storage migration successfully completed!")
 }
