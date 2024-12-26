@@ -199,26 +199,56 @@ func createScope(date string, region string, service string, request string) str
 }
 
 func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) bool {
-	authorizationHeader := r.Header.Get("Authorization")
-	if authorizationHeader == "" {
-		return false
-	}
 
 	signatureAlgorithm := "AWS4-HMAC-SHA256"
-	authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
-	if !found {
-		return false
-	}
-	authFields := strings.Split(authorizationHeader, ",")
-	if len(authFields) != 3 {
-		return false
+	expectedService := "s3"
+	expectedRequest := "aws4_request"
+	expectedDate := time.Now().UTC().Format("20060102")
+	var credential string
+	var timestamp string
+	var signedHeaders string
+	var signature string
+
+	authorizationHeader := r.Header.Get("Authorization")
+	if authorizationHeader == "" {
+		query := r.URL.Query()
+		credential = query.Get("X-Amz-Credential")
+		timestamp = query.Get("X-Amz-Date")
+		signedHeaders = query.Get("X-Amz-SignedHeaders")
+		signature = query.Get("X-Amz-Signature")
+	} else {
+		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
+		if !found {
+			return false
+		}
+		authFields := strings.Split(authorizationHeader, ",")
+		if len(authFields) != 3 {
+			return false
+		}
+
+		credential = strings.TrimSpace(authFields[0])
+		credential, found = strings.CutPrefix(credential, "Credential=")
+		if !found {
+			return false
+		}
+
+		// @TODO: Use Date header (https://developer.mozilla.org/de/docs/Web/HTTP/Headers/Date) if x-amz-date is not specified
+		// @TODO: check if the difference between timestamp and now is small enough
+		timestamp = r.Header.Get("x-amz-date")
+
+		signedHeaders = strings.TrimSpace(authFields[1])
+		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
+		if !found {
+			return false
+		}
+
+		signature = strings.TrimSpace(authFields[2])
+		signature, found = strings.CutPrefix(signature, "Signature=")
+		if !found {
+			return false
+		}
 	}
 
-	credential := strings.TrimSpace(authFields[0])
-	credential, found = strings.CutPrefix(credential, "Credential=")
-	if !found {
-		return false
-	}
 	accessKeyIdAndScope := strings.Split(credential, "/")
 	if len(accessKeyIdAndScope) != 5 {
 		return false
@@ -227,8 +257,6 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	if accessKeyId != expectedAccessKeyId {
 		return false
 	}
-	now := time.Now()
-	expectedDate := now.UTC().Format("20060102")
 	date := accessKeyIdAndScope[1]
 	if date != expectedDate {
 		return false
@@ -238,35 +266,20 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		return false
 	}
 
-	expectedService := "s3"
 	service := accessKeyIdAndScope[3]
 	if service != expectedService {
 		return false
 	}
 
-	expectedRequest := "aws4_request"
 	request := accessKeyIdAndScope[4]
 	if request != expectedRequest {
 		return false
 	}
 
-	signedHeaders := strings.TrimSpace(authFields[1])
-	signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
-	if !found {
-		return false
-	}
-	signedHeadersArray := strings.Split(signedHeaders, ";")
-
-	signature := strings.TrimSpace(authFields[2])
-	signature, found = strings.CutPrefix(signature, "Signature=")
-	if !found {
-		return false
-	}
-
 	scope := createScope(expectedDate, region, service, request)
 
-	// @TODO: check if the difference between timestamp and now is small enough
-	timestamp := r.Header.Get("x-amz-date")
+	signedHeadersArray := strings.Split(signedHeaders, ";")
+
 	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray)
 	signingKey := createSigningKey(expectedSecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, stringToSign)
