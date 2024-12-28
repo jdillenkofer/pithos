@@ -41,11 +41,44 @@ func TestCreateSignatureFromRequest(t *testing.T) {
 	scope := createScope(date, region, service, request)
 	assert.Equal(t, "20130524/us-east-1/s3/aws4_request", scope)
 
-	stringToSign := generateStringToSign(r, date+"T000000Z", scope, []string{"host", "range", "x-amz-content-sha256", "x-amz-date"})
+	isPresigned := false
+
+	stringToSign := generateStringToSign(r, date+"T000000Z", scope, []string{"host", "range", "x-amz-content-sha256", "x-amz-date"}, isPresigned)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972", stringToSign)
 
 	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
 
 	signature := createSignature(signingKey, stringToSign)
 	assert.Equal(t, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41", signature)
+}
+
+func TestCreateSignatureFromPresignedRequest(t *testing.T) {
+	var r *http.Request = &http.Request{}
+	r.Method = "GET"
+	r.URL = &url.URL{}
+	r.URL.Path = "/test.txt"
+	r.URL.RawQuery = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+	r.Host = "examplebucket.s3.amazonaws.com"
+	r.Header = http.Header{}
+	r.Body = io.NopCloser(bytes.NewReader([]byte{}))
+
+	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+	date := "20130524"
+	region := "us-east-1"
+	service := "s3"
+	request := "aws4_request"
+
+	scope := createScope(date, region, service, request)
+	assert.Equal(t, "20130524/us-east-1/s3/aws4_request", scope)
+
+	isPresigned := true
+
+	stringToSign := generateStringToSign(r, date+"T000000Z", scope, []string{"host"}, isPresigned)
+	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n3bfa292879f6447bbcda7001decf97f4a54dc650c8942174ae0a9121cf58ad04", stringToSign)
+
+	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
+
+	signature := createSignature(signingKey, stringToSign)
+	assert.Equal(t, "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", signature)
 }

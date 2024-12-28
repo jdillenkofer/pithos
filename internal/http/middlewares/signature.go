@@ -69,6 +69,9 @@ func uriEncode(input string) string {
 func generateCanonicalQueryString(r *http.Request) string {
 	queryStrings := []pair{}
 	for queryKey, queryValues := range r.URL.Query() {
+		if queryKey == "X-Amz-Signature" {
+			continue
+		}
 		for _, queryVal := range queryValues {
 			queryStrings = append(queryStrings, pair{
 				key: queryKey,
@@ -171,13 +174,13 @@ func generateHashedPayload(r *http.Request) string {
 	return hex.EncodeToString(dataSha256)
 }
 
-func generateCanonicalRequest(r *http.Request, headersToInclude []string) string {
+func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPresigned bool) string {
 	canonicalRequest := generateCanonicalHttpMethod(r) + "\n"
 	canonicalRequest += generateCanonicalURI(r) + "\n"
 	canonicalRequest += generateCanonicalQueryString(r) + "\n"
 	canonicalRequest += generateCanonicalHeaders(r, headersToInclude) + "\n"
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
-	if r.Header.Get("x-amz-content-sha256") == "UNSIGNED-PAYLOAD" {
+	if isPresigned || r.Header.Get("x-amz-content-sha256") == "UNSIGNED-PAYLOAD" {
 		canonicalRequest += "UNSIGNED-PAYLOAD"
 	} else {
 		canonicalRequest += generateHashedPayload(r)
@@ -185,8 +188,8 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string) string
 	return canonicalRequest
 }
 
-func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string) string {
-	canonicalRequest := generateCanonicalRequest(r, headersToInclude)
+func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string, isPresigned bool) string {
+	canonicalRequest := generateCanonicalRequest(r, headersToInclude, isPresigned)
 	sha256Hash := sha256.New()
 	sha256Hash.Write([]byte(canonicalRequest))
 	dataSha256 := sha256Hash.Sum(nil)
@@ -200,9 +203,9 @@ func createScope(date string, region string, service string, request string) str
 }
 
 func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) bool {
-	signatureAlgorithm := "AWS4-HMAC-SHA256"
-	expectedService := "s3"
-	expectedRequest := "aws4_request"
+	const signatureAlgorithm = "AWS4-HMAC-SHA256"
+	const expectedService = "s3"
+	const expectedRequest = "aws4_request"
 	now := time.Now().UTC()
 	expectedDate := now.Format("20060102")
 
@@ -211,9 +214,11 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	var expirationDuration time.Duration
 	var signedHeaders string
 	var signature string
+	var isPresigned bool
 
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
+		isPresigned = true
 		query := r.URL.Query()
 		credential = query.Get("X-Amz-Credential")
 		timestamp = query.Get("X-Amz-Date")
@@ -229,6 +234,7 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		signedHeaders = query.Get("X-Amz-SignedHeaders")
 		signature = query.Get("X-Amz-Signature")
 	} else {
+		isPresigned = false
 		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
 		if !found {
 			return false
@@ -306,7 +312,7 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 
 	signedHeadersArray := strings.Split(signedHeaders, ";")
 
-	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray)
+	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
 	signingKey := createSigningKey(expectedSecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, stringToSign)
 	return signature == calculatedSignature

@@ -51,16 +51,37 @@ var key *string = aws.String(*keyPrefix + "/hello_world.txt")
 var key2 *string = aws.String(*keyPrefix + "/hello_world2.txt")
 var body []byte = []byte("Hello, world!")
 
-func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
+func customDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	endpointSplit := strings.SplitN(addr, ".", 2)
+	if len(endpointSplit) == 2 {
+		addr = endpointSplit[1]
+	}
+	return net.Dial(network, addr)
+}
+
+func buildAwsHttpClient() *awshttp.BuildableClient {
 	httpClient := awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			endpointSplit := strings.SplitN(addr, ".", 2)
-			if len(endpointSplit) == 2 {
-				addr = endpointSplit[1]
-			}
-			return net.Dial(network, addr)
-		}
+		tr.DialContext = customDialContext
 	})
+	return httpClient
+}
+
+func buildHttpClient() *http.Client {
+	client := http.Client{
+		Transport: &http.Transport{
+			DialContext:           customDialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+	return &client
+}
+
+func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
+	httpClient := buildAwsHttpClient()
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
 	if err != nil {
@@ -418,6 +439,36 @@ func TestPutObject(t *testing.T) {
 				Body:   bytes.NewReader([]byte("Hello, first object!")),
 				Key:    key,
 			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+		})
+
+		t.Run("it should allow uploading an object with a presigned url"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			presignClient := s3.NewPresignClient(s3Client)
+			body := []byte("Hello, first object!")
+			presignedRequest, err := presignClient.PresignPutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			assert.Nil(t, err)
+
+			httpClient := buildHttpClient()
+			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, bytes.NewReader(body))
+			assert.Nil(t, err)
+			putObjectResult, err := httpClient.Do(request)
 			if err != nil {
 				assert.Fail(t, "PutObject failed", "err %v", err)
 			}
@@ -1048,6 +1099,51 @@ func TestGetObject(t *testing.T) {
 			assert.Equal(t, body, objectBytes)
 		})
 
+		t.Run("it should allow downloading the object with a presigned url"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			presignClient := s3.NewPresignClient(s3Client)
+			presignedRequest, err := presignClient.PresignGetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+
+			httpClient := buildHttpClient()
+			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, nil)
+			assert.Nil(t, err)
+			// @Hack: Why is this required?
+			// Before adding this header, the io.ReadAll call below would fail with EOF
+			request.Header.Add("Accept-Encoding", "identity")
+			getObjectResult, err := httpClient.Do(request)
+			if err != nil {
+				assert.Fail(t, "GetObject failed", "err %v", err)
+			}
+			assert.NotNil(t, getObjectResult)
+			assert.NotNil(t, getObjectResult.Body)
+			objectBytes, err := io.ReadAll(getObjectResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+		})
+
 		t.Run("it should allow downloading the object with byte range"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -1262,6 +1358,44 @@ func TestDeleteObject(t *testing.T) {
 			}
 			assert.NotNil(t, deleteObjectResult)
 		})
+
+		t.Run("it should allow deleting an object with a presigned url"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			presignClient := s3.NewPresignClient(s3Client)
+			presignedRequest, err := presignClient.PresignDeleteObject(context.Background(), &s3.DeleteObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+
+			httpClient := buildHttpClient()
+			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, nil)
+			assert.Nil(t, err)
+			deleteObjectResult, err := httpClient.Do(request)
+			if err != nil {
+				assert.Fail(t, "DeleteObject failed", "err %v", err)
+			}
+			assert.NotNil(t, deleteObjectResult)
+		})
 	})
 }
 
@@ -1287,6 +1421,33 @@ func TestDeleteBucket(t *testing.T) {
 			deleteBucketResult, err := s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 				Bucket: bucketName,
 			})
+			if err != nil {
+				assert.Fail(t, "DeleteBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, deleteBucketResult)
+		})
+
+		t.Run("it should delete an existing bucket with a presigned url"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			presignClient := s3.NewPresignClient(s3Client)
+			presignedRequest, err := presignClient.PresignDeleteBucket(context.Background(), &s3.DeleteBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			httpClient := buildHttpClient()
+			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, nil)
+			assert.Nil(t, err)
+			deleteBucketResult, err := httpClient.Do(request)
 			if err != nil {
 				assert.Fail(t, "DeleteBucket failed", "err %v", err)
 			}
