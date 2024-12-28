@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -199,13 +200,15 @@ func createScope(date string, region string, service string, request string) str
 }
 
 func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) bool {
-
 	signatureAlgorithm := "AWS4-HMAC-SHA256"
 	expectedService := "s3"
 	expectedRequest := "aws4_request"
-	expectedDate := time.Now().UTC().Format("20060102")
+	now := time.Now().UTC()
+	expectedDate := now.Format("20060102")
+
 	var credential string
 	var timestamp string
+	var expirationDuration time.Duration
 	var signedHeaders string
 	var signature string
 
@@ -214,6 +217,15 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		query := r.URL.Query()
 		credential = query.Get("X-Amz-Credential")
 		timestamp = query.Get("X-Amz-Date")
+		expires := query.Get("X-Amz-Expires")
+		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
+		if err != nil {
+			return false
+		}
+		if parsedExpired < 1 || parsedExpired > 604800 {
+			return false
+		}
+		expirationDuration = time.Duration(parsedExpired) * time.Second
 		signedHeaders = query.Get("X-Amz-SignedHeaders")
 		signature = query.Get("X-Amz-Signature")
 	} else {
@@ -232,9 +244,14 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 			return false
 		}
 
-		// @TODO: Use Date header (https://developer.mozilla.org/de/docs/Web/HTTP/Headers/Date) if x-amz-date is not specified
-		// @TODO: check if the difference between timestamp and now is small enough
+		// Use Date header (https://developer.mozilla.org/de/docs/Web/HTTP/Headers/Date), if x-amz-date is not specified
 		timestamp = r.Header.Get("x-amz-date")
+		if timestamp == "" {
+			timestamp = r.Header.Get("Date")
+		}
+
+		// Default expiration for non presigned urls
+		expirationDuration = 5 * time.Minute
 
 		signedHeaders = strings.TrimSpace(authFields[1])
 		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
@@ -277,6 +294,15 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	}
 
 	scope := createScope(expectedDate, region, service, request)
+
+	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
+	if err != nil {
+		return false
+	}
+	expiredTimestamp := now.Add(expirationDuration)
+	if parsedTimestamp.Before(now.Add(-15*time.Minute)) || parsedTimestamp.After(expiredTimestamp) {
+		return false
+	}
 
 	signedHeadersArray := strings.Split(signedHeaders, ";")
 
