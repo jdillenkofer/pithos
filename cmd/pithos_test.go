@@ -1130,9 +1130,6 @@ func TestGetObject(t *testing.T) {
 			httpClient := buildHttpClient()
 			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, nil)
 			assert.Nil(t, err)
-			// @Hack: Why is this required?
-			// Before adding this header, the io.ReadAll call below would fail with EOF
-			request.Header.Add("Accept-Encoding", "identity")
 			getObjectResult, err := httpClient.Do(request)
 			if err != nil {
 				assert.Fail(t, "GetObject failed", "err %v", err)
