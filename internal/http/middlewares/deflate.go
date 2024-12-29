@@ -10,6 +10,27 @@ import (
 type deflateResponseWriter struct {
 	io.Writer
 	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w deflateResponseWriter) WriteHeader(code int) {
+	if w.wroteHeader {
+		w.ResponseWriter.WriteHeader(code) // Allow multiple calls to propagate.
+		return
+	}
+	w.wroteHeader = true
+	defer w.ResponseWriter.WriteHeader(code)
+
+	// Already compressed data?
+	if w.Header().Get("Content-Encoding") != "" {
+		return
+	}
+
+	w.Header().Set("Content-Encoding", "deflate")
+	w.Header().Add("Vary", "Accept-Encoding")
+
+	// The content-length after compression is unknown
+	w.Header().Del("Content-Length")
 }
 
 func (w deflateResponseWriter) Write(b []byte) (int, error) {
@@ -22,7 +43,6 @@ func MakeDeflateMiddleware(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		w.Header().Set("Content-Encoding", "deflate")
 		flate, err := flate.NewWriter(w, -1)
 		if err != nil {
 			w.WriteHeader(500)
