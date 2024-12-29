@@ -460,7 +460,6 @@ func TestPutObject(t *testing.T) {
 			body := []byte("Hello, first object!")
 			presignedRequest, err := presignClient.PresignPutObject(context.Background(), &s3.PutObjectInput{
 				Bucket: bucketName,
-				Body:   bytes.NewReader(body),
 				Key:    key,
 			})
 			assert.Nil(t, err)
@@ -473,6 +472,39 @@ func TestPutObject(t *testing.T) {
 				assert.Fail(t, "PutObject failed", "err %v", err)
 			}
 			assert.NotNil(t, putObjectResult)
+			assert.Equal(t, 200, putObjectResult.StatusCode)
+		})
+
+		t.Run("it should allow uploading an object with a presigned url and preprovided body"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			presignClient := s3.NewPresignClient(s3Client)
+			body := []byte("Hello, first object!")
+			presignedRequest, err := presignClient.PresignPutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			assert.Nil(t, err)
+
+			httpClient := buildHttpClient()
+			request, err := http.NewRequest(presignedRequest.Method, presignedRequest.URL, bytes.NewReader(body))
+			request.Header.Add("Content-Type", presignedRequest.SignedHeader.Get("Content-Type"))
+			assert.Nil(t, err)
+			putObjectResult, err := httpClient.Do(request)
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+			assert.Equal(t, 200, putObjectResult.StatusCode)
 		})
 
 		t.Run("it should allow uploading an object a second time"+testSuffix, func(t *testing.T) {
@@ -1135,6 +1167,7 @@ func TestGetObject(t *testing.T) {
 				assert.Fail(t, "GetObject failed", "err %v", err)
 			}
 			assert.NotNil(t, getObjectResult)
+			assert.Equal(t, 200, getObjectResult.StatusCode)
 			assert.NotNil(t, getObjectResult.Body)
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
@@ -1392,6 +1425,7 @@ func TestDeleteObject(t *testing.T) {
 				assert.Fail(t, "DeleteObject failed", "err %v", err)
 			}
 			assert.NotNil(t, deleteObjectResult)
+			assert.Equal(t, 204, deleteObjectResult.StatusCode)
 		})
 	})
 }
@@ -1449,6 +1483,7 @@ func TestDeleteBucket(t *testing.T) {
 				assert.Fail(t, "DeleteBucket failed", "err %v", err)
 			}
 			assert.NotNil(t, deleteBucketResult)
+			assert.Equal(t, 204, deleteBucketResult.StatusCode)
 		})
 
 		t.Run("it should fail when deleting non existing bucket"+testSuffix, func(t *testing.T) {
