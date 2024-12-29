@@ -1,6 +1,6 @@
 FROM golang:1.23.4-alpine3.21 AS app-builder
 
-RUN apk add build-base
+RUN apk add --no-cache build-base
 
 WORKDIR /go/src/app
 
@@ -12,15 +12,15 @@ COPY internal/ internal/
 
 RUN go test ./... -v -timeout 30m
 
-RUN go install cmd/pithos.go
+RUN go install -ldflags='-s -w -extldflags "-static"' cmd/pithos.go
 
-FROM alpine:3.21.0
+FROM scratch
 
 WORKDIR /app
 
-COPY --from=app-builder /go/bin/pithos ./pithos
+COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
 
 EXPOSE 9000
 
-ENTRYPOINT ["./pithos", "serve"]
+ENTRYPOINT ["/usr/local/bin/pithos", "serve"]
 
