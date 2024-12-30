@@ -70,7 +70,7 @@ func TestMetadataBlobStorageWithSql(t *testing.T) {
 		log.Fatalf("Could not create MetadataBlobStorage: %s", err)
 	}
 	content := []byte("MetadataBlobStorage")
-	err = storage.Tester(metadataBlobStorage, content)
+	err = storage.Tester(metadataBlobStorage, []string{"bucket"}, content)
 	assert.Nil(t, err)
 }
 
@@ -97,7 +97,7 @@ func TestMetadataBlobStorageWithFilesystem(t *testing.T) {
 
 	blobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
-		log.Fatalf("Could not create SqlBlobStore: %s", err)
+		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
 
 	bucketRepository, err := sqliteBucket.NewRepository(db)
@@ -122,6 +122,6 @@ func TestMetadataBlobStorageWithFilesystem(t *testing.T) {
 		log.Fatalf("Could not create MetadataBlobStorage: %s", err)
 	}
 	content := []byte("MetadataBlobStorage")
-	err = storage.Tester(metadataBlobStorage, content)
+	err = storage.Tester(metadataBlobStorage, []string{"bucket"}, content)
 	assert.Nil(t, err)
 }
