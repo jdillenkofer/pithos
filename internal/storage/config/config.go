@@ -21,6 +21,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	blobStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/config"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -30,13 +31,14 @@ import (
 )
 
 const (
-	cacheStorageType                = "CacheStorage"
-	metadataBlobStorageType         = "MetadataBlobStorage"
-	prometheusStorageMiddlewareType = "PrometheusStorageMiddleware"
-	tracingStorageMiddlewareType    = "TracingStorageMiddleware"
-	outboxStorageType               = "OutboxStorage"
-	replicationStorageType          = "ReplicationStorage"
-	s3ClientStorageType             = "S3ClientStorage"
+	cacheStorageType                 = "CacheStorage"
+	metadataBlobStorageType          = "MetadataBlobStorage"
+	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
+	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
+	tracingStorageMiddlewareType     = "TracingStorageMiddleware"
+	outboxStorageType                = "OutboxStorage"
+	replicationStorageType           = "ReplicationStorage"
+	s3ClientStorageType              = "S3ClientStorage"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -151,6 +153,66 @@ func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinje
 		return nil, err
 	}
 	return metadatablob.NewStorage(db, metadataStore, blobStore)
+}
+
+type ConditionalStorageMiddlewareConfiguration struct {
+	BucketToStorageInstantiatorMap map[string]StorageInstantiator `json:"-"`
+	RawBucketToStorageMap          map[string]json.RawMessage     `json:"bucketToStorageMap"`
+	DefaultStorageInstantiator     StorageInstantiator            `json:"-"`
+	RawDefaultStorage              json.RawMessage                `json:"defaultStorage"`
+	internalConfig.DynamicJsonType
+}
+
+func (c *ConditionalStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type conditionalStorageMiddlewareConfiguration ConditionalStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*conditionalStorageMiddlewareConfiguration)(c))
+	if err != nil {
+		return err
+	}
+	c.BucketToStorageInstantiatorMap = map[string]StorageInstantiator{}
+	for bucket, rawStorage := range c.RawBucketToStorageMap {
+		storageInstantiator, err := CreateStorageInstantiatorFromJson(rawStorage)
+		if err != nil {
+			return err
+		}
+		c.BucketToStorageInstantiatorMap[bucket] = storageInstantiator
+	}
+
+	c.DefaultStorageInstantiator, err = CreateStorageInstantiatorFromJson(c.RawDefaultStorage)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *ConditionalStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	for _, storageInstantiator := range c.BucketToStorageInstantiatorMap {
+		err := storageInstantiator.RegisterReferences(diCollection)
+		if err != nil {
+			return err
+		}
+	}
+	err := c.DefaultStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *ConditionalStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	bucketToStorageMap := map[string]storage.Storage{}
+	for bucket, storageInstantiator := range c.BucketToStorageInstantiatorMap {
+		storage, err := storageInstantiator.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+		bucketToStorageMap[bucket] = storage
+	}
+	defaultStorage, err := c.DefaultStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	return conditional.NewStorageMiddleware(bucketToStorageMap, defaultStorage)
 }
 
 type PrometheusStorageMiddlewareConfiguration struct {
@@ -381,6 +443,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &CacheStorageConfiguration{}
 	case metadataBlobStorageType:
 		si = &MetadataBlobStorageConfiguration{}
+	case conditionalStorageMiddlewareType:
+		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:
 		si = &PrometheusStorageMiddlewareConfiguration{}
 	case tracingStorageMiddlewareType:

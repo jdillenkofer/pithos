@@ -120,6 +120,67 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
+func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
+	  "type": "ConditionalStorageMiddleware",
+	  "bucketToStorageMap": {
+		"test": {
+			"type": "MetadataBlobStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": "%v"
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"blobStore": {
+				"type": "FilesystemBlobStore",
+				"root": "%v"
+			}
+		}
+	  },
+	  "defaultStorage": {
+			"type": "MetadataBlobStorage",
+			"db": {
+				"type": "DatabaseReference",
+				"refName": "db"
+			},
+			"metadataStore": {
+			"type": "SqlMetadataStore",
+			"db": {
+				"type": "DatabaseReference",
+				"refName": "db"
+			}
+			},
+			"blobStore": {
+				"type": "SqlBlobStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			}
+		}
+	}`, dbPath, storagePath)
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
 func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
