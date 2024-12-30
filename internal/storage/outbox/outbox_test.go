@@ -102,6 +102,6 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	}
 
 	content := []byte("OutboxStorage")
-	err = storage.Tester(outboxStorage, content)
+	err = storage.Tester(outboxStorage, []string{"bucket"}, content)
 	assert.Nil(t, err)
 }
