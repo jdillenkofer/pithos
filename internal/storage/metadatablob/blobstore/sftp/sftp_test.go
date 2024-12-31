@@ -120,10 +120,25 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 	return sshAddr, clientConfig
 }
 
+/*
+testcontainers.SkipIfProviderIsNotHealthy(t) currently does not work.
+See https://github.com/testcontainers/testcontainers-go/issues/2859 for more information.
+*/
+func skipTestIfDockerNotAvailable(t *testing.T) {
+	defer func() {
+		if err := recover(); err != nil {
+			t.Skip("Skipping test because of missing docker socket")
+		}
+	}()
+	testcontainers.MustExtractDockerSocket(context.Background())
+}
+
 func TestSftpBlobStore(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}
+
+	skipTestIfDockerNotAvailable(t)
 
 	for _, usePassword := range []bool{false, true} {
 		var authType string
