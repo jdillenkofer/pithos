@@ -48,24 +48,24 @@ const defaultStorageConfig = `
 }
 `
 
-const SUBCOMMAND_SERVE = "serve"
-const SUBCOMMAND_MIGRATE_STORAGE = "migrate-storage"
+const subcommandServe = "serve"
+const subcommandMigrateStorage = "migrate-storage"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s %s|%s [options]\n", os.Args[0], SUBCOMMAND_SERVE, SUBCOMMAND_MIGRATE_STORAGE)
+		fmt.Printf("Usage: %s %s|%s [options]\n", os.Args[0], subcommandServe, subcommandMigrateStorage)
 		os.Exit(1)
 	}
 
 	subcommand := os.Args[1]
 	switch subcommand {
-	case SUBCOMMAND_SERVE:
+	case subcommandServe:
 		serve(ctx)
-	case SUBCOMMAND_MIGRATE_STORAGE:
+	case subcommandMigrateStorage:
 		migrateStorage(ctx)
 	default:
-		log.Fatalf("Invalid subcommand: %s. Expected one of '%s', '%s'.\n", subcommand, SUBCOMMAND_SERVE, SUBCOMMAND_MIGRATE_STORAGE)
+		log.Fatalf("Invalid subcommand: %s. Expected one of '%s', '%s'.\n", subcommand, subcommandServe, subcommandMigrateStorage)
 	}
 }
 
@@ -163,7 +163,7 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 
 func migrateStorage(ctx context.Context) {
 	if len(os.Args) < 4 {
-		fmt.Printf("Usage: %s %s [source-config.json] [destination-config.json]\n", os.Args[0], SUBCOMMAND_MIGRATE_STORAGE)
+		fmt.Printf("Usage: %s %s [source-config.json] [destination-config.json]\n", os.Args[0], subcommandMigrateStorage)
 		os.Exit(1)
 	}
 	sourceStorageConfig := os.Args[2]
