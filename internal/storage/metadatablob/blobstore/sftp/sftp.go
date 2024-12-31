@@ -10,12 +10,16 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
+
+const maxStpRetries = 3
+const waitDurationBeforeRetry = 3 * time.Second
 
 type sftpBlobStore struct {
 	addr         string
@@ -24,17 +28,19 @@ type sftpBlobStore struct {
 	client       *sftp.Client
 }
 
-func (sftp *sftpBlobStore) ensureRootDir() error {
-	err := sftp.client.MkdirAll(sftp.root)
+func (s *sftpBlobStore) ensureRootDir() error {
+	_, err := doRetriableOperation(func() (*struct{}, error) {
+		return nil, s.client.MkdirAll(s.root)
+	}, maxStpRetries, s.reconnectSftpClient)
 	return err
 }
 
-func (sftp *sftpBlobStore) getFilename(blobId blobstore.BlobId) string {
+func (s *sftpBlobStore) getFilename(blobId blobstore.BlobId) string {
 	blobFilename := hex.EncodeToString(blobId[:])
-	return filepath.Join(sftp.root, blobFilename)
+	return filepath.Join(s.root, blobFilename)
 }
 
-func (sftp *sftpBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *blobstore.BlobId, ok bool) {
+func (s *sftpBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *blobstore.BlobId, ok bool) {
 	if len(filename) != 32 {
 		return nil, false
 	}
@@ -50,31 +56,60 @@ func (sftp *sftpBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *bl
 	}, true
 }
 
-func newSftpClient(addr string, config *ssh.ClientConfig) (*sftp.Client, error) {
-	client, err := ssh.Dial("tcp", addr, config)
+func (s *sftpBlobStore) reconnectSftpClient() error {
+	if s.client != nil {
+		// If we have a retry wait a couple of seconds before continuing
+		time.Sleep(waitDurationBeforeRetry)
+		s.client.Close()
+	}
+
+	client, err := ssh.Dial("tcp", s.addr, s.clientConfig)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
 		client.Close()
-		return nil, err
+		return err
 	}
-	return sftpClient, nil
+	s.client = sftpClient
+	return nil
+}
+
+func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry func() error) (T, error) {
+	retries := 0
+	var empty T
+	for {
+		t, err := op()
+		if err != nil {
+			retries += 1
+			if retries < maxRetries {
+				err = preRetry()
+				if err != nil {
+					return empty, err
+				}
+				continue
+			}
+			return empty, err
+		}
+		return t, nil
+	}
 }
 
 func New(addr string, clientConfig *ssh.ClientConfig, root string) (blobstore.BlobStore, error) {
-	sftpClient, err := newSftpClient(addr, clientConfig)
-	if err != nil {
-		return nil, err
-	}
 	bs := &sftpBlobStore{
 		addr:         addr,
 		clientConfig: clientConfig,
 		root:         root,
-		client:       sftpClient,
+		client:       nil,
 	}
+
+	err := bs.reconnectSftpClient()
+	if err != nil {
+		return nil, err
+	}
+
 	err = bs.ensureRootDir()
 	if err != nil {
 		return nil, err
@@ -82,20 +117,22 @@ func New(addr string, clientConfig *ssh.ClientConfig, root string) (blobstore.Bl
 	return bs, nil
 }
 
-func (sftp *sftpBlobStore) Start(ctx context.Context) error {
+func (s *sftpBlobStore) Start(ctx context.Context) error {
 	return nil
 }
 
-func (sftp *sftpBlobStore) Stop(ctx context.Context) error {
-	err := sftp.client.Close()
+func (s *sftpBlobStore) Stop(ctx context.Context) error {
+	err := s.client.Close()
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (sftp *sftpBlobStore) calculateETagFromPath(path string) (*string, error) {
-	f, err := sftp.client.OpenFile(path, os.O_RDONLY)
+func (s *sftpBlobStore) calculateETagFromPath(path string) (*string, error) {
+	f, err := doRetriableOperation(func() (*sftp.File, error) {
+		return s.client.OpenFile(path, os.O_RDONLY)
+	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -107,10 +144,12 @@ func (sftp *sftpBlobStore) calculateETagFromPath(path string) (*string, error) {
 	return etag, nil
 }
 
-func (sftp *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
-	filename := sftp.getFilename(blobId)
+func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+	filename := s.getFilename(blobId)
 	{
-		f, err := sftp.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		f, err := doRetriableOperation(func() (*sftp.File, error) {
+			return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		}, maxStpRetries, s.reconnectSftpClient)
 		if err != nil {
 			return nil, err
 		}
@@ -120,11 +159,13 @@ func (sftp *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobs
 			return nil, err
 		}
 	}
-	etag, err := sftp.calculateETagFromPath(filename)
+	etag, err := s.calculateETagFromPath(filename)
 	if err != nil {
 		return nil, err
 	}
-	stat, err := sftp.client.Stat(filename)
+	stat, err := doRetriableOperation(func() (os.FileInfo, error) {
+		return s.client.Stat(filename)
+	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -135,9 +176,11 @@ func (sftp *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobs
 	}, nil
 }
 
-func (sftp *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
-	filename := sftp.getFilename(blobId)
-	f, err := sftp.client.OpenFile(filename, os.O_RDONLY)
+func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+	filename := s.getFilename(blobId)
+	f, err := doRetriableOperation(func() (*sftp.File, error) {
+		return s.client.OpenFile(filename, os.O_RDONLY)
+	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, blobstore.ErrBlobNotFound
@@ -147,8 +190,10 @@ func (sftp *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobs
 	return f, err
 }
 
-func (sftp *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
-	dirEntries, err := sftp.client.ReadDir(sftp.root)
+func (s *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	dirEntries, err := doRetriableOperation(func() ([]os.FileInfo, error) {
+		return s.client.ReadDir(s.root)
+	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -157,16 +202,18 @@ func (sftp *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobst
 		if dirEntry.IsDir() {
 			continue
 		}
-		if blobId, ok := sftp.tryGetBlobIdFromFilename(dirEntry.Name()); ok {
+		if blobId, ok := s.tryGetBlobIdFromFilename(dirEntry.Name()); ok {
 			blobIds = append(blobIds, *blobId)
 		}
 	}
 	return blobIds, nil
 }
 
-func (sftp *sftpBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
-	filename := sftp.getFilename(blobId)
-	err := sftp.client.Remove(filename)
+func (s *sftpBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	filename := s.getFilename(blobId)
+	_, err := doRetriableOperation(func() (*struct{}, error) {
+		return nil, s.client.Remove(filename)
+	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
 		e, ok := err.(*os.PathError)
 		if ok && e.Err == syscall.ENOENT {
