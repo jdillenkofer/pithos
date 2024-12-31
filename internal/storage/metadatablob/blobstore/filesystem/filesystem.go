@@ -68,6 +68,19 @@ func (bs *filesystemBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
+func calculateETagFromPath(path string) (*string, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	etag, err := blobstore.CalculateETag(f)
+	if err != nil {
+		return nil, err
+	}
+	return etag, nil
+}
+
 func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
 	filename := bs.getFilename(blobId)
 	{
@@ -81,7 +94,7 @@ func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId b
 			return nil, err
 		}
 	}
-	etag, err := blobstore.CalculateETagFromPath(filename)
+	etag, err := calculateETagFromPath(filename)
 	if err != nil {
 		return nil, err
 	}

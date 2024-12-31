@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"os"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/oklog/ulid/v2"
@@ -66,19 +65,6 @@ func CalculateETag(reader io.Reader) (*string, error) {
 	}
 	etag := "\"" + *md5Sum + "\""
 	return &etag, nil
-}
-
-func CalculateETagFromPath(path string) (*string, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	etag, err := CalculateETag(f)
-	if err != nil {
-		return nil, err
-	}
-	return etag, nil
 }
 
 func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {

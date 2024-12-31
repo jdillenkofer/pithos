@@ -88,7 +88,10 @@ func (sftp *sftpBlobStore) Start(ctx context.Context) error {
 
 func (sftp *sftpBlobStore) Stop(ctx context.Context) error {
 	err := sftp.client.Close()
-	return err
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (sftp *sftpBlobStore) calculateETagFromPath(path string) (*string, error) {
