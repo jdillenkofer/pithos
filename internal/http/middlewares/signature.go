@@ -166,6 +166,8 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 }
 
 func generateHashedPayload(r *http.Request) string {
+	// @TODO: error handling
+	// @TODO: cache request body to disk
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	sha256Hash := sha256.New()

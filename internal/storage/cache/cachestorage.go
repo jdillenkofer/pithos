@@ -112,6 +112,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	}
 
 	if err == ErrCacheMiss {
+		// @TODO: only cache byteRange that was requested
 		reader, err := cs.innerStorage.GetObject(ctx, bucket, key, nil, nil)
 		if err != nil {
 			return nil, err

@@ -53,6 +53,7 @@ func (ebsm *encryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
