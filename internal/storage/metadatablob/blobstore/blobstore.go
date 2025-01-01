@@ -45,11 +45,7 @@ func GenerateBlobId() (*BlobId, error) {
 
 func calculateMd5Sum(reader io.Reader) (*string, error) {
 	hash := md5.New()
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	_, err = hash.Write(data)
+	_, err := io.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}

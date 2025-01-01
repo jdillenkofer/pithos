@@ -198,14 +198,10 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 }
 
 func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return err
-	}
-	_, err = rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
+	_, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-		Body:   ioutils.NewByteReadSeekCloser(data),
+		Body:   reader,
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
