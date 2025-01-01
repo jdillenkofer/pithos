@@ -120,6 +120,7 @@ func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key 
 }
 
 func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -179,6 +180,7 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucket 
 }
 
 func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
+	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err

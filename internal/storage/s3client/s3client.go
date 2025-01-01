@@ -190,6 +190,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 		return nil, err
 	}
 
+	// @TODO: cache reader on disk
 	data, err := io.ReadAll(getObjectResult.Body)
 	if err != nil {
 		return nil, err
