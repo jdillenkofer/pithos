@@ -14,6 +14,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp"
+	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp/config"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
 )
 
@@ -22,6 +24,7 @@ const (
 	encryptionBlobStoreMiddlewareType = "EncryptionBlobStoreMiddleware"
 	tracingBlobStoreMiddlewareType    = "TracingBlobStoreMiddleware"
 	outboxBlobStoreType               = "OutboxBlobStore"
+	sftpBlobStoreType                 = "SftpBlobStore"
 	sqlBlobStoreType                  = "SqlBlobStore"
 )
 
@@ -165,6 +168,43 @@ func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	return outbox.New(db, innerBlobStore, blobOutboxEntryRepository)
 }
 
+type SftpBlobStoreConfiguration struct {
+	Addr                        internalConfig.StringProvider          `json:"addr"`
+	SshClientConfigInstantiator sftpConfig.SshClientConfigInstantiator `json:"-"`
+	RawSshClientConfig          json.RawMessage                        `json:"sshClientConfig"`
+	Root                        internalConfig.StringProvider          `json:"root"`
+	internalConfig.DynamicJsonType
+}
+
+func (s *SftpBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type sftpBlobStoreConfiguration SftpBlobStoreConfiguration
+	err := json.Unmarshal(b, (*sftpBlobStoreConfiguration)(s))
+	if err != nil {
+		return err
+	}
+	s.SshClientConfigInstantiator, err = sftpConfig.CreateSshClientConfigInstantiatorFromJson(s.RawSshClientConfig)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SftpBlobStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := s.SshClientConfigInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SftpBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
+	sshClientConfig, err := s.SshClientConfigInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	return sftp.New(s.Addr.Value(), sshClientConfig, s.Root.Value())
+}
+
 type SqlBlobStoreConfiguration struct {
 	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase          json.RawMessage                     `json:"db"`
@@ -221,6 +261,8 @@ func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error
 		bi = &TracingBlobStoreMiddlewareConfiguration{}
 	case outboxBlobStoreType:
 		bi = &OutboxBlobStoreConfiguration{}
+	case sftpBlobStoreType:
+		bi = &SftpBlobStoreConfiguration{}
 	case sqlBlobStoreType:
 		bi = &SqlBlobStoreConfiguration{}
 	default:
