@@ -53,14 +53,14 @@ func New(root string) (blobstore.BlobStore, error) {
 	bs := &filesystemBlobStore{
 		root: root,
 	}
-	err = bs.ensureRootDir()
-	if err != nil {
-		return nil, err
-	}
 	return bs, nil
 }
 
 func (bs *filesystemBlobStore) Start(ctx context.Context) error {
+	err := bs.ensureRootDir()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

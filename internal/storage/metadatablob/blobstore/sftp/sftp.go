@@ -104,20 +104,19 @@ func New(addr string, clientConfig *ssh.ClientConfig, root string) (blobstore.Bl
 		root:         root,
 		client:       nil,
 	}
-
-	err := bs.reconnectSftpClient()
-	if err != nil {
-		return nil, err
-	}
-
-	err = bs.ensureRootDir()
-	if err != nil {
-		return nil, err
-	}
 	return bs, nil
 }
 
 func (s *sftpBlobStore) Start(ctx context.Context) error {
+	err := s.reconnectSftpClient()
+	if err != nil {
+		return err
+	}
+
+	err = s.ensureRootDir()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
