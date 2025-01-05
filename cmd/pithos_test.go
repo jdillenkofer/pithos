@@ -143,7 +143,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		}
 	}
 
-	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
+	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, true, store))
 
 	if useReplication {
 		originalTs := ts
@@ -221,7 +221,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
 			}
 		}
-		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store2))
+		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, true, store2))
 	}
 
 	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)
