@@ -2,17 +2,17 @@ package ioutils
 
 import "io"
 
-type MultiCloser struct {
+type multiCloser struct {
 	closers []io.Closer
 }
 
-func NewMultiCloser(closers []io.Closer) *MultiCloser {
-	return &MultiCloser{
+func NewMultiCloser(closers []io.Closer) io.Closer {
+	return &multiCloser{
 		closers: closers,
 	}
 }
 
-func (m *MultiCloser) Close() error {
+func (m *multiCloser) Close() error {
 	var err error
 	for _, c := range m.closers {
 		if e := c.Close(); e != nil {
