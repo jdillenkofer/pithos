@@ -11,6 +11,7 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
+const defaultCompressionEnabled = false
 const defaultStorageJsonPath = "./storage.json"
 
 const mergableTagKey = "mergable"
@@ -24,6 +25,7 @@ type Settings struct {
 	port                  *int    `mergable:""`
 	monitoringPort        *int    `mergable:""`
 	monitoringPortEnabled *bool   `mergable:""`
+	compressionEnabled    *bool   `mergable:""`
 	storageJsonPath       *string `mergable:""`
 }
 
@@ -64,6 +66,10 @@ func (s *Settings) MonitoringPort() int {
 
 func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
+}
+
+func (s *Settings) CompressionEnabled() bool {
+	return valueOrDefault(s.compressionEnabled, defaultCompressionEnabled)
 }
 
 func (s *Settings) StorageJsonPath() string {

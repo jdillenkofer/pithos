@@ -65,6 +65,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	compressionEnabledAccessor := registerBoolFlag(serveCommand, "compressionEnabled", defaultCompressionEnabled, "should http compression be enabled")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 
 	err := serveCommand.Parse(cmdArgs)
@@ -81,6 +82,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		port:                  portAccessor(),
 		monitoringPort:        monitoringPortAccessor(),
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
+		compressionEnabled:    compressionEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
 	}, nil
 }

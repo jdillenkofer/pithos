@@ -16,6 +16,7 @@ const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey string = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey string = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey string = envKeyPrefix + "_MONITORING_PORT_ENABLED"
+const compressionEnabledEnvKey string = envKeyPrefix + "_COMPRESSION_ENABLED"
 const storageJsonPathEnvKey string = envKeyPrefix + "_STORAGE_JSON_PATH"
 
 func getStringFromEnv(envKey string) *string {
@@ -58,6 +59,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	port := getIntFromEnv(portEnvKey)
 	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
+	compressionEnabled := getBoolFromEnv(compressionEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	return &Settings{
 		accessKeyId:           accessKeyId,
@@ -68,6 +70,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		port:                  port,
 		monitoringPort:        monitoringPort,
 		monitoringPortEnabled: monitoringPortEnabled,
+		compressionEnabled:    compressionEnabled,
 		storageJsonPath:       storageJsonPath,
 	}, nil
 }
