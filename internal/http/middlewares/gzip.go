@@ -26,7 +26,6 @@ func (w gzipResponseWriter) WriteHeader(code int) {
 		return
 	}
 
-	w.Header().Set("Content-Encoding", "gzip")
 	w.Header().Add("Vary", "Accept-Encoding")
 
 	// The content-length after compression is unknown
@@ -43,6 +42,7 @@ func MakeGzipMiddleware(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
+		w.Header().Set("Content-Encoding", "gzip")
 		gz := gzip.NewWriter(w)
 		defer gz.Close()
 		h.ServeHTTP(gzipResponseWriter{Writer: gz, ResponseWriter: w}, r)
