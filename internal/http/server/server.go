@@ -23,7 +23,7 @@ type Server struct {
 	storage storage.Storage
 }
 
-func SetupServer(accessKeyId string, secretAccessKey string, region string, baseEndpoint string, compressionEnabled bool, storage storage.Storage) http.Handler {
+func SetupServer(accessKeyId string, secretAccessKey string, region string, baseEndpoint string, storage storage.Storage) http.Handler {
 	server := &Server{
 		storage: storage,
 	}
@@ -39,10 +39,6 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
 	var rootHandler http.Handler = mux
-	if compressionEnabled {
-		rootHandler = middlewares.MakeGzipMiddleware(rootHandler)
-		rootHandler = middlewares.MakeDeflateMiddleware(rootHandler)
-	}
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
 	if accessKeyId != "" && secretAccessKey != "" {
 		rootHandler = middlewares.MakeSignatureMiddleware(accessKeyId, secretAccessKey, region, rootHandler)

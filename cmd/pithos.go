@@ -97,7 +97,7 @@ func serve(ctx context.Context) {
 		}
 	}()
 
-	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), settings.CompressionEnabled(), store)
+	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
