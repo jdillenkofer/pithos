@@ -128,51 +128,20 @@ func (s *sftpBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sftpBlobStore) calculateETagFromPath(path string) (*string, error) {
+func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	filename := s.getFilename(blobId)
 	f, err := doRetriableOperation(func() (*sftp.File, error) {
-		return s.client.OpenFile(path, os.O_RDONLY)
+		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	}, maxStpRetries, s.reconnectSftpClient)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
-	etag, err := blobstore.CalculateETag(f)
+	_, err = io.Copy(f, reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return etag, nil
-}
-
-func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
-	filename := s.getFilename(blobId)
-	{
-		f, err := doRetriableOperation(func() (*sftp.File, error) {
-			return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-		}, maxStpRetries, s.reconnectSftpClient)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		_, err = io.Copy(f, reader)
-		if err != nil {
-			return nil, err
-		}
-	}
-	etag, err := s.calculateETagFromPath(filename)
-	if err != nil {
-		return nil, err
-	}
-	stat, err := doRetriableOperation(func() (os.FileInfo, error) {
-		return s.client.Stat(filename)
-	}, maxStpRetries, s.reconnectSftpClient)
-	if err != nil {
-		return nil, err
-	}
-	return &blobstore.PutBlobResult{
-		BlobId: blobId,
-		ETag:   *etag,
-		Size:   stat.Size(),
-	}, nil
+	return nil
 }
 
 func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {

@@ -52,39 +52,31 @@ func (ebsm *encryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 	return ebsm.innerBlobStore.Stop(ctx)
 }
 
-func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, err
-	}
-
-	// Recalculate etag on original data
-	originalSize := int64(len(data))
-	originalReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
-	etag, err := blobstore.CalculateETag(originalReadSeekCloser)
-	if err != nil {
-		return nil, err
+		return err
 	}
 
 	paddedData, err := pkcs7padding.Pad(data, aes.BlockSize)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if len(paddedData)%aes.BlockSize != 0 {
-		return nil, ErrPlaintextNotAMultipleOfBlockSize
+		return ErrPlaintextNotAMultipleOfBlockSize
 	}
 
 	block, err := aes.NewCipher(ebsm.key)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	ciphertext := make([]byte, aes.BlockSize+len(paddedData))
 	iv := ciphertext[:aes.BlockSize]
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
+		return err
 	}
 
 	mode := cipher.NewCBCEncrypter(block, iv)
@@ -95,14 +87,12 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 	ciphertextWithMAC := mac.Sum(ciphertext)
 
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(ciphertextWithMAC)
-	putBlobResult, err := ebsm.innerBlobStore.PutBlob(ctx, tx, blobId, byteReadSeekCloser)
+	err = ebsm.innerBlobStore.PutBlob(ctx, tx, blobId, byteReadSeekCloser)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	putBlobResult.Size = originalSize
-	putBlobResult.ETag = *etag
-	return putBlobResult, nil
+	return nil
 }
 
 func validHMAC(message, messageMAC, key []byte) bool {

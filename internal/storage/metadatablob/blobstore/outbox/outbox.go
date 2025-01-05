@@ -56,7 +56,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 		switch entry.Operation {
 		case blobOutboxEntry.PutBlobOperation:
-			_, err := obs.innerBlobStore.PutBlob(ctx, tx, entry.BlobId, bytes.NewReader(entry.Content))
+			err = obs.innerBlobStore.PutBlob(ctx, tx, entry.BlobId, bytes.NewReader(entry.Content))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -157,27 +157,18 @@ func (obs *outboxBlobStore) storeBlobOutboxEntry(ctx context.Context, tx *sql.Tx
 	return nil
 }
 
-func (obs *outboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (obs *outboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = obs.storeBlobOutboxEntry(ctx, tx, blobOutboxEntry.PutBlobOperation, blobId, content)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	etag, err := blobstore.CalculateETag(bytes.NewReader(content))
-	if err != nil {
-		return nil, err
-	}
-
-	return &blobstore.PutBlobResult{
-		BlobId: blobId,
-		ETag:   *etag,
-		Size:   int64(len(content)),
-	}, nil
+	return nil
 }
 
 func (obs *outboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {

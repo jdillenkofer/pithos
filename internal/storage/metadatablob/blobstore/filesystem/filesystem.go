@@ -68,45 +68,20 @@ func (bs *filesystemBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func calculateETagFromPath(path string) (*string, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	filename := bs.getFilename(blobId)
+
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
-	etag, err := blobstore.CalculateETag(f)
+	_, err = io.Copy(f, reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return etag, nil
-}
 
-func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
-	filename := bs.getFilename(blobId)
-	{
-		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		_, err = io.Copy(f, reader)
-		if err != nil {
-			return nil, err
-		}
-	}
-	etag, err := calculateETagFromPath(filename)
-	if err != nil {
-		return nil, err
-	}
-	stat, err := os.Stat(filename)
-	if err != nil {
-		return nil, err
-	}
-	return &blobstore.PutBlobResult{
-		BlobId: blobId,
-		ETag:   *etag,
-		Size:   stat.Size(),
-	}, nil
+	return nil
 }
 
 func (bs *filesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {

@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"io"
@@ -31,10 +30,10 @@ func (bs *sqlBlobStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	blobContentEntity := blobContent.Entity{
 		Id:      (*ulid.ULID)(&blobId),
@@ -42,19 +41,10 @@ func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	}
 	err = bs.blobContentRepository.PutBlobContent(ctx, tx, &blobContentEntity)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	etag, err := blobstore.CalculateETag(bytes.NewReader(content))
-	if err != nil {
-		return nil, err
-	}
-
-	return &blobstore.PutBlobResult{
-		BlobId: blobId,
-		ETag:   *etag,
-		Size:   int64(len(content)),
-	}, nil
+	return nil
 }
 
 func (bs *sqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {

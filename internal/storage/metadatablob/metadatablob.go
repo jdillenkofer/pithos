@@ -2,7 +2,9 @@ package metadatablob
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"log"
 	"time"
@@ -286,6 +288,18 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 	return reader, nil
 }
 
+func calculateETag(reader io.Reader) (*string, error) {
+	hash := md5.New()
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	etag := "\"" + hexSum + "\""
+	return &etag, nil
+}
+
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -317,7 +331,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
+	originalSize, etag, err := mbs.uploadBlobAndCalculateEtag(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -326,13 +340,13 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	object := metadatastore.Object{
 		Key:          key,
 		LastModified: time.Now(),
-		ETag:         putBlobResult.ETag,
-		Size:         putBlobResult.Size,
+		ETag:         *etag,
+		Size:         *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
-				Id:   putBlobResult.BlobId,
-				ETag: putBlobResult.ETag,
-				Size: putBlobResult.Size,
+				Id:   *blobId,
+				ETag: *etag,
+				Size: *originalSize,
 			},
 		},
 	}
@@ -414,7 +428,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
+func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
@@ -428,14 +442,16 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	putBlobResult, err := mbs.blobStore.PutBlob(ctx, tx, *blobId, data)
+	originalSize, etag, err := mbs.uploadBlobAndCalculateEtag(ctx, tx, *blobId, reader)
 	if err != nil {
+		tx.Rollback()
 		return nil, err
 	}
+
 	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
-		Id:   putBlobResult.BlobId,
-		ETag: putBlobResult.ETag,
-		Size: putBlobResult.Size,
+		Id:   *blobId,
+		ETag: *etag,
+		Size: *originalSize,
 	})
 	if err != nil {
 		tx.Rollback()
@@ -446,8 +462,61 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 	return &storage.UploadPartResult{
-		ETag: putBlobResult.ETag,
+		ETag: *etag,
 	}, nil
+}
+
+func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *string, error) {
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(2)
+
+	doneChan := make(chan struct{}, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		err := mbs.blobStore.PutBlob(ctx, tx, blobId, readers[0])
+		if err != nil {
+			errChan <- err
+			return
+		}
+		doneChan <- struct{}{}
+	}()
+
+	etagChan := make(chan string, 1)
+	errChan2 := make(chan error, 1)
+	go func() {
+		etag, err := calculateETag(readers[1])
+		if err != nil {
+			errChan2 <- err
+			return
+		}
+		etagChan <- *etag
+	}()
+
+	originalSize, err := io.Copy(writer, reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = closer.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	select {
+	case <-doneChan:
+	case err := <-errChan:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	var etag string
+	select {
+	case etag = <-etagChan:
+	case err := <-errChan2:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return &originalSize, &etag, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {
