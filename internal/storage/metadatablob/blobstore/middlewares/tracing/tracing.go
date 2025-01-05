@@ -34,7 +34,7 @@ func (tbsm *tracingBlobStoreMiddleware) Stop(ctx context.Context) error {
 	return tbsm.innerBlobStore.Stop(ctx)
 }
 
-func (tbsm *tracingBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*blobstore.PutBlobResult, error) {
+func (tbsm *tracingBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
 	defer trace.StartRegion(ctx, tbsm.regionName+".PutBlob()").End()
 
 	return tbsm.innerBlobStore.PutBlob(ctx, tx, blobId, reader)
