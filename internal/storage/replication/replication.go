@@ -115,7 +115,7 @@ func (rs *replicationStorage) HeadObject(ctx context.Context, bucket string, key
 	return rs.primaryStorage.HeadObject(ctx, bucket, key)
 }
 
-func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	return rs.primaryStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 

@@ -266,7 +266,7 @@ func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucket s
 	return mObject, nil
 }
 
-func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	reader, err := psm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
@@ -274,7 +274,7 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 	}
 
 	bytesDownloaded := 0
-	reader = ioutils.NewStatsReadSeekCloser(reader, func(n int) {
+	reader = ioutils.NewStatsReadCloser(reader, func(n int) {
 		bytesDownloaded += n
 	})
 
@@ -286,7 +286,7 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 
 func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
 	bytesUploaded := 0
-	reader = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
+	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
 		bytesUploaded += n
 	})
 
@@ -328,7 +328,7 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 
 func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
 	bytesUploaded := 0
-	data = ioutils.NewStatsReadSeekCloser(ioutils.NewNopSeekCloser(data), func(n int) {
+	data = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(data), func(n int) {
 		bytesUploaded += n
 	})
 

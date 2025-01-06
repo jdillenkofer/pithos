@@ -94,7 +94,7 @@ func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucket stri
 	return tsm.innerStorage.HeadObject(ctx, bucket, key)
 }
 
-func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".GetObject()").End()
 
 	return tsm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)

@@ -11,9 +11,8 @@ import (
 func TestSimpleMultiReadSeekCloser(t *testing.T) {
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
 	reader := NewByteReadSeekCloser(content)
-	multiReadSeekCloser, err := NewMultiReadSeekCloser([]io.ReadSeekCloser{reader})
-	assert.Nil(t, err)
-	err = iotest.TestReader(multiReadSeekCloser, content)
+	multiReadCloser := NewMultiReadCloser([]io.ReadCloser{reader})
+	err := iotest.TestReader(multiReadCloser, content)
 	assert.Nil(t, err)
 }
 
@@ -21,9 +20,8 @@ func TestDualMultiReadSeekCloser(t *testing.T) {
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'}
 	reader := NewByteReadSeekCloser(content[0:5])
 	reader2 := NewByteReadSeekCloser(content[5:11])
-	multiReadSeekCloser, err := NewMultiReadSeekCloser([]io.ReadSeekCloser{reader, reader2})
-	assert.Nil(t, err)
-	err = iotest.TestReader(multiReadSeekCloser, content)
+	multiReadCloser := NewMultiReadCloser([]io.ReadCloser{reader, reader2})
+	err := iotest.TestReader(multiReadCloser, content)
 	assert.Nil(t, err)
 }
 
@@ -33,12 +31,11 @@ func TestDualMultiReadSeekCloserWithStartOffset(t *testing.T) {
 	var reader2 io.ReadSeekCloser
 	reader2 = NewByteReadSeekCloser(content[5:11])
 	reader2 = NewLimitedStartReadSeekCloser(reader2, 1)
-	multiReadSeekCloser, err := NewMultiReadSeekCloser([]io.ReadSeekCloser{reader, reader2})
-	assert.Nil(t, err)
+	multiReadSeekCloser := NewMultiReadCloser([]io.ReadCloser{reader, reader2})
 	newContent := []byte{}
 	newContent = append(newContent, content[0:5]...)
 	newContent = append(newContent, content[6:11]...)
-	err = iotest.TestReader(multiReadSeekCloser, newContent)
+	err := iotest.TestReader(multiReadSeekCloser, newContent)
 	assert.Nil(t, err)
 }
 
@@ -47,9 +44,8 @@ func TestTripleMultiReadSeekCloser(t *testing.T) {
 	reader := NewByteReadSeekCloser(content[0:5])
 	reader2 := NewByteReadSeekCloser(content[5:7])
 	reader3 := NewByteReadSeekCloser(content[7:11])
-	multiReadSeekCloser, err := NewMultiReadSeekCloser([]io.ReadSeekCloser{reader, reader2, reader3})
-	assert.Nil(t, err)
-	err = iotest.TestReader(multiReadSeekCloser, content)
+	multiReadCloser := NewMultiReadCloser([]io.ReadCloser{reader, reader2, reader3})
+	err := iotest.TestReader(multiReadCloser, content)
 	assert.Nil(t, err)
 }
 
@@ -59,9 +55,8 @@ func TestQuadMultiReadSeekCloser(t *testing.T) {
 	reader2 := NewByteReadSeekCloser(content[5:7])
 	reader3 := NewByteReadSeekCloser(content[7:8])
 	reader4 := NewByteReadSeekCloser(content[8:11])
-	multiReadSeekCloser, err := NewMultiReadSeekCloser([]io.ReadSeekCloser{reader, reader2, reader3, reader4})
-	assert.Nil(t, err)
-	err = iotest.TestReader(multiReadSeekCloser, content)
+	multiReadCloser := NewMultiReadCloser([]io.ReadCloser{reader, reader2, reader3, reader4})
+	err := iotest.TestReader(multiReadCloser, content)
 	assert.Nil(t, err)
 }
 
@@ -76,7 +71,7 @@ func TestSimpleLimitedStartReadSeekCloser(t *testing.T) {
 func TestSimpleLimitedEndReadSeekCloser(t *testing.T) {
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
 	reader := NewByteReadSeekCloser(content)
-	limitedEndReadSeekCloser := NewLimitedEndReadSeekCloser(reader, 2)
+	limitedEndReadSeekCloser := NewLimitedEndReadCloser(reader, 2)
 	err := iotest.TestReader(limitedEndReadSeekCloser, content[0:2])
 	assert.Nil(t, err)
 }

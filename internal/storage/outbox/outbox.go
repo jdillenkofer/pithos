@@ -352,7 +352,7 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucket string, key stri
 	return os.innerStorage.HeadObject(ctx, bucket, key)
 }
 
-func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
