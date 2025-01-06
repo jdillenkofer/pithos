@@ -115,7 +115,7 @@ func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucket 
 	return storage.HeadObject(ctx, bucket, key)
 }
 
-func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	storage := csm.lookupStorage(bucket)
 	return storage.GetObject(ctx, bucket, key, startByte, endByte)
 }

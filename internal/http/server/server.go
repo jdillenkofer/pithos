@@ -428,7 +428,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var readers []io.ReadSeekCloser
+	var readers []io.ReadCloser
 	var sizes []int64
 	var totalSize int64 = 0
 	if len(byteRanges) > 0 {

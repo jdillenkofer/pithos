@@ -243,7 +243,7 @@ func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucket string, k
 	return &o, err
 }
 
-func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -255,7 +255,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		return nil, err
 	}
 
-	blobReaders := []io.ReadSeekCloser{}
+	blobReaders := []io.ReadCloser{}
 	for _, blob := range object.Blobs {
 		blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
 		if err != nil {
@@ -265,12 +265,8 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		blobReaders = append(blobReaders, blobReader)
 	}
 
-	var reader io.ReadSeekCloser
-	reader, err = ioutils.NewMultiReadSeekCloser(blobReaders)
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
+	var reader io.ReadCloser
+	reader = ioutils.NewMultiReadCloser(blobReaders)
 
 	err = tx.Commit()
 	if err != nil {
@@ -280,10 +276,10 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 	// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
 	// because the LimitedStartSeekCloser changes the offsets
 	if endByte != nil {
-		reader = ioutils.NewLimitedEndReadSeekCloser(reader, *endByte)
+		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 	}
 	if startByte != nil {
-		reader = ioutils.NewLimitedStartReadSeekCloser(reader, *startByte)
+		reader = ioutils.NewLimitedStartReadCloser(reader, *startByte)
 	}
 	return reader, nil
 }

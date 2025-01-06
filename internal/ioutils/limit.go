@@ -5,6 +5,36 @@ import (
 	"io"
 )
 
+func NewLimitedStartReadCloser(innerReadCloser io.ReadCloser, startLimit int64) io.ReadCloser {
+	switch r := innerReadCloser.(type) {
+	case io.Seeker:
+		r.Seek(startLimit, io.SeekCurrent)
+	default:
+		io.CopyN(io.Discard, r, startLimit)
+	}
+	return innerReadCloser
+}
+
+type limitedEndReadCloser struct {
+	io.Reader
+	innerReadCloser io.ReadCloser
+}
+
+func NewLimitedEndReadCloser(innerReadCloser io.ReadCloser, endLimit int64) io.ReadCloser {
+	return &limitedEndReadCloser{
+		io.LimitReader(innerReadCloser, endLimit),
+		innerReadCloser,
+	}
+}
+
+func (lrc *limitedEndReadCloser) Close() error {
+	err := lrc.innerReadCloser.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type limitedStartReadSeekCloser struct {
 	isInitialized       bool
 	currentReadOffset   int64

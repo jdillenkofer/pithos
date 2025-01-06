@@ -103,8 +103,8 @@ func (cs *CacheStorage) HeadObject(ctx context.Context, bucket string, key strin
 	return object, nil
 }
 
-func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
-	var reader io.ReadSeekCloser
+func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	var reader io.ReadCloser
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
 	data, err := cs.cache.Get(cacheKey)
 	if err != nil && err != ErrCacheMiss {
@@ -134,10 +134,10 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
 	// because the LimitedStartSeekCloser changes the offsets
 	if endByte != nil {
-		reader = ioutils.NewLimitedEndReadSeekCloser(reader, *endByte)
+		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 	}
 	if startByte != nil {
-		reader = ioutils.NewLimitedStartReadSeekCloser(reader, *startByte)
+		reader = ioutils.NewLimitedStartReadCloser(reader, *startByte)
 	}
 	return reader, nil
 }

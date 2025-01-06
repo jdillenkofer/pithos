@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
@@ -165,7 +164,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucket string, key st
 	}, nil
 }
 
-func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadSeekCloser, error) {
+func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	var byteRange *string = nil
 	if startByte != nil && endByte != nil {
 		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
@@ -190,12 +189,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 		return nil, err
 	}
 
-	// @TODO: cache reader on disk
-	data, err := io.ReadAll(getObjectResult.Body)
-	if err != nil {
-		return nil, err
-	}
-	return ioutils.NewByteReadSeekCloser(data), nil
+	return getObjectResult.Body, nil
 }
 
 func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
