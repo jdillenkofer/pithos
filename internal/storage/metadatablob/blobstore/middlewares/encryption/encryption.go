@@ -213,25 +213,29 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 	if err != nil {
 		return nil, err
 	}
-	cipherStream := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
 
-	iv := make([]byte, aes.BlockSize)
-	_, err = io.ReadFull(cipherStream, iv)
-	if err != nil {
-		return nil, err
-	}
+	lazyReadCloser := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+		cipherStream := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
 
-	// CBC mode always works in whole blocks.
-	if hmacOffset%aes.BlockSize != 0 {
-		return nil, ErrCiphertextNotAMultipleOfBlockSize
-	}
+		iv := make([]byte, aes.BlockSize)
+		_, err = io.ReadFull(cipherStream, iv)
+		if err != nil {
+			return nil, err
+		}
 
-	decryptedStream, err := newCBCDecrypterReader(ebsm.key, iv, hmacOffset, cipherStream)
-	if err != nil {
-		return nil, err
-	}
+		// CBC mode always works in whole blocks.
+		if hmacOffset%aes.BlockSize != 0 {
+			return nil, ErrCiphertextNotAMultipleOfBlockSize
+		}
 
-	return decryptedStream, nil
+		decryptedStream, err := newCBCDecrypterReader(ebsm.key, iv, hmacOffset, cipherStream)
+		if err != nil {
+			return nil, err
+		}
+		return decryptedStream, nil
+	})
+
+	return lazyReadCloser, nil
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
