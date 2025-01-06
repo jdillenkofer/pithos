@@ -106,6 +106,55 @@ func validHMAC(message io.ReadCloser, messageMAC, key []byte) (*bool, error) {
 	return &valid, nil
 }
 
+type cbcDecrypterReader struct {
+	mode            cipher.BlockMode
+	innerReadCloser io.ReadCloser
+	internalSrc     []byte
+	internalDst     []byte
+	endOffset       int64
+}
+
+func newCBCDecrypterReader(key []byte, iv []byte, endOffset int64, innerReadCloser io.ReadCloser) (io.ReadCloser, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	mode := cipher.NewCBCDecrypter(block, iv)
+	return &cbcDecrypterReader{
+		mode:            mode,
+		innerReadCloser: innerReadCloser,
+		internalSrc:     make([]byte, aes.BlockSize),
+		internalDst:     make([]byte, aes.BlockSize),
+		endOffset:       endOffset,
+	}, nil
+}
+
+func (dr *cbcDecrypterReader) Read(p []byte) (int, error) {
+	if dr.endOffset == 0 {
+		return 0, io.EOF
+	}
+	bytesRead, err := io.ReadFull(dr.innerReadCloser, dr.internalSrc)
+	if err != nil {
+		return bytesRead, err
+	}
+	dr.mode.CryptBlocks(dr.internalDst, dr.internalSrc)
+	dr.endOffset -= int64(bytesRead)
+	if dr.endOffset == aes.BlockSize {
+		unpaddedData, err := pkcs7padding.Unpad(dr.internalDst, aes.BlockSize)
+		if err != nil {
+			return -1, err
+		}
+		n := copy(p, unpaddedData)
+		return n, nil
+	}
+	n := copy(p, dr.internalDst)
+	return n, nil
+}
+
+func (dr *cbcDecrypterReader) Close() error {
+	return dr.innerReadCloser.Close()
+}
+
 func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	var endOffset int64
 	{
@@ -164,11 +213,10 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 	if err != nil {
 		return nil, err
 	}
-	ciphertext := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
-	defer ciphertext.Close()
+	cipherStream := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
 
 	iv := make([]byte, aes.BlockSize)
-	_, err = io.ReadFull(ciphertext, iv)
+	_, err = io.ReadFull(cipherStream, iv)
 	if err != nil {
 		return nil, err
 	}
@@ -178,26 +226,12 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 		return nil, ErrCiphertextNotAMultipleOfBlockSize
 	}
 
-	block, err := aes.NewCipher(ebsm.key)
-	if err != nil {
-		return nil, err
-	}
-	mode := cipher.NewCBCDecrypter(block, iv)
-
-	ciphertextBytes, err := io.ReadAll(ciphertext)
+	decryptedStream, err := newCBCDecrypterReader(ebsm.key, iv, hmacOffset, cipherStream)
 	if err != nil {
 		return nil, err
 	}
 
-	mode.CryptBlocks(ciphertextBytes, ciphertextBytes)
-
-	unpaddedData, err := pkcs7padding.Unpad(ciphertextBytes, aes.BlockSize)
-	if err != nil {
-		return nil, err
-	}
-
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(unpaddedData)
-	return byteReadSeekCloser, nil
+	return decryptedStream, nil
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
