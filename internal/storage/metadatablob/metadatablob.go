@@ -279,7 +279,10 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 	}
 	if startByte != nil {
-		reader = ioutils.NewLimitedStartReadCloser(reader, *startByte)
+		err = ioutils.SkipNBytes(reader, *startByte)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return reader, nil
 }

@@ -40,7 +40,7 @@ func (tbsm *tracingBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx,
 	return tbsm.innerBlobStore.PutBlob(ctx, tx, blobId, reader)
 }
 
-func (tbsm *tracingBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (tbsm *tracingBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	defer trace.StartRegion(ctx, tbsm.regionName+".GetBlob()").End()
 
 	return tbsm.innerBlobStore.GetBlob(ctx, tx, blobId)
