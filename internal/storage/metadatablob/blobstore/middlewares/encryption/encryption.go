@@ -95,11 +95,15 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 	return nil
 }
 
-func validHMAC(message, messageMAC, key []byte) bool {
+func validHMAC(message io.ReadSeekCloser, messageMAC, key []byte) (*bool, error) {
 	mac := hmac.New(sha256.New, key)
-	mac.Write(message)
+	_, err := io.Copy(mac, message)
+	if err != nil {
+		return nil, err
+	}
 	expectedMAC := mac.Sum(nil)
-	return hmac.Equal(messageMAC, expectedMAC)
+	valid := hmac.Equal(messageMAC, expectedMAC)
+	return &valid, nil
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
@@ -108,7 +112,25 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 		return nil, err
 	}
 
-	data, err := io.ReadAll(readSeekCloser)
+	endOffset, err := readSeekCloser.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, err
+	}
+
+	hmacOffset := endOffset - hmacSize
+	if hmacOffset < aes.BlockSize {
+		return nil, ErrCiphertextTooShort
+	}
+
+	_, err = readSeekCloser.Seek(hmacOffset, io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+	ciphertextMAC, err := io.ReadAll(readSeekCloser)
+	if err != nil {
+		return nil, err
+	}
+	_, err = readSeekCloser.Seek(0, io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
@@ -119,34 +141,58 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 		return nil, err
 	}
 
-	if len(data) < hmacSize {
-		return nil, ErrDataTooShortForHMACValidation
-	}
-
 	// Verify HMAC before decryption
-	ciphertext := data[:len(data)-hmacSize]
-	ciphertextMAC := data[len(data)-hmacSize:]
-	if !validHMAC(ciphertext, ciphertextMAC, key) {
+	ciphertext := ioutils.NewLimitedEndReadSeekCloser(readSeekCloser, hmacOffset)
+	valid, err := validHMAC(ciphertext, ciphertextMAC, key)
+	if err != nil {
+		return nil, err
+	}
+	if !*valid {
 		return nil, ErrInvalidHMAC
 	}
 
-	if len(ciphertext) < aes.BlockSize {
-		return nil, ErrCiphertextTooShort
+	_, err = ciphertext.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, err
 	}
 
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
+	iv := make([]byte, aes.BlockSize)
+	_, err = io.ReadFull(ciphertext, iv)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = ciphertext.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+	ciphertext = ioutils.NewLimitedStartReadSeekCloser(ciphertext, aes.BlockSize)
+
+	ciphertextEnd, err := ciphertext.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, err
+	}
 
 	// CBC mode always works in whole blocks.
-	if len(ciphertext)%aes.BlockSize != 0 {
+	if ciphertextEnd%aes.BlockSize != 0 {
 		return nil, ErrCiphertextNotAMultipleOfBlockSize
+	}
+
+	_, err = ciphertext.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, err
 	}
 
 	mode := cipher.NewCBCDecrypter(block, iv)
 
-	mode.CryptBlocks(ciphertext, ciphertext)
+	ciphertextBytes, err := io.ReadAll(ciphertext)
+	if err != nil {
+		return nil, err
+	}
 
-	unpaddedData, err := pkcs7padding.Unpad(ciphertext, aes.BlockSize)
+	mode.CryptBlocks(ciphertextBytes, ciphertextBytes)
+
+	unpaddedData, err := pkcs7padding.Unpad(ciphertextBytes, aes.BlockSize)
 	if err != nil {
 		return nil, err
 	}
