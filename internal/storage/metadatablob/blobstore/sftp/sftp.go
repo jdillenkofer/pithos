@@ -144,7 +144,7 @@ func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	return nil
 }
 
-func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	filename := s.getFilename(blobId)
 	f, err := doRetriableOperation(func() (*sftp.File, error) {
 		return s.client.OpenFile(filename, os.O_RDONLY)

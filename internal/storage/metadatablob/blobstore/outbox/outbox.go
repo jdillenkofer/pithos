@@ -171,7 +171,7 @@ func (obs *outboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blob
 	return nil
 }
 
-func (obs *outboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (obs *outboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	lastBlobOutboxEntry, err := obs.blobOutboxEntryRepository.FindLastBlobOutboxEntryByBlobId(ctx, tx, blobId)
 	if err != nil {
 		return nil, err

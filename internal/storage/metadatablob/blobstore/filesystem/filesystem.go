@@ -84,7 +84,7 @@ func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId b
 	return nil
 }
 
-func (bs *filesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (bs *filesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	if err != nil {

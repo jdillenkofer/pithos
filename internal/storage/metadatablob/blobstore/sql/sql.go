@@ -47,7 +47,7 @@ func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	return nil
 }
 
-func (bs *sqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadSeekCloser, error) {
+func (bs *sqlBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	blobContentEntity, err := bs.blobContentRepository.FindBlobContentById(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
