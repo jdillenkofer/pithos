@@ -107,47 +107,87 @@ func validHMAC(message io.ReadCloser, messageMAC, key []byte) (*bool, error) {
 }
 
 type cbcDecrypterReader struct {
-	mode            cipher.BlockMode
-	innerReadCloser io.ReadCloser
-	internalSrc     []byte
-	internalDst     []byte
-	endOffset       int64
+	mode                        cipher.BlockMode
+	innerReadCloser             io.ReadCloser
+	internalSrc                 []byte
+	internalDst                 []byte
+	bytesRemainingInInternalDst int64
+	innerReaderEndOffset        int64
 }
 
-func newCBCDecrypterReader(key []byte, iv []byte, endOffset int64, innerReadCloser io.ReadCloser) (io.ReadCloser, error) {
+func newCBCDecrypterReader(key []byte, iv []byte, innerReaderEndOffset int64, innerReadCloser io.ReadCloser) (io.ReadCloser, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
 	mode := cipher.NewCBCDecrypter(block, iv)
 	return &cbcDecrypterReader{
-		mode:            mode,
-		innerReadCloser: innerReadCloser,
-		internalSrc:     make([]byte, aes.BlockSize),
-		internalDst:     make([]byte, aes.BlockSize),
-		endOffset:       endOffset,
+		mode:                        mode,
+		innerReadCloser:             innerReadCloser,
+		internalSrc:                 make([]byte, aes.BlockSize*512),
+		internalDst:                 make([]byte, aes.BlockSize*512),
+		bytesRemainingInInternalDst: 0,
+		innerReaderEndOffset:        innerReaderEndOffset,
 	}, nil
 }
 
 func (dr *cbcDecrypterReader) Read(p []byte) (int, error) {
-	if dr.endOffset == 0 {
+	if dr.bytesRemainingInInternalDst > 0 {
+		n := copy(p, dr.internalDst[:dr.bytesRemainingInInternalDst])
+		copy(dr.internalDst, dr.internalDst[n:dr.bytesRemainingInInternalDst])
+		dr.bytesRemainingInInternalDst -= int64(n)
+		return n, nil
+	}
+	// Make sure that no more data can be read when reaching endOffset
+	if dr.innerReaderEndOffset == 0 {
 		return 0, io.EOF
 	}
-	bytesRead, err := io.ReadFull(dr.innerReadCloser, dr.internalSrc)
-	if err != nil {
-		return bytesRead, err
+
+	var bytesRead int
+	var err error
+	// Read until the entire internalSrc buffer is full (optimization)
+	if dr.innerReaderEndOffset > int64(len(dr.internalSrc)) {
+		bytesRead, err = io.ReadFull(dr.innerReadCloser, dr.internalSrc)
+		if err != nil {
+			return bytesRead, err
+		}
+	} else {
+		// Read at least aes.BlockSize bytes
+		bytesRead, err = io.ReadAtLeast(dr.innerReadCloser, dr.internalSrc, aes.BlockSize)
+		if err != nil {
+			return bytesRead, err
+		}
+
+		// Always round up to the next full blockSize
+		remainingBytesToReadForFullBlock := bytesRead % aes.BlockSize
+		if remainingBytesToReadForFullBlock > 0 {
+			buf := make([]byte, remainingBytesToReadForFullBlock)
+			bytesRead2, err := io.ReadFull(dr.innerReadCloser, buf)
+			if err != nil {
+				return bytesRead2, err
+			}
+			copy(dr.internalSrc[bytesRead:], buf)
+			bytesRead += bytesRead2
+		}
 	}
-	dr.mode.CryptBlocks(dr.internalDst, dr.internalSrc)
-	dr.endOffset -= int64(bytesRead)
-	if dr.endOffset == aes.BlockSize {
-		unpaddedData, err := pkcs7padding.Unpad(dr.internalDst, aes.BlockSize)
+	dr.innerReaderEndOffset -= int64(bytesRead)
+	dr.mode.CryptBlocks(dr.internalDst[:bytesRead], dr.internalSrc[:bytesRead])
+	dr.bytesRemainingInInternalDst += int64(bytesRead)
+
+	if dr.innerReaderEndOffset == 0 {
+		unpaddedData, err := pkcs7padding.Unpad(dr.internalDst[:dr.bytesRemainingInInternalDst], aes.BlockSize)
 		if err != nil {
 			return -1, err
 		}
-		n := copy(p, unpaddedData)
+		dr.bytesRemainingInInternalDst = int64(copy(dr.internalDst, unpaddedData))
+		n := copy(p, dr.internalDst[:dr.bytesRemainingInInternalDst])
+		copy(dr.internalDst, dr.internalDst[n:])
+		dr.bytesRemainingInInternalDst -= int64(n)
 		return n, nil
 	}
-	n := copy(p, dr.internalDst)
+	n := copy(p, dr.internalDst[:dr.bytesRemainingInInternalDst])
+	copy(dr.internalDst, dr.internalDst[n:dr.bytesRemainingInInternalDst])
+	dr.bytesRemainingInInternalDst -= int64(n)
 	return n, nil
 }
 
@@ -228,7 +268,7 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 			return nil, ErrCiphertextNotAMultipleOfBlockSize
 		}
 
-		decryptedStream, err := newCBCDecrypterReader(ebsm.key, iv, hmacOffset, cipherStream)
+		decryptedStream, err := newCBCDecrypterReader(ebsm.key, iv, hmacOffset-int64(len(iv)), cipherStream)
 		if err != nil {
 			return nil, err
 		}
