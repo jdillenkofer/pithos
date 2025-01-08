@@ -45,11 +45,11 @@ func NewStorage(db *sql.DB, innerStorage storage.Storage, storageOutboxEntryRepo
 func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	defer trace.StartRegion(ctx, "OutboxStorage.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return
-	}
 	for {
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+		if err != nil {
+			return
+		}
 		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
@@ -57,6 +57,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 		if entry == nil {
+			tx.Commit()
 			break
 		}
 
@@ -100,11 +101,12 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			tx.Rollback()
 			return
 		}
+
+		err = tx.Commit()
+		if err != nil {
+			return
+		}
 		processedOutboxEntryCount += 1
-	}
-	err = tx.Commit()
-	if err != nil {
-		return
 	}
 	if processedOutboxEntryCount > 0 {
 		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
