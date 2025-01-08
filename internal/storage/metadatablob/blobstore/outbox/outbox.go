@@ -39,11 +39,12 @@ func New(db *sql.DB, innerBlobStore blobstore.BlobStore, blobOutboxEntryReposito
 func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 	defer trace.StartRegion(ctx, "OutboxBlobStore.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return
-	}
 	for {
+		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{})
+		if err != nil {
+			return
+		}
+
 		entry, err := obs.blobOutboxEntryRepository.FindFirstBlobOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
@@ -51,6 +52,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 		if entry == nil {
+			tx.Rollback()
 			break
 		}
 
@@ -81,10 +83,11 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 		processedOutboxEntryCount += 1
-	}
-	err = tx.Commit()
-	if err != nil {
-		return
+
+		err = tx.Commit()
+		if err != nil {
+			return
+		}
 	}
 	if processedOutboxEntryCount > 0 {
 		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
