@@ -52,7 +52,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 		if entry == nil {
-			tx.Rollback()
+			tx.Commit()
 			break
 		}
 
