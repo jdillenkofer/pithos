@@ -23,6 +23,7 @@ type encryptionBlobStoreMiddleware struct {
 }
 
 const hmacSize = 32
+const shouldValidateHmac = false
 
 var (
 	ErrDataTooShortForHMACValidation     = errors.New("data too short for HMAC validation")
@@ -229,8 +230,8 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 	if hmacOffset < aes.BlockSize {
 		return nil, ErrCiphertextTooShort
 	}
-	/*
 
+	if !shouldValidateHmac {
 		var ciphertextMAC []byte
 		if readSeekCloser, ok := readCloser.(io.ReadSeekCloser); ok {
 			readSeekCloser.Seek(hmacOffset, io.SeekStart)
@@ -274,7 +275,7 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 				return nil, ErrInvalidHMAC
 			}
 		}
-	*/
+	}
 
 	readCloser, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 	if err != nil {
