@@ -4,7 +4,7 @@ import (
 	"io"
 )
 
-func SkipNBytes(r io.Reader, n int64) error {
+func SkipNBytes(r io.Reader, n int64) (int64, error) {
 	var err error
 	switch r := r.(type) {
 	case io.Seeker:
@@ -12,7 +12,17 @@ func SkipNBytes(r io.Reader, n int64) error {
 	default:
 		_, err = io.CopyN(io.Discard, r, n)
 	}
-	return err
+	return n, err
+}
+
+func SkipAllBytes(r io.Reader) (n int64, err error) {
+	switch r := r.(type) {
+	case io.Seeker:
+		n, err = r.Seek(0, io.SeekEnd)
+	default:
+		n, err = io.Copy(io.Discard, r)
+	}
+	return n, err
 }
 
 type limitedEndReadCloser struct {

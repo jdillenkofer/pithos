@@ -137,7 +137,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 	}
 	if startByte != nil {
-		err := ioutils.SkipNBytes(reader, *startByte)
+		_, err := ioutils.SkipNBytes(reader, *startByte)
 		if err != nil {
 			return nil, err
 		}

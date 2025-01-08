@@ -265,8 +265,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		blobReaders = append(blobReaders, blobReader)
 	}
 
-	var reader io.ReadCloser
-	reader = ioutils.NewMultiReadCloser(blobReaders)
+	var reader io.ReadCloser = ioutils.NewMultiReadCloser(blobReaders)
 
 	err = tx.Commit()
 	if err != nil {
@@ -279,7 +278,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 	}
 	if startByte != nil {
-		err = ioutils.SkipNBytes(reader, *startByte)
+		_, err = ioutils.SkipNBytes(reader, *startByte)
 		if err != nil {
 			return nil, err
 		}
