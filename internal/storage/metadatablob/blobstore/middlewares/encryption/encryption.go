@@ -254,7 +254,7 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 			if err != nil {
 				return nil, err
 			}
-			ciphertextMAC, err = io.ReadAll(readCloser)
+			ciphertextMAC, err = io.ReadAll(readSeekCloser)
 			if err != nil {
 				return nil, err
 			}
@@ -263,7 +263,7 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 				return nil, err
 			}
 
-			ciphertext := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
+			ciphertext := ioutils.NewLimitedEndReadCloser(readSeekCloser, hmacOffset)
 
 			valid, err := validHMAC(ciphertext, ciphertextMAC, ebsm.key)
 			if err != nil {
