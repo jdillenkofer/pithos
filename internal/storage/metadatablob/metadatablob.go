@@ -255,6 +255,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 		return nil, err
 	}
 
+	// @Speed: Only attach blobs which are inside the read range
 	blobReaders := []io.ReadCloser{}
 	for _, blob := range object.Blobs {
 		blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
