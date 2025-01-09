@@ -23,7 +23,6 @@ type encryptionBlobStoreMiddleware struct {
 }
 
 const hmacSize = 32
-const shouldValidateHmac = false
 
 var (
 	ErrDataTooShortForHMACValidation     = errors.New("data too short for HMAC validation")
@@ -197,75 +196,98 @@ func (dr *cbcDecrypterReader) Close() error {
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	var readCloser io.ReadCloser
 	readCloser, err := ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
 	}
+	var readCloser2 io.ReadCloser
+	var readCloser3 io.ReadCloser
+	var readCloser4 io.ReadCloser
+	if _, ok := readCloser.(io.ReadSeekCloser); !ok {
+		readCloser2, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
+		if err != nil {
+			readCloser.Close()
+			return nil, err
+		}
+		readCloser3, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
+		if err != nil {
+			readCloser.Close()
+			readCloser2.Close()
+			return nil, err
+		}
+		readCloser4, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
+		if err != nil {
+			readCloser.Close()
+			readCloser2.Close()
+			readCloser3.Close()
+			return nil, err
+		}
+	}
 
-	var endOffset int64
-	if readSeekCloser, ok := readCloser.(io.ReadSeekCloser); ok {
-		endOffset, err = readSeekCloser.Seek(0, io.SeekEnd)
-		if err != nil {
-			return nil, err
-		}
-		_, err := readSeekCloser.Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		{
-			defer readCloser.Close()
-			endOffset, err = ioutils.SkipAllBytes(readCloser)
+	lazyReadCloser := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+		var endOffset int64
+		if readSeekCloser, ok := readCloser.(io.ReadSeekCloser); ok {
+			endOffset, err = readSeekCloser.Seek(0, io.SeekEnd)
+			if err != nil {
+				return nil, err
+			}
+			_, err := readSeekCloser.Seek(0, io.SeekStart)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			endOffset, err = ioutils.SkipAllBytes(readCloser2)
 			if err != nil {
 				return nil, err
 			}
 		}
-		readCloser, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
-		if err != nil {
-			return nil, err
+
+		hmacOffset := endOffset - hmacSize
+		if hmacOffset < aes.BlockSize {
+			return nil, ErrCiphertextTooShort
 		}
-	}
 
-	hmacOffset := endOffset - hmacSize
-	if hmacOffset < aes.BlockSize {
-		return nil, ErrCiphertextTooShort
-	}
-
-	if !shouldValidateHmac {
 		var ciphertextMAC []byte
 		if readSeekCloser, ok := readCloser.(io.ReadSeekCloser); ok {
-			readSeekCloser.Seek(hmacOffset, io.SeekStart)
+			_, err = readSeekCloser.Seek(hmacOffset, io.SeekStart)
+			if err != nil {
+				return nil, err
+			}
 			ciphertextMAC, err = io.ReadAll(readCloser)
 			if err != nil {
 				return nil, err
 			}
-			readSeekCloser.Seek(0, io.SeekStart)
-		} else {
-			{
-				defer readCloser.Close()
-				_, err = ioutils.SkipNBytes(readCloser, hmacOffset)
-				if err != nil {
-					return nil, err
-				}
-				ciphertextMAC, err = io.ReadAll(readCloser)
-				if err != nil {
-					return nil, err
-				}
-			}
-			readCloser, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
+			_, err = readSeekCloser.Seek(0, io.SeekStart)
 			if err != nil {
 				return nil, err
 			}
-		}
 
-		// Verify HMAC before decryption
-		{
-			readCloser, err := ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
+			ciphertext := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
+
+			valid, err := validHMAC(ciphertext, ciphertextMAC, ebsm.key)
 			if err != nil {
 				return nil, err
 			}
-			ciphertext := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
-			defer ciphertext.Close()
+			if !*valid {
+				return nil, ErrInvalidHMAC
+			}
+
+			_, err = readSeekCloser.Seek(0, io.SeekStart)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			_, err = ioutils.SkipNBytes(readCloser3, hmacOffset)
+			if err != nil {
+				return nil, err
+			}
+			ciphertextMAC, err = io.ReadAll(readCloser3)
+			if err != nil {
+				return nil, err
+			}
+
+			ciphertext := ioutils.NewLimitedEndReadCloser(readCloser4, hmacOffset)
 
 			valid, err := validHMAC(ciphertext, ciphertextMAC, ebsm.key)
 			if err != nil {
@@ -275,14 +297,6 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 				return nil, ErrInvalidHMAC
 			}
 		}
-	}
-
-	readCloser, err = ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
-	if err != nil {
-		return nil, err
-	}
-
-	lazyReadCloser := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
 		cipherStream := ioutils.NewLimitedEndReadCloser(readCloser, hmacOffset)
 
 		iv := make([]byte, aes.BlockSize)
@@ -303,7 +317,33 @@ func (ebsm *encryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.
 		return decryptedStream, nil
 	})
 
-	return lazyReadCloser, nil
+	return ioutils.NewReadAndCallbackCloser(lazyReadCloser, func() error {
+		if readCloser4 != nil {
+			err := readCloser4.Close()
+			if err != nil {
+				return err
+			}
+		}
+		if readCloser3 != nil {
+			err := readCloser3.Close()
+			if err != nil {
+				return err
+			}
+		}
+		if readCloser2 != nil {
+			err := readCloser2.Close()
+			if err != nil {
+				return err
+			}
+		}
+		if readCloser != nil {
+			err := readCloser.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}), nil
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
