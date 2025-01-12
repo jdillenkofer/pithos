@@ -24,9 +24,9 @@ func NewDebugReadCloser(name string, innerReadCloser io.ReadCloser) io.ReadClose
 }
 
 func (d *debugReadCloser) Read(p []byte) (int, error) {
-	log.Println("DebugReadSeekCloser", d.name, "Read(", p, ")")
+	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")")
 	n, err := d.innerReadCloser.Read(p)
-	log.Println("DebugReadSeekCloser", d.name, "Read(", p, ") = (n: ", n, ", err:", err, ")")
+	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")")
 	return n, err
 }
 
@@ -43,9 +43,9 @@ type debugReadSeekCloser struct {
 }
 
 func (d *debugReadSeekCloser) Read(p []byte) (int, error) {
-	log.Println("DebugReadSeekCloser", d.name, "Read(", p, ")")
+	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")")
 	n, err := d.innerReadSeekCloser.Read(p)
-	log.Println("DebugReadSeekCloser", d.name, "Read(", p, ") = (n: ", n, ", err:", err, ")")
+	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")")
 	return n, err
 }
 
