@@ -262,17 +262,19 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 	if startByte != nil {
 		newStartByteOffset = *startByte
 	}
+	skippingAtTheStart := true
 	for _, blob := range object.Blobs {
 		// We only get blobs within the requested byte range
 		if endByte != nil && *endByte < blobsSizeUntilNow {
 			break
 		}
 		blobsSizeUntilNow += blob.Size
-		if newStartByteOffset >= blob.Size {
+		if skippingAtTheStart && newStartByteOffset >= blob.Size {
 			newStartByteOffset -= blob.Size
 			bytesSkipped += blob.Size
 			continue
 		}
+		skippingAtTheStart = false
 
 		blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
 		if err != nil {
