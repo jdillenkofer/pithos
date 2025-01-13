@@ -428,6 +428,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contentType := "application/octet-stream"
+	if object.ContentType != "" {
+		contentType = object.ContentType
+	}
+	w.Header().Set(contentTypeHeader, contentType)
+
 	var readers []io.ReadCloser
 	var sizes []int64
 	var totalSize int64 = 0
@@ -522,8 +528,9 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+	contentType := r.Header.Get(contentTypeHeader)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
-	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key, contentType)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -625,12 +632,13 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+	contentType := r.Header.Get(contentTypeHeader)
 
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	err := s.storage.PutObject(ctx, bucket, key, r.Body)
+	err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return

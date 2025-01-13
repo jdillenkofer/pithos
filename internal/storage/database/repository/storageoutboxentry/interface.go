@@ -19,14 +19,15 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id        *ulid.ULID
-	Operation string
-	Bucket    string
-	Key       string
-	Data      []byte
-	Ordinal   int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Id          *ulid.ULID
+	Operation   string
+	Bucket      string
+	Key         string
+	ContentType string
+	Data        []byte
+	Ordinal     int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 const (

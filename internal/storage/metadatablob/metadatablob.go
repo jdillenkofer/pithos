@@ -187,6 +187,7 @@ func (mbs *metadataBlobStorage) HeadBucket(ctx context.Context, bucket string) (
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
 		Key:          mObject.Key,
+		ContentType:  mObject.ContentType,
 		LastModified: mObject.LastModified,
 		ETag:         mObject.ETag,
 		Size:         mObject.Size,
@@ -317,7 +318,7 @@ func calculateETag(reader io.Reader) (*string, error) {
 	return &etag, nil
 }
 
-func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
@@ -356,6 +357,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 
 	object := metadatastore.Object{
 		Key:          key,
+		ContentType:  contentType,
 		LastModified: time.Now(),
 		ETag:         *etag,
 		Size:         *originalSize,
@@ -424,7 +426,7 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 	}
 }
 
-func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
+func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
@@ -432,7 +434,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx, bucket, key)
+	result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx, bucket, key, contentType)
 	if err != nil {
 		tx.Rollback()
 		return nil, err

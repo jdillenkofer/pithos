@@ -192,11 +192,16 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+	var contentTypeStr *string = nil
+	if contentType != "" {
+		contentTypeStr = aws.String(contentType)
+	}
 	_, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   reader,
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		ContentType: contentTypeStr,
+		Body:        reader,
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -221,10 +226,15 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucket string, key 
 	return nil
 }
 
-func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
+	var contentTypeStr *string = nil
+	if contentType != "" {
+		contentTypeStr = aws.String(contentType)
+	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		ContentType: contentTypeStr,
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {

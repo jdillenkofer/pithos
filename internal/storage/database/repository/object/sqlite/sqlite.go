@@ -22,12 +22,12 @@ type sqliteRepository struct {
 }
 
 const (
-	insertObjectStmt                                               = "INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"
-	updateObjectByIdStmt                                           = "UPDATE objects SET bucket_name = ?, key = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?"
+	insertObjectStmt                                               = "INSERT INTO objects (id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	updateObjectByIdStmt                                           = "UPDATE objects SET bucket_name = ?, key = ?, content_type = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?"
 	containsBucketObjectsByBucketNameStmt                          = "SELECT id FROM objects WHERE bucket_name = ?"
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt = "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC"
-	findObjectByBucketNameAndKeyAndUploadIdStmt                    = "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?"
-	findObjectByBucketNameAndKeyStmt                               = "SELECT id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?"
+	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC"
+	findObjectByBucketNameAndKeyAndUploadIdStmt                    = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?"
+	findObjectByBucketNameAndKeyStmt                               = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?"
 	countObjectsByBucketNameAndPrefixAndStartAfterStmt             = "SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_status = ?"
 	deleteObjectByIdStmt                                           = "DELETE FROM objects WHERE id = ?"
 )
@@ -82,13 +82,14 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	var id string
 	var bucketName string
 	var key string
+	var contentType string
 	var etag string
 	var size int64
 	var upload_status string
 	var upload_id string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := objectRows.Scan(&id, &bucketName, &key, &etag, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
+	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &etag, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +98,7 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 		Id:           &ulidId,
 		BucketName:   bucketName,
 		Key:          key,
+		ContentType:  contentType,
 		ETag:         etag,
 		Size:         size,
 		UploadStatus: upload_status,
@@ -113,11 +115,11 @@ func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *
 		object.Id = &id
 		object.CreatedAt = time.Now()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.StmtContext(ctx, or.insertObjectPreparedStmt).ExecContext(ctx, object.Id.String(), object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.StmtContext(ctx, or.insertObjectPreparedStmt).ExecContext(ctx, object.Id.String(), object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now()
-	_, err := tx.StmtContext(ctx, or.updateObjectByIdPreparedStmt).ExecContext(ctx, object.BucketName, object.Key, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.StmtContext(ctx, or.updateObjectByIdPreparedStmt).ExecContext(ctx, object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 

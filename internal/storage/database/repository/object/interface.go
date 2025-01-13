@@ -22,6 +22,7 @@ type Entity struct {
 	Id           *ulid.ULID
 	BucketName   string
 	Key          string
+	ContentType  string
 	ETag         string
 	Size         int64
 	UploadStatus string

@@ -95,7 +95,7 @@ func TestStorageMigrator(t *testing.T) {
 	err = storage.CreateBucket(ctx, bucketName)
 	assert.Nil(t, err)
 
-	err = storage.PutObject(ctx, bucketName, objectKey, bytes.NewReader(objectData))
+	err = storage.PutObject(ctx, bucketName, objectKey, "", bytes.NewReader(objectData))
 	assert.Nil(t, err)
 
 	storagePath2 := *tempDir2

@@ -77,7 +77,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
-			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, bytes.NewReader(entry.Data))
+			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -363,7 +363,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
@@ -402,12 +402,12 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucket string, key st
 	return nil
 }
 
-func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
+func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key)
+	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
 }
 
 func (os *outboxStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
