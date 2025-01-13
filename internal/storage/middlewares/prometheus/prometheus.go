@@ -284,13 +284,13 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 	return reader, nil
 }
 
-func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	bytesUploaded := 0
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
 		bytesUploaded += n
 	})
 
-	err := psm.innerStorage.PutObject(ctx, bucket, key, reader)
+	err := psm.innerStorage.PutObject(ctx, bucket, key, contentType, reader)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return err
@@ -314,8 +314,8 @@ func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucket, key)
+func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateMultipartUpload"}).Inc()
 		return nil, err

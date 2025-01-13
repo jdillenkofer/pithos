@@ -145,14 +145,14 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	return reader, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, reader io.Reader) error {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	err = cs.innerStorage.PutObject(ctx, bucket, key, byteReadSeekCloser)
+	err = cs.innerStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser)
 	if err != nil {
 		return err
 	}
@@ -180,8 +180,8 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucket string, key str
 	return nil
 }
 
-func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string) (*storage.InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucket, key)
+func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
 	if err != nil {
 		return nil, err
 	}

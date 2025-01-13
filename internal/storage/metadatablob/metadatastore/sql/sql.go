@@ -229,6 +229,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 
 	return &metadatastore.Object{
 		Key:          key,
+		ContentType:  objectEntity.ContentType,
 		LastModified: objectEntity.UpdatedAt,
 		ETag:         objectEntity.ETag,
 		Size:         objectEntity.Size,
@@ -262,6 +263,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 	objectEntity := object.Entity{
 		BucketName:   bucketName,
+		ContentType:  obj.ContentType,
 		Key:          obj.Key,
 		ETag:         obj.ETag,
 		Size:         obj.Size,
@@ -320,7 +322,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -332,6 +334,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	objectEntity := object.Entity{
 		BucketName:   bucketName,
 		Key:          key,
+		ContentType:  contentType,
 		ETag:         "",
 		Size:         -1,
 		UploadId:     ulid.Make().String(),
