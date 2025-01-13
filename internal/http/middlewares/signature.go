@@ -307,8 +307,9 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	if err != nil {
 		return false
 	}
-	expiredTimestamp := now.Add(expirationDuration)
-	if parsedTimestamp.Before(now.Add(-15*time.Minute)) || parsedTimestamp.After(expiredTimestamp) {
+	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
+	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
+	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		return false
 	}
 
