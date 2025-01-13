@@ -210,7 +210,7 @@ func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add(contentTypeHeader, applicationXmlContentType)
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
 		Buckets: []*Bucket{},
@@ -275,7 +275,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Contents:       []*Content{},
 	}
 
-	w.Header().Add(contentTypeHeader, applicationXmlContentType)
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, object := range result.Objects {
 		listBucketResult.Contents = append(listBucketResult.Contents, &Content{
@@ -303,7 +303,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add(locationHeader, bucket)
+	w.Header().Set(locationHeader, bucket)
 	w.WriteHeader(200)
 }
 
@@ -332,9 +332,9 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gmtTimeLoc := time.FixedZone("GMT", 0)
-	w.Header().Add(etagHeader, object.ETag)
-	w.Header().Add(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
-	w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	w.Header().Set(etagHeader, object.ETag)
+	w.Header().Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
+	w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 }
 
@@ -476,8 +476,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			reader.Close()
 		}
 	})()
-	w.Header().Add(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
-	w.Header().Add(acceptRangesHeader, "bytes")
+	w.Header().Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	w.Header().Set(acceptRangesHeader, "bytes")
 	if len(byteRanges) > 1 {
 		separator := ulid.Make().String()
 		rangeHeaderLength := int64(0)
@@ -495,8 +495,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		separatorLineLength := (2 /* -- */ + 2 /* \r\n */ + separatorLength)
 		endSeparatorLineLength := separatorLineLength + 2 /* \r\n */ + 2 /* -- at the end */
 		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*byteRangesCount + endSeparatorLineLength
-		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
-		w.Header().Add(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
+		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		w.Header().Set(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
 		w.WriteHeader(206)
 		for idx := range readers {
 			if idx > 0 {
@@ -510,14 +510,14 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		io.WriteString(w, fmt.Sprintf("\r\n--%s--\r\n", separator))
 	} else if len(byteRanges) == 1 {
-		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
 		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
-		w.Header().Add(contentRangeHeader, contentRangeValue)
+		w.Header().Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		io.CopyN(w, readers[0], totalSize)
 	} else {
-		w.Header().Add(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		io.CopyN(w, readers[0], totalSize)
 	}
@@ -623,7 +623,7 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Add(etagHeader, uploadPartResult.ETag)
+	w.Header().Set(etagHeader, uploadPartResult.ETag)
 	w.WriteHeader(200)
 }
 
