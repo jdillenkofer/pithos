@@ -510,11 +510,18 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, 
 		etagChan <- *etag
 	}()
 
-	originalSize, err := io.Copy(writer, reader)
-	if err != nil {
-		return nil, nil, err
-	}
-	err = closer.Close()
+	// @Note: We need a anonymous function here,
+	// because defers are always scoped to the function.
+	// But if we don't directly defer close after the copy,
+	// we deadlock the program
+	originalSize, err := func() (*int64, error) {
+		defer closer.Close()
+		originalSize, err := io.Copy(writer, reader)
+		if err != nil {
+			return nil, err
+		}
+		return &originalSize, nil
+	}()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -535,7 +542,7 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, 
 			return nil, nil, err
 		}
 	}
-	return &originalSize, &etag, nil
+	return originalSize, &etag, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {

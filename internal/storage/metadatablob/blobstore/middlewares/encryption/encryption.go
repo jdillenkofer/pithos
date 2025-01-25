@@ -179,12 +179,8 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 		doneChan := make(chan struct{}, 1)
 		errChan := make(chan error, 1)
 		go func() {
+			defer closer.Close()
 			_, err := io.Copy(writer, ivAndCiphertextReadCloser)
-			if err != nil {
-				errChan <- err
-				return
-			}
-			err = closer.Close()
 			if err != nil {
 				errChan <- err
 				return
