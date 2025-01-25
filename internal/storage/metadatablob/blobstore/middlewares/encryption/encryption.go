@@ -53,7 +53,7 @@ func (ebsm *encryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 }
 
 func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
-	// @TODO: cache reader on disk
+	// @TODO: streaming encryption and padding
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -82,14 +82,64 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 	mode := cipher.NewCBCEncrypter(block, iv)
 	mode.CryptBlocks(ciphertext[aes.BlockSize:], paddedData)
 
-	mac := hmac.New(sha256.New, ebsm.key)
-	mac.Write(ciphertext)
-	ciphertextWithMAC := mac.Sum(ciphertext)
+	var ciphertextReadCloser io.ReadCloser = ioutils.NewByteReadSeekCloser(ciphertext)
 
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(ciphertextWithMAC)
-	err = ebsm.innerBlobStore.PutBlob(ctx, tx, blobId, byteReadSeekCloser)
-	if err != nil {
-		return err
+	{
+		readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(2)
+
+		doneChan := make(chan struct{}, 1)
+		errChan := make(chan error, 1)
+		go func() {
+			_, err := io.Copy(writer, ciphertextReadCloser)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			err = closer.Close()
+			if err != nil {
+				errChan <- err
+				return
+			}
+			doneChan <- struct{}{}
+		}()
+
+		signatureReaderChan := make(chan io.ReadCloser, 1)
+		errChan2 := make(chan error, 1)
+		go func() {
+			mac := hmac.New(sha256.New, ebsm.key)
+			_, err := io.Copy(mac, readers[0])
+			if err != nil {
+				errChan2 <- err
+				return
+			}
+			signature := mac.Sum([]byte{})
+			signatureReaderChan <- ioutils.NewByteReadSeekCloser(signature)
+		}()
+
+		signatureReadCloser := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+			var readCloser io.ReadCloser
+			select {
+			case readCloser = <-signatureReaderChan:
+			case err := <-errChan2:
+				if err != nil {
+					return nil, err
+				}
+			}
+			return readCloser, nil
+		})
+
+		err = ebsm.innerBlobStore.PutBlob(ctx, tx, blobId, io.MultiReader(readers[1], signatureReadCloser))
+		if err != nil {
+			return err
+		}
+
+		select {
+		case <-doneChan:
+		case err := <-errChan:
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
