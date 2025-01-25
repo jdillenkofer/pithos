@@ -9,7 +9,7 @@ type multiReadCloser struct {
 	readClosers []io.ReadCloser
 }
 
-func NewMultiReadCloser(readClosers []io.ReadCloser) io.ReadCloser {
+func NewMultiReadCloser(readClosers ...io.ReadCloser) io.ReadCloser {
 	var readers []io.Reader
 	for _, readCloser := range readClosers {
 		readers = append(readers, readCloser)
