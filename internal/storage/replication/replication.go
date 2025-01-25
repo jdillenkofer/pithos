@@ -120,25 +120,60 @@ func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key 
 }
 
 func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
-	// @TODO: cache reader on disk
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(len(rs.secondaryStorages) + 1)
 
-	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
+	doneChan := make(chan *storage.PutObjectResult, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		result, err := rs.primaryStorage.PutObject(ctx, bucket, key, contentType, readers[len(rs.secondaryStorages)], checksumInput)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		doneChan <- result
+	}()
+
+	var doneChannels []chan *storage.PutObjectResult = nil
+	var errChannels []chan error = nil
+	for range rs.secondaryStorages {
+		doneChannels = append(doneChannels, make(chan *storage.PutObjectResult))
+		errChannels = append(errChannels, make(chan error))
+	}
+
+	for i, secondaryStorage := range rs.secondaryStorages {
+		go func() {
+			result, err := secondaryStorage.PutObject(ctx, bucket, key, contentType, readers[i], checksumInput)
+			if err != nil {
+				errChannels[i] <- err
+				return
+			}
+			doneChannels[i] <- result
+		}()
+	}
+
+	_, err := io.Copy(writer, reader)
 	if err != nil {
+		closer.Close()
 		return nil, err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
-		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+	closer.Close()
+
+	var putObjectResult *storage.PutObjectResult
+	select {
+	case putObjectResult = <-doneChan:
+	case err := <-errChan:
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
-		if err != nil {
-			return nil, err
+	}
+
+	for i := range rs.secondaryStorages {
+		select {
+		case <-doneChannels[i]:
+		case err := <-errChannels[i]:
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return putObjectResult, nil
@@ -180,30 +215,66 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucket 
 }
 
 func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	// @TODO: cache reader on disk
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
-
-	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, byteReadSeekCloser, checksumInput)
-	if err != nil {
-		return nil, err
-	}
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(len(rs.secondaryStorages) + 1)
 
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	rs.mapMutex.Unlock()
 
+	uploadPartResultChan := make(chan *storage.UploadPartResult, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, readers[len(rs.secondaryStorages)], checksumInput)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		uploadPartResultChan <- uploadPartResult
+	}()
+
+	var doneChannels []chan struct{} = nil
+	var errChannels []chan error = nil
+	for range rs.secondaryStorages {
+		doneChannels = append(doneChannels, make(chan struct{}))
+		errChannels = append(errChannels, make(chan error))
+	}
+
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+		go func() {
+			_, err := secondaryStorage.UploadPart(ctx, bucket, key, secondaryUploadIds[i], partNumber, readers[i], checksumInput)
+			if err != nil {
+				errChannels[i] <- err
+				return
+			}
+			doneChannels[i] <- struct{}{}
+		}()
+	}
+
+	_, err := io.Copy(writer, reader)
+	if err != nil {
+		return nil, err
+	}
+	err = closer.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	var uploadPartResult *storage.UploadPartResult
+	select {
+	case uploadPartResult = <-uploadPartResultChan:
+	case err := <-errChan:
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.UploadPart(ctx, bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser, checksumInput)
-		if err != nil {
-			return nil, err
+	}
+
+	for i := range rs.secondaryStorages {
+		select {
+		case <-doneChannels[i]:
+		case err := <-errChannels[i]:
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	return uploadPartResult, nil
