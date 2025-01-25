@@ -9,7 +9,7 @@ var (
 	// ErrInvalidBlockSize indicates hash blocksize <= 0.
 	ErrInvalidBlockSize = errors.New("invalid blocksize")
 
-	// ErrInvalidPKCS7Data indicates bad input to PKCS7 pad or unpad.
+	// ErrInvalidPKCS7Data indicates bad input to PKCS7 unpad.
 	ErrInvalidPKCS7Data = errors.New("invalid PKCS7 data (empty or not padded)")
 
 	// ErrInvalidPKCS7Padding indicates PKCS7 unpad fails to bad input.
@@ -22,9 +22,6 @@ var (
 func Pad(b []byte, blocksize int) ([]byte, error) {
 	if blocksize <= 0 {
 		return nil, ErrInvalidBlockSize
-	}
-	if len(b) == 0 {
-		return nil, ErrInvalidPKCS7Data
 	}
 	n := blocksize - (len(b) % blocksize)
 	pb := make([]byte, len(b)+n)
