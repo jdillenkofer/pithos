@@ -59,6 +59,19 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 		return err
 	}
 
+	// Generate a random initialization vector
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return err
+	}
+
+	block, err := aes.NewCipher(ebsm.key)
+	if err != nil {
+		return err
+	}
+
+	mode := cipher.NewCBCEncrypter(block, iv)
+
 	paddedData, err := pkcs7padding.Pad(data, aes.BlockSize)
 	if err != nil {
 		return err
@@ -68,21 +81,12 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 		return ErrPlaintextNotAMultipleOfBlockSize
 	}
 
-	block, err := aes.NewCipher(ebsm.key)
-	if err != nil {
-		return err
-	}
+	ciphertext := make([]byte, len(paddedData))
+	mode.CryptBlocks(ciphertext, paddedData)
 
-	ciphertext := make([]byte, aes.BlockSize+len(paddedData))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return err
-	}
-
-	mode := cipher.NewCBCEncrypter(block, iv)
-	mode.CryptBlocks(ciphertext[aes.BlockSize:], paddedData)
-
-	var ciphertextReadCloser io.ReadCloser = ioutils.NewByteReadSeekCloser(ciphertext)
+	ivReadCloser := ioutils.NewByteReadSeekCloser(iv)
+	ciphertextReadCloser := ioutils.NewByteReadSeekCloser(ciphertext)
+	var ivAndCiphertextReadCloser io.ReadCloser = ioutils.NewMultiReadCloser(ivReadCloser, ciphertextReadCloser)
 
 	{
 		readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(2)
@@ -90,7 +94,7 @@ func (ebsm *encryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.
 		doneChan := make(chan struct{}, 1)
 		errChan := make(chan error, 1)
 		go func() {
-			_, err := io.Copy(writer, ciphertextReadCloser)
+			_, err := io.Copy(writer, ivAndCiphertextReadCloser)
 			if err != nil {
 				errChan <- err
 				return
