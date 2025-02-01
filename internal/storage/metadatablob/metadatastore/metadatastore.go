@@ -90,7 +90,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	bucketName := "bucket"
 	key := "test"
 
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid blob length")
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid object key")
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -234,7 +234,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -245,7 +245,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -293,7 +293,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
