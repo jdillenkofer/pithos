@@ -50,8 +50,9 @@ func SetupMonitoringServer(dbs []*sql.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		for _, db := range dbs {
-			err := db.Ping()
+			err := db.PingContext(ctx)
 			if err != nil {
 				w.WriteHeader(503)
 				w.Write([]byte("Unhealthy"))

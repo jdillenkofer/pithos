@@ -46,7 +46,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	blobId := BlobId(ulid.Make())
 	blob := ioutils.NewByteReadSeekCloser(content)
 
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 		return err
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 		return errors.New("read result returned invalid content")
 	}
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	}
 	tx.Commit()
 
-	tx, err = db.Begin()
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
