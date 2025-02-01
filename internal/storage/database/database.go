@@ -85,19 +85,22 @@ func OpenDatabase(dbPath string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath+"?mode=rwc")
+	db, err := sql.Open("sqlite3", dbPath+"?mode=rwc&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	err = SetupDatabase(db)
+	err = setupDatabase(db)
 	if err != nil {
 		return nil, err
 	}
 	return db, nil
 }
 
-func SetupDatabase(db *sql.DB) error {
+func setupDatabase(db *sql.DB) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(0)
 	err := enableAutoVacuumFullMode(db)
 	if err != nil {
 		return err
