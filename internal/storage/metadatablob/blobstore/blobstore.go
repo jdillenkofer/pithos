@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -35,7 +36,7 @@ func GenerateBlobId() (*BlobId, error) {
 	return &blobId, nil
 }
 
-func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
+func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	ctx := context.Background()
 	err := blobStore.Start(ctx)
 	if err != nil {
@@ -46,7 +47,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	blobId := BlobId(ulid.Make())
 	blob := ioutils.NewByteReadSeekCloser(content)
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -62,7 +63,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 		return err
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -73,7 +74,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -92,7 +93,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 		return errors.New("read result returned invalid content")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -103,7 +104,7 @@ func Tester(blobStore BlobStore, db *sql.DB, content []byte) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}

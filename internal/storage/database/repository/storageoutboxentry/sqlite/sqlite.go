@@ -10,15 +10,6 @@ import (
 )
 
 type sqliteRepository struct {
-	db                                               *sql.DB
-	nextOrdinalStorageOutboxEntryPreparedStmt        *sql.Stmt
-	findFirstStorageOutboxEntryPreparedStmt          *sql.Stmt
-	findLastStorageOutboxEntryPreparedStmt           *sql.Stmt
-	findFirstStorageOutboxEntryForBucketPreparedStmt *sql.Stmt
-	findLastStorageOutboxEntryForBucketPreparedStmt  *sql.Stmt
-	insertStorageOutboxEntryPreparedStmt             *sql.Stmt
-	updateStorageOutboxEntryByIdPreparedStmt         *sql.Stmt
-	deleteStorageOutboxEntryByIdPreparedStmt         *sql.Stmt
 }
 
 const (
@@ -32,50 +23,8 @@ const (
 	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = ?"
 )
 
-func NewRepository(db *sql.DB) (storageoutboxentry.Repository, error) {
-	nextOrdinalStorageOutboxEntryPreparedStmt, err := db.Prepare(nextOrdinalStorageOutboxEntryStmt)
-	if err != nil {
-		return nil, err
-	}
-	findFirstStorageOutboxEntryPreparedStmt, err := db.Prepare(findFirstStorageOutboxEntryStmt)
-	if err != nil {
-		return nil, err
-	}
-	findLastStorageOutboxEntryPreparedStmt, err := db.Prepare(findLastStorageOutboxEntryStmt)
-	if err != nil {
-		return nil, err
-	}
-	findFirstStorageOutboxEntryForBucketPreparedStmt, err := db.Prepare(findFirstStorageOutboxEntryForBucketStmt)
-	if err != nil {
-		return nil, err
-	}
-	findLastStorageOutboxEntryForBucketPreparedStmt, err := db.Prepare(findLastStorageOutboxEntryForBucketStmt)
-	if err != nil {
-		return nil, err
-	}
-	insertStorageOutboxEntryPreparedStmt, err := db.Prepare(insertStorageOutboxEntryStmt)
-	if err != nil {
-		return nil, err
-	}
-	updateStorageOutboxEntryByIdPreparedStmt, err := db.Prepare(updateStorageOutboxEntryByIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	deleteStorageOutboxEntryByIdPreparedStmt, err := db.Prepare(deleteStorageOutboxEntryByIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	return &sqliteRepository{
-		db: db,
-		nextOrdinalStorageOutboxEntryPreparedStmt:        nextOrdinalStorageOutboxEntryPreparedStmt,
-		findFirstStorageOutboxEntryPreparedStmt:          findFirstStorageOutboxEntryPreparedStmt,
-		findLastStorageOutboxEntryPreparedStmt:           findLastStorageOutboxEntryPreparedStmt,
-		findFirstStorageOutboxEntryForBucketPreparedStmt: findFirstStorageOutboxEntryForBucketPreparedStmt,
-		findLastStorageOutboxEntryForBucketPreparedStmt:  findLastStorageOutboxEntryForBucketPreparedStmt,
-		insertStorageOutboxEntryPreparedStmt:             insertStorageOutboxEntryPreparedStmt,
-		updateStorageOutboxEntryByIdPreparedStmt:         updateStorageOutboxEntryByIdPreparedStmt,
-		deleteStorageOutboxEntryByIdPreparedStmt:         deleteStorageOutboxEntryByIdPreparedStmt,
-	}, nil
+func NewRepository() (storageoutboxentry.Repository, error) {
+	return &sqliteRepository{}, nil
 }
 
 func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageoutboxentry.Entity, error) {
@@ -110,7 +59,7 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 }
 
 func (sor *sqliteRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
-	row := tx.StmtContext(ctx, sor.nextOrdinalStorageOutboxEntryPreparedStmt).QueryRowContext(ctx)
+	row := tx.QueryRowContext(ctx, nextOrdinalStorageOutboxEntryStmt)
 	var ordinal int
 	err := row.Scan(&ordinal)
 	if err != nil {
@@ -123,7 +72,7 @@ func (sor *sqliteRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int,
 }
 
 func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.StmtContext(ctx, sor.findFirstStorageOutboxEntryPreparedStmt).QueryRowContext(ctx)
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -132,7 +81,7 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx
 }
 
 func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.StmtContext(ctx, sor.findLastStorageOutboxEntryPreparedStmt).QueryRowContext(ctx)
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -141,7 +90,7 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx 
 }
 
 func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*storageoutboxentry.Entity, error) {
-	row := tx.StmtContext(ctx, sor.findFirstStorageOutboxEntryForBucketPreparedStmt).QueryRowContext(ctx, bucket)
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, bucket)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -150,7 +99,7 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Co
 }
 
 func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*storageoutboxentry.Entity, error) {
-	row := tx.StmtContext(ctx, sor.findLastStorageOutboxEntryForBucketPreparedStmt).QueryRowContext(ctx, bucket)
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucket)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -164,16 +113,16 @@ func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql
 		storageOutboxEntry.Id = &id
 		storageOutboxEntry.CreatedAt = time.Now()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
-		_, err := tx.StmtContext(ctx, sor.insertStorageOutboxEntryPreparedStmt).ExecContext(ctx, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.Ordinal, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.Ordinal, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	storageOutboxEntry.UpdatedAt = time.Now()
-	_, err := tx.StmtContext(ctx, sor.updateStorageOutboxEntryByIdPreparedStmt).ExecContext(ctx, storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.Ordinal, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.Ordinal, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
 	return err
 }
 
 func (sor *sqliteRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.StmtContext(ctx, sor.deleteStorageOutboxEntryByIdPreparedStmt).ExecContext(ctx, id.String())
+	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String())
 	return err
 }

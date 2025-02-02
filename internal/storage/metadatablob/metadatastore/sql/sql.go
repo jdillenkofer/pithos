@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
@@ -24,7 +25,7 @@ type sqlMetadataStore struct {
 	blobRepository   blob.Repository
 }
 
-func New(db *sql.DB, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (metadatastore.MetadataStore, error) {
+func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (metadatastore.MetadataStore, error) {
 	return &sqlMetadataStore{
 		bucketRepository: bucketRepository,
 		objectRepository: objectRepository,

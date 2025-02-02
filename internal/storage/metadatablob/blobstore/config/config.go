@@ -157,7 +157,7 @@ func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository(db)
+	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository()
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (s *SqlBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.D
 	if err != nil {
 		return nil, err
 	}
-	blobContentRepository, err := sqliteBlobContent.NewRepository(db)
+	blobContentRepository, err := sqliteBlobContent.NewRepository()
 	if err != nil {
 		return nil, err
 	}

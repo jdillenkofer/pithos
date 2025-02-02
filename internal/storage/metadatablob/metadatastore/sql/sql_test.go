@@ -35,15 +35,15 @@ func TestSqlMetadataStore(t *testing.T) {
 		}
 	}()
 
-	bucketRepository, err := sqliteBucket.NewRepository(db)
+	bucketRepository, err := sqliteBucket.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
 	}
-	objectRepository, err := sqliteObject.NewRepository(db)
+	objectRepository, err := sqliteObject.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create ObjectRepository: %s", err)
 	}
-	blobRepository, err := sqliteBlob.NewRepository(db)
+	blobRepository, err := sqliteBlob.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}

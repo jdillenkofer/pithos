@@ -10,15 +10,6 @@ import (
 )
 
 type sqliteRepository struct {
-	db                                                                     *sql.DB
-	insertObjectPreparedStmt                                               *sql.Stmt
-	updateObjectByIdPreparedStmt                                           *sql.Stmt
-	containsBucketObjectsByBucketNamePreparedStmt                          *sql.Stmt
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscPreparedStmt *sql.Stmt
-	findObjectByBucketNameAndKeyAndUploadIdPreparedStmt                    *sql.Stmt
-	findObjectByBucketNameAndKeyPreparedStmt                               *sql.Stmt
-	countObjectsByBucketNameAndPrefixAndStartAfterPreparedStmt             *sql.Stmt
-	deleteObjectByIdPreparedStmt                                           *sql.Stmt
 }
 
 const (
@@ -32,50 +23,8 @@ const (
 	deleteObjectByIdStmt                                           = "DELETE FROM objects WHERE id = ?"
 )
 
-func NewRepository(db *sql.DB) (object.Repository, error) {
-	insertObjectPreparedStmt, err := db.Prepare(insertObjectStmt)
-	if err != nil {
-		return nil, err
-	}
-	updateObjectByIdPreparedStmt, err := db.Prepare(updateObjectByIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	containsBucketObjectsByBucketNamePreparedStmt, err := db.Prepare(containsBucketObjectsByBucketNameStmt)
-	if err != nil {
-		return nil, err
-	}
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscPreparedStmt, err := db.Prepare(findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt)
-	if err != nil {
-		return nil, err
-	}
-	findObjectByBucketNameAndKeyAndUploadIdPreparedStmt, err := db.Prepare(findObjectByBucketNameAndKeyAndUploadIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	findObjectByBucketNameAndKeyPreparedStmt, err := db.Prepare(findObjectByBucketNameAndKeyStmt)
-	if err != nil {
-		return nil, err
-	}
-	countObjectsByBucketNameAndPrefixAndStartAfterPreparedStmt, err := db.Prepare(countObjectsByBucketNameAndPrefixAndStartAfterStmt)
-	if err != nil {
-		return nil, err
-	}
-	deleteObjectByIdPreparedStmt, err := db.Prepare(deleteObjectByIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	return &sqliteRepository{
-		db:                           db,
-		insertObjectPreparedStmt:     insertObjectPreparedStmt,
-		updateObjectByIdPreparedStmt: updateObjectByIdPreparedStmt,
-		containsBucketObjectsByBucketNamePreparedStmt:                          containsBucketObjectsByBucketNamePreparedStmt,
-		findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscPreparedStmt: findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscPreparedStmt,
-		findObjectByBucketNameAndKeyAndUploadIdPreparedStmt:                    findObjectByBucketNameAndKeyAndUploadIdPreparedStmt,
-		findObjectByBucketNameAndKeyPreparedStmt:                               findObjectByBucketNameAndKeyPreparedStmt,
-		countObjectsByBucketNameAndPrefixAndStartAfterPreparedStmt:             countObjectsByBucketNameAndPrefixAndStartAfterPreparedStmt,
-		deleteObjectByIdPreparedStmt:                                           deleteObjectByIdPreparedStmt,
-	}, nil
+func NewRepository() (object.Repository, error) {
+	return &sqliteRepository{}, nil
 }
 
 func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
@@ -115,16 +64,16 @@ func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *
 		object.Id = &id
 		object.CreatedAt = time.Now()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.StmtContext(ctx, or.insertObjectPreparedStmt).ExecContext(ctx, object.Id.String(), object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now()
-	_, err := tx.StmtContext(ctx, or.updateObjectByIdPreparedStmt).ExecContext(ctx, object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName, object.Key, object.ContentType, object.ETag, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 
 func (or *sqliteRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
-	objectRows, err := tx.StmtContext(ctx, or.containsBucketObjectsByBucketNamePreparedStmt).QueryContext(ctx, bucketName)
+	objectRows, err := tx.QueryContext(ctx, containsBucketObjectsByBucketNameStmt, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +83,7 @@ func (or *sqliteRepository) ContainsBucketObjectsByBucketName(ctx context.Contex
 }
 
 func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]object.Entity, error) {
-	objectRows, err := tx.StmtContext(ctx, or.findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscPreparedStmt).QueryContext(ctx, bucketName, prefix, startAfter, object.UploadStatusCompleted)
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName, prefix, startAfter, object.UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +100,7 @@ func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 }
 
 func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*object.Entity, error) {
-	objectRows, err := tx.StmtContext(ctx, or.findObjectByBucketNameAndKeyAndUploadIdPreparedStmt).QueryContext(ctx, bucketName, key, uploadId, object.UploadStatusPending)
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName, key, uploadId, object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +117,7 @@ func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.
 }
 
 func (or *sqliteRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*object.Entity, error) {
-	objectRows, err := tx.StmtContext(ctx, or.findObjectByBucketNameAndKeyPreparedStmt).QueryContext(ctx, bucketName, key, object.UploadStatusCompleted)
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyStmt, bucketName, key, object.UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +134,7 @@ func (or *sqliteRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx
 }
 
 func (or *sqliteRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
-	keyCountRow := tx.StmtContext(ctx, or.countObjectsByBucketNameAndPrefixAndStartAfterPreparedStmt).QueryRowContext(ctx, bucketName, prefix, startAfter, object.UploadStatusCompleted)
+	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName, prefix, startAfter, object.UploadStatusCompleted)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {
@@ -195,6 +144,6 @@ func (or *sqliteRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx c
 }
 
 func (or *sqliteRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
-	_, err := tx.StmtContext(ctx, or.deleteObjectByIdPreparedStmt).ExecContext(ctx, objectId.String())
+	_, err := tx.ExecContext(ctx, deleteObjectByIdStmt, objectId.String())
 	return err
 }

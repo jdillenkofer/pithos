@@ -12,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
@@ -20,7 +21,7 @@ import (
 )
 
 type metadataBlobStorage struct {
-	db                 *sql.DB
+	db                 database.Database
 	startStopValidator *startstopvalidator.StartStopValidator
 	metadataStore      metadatastore.MetadataStore
 	blobStore          blobstore.BlobStore
@@ -28,7 +29,7 @@ type metadataBlobStorage struct {
 	gcTaskHandle       *task.TaskHandle
 }
 
-func NewStorage(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (storage.Storage, error) {
+func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
 	if err != nil {
 		return nil, err
@@ -95,7 +96,7 @@ func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
 func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucket string) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -117,7 +118,7 @@ func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucket string)
 func (mbs *metadataBlobStorage) DeleteBucket(ctx context.Context, bucket string) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -144,7 +145,7 @@ func convertBucket(mBucket metadatastore.Bucket) storage.Bucket {
 }
 
 func (mbs *metadataBlobStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +165,7 @@ func (mbs *metadataBlobStorage) ListBuckets(ctx context.Context) ([]storage.Buck
 }
 
 func (mbs *metadataBlobStorage) HeadBucket(ctx context.Context, bucket string) (*storage.Bucket, error) {
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +204,7 @@ func convertListBucketResult(mListBucketResult metadatastore.ListBucketResult) s
 }
 
 func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +225,7 @@ func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucket string, 
 }
 
 func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucket string, key string) (*storage.Object, error) {
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +246,7 @@ func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucket string, k
 }
 
 func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +322,7 @@ func calculateETag(reader io.Reader) (*string, error) {
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -387,7 +388,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -429,7 +430,7 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +451,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +560,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +589,7 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}

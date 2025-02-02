@@ -37,7 +37,7 @@ func TestOutboxBlobStore(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Could not create FilesystemBlobStore: %s", err)
 	}
-	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository(db)
+	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobOutboxEntryRepository: %s", err)
 	}

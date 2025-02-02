@@ -1,7 +1,6 @@
 package server
 
 import (
-	"database/sql"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -46,7 +46,7 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	return rootHandler
 }
 
-func SetupMonitoringServer(dbs []*sql.DB) http.Handler {
+func SetupMonitoringServer(dbs []database.Database) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

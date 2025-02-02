@@ -8,6 +8,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	blobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
@@ -16,7 +17,7 @@ type sqlBlobStore struct {
 	blobContentRepository blobContent.Repository
 }
 
-func New(db *sql.DB, blobContentRepository blobContent.Repository) (blobstore.BlobStore, error) {
+func New(db database.Database, blobContentRepository blobContent.Repository) (blobstore.BlobStore, error) {
 	return &sqlBlobStore{
 		blobContentRepository: blobContentRepository,
 	}, nil
