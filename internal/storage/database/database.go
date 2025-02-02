@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"os"
@@ -79,24 +80,66 @@ func applyDatabaseMigrations(db *sql.DB) error {
 	return nil
 }
 
-func OpenDatabase(dbPath string) (*sql.DB, error) {
+type Database interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	PingContext(ctx context.Context) error
+	Close() error
+}
+
+type sqliteDatabase struct {
+	readOnlyDb  *sql.DB
+	writeableDb *sql.DB
+}
+
+func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	if opts.ReadOnly {
+		return sdb.readOnlyDb.BeginTx(ctx, opts)
+	}
+	return sdb.writeableDb.BeginTx(ctx, opts)
+}
+
+func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {
+	return sdb.readOnlyDb.PingContext(ctx)
+}
+
+func (sdb *sqliteDatabase) Close() error {
+	err := sdb.readOnlyDb.Close()
+	if err != nil {
+		return err
+	}
+	err = sdb.writeableDb.Close()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func OpenDatabase(dbPath string) (Database, error) {
 	storagePath := filepath.Dir(dbPath)
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath+"?mode=rwc&_txlock=immediate")
+	writeableDb, err := sql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
-	err = setupDatabase(db)
+	err = setupWriteableDatabase(writeableDb)
 	if err != nil {
+		writeableDb.Close()
 		return nil, err
 	}
-	return db, nil
+
+	readOnlyDb, err := sql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred")
+	if err != nil {
+		writeableDb.Close()
+		return nil, err
+	}
+	sqliteDatabase := sqliteDatabase{readOnlyDb, writeableDb}
+	return &sqliteDatabase, nil
 }
 
-func setupDatabase(db *sql.DB) error {
+func setupWriteableDatabase(db *sql.DB) error {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxIdleTime(0)

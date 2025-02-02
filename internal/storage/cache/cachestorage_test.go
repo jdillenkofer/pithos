@@ -44,7 +44,7 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobContentRepository, err := sqliteBlobContent.NewRepository(db)
+	blobContentRepository, err := sqliteBlobContent.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobContentRepository: %s", err)
 	}
@@ -53,15 +53,15 @@ func TestCacheStorage(t *testing.T) {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	bucketRepository, err := sqliteBucket.NewRepository(db)
+	bucketRepository, err := sqliteBucket.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
 	}
-	objectRepository, err := sqliteObject.NewRepository(db)
+	objectRepository, err := sqliteObject.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create ObjectRepository: %s", err)
 	}
-	blobRepository, err := sqliteBlob.NewRepository(db)
+	blobRepository, err := sqliteBlob.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}

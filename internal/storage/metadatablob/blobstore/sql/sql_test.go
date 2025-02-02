@@ -32,7 +32,7 @@ func TestSqlBlobStore(t *testing.T) {
 			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
 		}
 	}()
-	blobContentRepository, err := sqliteBlobContent.NewRepository(db)
+	blobContentRepository, err := sqliteBlobContent.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobContentRepository: %s", err)
 	}

@@ -337,7 +337,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db)
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
 	if err != nil {
 		return nil, err
 	}

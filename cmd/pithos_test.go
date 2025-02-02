@@ -172,7 +172,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		}
 
 		var outboxStorage storage.Storage
-		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db2)
+		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
 		if err != nil {
 			log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 

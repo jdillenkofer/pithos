@@ -1,13 +1,13 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"strconv"
 
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 )
 
 type DynamicJsonType struct {
@@ -20,18 +20,18 @@ type DynamicJsonInstantiator[T any] interface {
 }
 
 type DbContainer struct {
-	dbs []*sql.DB
+	dbs []database.Database
 }
 
 func NewDbContainer() *DbContainer {
 	return &DbContainer{}
 }
 
-func (dbContainer *DbContainer) AddDb(db *sql.DB) {
+func (dbContainer *DbContainer) AddDb(db database.Database) {
 	dbContainer.dbs = append(dbContainer.dbs, db)
 }
 
-func (dbContainer *DbContainer) Dbs() []*sql.DB {
+func (dbContainer *DbContainer) Dbs() []database.Database {
 	return dbContainer.dbs
 }
 

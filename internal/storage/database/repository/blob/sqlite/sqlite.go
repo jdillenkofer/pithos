@@ -10,12 +10,6 @@ import (
 )
 
 type sqliteRepository struct {
-	db                                                      *sql.DB
-	findInUseBlobIdsPreparedStmt                            *sql.Stmt
-	findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt *sql.Stmt
-	insertBlobPreparedStmt                                  *sql.Stmt
-	updateBlobByIdPreparedStmt                              *sql.Stmt
-	deleteBlobByObjectIdPreparedStmt                        *sql.Stmt
 }
 
 const (
@@ -26,35 +20,8 @@ const (
 	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
 )
 
-func NewRepository(db *sql.DB) (blob.Repository, error) {
-	findInUseBlobIdsPreparedStmt, err := db.Prepare(findInUseBlobIdsStmt)
-	if err != nil {
-		return nil, err
-	}
-	findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt, err := db.Prepare(findBlobsByObjectIdOrderBySequenceNumberAscStmt)
-	if err != nil {
-		return nil, err
-	}
-	insertBlobPreparedStmt, err := db.Prepare(insertBlobStmt)
-	if err != nil {
-		return nil, err
-	}
-	updateBlobByIdPreparedStmt, err := db.Prepare(updateBlobByIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	deleteBlobByObjectIdPreparedStmt, err := db.Prepare(deleteBlobByObjectIdStmt)
-	if err != nil {
-		return nil, err
-	}
-	return &sqliteRepository{
-		db:                           db,
-		findInUseBlobIdsPreparedStmt: findInUseBlobIdsPreparedStmt,
-		findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt: findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt,
-		insertBlobPreparedStmt:           insertBlobPreparedStmt,
-		updateBlobByIdPreparedStmt:       updateBlobByIdPreparedStmt,
-		deleteBlobByObjectIdPreparedStmt: deleteBlobByObjectIdPreparedStmt,
-	}, nil
+func NewRepository() (blob.Repository, error) {
+	return &sqliteRepository{}, nil
 }
 
 func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
@@ -85,7 +52,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 }
 
 func (br *sqliteRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
-	blobIdRows, err := tx.StmtContext(ctx, br.findInUseBlobIdsPreparedStmt).QueryContext(ctx)
+	blobIdRows, err := tx.QueryContext(ctx, findInUseBlobIdsStmt)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +71,7 @@ func (br *sqliteRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([
 }
 
 func (br *sqliteRepository) FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]blob.Entity, error) {
-	blobRows, err := tx.StmtContext(ctx, br.findBlobsByObjectIdOrderBySequenceNumberAscPreparedStmt).QueryContext(ctx, objectId.String())
+	blobRows, err := tx.QueryContext(ctx, findBlobsByObjectIdOrderBySequenceNumberAscStmt, objectId.String())
 	if err != nil {
 		return nil, err
 	}
@@ -126,16 +93,16 @@ func (br *sqliteRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob
 		blob.Id = &id
 		blob.CreatedAt = time.Now()
 		blob.UpdatedAt = blob.CreatedAt
-		_, err := tx.StmtContext(ctx, br.insertBlobPreparedStmt).ExecContext(ctx, blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBlobStmt, blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
 		return err
 	}
 
 	blob.UpdatedAt = time.Now()
-	_, err := tx.StmtContext(ctx, br.updateBlobByIdPreparedStmt).ExecContext(ctx, blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
+	_, err := tx.ExecContext(ctx, updateBlobByIdStmt, blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
 	return err
 }
 
 func (br *sqliteRepository) DeleteBlobsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
-	_, err := tx.StmtContext(ctx, br.deleteBlobByObjectIdPreparedStmt).ExecContext(ctx, objectId.String())
+	_, err := tx.ExecContext(ctx, deleteBlobByObjectIdStmt, objectId.String())
 	return err
 }

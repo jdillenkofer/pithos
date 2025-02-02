@@ -90,15 +90,15 @@ func (s *SqlMetadataStoreConfiguration) Instantiate(diProvider dependencyinjecti
 	if err != nil {
 		return nil, err
 	}
-	bucketRepository, err := sqliteBucket.NewRepository(db)
+	bucketRepository, err := sqliteBucket.NewRepository()
 	if err != nil {
 		return nil, err
 	}
-	objectRepository, err := sqliteObject.NewRepository(db)
+	objectRepository, err := sqliteObject.NewRepository()
 	if err != nil {
 		return nil, err
 	}
-	blobRepository, err := sqliteBlob.NewRepository(db)
+	blobRepository, err := sqliteBlob.NewRepository()
 	if err != nil {
 		return nil, err
 	}

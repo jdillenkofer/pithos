@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 )
@@ -79,7 +80,7 @@ type MetadataStore interface {
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
 }
 
-func Tester(metadataStore MetadataStore, db *sql.DB) error {
+func Tester(metadataStore MetadataStore, db database.Database) error {
 	ctx := context.Background()
 	err := metadataStore.Start(ctx)
 	if err != nil {
@@ -90,7 +91,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	bucketName := "bucket"
 	key := "test"
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -101,7 +102,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -135,7 +136,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -167,7 +168,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid blob length")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -186,7 +187,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 		return errors.New("invalid object key")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -197,7 +198,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -208,7 +209,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -234,7 +235,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -245,7 +246,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -256,7 +257,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -271,7 +272,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -282,7 +283,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -293,7 +294,7 @@ func Tester(metadataStore MetadataStore, db *sql.DB) error {
 	}
 	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}

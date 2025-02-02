@@ -1,7 +1,6 @@
 package config
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -17,10 +16,10 @@ const (
 	registerDatabaseReferenceType = "RegisterDatabaseReference"
 )
 
-type DatabaseInstantiator = internalConfig.DynamicJsonInstantiator[*sql.DB]
+type DatabaseInstantiator = internalConfig.DynamicJsonInstantiator[database.Database]
 
 type SqliteDatabaseConfiguration struct {
-	dbInstance *sql.DB
+	dbInstance database.Database
 	DbPath     internalConfig.StringProvider `json:"dbPath"`
 	internalConfig.DynamicJsonType
 }
@@ -29,7 +28,7 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 	return nil
 }
 
-func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
+func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	if s.dbInstance == nil {
 		dbInstance, err := database.OpenDatabase(s.DbPath.Value())
 		if err != nil {
@@ -56,7 +55,7 @@ func (ref *DatabaseReferenceConfiguration) RegisterReferences(diCollection depen
 	return nil
 }
 
-func (ref *DatabaseReferenceConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
+func (ref *DatabaseReferenceConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	di, err := diProvider.LookupByName(ref.RefName.Value())
 	if err != nil {
 		return nil, err
@@ -101,7 +100,7 @@ func (regRef *RegisterDatabaseReferenceConfiguration) RegisterReferences(diColle
 	return nil
 }
 
-func (regRef *RegisterDatabaseReferenceConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (*sql.DB, error) {
+func (regRef *RegisterDatabaseReferenceConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	db, err := regRef.DatabaseInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err

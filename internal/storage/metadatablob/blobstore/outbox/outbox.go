@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	blobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/task"
@@ -18,7 +19,7 @@ import (
 )
 
 type outboxBlobStore struct {
-	db                         *sql.DB
+	db                         database.Database
 	triggerChannel             chan struct{}
 	triggerChannelClosed       bool
 	outboxProcessingTaskHandle *task.TaskHandle
@@ -26,7 +27,7 @@ type outboxBlobStore struct {
 	blobOutboxEntryRepository  blobOutboxEntry.Repository
 }
 
-func New(db *sql.DB, innerBlobStore blobstore.BlobStore, blobOutboxEntryRepository blobOutboxEntry.Repository) (blobstore.BlobStore, error) {
+func New(db database.Database, innerBlobStore blobstore.BlobStore, blobOutboxEntryRepository blobOutboxEntry.Repository) (blobstore.BlobStore, error) {
 	return &outboxBlobStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
@@ -40,7 +41,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 	defer trace.StartRegion(ctx, "OutboxBlobStore.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	for {
-		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{})
+		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
 			return
 		}

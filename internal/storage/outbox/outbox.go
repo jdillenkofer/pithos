@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
 type outboxStorage struct {
-	db                           *sql.DB
+	db                           database.Database
 	triggerChannel               chan struct{}
 	triggerChannelClosed         bool
 	outboxProcessingTaskHandle   *task.TaskHandle
@@ -26,7 +27,7 @@ type outboxStorage struct {
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
-func NewStorage(db *sql.DB, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository) (storage.Storage, error) {
+func NewStorage(db database.Database, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("OutboxStorage")
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	defer trace.StartRegion(ctx, "OutboxStorage.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
 			return
 		}
@@ -197,7 +198,7 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 }
 
 func (os *outboxStorage) CreateBucket(ctx context.Context, bucket string) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -214,7 +215,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucket string) error 
 }
 
 func (os *outboxStorage) DeleteBucket(ctx context.Context, bucket string) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -231,7 +232,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucket string) error 
 }
 
 func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bucket string) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -251,7 +252,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 	lastOrdinal := lastStorageOutboxEntry.Ordinal
 
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
 			return err
 		}
@@ -275,7 +276,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 }
 
 func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -295,7 +296,7 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 	lastOrdinal := lastStorageOutboxEntry.Ordinal
 
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
 			return err
 		}
@@ -364,7 +365,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 }
 
 func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
@@ -386,7 +387,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key strin
 }
 
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 )
@@ -18,14 +19,14 @@ type BlobGarbageCollector interface {
 }
 
 type blobGC struct {
-	db              *sql.DB
+	db              database.Database
 	collectionMutex sync.RWMutex
 	metadataStore   metadatastore.MetadataStore
 	blobStore       blobstore.BlobStore
 	writeOperations atomic.Int64
 }
 
-func New(db *sql.DB, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (BlobGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (BlobGarbageCollector, error) {
 	return &blobGC{
 		db:              db,
 		collectionMutex: sync.RWMutex{},
@@ -71,7 +72,7 @@ func (blobGC *blobGC) runGC() error {
 
 	ctx := context.Background()
 
-	tx, err := blobGC.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := blobGC.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}

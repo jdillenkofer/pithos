@@ -44,15 +44,15 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		log.Fatalf("Could not create SqlBlobStore: %s", err)
 	}
 
-	bucketRepository, err := sqliteBucket.NewRepository(db)
+	bucketRepository, err := sqliteBucket.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BucketRepository: %s", err)
 	}
-	objectRepository, err := sqliteObject.NewRepository(db)
+	objectRepository, err := sqliteObject.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create ObjectRepository: %s", err)
 	}
-	blobRepository, err := sqliteBlob.NewRepository(db)
+	blobRepository, err := sqliteBlob.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create BlobRepository: %s", err)
 	}
@@ -91,7 +91,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	// metadataBlobStorage would open separate transactions, we would deadlock the test.
 	// To avoid this each storage type gets its own db.
 	// In the future i want to redesign storage implementations to use the already open transaction.
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository(db2)
+	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
 	if err != nil {
 		log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
 
