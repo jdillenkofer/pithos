@@ -12,7 +12,7 @@ COPY internal/ internal/
 
 RUN go test ./... -v -timeout 30m
 
-RUN go install -ldflags='-s -w -extldflags "-static"' cmd/pithos.go
+RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 
 FROM scratch
 
