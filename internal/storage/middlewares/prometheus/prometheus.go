@@ -273,21 +273,18 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 		return nil, err
 	}
 
-	bytesDownloaded := 0
 	reader = ioutils.NewStatsReadCloser(reader, func(n int) {
-		bytesDownloaded += n
+		psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
 	})
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
-	psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesDownloaded))
 
 	return reader, nil
 }
 
 func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
-	bytesUploaded := 0
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
-		bytesUploaded += n
+		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
 	})
 
 	err := psm.innerStorage.PutObject(ctx, bucket, key, contentType, reader)
@@ -297,7 +294,6 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket st
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
-	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
 
 	return nil
 }
