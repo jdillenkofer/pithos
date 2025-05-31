@@ -211,3 +211,11 @@ func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucket string,
 	}
 	return nil
 }
+
+func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	if err != nil {
+		return nil, err
+	}
+	return listMultipartUploadsResult, nil
+}

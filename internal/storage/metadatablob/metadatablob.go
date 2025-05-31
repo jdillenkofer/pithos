@@ -613,3 +613,46 @@ func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucket
 	}
 	return nil
 }
+
+func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore.ListMultipartUploadsResult) storage.ListMultipartUploadsResult {
+	return storage.ListMultipartUploadsResult{
+		Bucket:             mlistMultipartUploadsResult.Bucket,
+		KeyMarker:          mlistMultipartUploadsResult.KeyMarker,
+		UploadIdMarker:     mlistMultipartUploadsResult.UploadIdMarker,
+		NextKeyMarker:      mlistMultipartUploadsResult.NextKeyMarker,
+		Prefix:             mlistMultipartUploadsResult.Prefix,
+		Delimiter:          mlistMultipartUploadsResult.Delimiter,
+		NextUploadIdMarker: mlistMultipartUploadsResult.NextUploadIdMarker,
+		MaxUploads:         mlistMultipartUploadsResult.MaxUploads,
+		CommonPrefixes:     mlistMultipartUploadsResult.CommonPrefixes,
+		Uploads: sliceutils.Map(func(mUpload metadatastore.Upload) storage.Upload {
+			return storage.Upload{
+				Key:       mUpload.Key,
+				UploadId:  mUpload.UploadId,
+				Initiated: mUpload.Initiated,
+			}
+		}, mlistMultipartUploadsResult.Uploads),
+		IsTruncated: mlistMultipartUploadsResult.IsTruncated,
+	}
+}
+
+func (mbs *metadataBlobStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	mListMultipartUploadsResult, err := mbs.metadataStore.ListMultipartUploads(ctx, tx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	listMultipartUploadsResult := convertListMultipartUploadsResult(*mListMultipartUploadsResult)
+	return &listMultipartUploadsResult, nil
+}

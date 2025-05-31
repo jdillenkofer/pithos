@@ -149,3 +149,8 @@ func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Contex
 	storage := csm.lookupStorage(bucket)
 	return storage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
+
+func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	storage := csm.lookupStorage(bucket)
+	return storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+}

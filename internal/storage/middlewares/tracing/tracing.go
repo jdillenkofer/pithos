@@ -135,3 +135,9 @@ func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, b
 
 	return tsm.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
+
+func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	defer trace.StartRegion(ctx, tsm.regionName+".ListMultipartUploads()").End()
+
+	return tsm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+}

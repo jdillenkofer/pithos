@@ -56,11 +56,32 @@ type AbortMultipartResult struct {
 	DeletedBlobs []Blob
 }
 
+type Upload struct {
+	Key       string
+	UploadId  string
+	Initiated time.Time
+}
+
+type ListMultipartUploadsResult struct {
+	Bucket             string
+	KeyMarker          string
+	UploadIdMarker     string
+	NextKeyMarker      string
+	Prefix             string
+	Delimiter          string
+	NextUploadIdMarker string
+	MaxUploads         int32
+	CommonPrefixes     []string
+	Uploads            []Upload
+	IsTruncated        bool
+}
+
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")
 var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
+var ErrNotImplemented error = errors.New("not implemented")
 
 type MetadataStore interface {
 	Start(ctx context.Context) error
@@ -78,6 +99,7 @@ type MetadataStore interface {
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
+	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*ListMultipartUploadsResult, error)
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {

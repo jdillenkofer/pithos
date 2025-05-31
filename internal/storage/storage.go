@@ -47,10 +47,31 @@ type CompleteMultipartUploadResult struct {
 	ChecksumSHA256 string
 }
 
+type Upload struct {
+	Key       string
+	UploadId  string
+	Initiated time.Time
+}
+
+type ListMultipartUploadsResult struct {
+	Bucket             string
+	KeyMarker          string
+	UploadIdMarker     string
+	NextKeyMarker      string
+	Prefix             string
+	Delimiter          string
+	NextUploadIdMarker string
+	MaxUploads         int32
+	CommonPrefixes     []string
+	Uploads            []Upload
+	IsTruncated        bool
+}
+
 var ErrNoSuchBucket error = metadatastore.ErrNoSuchBucket
 var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
+var ErrNotImplemented error = metadatastore.ErrNotImplemented
 
 type Storage interface {
 	Start(ctx context.Context) error
@@ -68,6 +89,7 @@ type Storage interface {
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
+	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*ListMultipartUploadsResult, error)
 }
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName string) ([]Object, error) {
