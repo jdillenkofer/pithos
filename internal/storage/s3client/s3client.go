@@ -306,3 +306,8 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucket stri
 	}
 	return nil
 }
+
+func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	// @TODO: implement this
+	return nil, storage.ErrNotImplemented
+}

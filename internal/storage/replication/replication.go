@@ -244,3 +244,7 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucket s
 	rs.mapMutex.Unlock()
 	return nil
 }
+
+func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	return rs.primaryStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+}

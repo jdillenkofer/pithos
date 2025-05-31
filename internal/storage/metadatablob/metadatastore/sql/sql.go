@@ -510,3 +510,60 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		DeletedBlobs: blobs,
 	}, nil
 }
+
+func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*metadatastore.ListMultipartUploadsResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarker(ctx, tx, bucketName, prefix, keyMarker)
+	if err != nil {
+		return nil, err
+	}
+	commonPrefixes := []string{}
+	uploads := []metadatastore.Upload{}
+	// @TODO: order by key and uploadId
+	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerOrderByKeyAsc(ctx, tx, bucketName, prefix, keyMarker)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, objectEntity := range objectEntities {
+		if delimiter != "" {
+			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key, delimiter)
+			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
+				commonPrefixes = append(commonPrefixes, *commonPrefix)
+			}
+		}
+		if len(uploads) < maxUploads {
+			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key, prefix)
+			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
+				uploads = append(uploads, metadatastore.Upload{
+					Key:       objectEntity.Key,
+					UploadId:  objectEntity.UploadId,
+					Initiated: objectEntity.CreatedAt,
+				})
+			}
+		}
+	}
+
+	listMultipartUploadsResult := metadatastore.ListMultipartUploadsResult{
+		Bucket:         bucketName,
+		KeyMarker:      keyMarker,
+		UploadIdMarker: uploadIdMarker,
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		// @TODO: nextKeyMarker and nextUploadIdMarker
+		NextKeyMarker:      "",
+		NextUploadIdMarker: "",
+		MaxUploads:         int32(maxUploads),
+		CommonPrefixes:     commonPrefixes,
+		Uploads:            uploads,
+		IsTruncated:        *keyCount > maxUploads,
+	}
+	return &listMultipartUploadsResult, nil
+}

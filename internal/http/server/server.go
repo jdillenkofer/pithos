@@ -28,14 +28,14 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 		storage: storage,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", server.listBucketHandler)
+	mux.HandleFunc("GET /", server.listBucketsHandler)
 	mux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	mux.HandleFunc("GET /{bucket}", server.listObjectsHandler)
+	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsHandler)
 	mux.HandleFunc("PUT /{bucket}", server.createBucketHandler)
 	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
-	mux.HandleFunc("POST /{bucket}/{key...}", server.postObjectHandler)
+	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
 	var rootHandler http.Handler = mux
@@ -76,6 +76,9 @@ const maxKeysQuery = "max-keys"
 const uploadIdQuery = "uploadId"
 const uploadsQuery = "uploads"
 const partNumberQuery = "partNumber"
+const keyMarkerQuery = "key-marker"
+const uploadIdMarkerQuery = "upload-id-marker"
+const maxUploadsQuery = "max-uploads"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -155,6 +158,28 @@ type CompleteMultipartUploadResult struct {
 	ChecksumSHA256 string   `xml:"ChecksumSHA256"`
 }
 
+type Upload struct {
+	Key          string `xml:"Key"`
+	UploadId     string `xml:"UploadId"`
+	Initiated    string `xml:"Initiated"`
+	StorageClass string `xml:"StorageClass"`
+}
+
+type ListMultipartUploadsResult struct {
+	XMLName            xml.Name          `xml:"ListMultipartUploadsResult"`
+	Bucket             string            `xml:"Bucket"`
+	KeyMarker          string            `xml:"KeyMarker"`
+	UploadIdMarker     string            `xml:"UploadIdMarker"`
+	NextKeyMarker      string            `xml:"NextKeyMarker"`
+	NextUploadIdMarker string            `xml:"NextUploadIdMarker"`
+	MaxUploads         int               `xml:"MaxUploads"`
+	IsTruncated        bool              `xml:"IsTruncated"`
+	Delimiter          string            `xml:"Delimiter"`
+	Prefix             string            `xml:"Prefix"`
+	Uploads            []*Upload         `xml:"Upload"`
+	CommonPrefixes     []*CommonPrefixes `xml:"CommonPrefixes"`
+}
+
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"Error"`
 	Code      string   `xml:"Code"`
@@ -202,8 +227,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	w.Write(xmlErrorResponse)
 }
 
-func (s *Server) listBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listBucketHandler()")
+func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.listBucketsHandler()")
 	defer task.End()
 	log.Println("Listing Buckets")
 	buckets, err := s.storage.ListBuckets(ctx)
@@ -241,6 +266,68 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(200)
+}
+
+func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has(uploadsQuery) {
+		s.listMultipartUploadsHandler(w, r)
+		return
+	}
+	s.listObjectsHandler(w, r)
+}
+
+func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.listMultipartUploadsHandler()")
+	defer task.End()
+	bucket := r.PathValue(bucketPath)
+	query := r.URL.Query()
+	prefix := query.Get(prefixQuery)
+	delimiter := query.Get(delimiterQuery)
+	keyMarker := query.Get(keyMarkerQuery)
+	uploadIdMarker := query.Get(uploadIdMarkerQuery)
+	maxUploads := query.Get(maxUploadsQuery)
+	maxUploadsI64, err := strconv.ParseInt(maxUploads, 10, 32)
+	if err != nil || maxUploadsI64 < 0 {
+		maxUploadsI64 = 1000
+	}
+	maxUploadsInt := int(maxUploadsI64)
+
+	log.Println("Listing MultipartUploads")
+	result, err := s.storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsInt)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	listMultipartUploadResult := ListMultipartUploadsResult{
+		Bucket:             result.Bucket,
+		KeyMarker:          result.KeyMarker,
+		UploadIdMarker:     result.UploadIdMarker,
+		NextKeyMarker:      result.NextKeyMarker,
+		NextUploadIdMarker: result.NextUploadIdMarker,
+		MaxUploads:         maxUploadsInt,
+		IsTruncated:        result.IsTruncated,
+		Delimiter:          result.Delimiter,
+		Prefix:             result.Prefix,
+		Uploads:            []*Upload{},
+		CommonPrefixes:     []*CommonPrefixes{},
+	}
+
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	for _, upload := range result.Uploads {
+		listMultipartUploadResult.Uploads = append(listMultipartUploadResult.Uploads, &Upload{
+			Key:          upload.Key,
+			UploadId:     upload.UploadId,
+			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
+			StorageClass: "STANDARD",
+		})
+	}
+	for _, commonPrefix := range result.CommonPrefixes {
+		listMultipartUploadResult.CommonPrefixes = append(listMultipartUploadResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
+	}
+	out, _ := xmlMarshalWithDocType(listMultipartUploadResult)
+	w.Write(out)
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
@@ -578,7 +665,7 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 	w.Write(out)
 }
 
-func (s *Server) postObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// CreateMultipartUpload

@@ -99,6 +99,23 @@ func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 	return objects, nil
 }
 
+func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName, prefix, startAfter, object.UploadStatusPending)
+	if err != nil {
+		return nil, err
+	}
+	defer objectRows.Close()
+	objects := []object.Entity{}
+	for objectRows.Next() {
+		objectEntity, err := convertRowToObjectEntity(objectRows)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *objectEntity)
+	}
+	return objects, nil
+}
+
 func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName, key, uploadId, object.UploadStatusPending)
 	if err != nil {
@@ -135,6 +152,16 @@ func (or *sqliteRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx
 
 func (or *sqliteRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
 	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName, prefix, startAfter, object.UploadStatusCompleted)
+	var keyCount int
+	err := keyCountRow.Scan(&keyCount)
+	if err != nil {
+		return nil, err
+	}
+	return &keyCount, nil
+}
+
+func (or *sqliteRepository) CountUploadsByBucketNameAndPrefixAndKeyMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
+	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName, prefix, startAfter, object.UploadStatusPending)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {

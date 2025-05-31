@@ -363,3 +363,14 @@ func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context
 
 	return nil
 }
+
+func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
+		return nil, err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
+	return listMultipartUploadsResult, nil
+}

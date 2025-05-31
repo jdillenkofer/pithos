@@ -437,3 +437,12 @@ func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucket string
 
 	return os.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
+
+func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+}
