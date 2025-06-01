@@ -550,10 +550,8 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 					Initiated: objectEntity.CreatedAt,
 				})
 			}
-		} else {
 			nextKeyMarker = objectEntity.Key
 			nextUploadIdMarker = objectEntity.UploadId
-			break
 		}
 	}
 
