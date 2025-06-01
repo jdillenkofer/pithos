@@ -12,11 +12,11 @@ type Repository interface {
 	SaveObject(ctx context.Context, tx *sql.Tx, object *Entity) error
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]Entity, error)
-	FindUploadsByBucketNameAndPrefixAndKeyMarkerOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]Entity, error)
+	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
 	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*Entity, error)
 	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Entity, error)
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error)
-	CountUploadsByBucketNameAndPrefixAndKeyMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error)
+	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
 }
 
