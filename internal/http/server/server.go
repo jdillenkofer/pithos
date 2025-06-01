@@ -299,7 +299,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		handleError(err, w, r)
 		return
 	}
-	listMultipartUploadResult := ListMultipartUploadsResult{
+	listMultipartUploadsResult := ListMultipartUploadsResult{
 		Bucket:             result.Bucket,
 		KeyMarker:          result.KeyMarker,
 		UploadIdMarker:     result.UploadIdMarker,
@@ -316,7 +316,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, upload := range result.Uploads {
-		listMultipartUploadResult.Uploads = append(listMultipartUploadResult.Uploads, &Upload{
+		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &Upload{
 			Key:          upload.Key,
 			UploadId:     upload.UploadId,
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
@@ -324,9 +324,9 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
-		listMultipartUploadResult.CommonPrefixes = append(listMultipartUploadResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
+		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
 	}
-	out, _ := xmlMarshalWithDocType(listMultipartUploadResult)
+	out, _ := xmlMarshalWithDocType(listMultipartUploadsResult)
 	w.Write(out)
 }
 
