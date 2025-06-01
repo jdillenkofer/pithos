@@ -107,7 +107,7 @@ func (rs *replicationStorage) HeadBucket(ctx context.Context, bucket string) (*s
 	return rs.primaryStorage.HeadBucket(ctx, bucket)
 }
 
-func (rs *replicationStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (rs *replicationStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	return rs.primaryStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
 }
 
@@ -245,6 +245,6 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucket s
 	return nil
 }
 
-func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	return rs.primaryStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }

@@ -82,7 +82,7 @@ func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucket stri
 	return tsm.innerStorage.HeadBucket(ctx, bucket)
 }
 
-func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListObjects()").End()
 
 	return tsm.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
@@ -136,7 +136,7 @@ func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, b
 	return tsm.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
 
-func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListMultipartUploads()").End()
 
 	return tsm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)

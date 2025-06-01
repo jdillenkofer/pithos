@@ -337,7 +337,7 @@ func (os *outboxStorage) HeadBucket(ctx context.Context, bucket string) (*storag
 	return os.innerStorage.HeadBucket(ctx, bucket)
 }
 
-func (os *outboxStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (os *outboxStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
@@ -438,7 +438,7 @@ func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucket string
 	return os.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
 
-func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err

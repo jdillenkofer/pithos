@@ -91,7 +91,7 @@ type MetadataStore interface {
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*Bucket, error)
-	ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*ListBucketResult, error)
+	ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName string, object *Object) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error
@@ -99,7 +99,7 @@ type MetadataStore interface {
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
-	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*ListMultipartUploadsResult, error)
+	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {
