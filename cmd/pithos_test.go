@@ -1728,10 +1728,9 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, putObjectResult)
 
-			maxKeys := int32(1)
 			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 				Bucket:  bucketName,
-				MaxKeys: &maxKeys,
+				MaxKeys: aws.Int32(1),
 			})
 			if err != nil {
 				assert.Fail(t, "ListObjects failed", "err %v", err)

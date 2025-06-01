@@ -117,7 +117,7 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucket string, prefi
 		Prefix:     aws.String(prefix),
 		Delimiter:  aws.String(delimiter),
 		StartAfter: aws.String(startAfter),
-		MaxKeys:    aws.Int32(int32(maxKeys)),
+		MaxKeys:    aws.Int32(maxKeys),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -314,7 +314,7 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket stri
 		Delimiter:      aws.String(delimiter),
 		KeyMarker:      aws.String(keyMarker),
 		UploadIdMarker: aws.String(uploadIdMarker),
-		MaxUploads:     aws.Int32(int32(maxUploads)),
+		MaxUploads:     aws.Int32(maxUploads),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
