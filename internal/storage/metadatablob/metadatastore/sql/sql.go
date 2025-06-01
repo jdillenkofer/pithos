@@ -520,17 +520,19 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarker(ctx, tx, bucketName, prefix, keyMarker)
+	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
 	commonPrefixes := []string{}
 	uploads := []metadatastore.Upload{}
-	// @TODO: order by key and uploadId
-	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerOrderByKeyAsc(ctx, tx, bucketName, prefix, keyMarker)
+	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
+
+	nextKeyMarker := ""
+	nextUploadIdMarker := ""
 
 	for _, objectEntity := range objectEntities {
 		if delimiter != "" {
@@ -548,18 +550,21 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 					Initiated: objectEntity.CreatedAt,
 				})
 			}
+		} else {
+			nextKeyMarker = objectEntity.Key
+			nextUploadIdMarker = objectEntity.UploadId
+			break
 		}
 	}
 
 	listMultipartUploadsResult := metadatastore.ListMultipartUploadsResult{
-		Bucket:         bucketName,
-		KeyMarker:      keyMarker,
-		UploadIdMarker: uploadIdMarker,
-		Prefix:         prefix,
-		Delimiter:      delimiter,
-		// @TODO: nextKeyMarker and nextUploadIdMarker
-		NextKeyMarker:      "",
-		NextUploadIdMarker: "",
+		Bucket:             bucketName,
+		KeyMarker:          keyMarker,
+		UploadIdMarker:     uploadIdMarker,
+		Prefix:             prefix,
+		Delimiter:          delimiter,
+		NextKeyMarker:      nextKeyMarker,
+		NextUploadIdMarker: nextUploadIdMarker,
 		MaxUploads:         int32(maxUploads),
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,

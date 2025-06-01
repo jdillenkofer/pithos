@@ -13,14 +13,16 @@ type sqliteRepository struct {
 }
 
 const (
-	insertObjectStmt                                               = "INSERT INTO objects (id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-	updateObjectByIdStmt                                           = "UPDATE objects SET bucket_name = ?, key = ?, content_type = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?"
-	containsBucketObjectsByBucketNameStmt                          = "SELECT id FROM objects WHERE bucket_name = ?"
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC"
-	findObjectByBucketNameAndKeyAndUploadIdStmt                    = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?"
-	findObjectByBucketNameAndKeyStmt                               = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?"
-	countObjectsByBucketNameAndPrefixAndStartAfterStmt             = "SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_status = ?"
-	deleteObjectByIdStmt                                           = "DELETE FROM objects WHERE id = ?"
+	insertObjectStmt                                                                             = "INSERT INTO objects (id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	updateObjectByIdStmt                                                                         = "UPDATE objects SET bucket_name = ?, key = ?, content_type = ?, etag = ?, size = ?, upload_status = ?, upload_id = ?, updated_at = ? WHERE id = ?"
+	containsBucketObjectsByBucketNameStmt                                                        = "SELECT id FROM objects WHERE bucket_name = ?"
+	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                               = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_status = ? ORDER BY key ASC"
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key LIKE ? || '%' AND key > ? AND upload_id > ? AND upload_status = ? ORDER BY key ASC, upload_id ASC"
+	findObjectByBucketNameAndKeyAndUploadIdStmt                                                  = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_id = ? AND upload_status = ?"
+	findObjectByBucketNameAndKeyStmt                                                             = "SELECT id, bucket_name, key, content_type, etag, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = ? AND key = ? AND upload_status = ?"
+	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_status = ?"
+	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = ? and key LIKE ? || '%' AND key > ? AND upload_id > ? AND upload_status = ?"
+	deleteObjectByIdStmt                                                                         = "DELETE FROM objects WHERE id = ?"
 )
 
 func NewRepository() (object.Repository, error) {
@@ -99,8 +101,8 @@ func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 	return objects, nil
 }
 
-func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName, prefix, startAfter, object.UploadStatusPending)
+func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt, bucketName, prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +162,8 @@ func (or *sqliteRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx c
 	return &keyCount, nil
 }
 
-func (or *sqliteRepository) CountUploadsByBucketNameAndPrefixAndKeyMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
-	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName, prefix, startAfter, object.UploadStatusPending)
+func (or *sqliteRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) (*int, error) {
+	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt, bucketName, prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {
