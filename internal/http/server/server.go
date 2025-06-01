@@ -133,9 +133,9 @@ type ListBucketResult struct {
 	Name           string            `xml:"Name"`
 	Prefix         string            `xml:"Prefix"`
 	Delimiter      string            `xml:"Delimiter"`
-	MaxKeys        int               `xml:"MaxKeys"`
+	MaxKeys        int32             `xml:"MaxKeys"`
 	CommonPrefixes []*CommonPrefixes `xml:"CommonPrefixes"`
-	KeyCount       int               `xml:"KeyCount"`
+	KeyCount       int32             `xml:"KeyCount"`
 	StartAfter     string            `xml:"StartAfter"`
 }
 
@@ -172,7 +172,7 @@ type ListMultipartUploadsResult struct {
 	UploadIdMarker     string            `xml:"UploadIdMarker"`
 	NextKeyMarker      string            `xml:"NextKeyMarker"`
 	NextUploadIdMarker string            `xml:"NextUploadIdMarker"`
-	MaxUploads         int               `xml:"MaxUploads"`
+	MaxUploads         int32             `xml:"MaxUploads"`
 	IsTruncated        bool              `xml:"IsTruncated"`
 	Delimiter          string            `xml:"Delimiter"`
 	Prefix             string            `xml:"Prefix"`
@@ -291,10 +291,10 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	if err != nil || maxUploadsI64 < 0 {
 		maxUploadsI64 = 1000
 	}
-	maxUploadsInt := int(maxUploadsI64)
+	maxUploadsI32 := int32(maxUploadsI64)
 
 	log.Println("Listing MultipartUploads")
-	result, err := s.storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsInt)
+	result, err := s.storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -305,7 +305,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		UploadIdMarker:     result.UploadIdMarker,
 		NextKeyMarker:      result.NextKeyMarker,
 		NextUploadIdMarker: result.NextUploadIdMarker,
-		MaxUploads:         maxUploadsInt,
+		MaxUploads:         maxUploadsI32,
 		IsTruncated:        result.IsTruncated,
 		Delimiter:          result.Delimiter,
 		Prefix:             result.Prefix,
@@ -343,10 +343,10 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil || maxKeysI64 < 0 {
 		maxKeysI64 = 1000
 	}
-	maxKeysInt := int(maxKeysI64)
+	maxKeysI32 := int32(maxKeysI64)
 
 	log.Printf("Listing objects in bucket %s\n", bucket)
-	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysInt)
+	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -356,8 +356,8 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Prefix:         prefix,
 		Delimiter:      delimiter,
 		StartAfter:     startAfter,
-		KeyCount:       len(result.Objects),
-		MaxKeys:        maxKeysInt,
+		KeyCount:       int32(len(result.Objects)),
+		MaxKeys:        maxKeysI32,
 		CommonPrefixes: []*CommonPrefixes{},
 		IsTruncated:    result.IsTruncated,
 		Contents:       []*Content{},

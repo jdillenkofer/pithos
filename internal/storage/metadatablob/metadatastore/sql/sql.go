@@ -134,7 +134,7 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
 	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -153,7 +153,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 				commonPrefixes = append(commonPrefixes, *commonPrefix)
 			}
 		}
-		if len(objects) < maxKeys {
+		if int32(len(objects)) < maxKeys {
 			blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
 			if err != nil {
 				return nil, err
@@ -183,12 +183,12 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	listBucketResult := metadatastore.ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
-		IsTruncated:    *keyCount > maxKeys,
+		IsTruncated:    int32(*keyCount) > maxKeys,
 	}
 	return &listBucketResult, nil
 }
 
-func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -511,7 +511,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	}, nil
 }
 
-func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*metadatastore.ListMultipartUploadsResult, error) {
+func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*metadatastore.ListMultipartUploadsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -541,7 +541,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 				commonPrefixes = append(commonPrefixes, *commonPrefix)
 			}
 		}
-		if len(uploads) < maxUploads {
+		if int32(len(uploads)) < maxUploads {
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key, prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
@@ -565,10 +565,10 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		Delimiter:          delimiter,
 		NextKeyMarker:      nextKeyMarker,
 		NextUploadIdMarker: nextUploadIdMarker,
-		MaxUploads:         int32(maxUploads),
+		MaxUploads:         maxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
-		IsTruncated:        *keyCount > maxUploads,
+		IsTruncated:        int32(*keyCount) > maxUploads,
 	}
 	return &listMultipartUploadsResult, nil
 }

@@ -87,7 +87,7 @@ func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName string) (*sto
 	return bucket, nil
 }
 
-func (cs *CacheStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (cs *CacheStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	objects, err := cs.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		return nil, err
@@ -212,7 +212,7 @@ func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucket string,
 	return nil
 }
 
-func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 	if err != nil {
 		return nil, err

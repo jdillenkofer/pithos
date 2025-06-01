@@ -111,7 +111,7 @@ func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucket string) (*stor
 	}, nil
 }
 
-func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	listObjectsResult, err := rs.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:     aws.String(bucket),
 		Prefix:     aws.String(prefix),
@@ -307,7 +307,22 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucket stri
 	return nil
 }
 
-func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+	_, err := rs.s3Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket:         aws.String(bucket),
+		Prefix:         aws.String(prefix),
+		Delimiter:      aws.String(delimiter),
+		KeyMarker:      aws.String(keyMarker),
+		UploadIdMarker: aws.String(uploadIdMarker),
+		MaxUploads:     aws.Int32(int32(maxUploads)),
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
 	// @TODO: implement this
 	return nil, storage.ErrNotImplemented
 }

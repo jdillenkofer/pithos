@@ -105,7 +105,7 @@ func (csm *conditionalStorageMiddleware) HeadBucket(ctx context.Context, bucket 
 	return storage.HeadBucket(ctx, bucket)
 }
 
-func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int) (*storage.ListBucketResult, error) {
+func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	storage := csm.lookupStorage(bucket)
 	return storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
 }
@@ -150,7 +150,7 @@ func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Contex
 	return storage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 }
 
-func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int) (*storage.ListMultipartUploadsResult, error) {
+func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	storage := csm.lookupStorage(bucket)
 	return storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
