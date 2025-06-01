@@ -638,6 +638,110 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, body, objectBytes)
 		})
 
+		t.Run("it should allow listing multipart uploads"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+
+			if err != nil {
+				assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+			}
+			assert.NotNil(t, createMultiPartUploadResult)
+			assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+			assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+			uploadId := createMultiPartUploadResult.UploadId
+			assert.NotNil(t, uploadId)
+
+			listMultipartUploadsResult, err := s3Client.ListMultipartUploads(context.Background(), &s3.ListMultipartUploadsInput{
+				Bucket: bucketName,
+				Prefix: keyPrefix,
+			})
+			if err != nil {
+				assert.Fail(t, "ListMultipartUploads failed", "err %v", err)
+			}
+
+			assert.NotNil(t, listMultipartUploadsResult)
+			assert.Equal(t, *bucketName, *listMultipartUploadsResult.Bucket)
+			assert.Equal(t, *keyPrefix, *listMultipartUploadsResult.Prefix)
+			assert.Len(t, listMultipartUploadsResult.Uploads, 1)
+			firstUpload := listMultipartUploadsResult.Uploads[0]
+			assert.Equal(t, *key, *firstUpload.Key)
+			assert.Equal(t, *uploadId, *firstUpload.UploadId)
+			assert.NotNil(t, firstUpload.Initiated)
+		})
+
+		t.Run("it should allow listing two multipart uploads"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+
+			if err != nil {
+				assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+			}
+			assert.NotNil(t, createMultiPartUploadResult)
+			assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+			assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+			uploadId := createMultiPartUploadResult.UploadId
+			assert.NotNil(t, uploadId)
+
+			createMultiPartUploadResult2, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key2,
+			})
+
+			if err != nil {
+				assert.Fail(t, "CreateMultiPartUpload2 failed", "err %v", err)
+			}
+			assert.NotNil(t, createMultiPartUploadResult2)
+			assert.Equal(t, *bucketName, *createMultiPartUploadResult2.Bucket)
+			assert.Equal(t, *key2, *createMultiPartUploadResult2.Key)
+			uploadId2 := createMultiPartUploadResult2.UploadId
+			assert.NotNil(t, uploadId2)
+
+			listMultipartUploadsResult, err := s3Client.ListMultipartUploads(context.Background(), &s3.ListMultipartUploadsInput{
+				Bucket: bucketName,
+				Prefix: keyPrefix,
+			})
+			if err != nil {
+				assert.Fail(t, "ListMultipartUploads failed", "err %v", err)
+			}
+
+			assert.NotNil(t, listMultipartUploadsResult)
+			assert.Equal(t, *bucketName, *listMultipartUploadsResult.Bucket)
+			assert.Equal(t, *keyPrefix, *listMultipartUploadsResult.Prefix)
+			assert.Len(t, listMultipartUploadsResult.Uploads, 2)
+			firstUpload := listMultipartUploadsResult.Uploads[0]
+			assert.Equal(t, *key, *firstUpload.Key)
+			assert.Equal(t, *uploadId, *firstUpload.UploadId)
+			assert.NotNil(t, firstUpload.Initiated)
+			secondUpload := listMultipartUploadsResult.Uploads[1]
+			assert.Equal(t, *key2, *secondUpload.Key)
+			assert.Equal(t, *uploadId2, *secondUpload.UploadId)
+			assert.NotNil(t, secondUpload.Initiated)
+		})
+
 		t.Run("it should allow multipart uploads with two parts"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
