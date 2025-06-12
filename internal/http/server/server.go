@@ -34,7 +34,7 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	mux.HandleFunc("PUT /{bucket}", server.createBucketHandler)
 	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
-	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectHandler)
+	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrlistPartsHandler)
 	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
@@ -78,7 +78,9 @@ const uploadsQuery = "uploads"
 const partNumberQuery = "partNumber"
 const keyMarkerQuery = "key-marker"
 const uploadIdMarkerQuery = "upload-id-marker"
+const partNumberMarkerQuery = "part-number-marker"
 const maxUploadsQuery = "max-uploads"
+const maxPartsQuery = "max-parts"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -178,6 +180,34 @@ type ListMultipartUploadsResult struct {
 	Prefix             string            `xml:"Prefix"`
 	Uploads            []*Upload         `xml:"Upload"`
 	CommonPrefixes     []*CommonPrefixes `xml:"CommonPrefixes"`
+}
+
+type Part struct {
+	ChecksumCRC32     string `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    string `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME string `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      string `xml:"ChecksumSHA1"`
+	ChecksumSHA256    string `xml:"ChecksumSHA256"`
+	ETag              string `xml:"ETag"`
+	LastModified      string `xml:"LastModified"`
+	PartNumber        int32  `xml:"PartNumber"`
+	Size              int64  `xml:"Size"`
+}
+
+type ListPartsResult struct {
+	XMLName              xml.Name `xml:"ListPartsResult"`
+	Bucket               string   `xml:"Bucket"`
+	Key                  string   `xml:"Key"`
+	UploadId             string   `xml:"UploadId"`
+	PartNumberMarker     int32    `xml:"PartNumberMarker"`
+	NextPartNumberMarker int32    `xml:"NextPartNumberMarker"`
+	MaxParts             int32    `xml:"MaxParts"`
+	IsTruncated          bool     `xml:"IsTruncated"`
+	Parts                []*Part  `xml:"Part"`
+	// @TODO: Initiator and Owner missing
+	StorageClass      string `xml:"StorageClass"`
+	ChecksumAlgorithm string `xml:"ChecksumAlgorithm"`
+	ChecksumType      string `xml:"ChecksumType"`
 }
 
 type ErrorResponse struct {
@@ -495,6 +525,55 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 		}
 	}
 	return byteRanges, nil
+}
+
+func (s *Server) getObjectOrlistPartsHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has(uploadIdQuery) {
+		s.listPartsHandler(w, r)
+		return
+	}
+	s.getObjectHandler(w, r)
+}
+
+func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.listPartsHandler()")
+	defer task.End()
+	bucket := r.PathValue(bucketPath)
+	key := r.PathValue(keyPath)
+	query := r.URL.Query()
+	uploadId := query.Get(uploadIdQuery)
+	maxParts := query.Get(maxPartsQuery)
+	partNumberMarker := query.Get(partNumberMarkerQuery)
+	log.Printf("ListParts for object with key %s from bucket %s\n", key, bucket)
+	log.Println(uploadId, maxParts, partNumberMarker)
+	// @TODO: implement this
+	ctx.Value(0)
+	var err error = nil
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	listPartsResult := ListPartsResult{
+		Bucket:      bucket,
+		Key:         key,
+		UploadId:    uploadId,
+		IsTruncated: false,
+		Parts: []*Part{
+			{
+				ETag:         "test",
+				LastModified: time.Now().UTC().Format(time.RFC3339),
+				PartNumber:   0,
+				Size:         100,
+			},
+		},
+		StorageClass: "STANDARD",
+	}
+
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(listPartsResult)
+	w.Write(out)
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
