@@ -219,3 +219,11 @@ func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucket string,
 	}
 	return listMultipartUploadsResult, nil
 }
+
+func (cs *CacheStorage) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+	if err != nil {
+		return nil, err
+	}
+	return listPartsResult, nil
+}

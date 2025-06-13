@@ -308,7 +308,7 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucket stri
 }
 
 func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	listMultipartUploads, err := rs.s3Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+	listMultipartUploadsResult, err := rs.s3Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
 		Bucket:         aws.String(bucket),
 		Prefix:         aws.String(prefix),
 		Delimiter:      aws.String(delimiter),
@@ -330,21 +330,55 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucket stri
 			UploadId:  *upload.UploadId,
 			Initiated: *upload.Initiated,
 		}
-	}, listMultipartUploads.Uploads)
+	}, listMultipartUploadsResult.Uploads)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
 		return *commonPrefix.Prefix
-	}, listMultipartUploads.CommonPrefixes)
+	}, listMultipartUploadsResult.CommonPrefixes)
 	return &storage.ListMultipartUploadsResult{
-		Bucket:             *listMultipartUploads.Bucket,
-		KeyMarker:          *listMultipartUploads.KeyMarker,
-		UploadIdMarker:     *listMultipartUploads.UploadIdMarker,
-		Prefix:             *listMultipartUploads.Prefix,
-		Delimiter:          *listMultipartUploads.Delimiter,
-		NextKeyMarker:      *listMultipartUploads.NextKeyMarker,
-		NextUploadIdMarker: *listMultipartUploads.NextUploadIdMarker,
-		MaxUploads:         *listMultipartUploads.MaxUploads,
+		Bucket:             *listMultipartUploadsResult.Bucket,
+		KeyMarker:          *listMultipartUploadsResult.KeyMarker,
+		UploadIdMarker:     *listMultipartUploadsResult.UploadIdMarker,
+		Prefix:             *listMultipartUploadsResult.Prefix,
+		Delimiter:          *listMultipartUploadsResult.Delimiter,
+		NextKeyMarker:      *listMultipartUploadsResult.NextKeyMarker,
+		NextUploadIdMarker: *listMultipartUploadsResult.NextUploadIdMarker,
+		MaxUploads:         *listMultipartUploadsResult.MaxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
-		IsTruncated:        *listMultipartUploads.IsTruncated,
+		IsTruncated:        *listMultipartUploadsResult.IsTruncated,
+	}, nil
+}
+
+func (rs *s3ClientStorage) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	listPartsResult, err := rs.s3Client.ListParts(ctx, &s3.ListPartsInput{
+		Bucket:           aws.String(bucket),
+		Key:              aws.String(key),
+		UploadId:         aws.String(uploadId),
+		PartNumberMarker: aws.String(partNumberMarker),
+		MaxParts:         aws.Int32(maxParts),
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &storage.ListPartsResult{
+		Bucket:               *listPartsResult.Bucket,
+		Key:                  *listPartsResult.Key,
+		UploadId:             *listPartsResult.UploadId,
+		PartNumberMarker:     *listPartsResult.PartNumberMarker,
+		NextPartNumberMarker: listPartsResult.NextPartNumberMarker,
+		MaxParts:             *listPartsResult.MaxParts,
+		IsTruncated:          *listPartsResult.IsTruncated,
+		Parts: sliceutils.Map(func(part types.Part) *storage.Part {
+			return &storage.Part{
+				ETag:         *part.ETag,
+				LastModified: *part.LastModified,
+				PartNumber:   *part.PartNumber,
+				Size:         *part.Size,
+			}
+		}, listPartsResult.Parts),
 	}, nil
 }

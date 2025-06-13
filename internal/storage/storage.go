@@ -67,6 +67,24 @@ type ListMultipartUploadsResult struct {
 	IsTruncated        bool
 }
 
+type Part struct {
+	ETag         string
+	LastModified time.Time
+	PartNumber   int32
+	Size         int64
+}
+
+type ListPartsResult struct {
+	Bucket               string
+	Key                  string
+	UploadId             string
+	PartNumberMarker     string
+	NextPartNumberMarker *string
+	MaxParts             int32
+	IsTruncated          bool
+	Parts                []*Part
+}
+
 var ErrNoSuchBucket error = metadatastore.ErrNoSuchBucket
 var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
@@ -90,6 +108,7 @@ type Storage interface {
 	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
+	ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName string) ([]Object, error) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -93,6 +94,8 @@ const contentTypeHeader = "Content-Type"
 const locationHeader = "Location"
 
 const applicationXmlContentType = "application/xml"
+
+const storageClassStandard = "STANDARD"
 
 type Bucket struct {
 	XMLName      xml.Name `xml:"Bucket"`
@@ -183,15 +186,15 @@ type ListMultipartUploadsResult struct {
 }
 
 type Part struct {
-	ChecksumCRC32     string `xml:"ChecksumCRC32"`
-	ChecksumCRC32C    string `xml:"ChecksumCRC32C"`
-	ChecksumCRC64NVME string `xml:"ChecksumCRC64NVME"`
-	ChecksumSHA1      string `xml:"ChecksumSHA1"`
-	ChecksumSHA256    string `xml:"ChecksumSHA256"`
-	ETag              string `xml:"ETag"`
-	LastModified      string `xml:"LastModified"`
-	PartNumber        int32  `xml:"PartNumber"`
-	Size              int64  `xml:"Size"`
+	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      *string `xml:"ChecksumSHA1"`
+	ChecksumSHA256    *string `xml:"ChecksumSHA256"`
+	ETag              string  `xml:"ETag"`
+	LastModified      string  `xml:"LastModified"`
+	PartNumber        int32   `xml:"PartNumber"`
+	Size              int64   `xml:"Size"`
 }
 
 type ListPartsResult struct {
@@ -199,15 +202,15 @@ type ListPartsResult struct {
 	Bucket               string   `xml:"Bucket"`
 	Key                  string   `xml:"Key"`
 	UploadId             string   `xml:"UploadId"`
-	PartNumberMarker     int32    `xml:"PartNumberMarker"`
-	NextPartNumberMarker int32    `xml:"NextPartNumberMarker"`
+	PartNumberMarker     string   `xml:"PartNumberMarker"`
+	NextPartNumberMarker *string  `xml:"NextPartNumberMarker"`
 	MaxParts             int32    `xml:"MaxParts"`
 	IsTruncated          bool     `xml:"IsTruncated"`
 	Parts                []*Part  `xml:"Part"`
 	// @TODO: Initiator and Owner missing
-	StorageClass      string `xml:"StorageClass"`
-	ChecksumAlgorithm string `xml:"ChecksumAlgorithm"`
-	ChecksumType      string `xml:"ChecksumType"`
+	StorageClass      string  `xml:"StorageClass"`
+	ChecksumAlgorithm *string `xml:"ChecksumAlgorithm"`
+	ChecksumType      *string `xml:"ChecksumType"`
 }
 
 type ErrorResponse struct {
@@ -350,7 +353,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 			Key:          upload.Key,
 			UploadId:     upload.UploadId,
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
-			StorageClass: "STANDARD",
+			StorageClass: storageClassStandard,
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
@@ -401,7 +404,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			LastModified: object.LastModified.Format(time.RFC3339),
 			ETag:         object.ETag,
 			Size:         object.Size,
-			StorageClass: "STANDARD",
+			StorageClass: storageClassStandard,
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
@@ -539,36 +542,49 @@ func (s *Server) getObjectOrlistPartsHandler(w http.ResponseWriter, r *http.Requ
 func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listPartsHandler()")
 	defer task.End()
+
+	query := r.URL.Query()
+
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
-	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
-	maxParts := query.Get(maxPartsQuery)
 	partNumberMarker := query.Get(partNumberMarkerQuery)
-	log.Printf("ListParts for object with key %s from bucket %s\n", key, bucket)
-	log.Println(uploadId, maxParts, partNumberMarker)
-	// @TODO: implement this
-	ctx.Value(0)
-	var err error = nil
+	maxParts := query.Get(maxPartsQuery)
+
+	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if maxPartsI64 < 1 || maxPartsI64 > 1000 {
+		w.WriteHeader(400)
+		return
+	}
+	maxPartsI32 := int32(maxPartsI64)
+
+	result, err := s.storage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxPartsI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 
 	listPartsResult := ListPartsResult{
-		Bucket:      bucket,
-		Key:         key,
-		UploadId:    uploadId,
-		IsTruncated: false,
-		Parts: []*Part{
-			{
-				ETag:         "test",
-				LastModified: time.Now().UTC().Format(time.RFC3339),
-				PartNumber:   0,
-				Size:         100,
-			},
-		},
-		StorageClass: "STANDARD",
+		Bucket:               result.Bucket,
+		Key:                  result.Key,
+		UploadId:             result.UploadId,
+		PartNumberMarker:     result.PartNumberMarker,
+		NextPartNumberMarker: result.NextPartNumberMarker,
+		MaxParts:             result.MaxParts,
+		IsTruncated:          result.IsTruncated,
+		Parts: sliceutils.Map(func(part *storage.Part) *Part {
+			return &Part{
+				ETag:         part.ETag,
+				LastModified: part.LastModified.UTC().Format(time.RFC3339),
+				PartNumber:   part.PartNumber,
+				Size:         part.Size,
+			}
+		}, result.Parts),
+		StorageClass: storageClassStandard,
 	}
 
 	w.WriteHeader(200)
@@ -775,17 +791,17 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	partNumberUint64, err := strconv.ParseInt(partNumber, 10, 16)
+	partNumberI64, err := strconv.ParseInt(partNumber, 10, 16)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	partNumberInt32 := int32(partNumberUint64)
-	if partNumberInt32 < 1 || partNumberInt32 > 10000 {
+	partNumberI32 := int32(partNumberI64)
+	if partNumberI32 < 1 || partNumberI32 > 10000 {
 		w.WriteHeader(400)
 		return
 	}
-	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberInt32, r.Body)
+	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberI32, r.Body)
 	if err != nil {
 		handleError(err, w, r)
 		return
