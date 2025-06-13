@@ -248,3 +248,7 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucket s
 func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	return rs.primaryStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
+
+func (rs *replicationStorage) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	return rs.primaryStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+}

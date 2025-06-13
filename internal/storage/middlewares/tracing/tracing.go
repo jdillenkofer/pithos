@@ -141,3 +141,9 @@ func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, b
 
 	return tsm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
+
+func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	defer trace.StartRegion(ctx, tsm.regionName+".ListParts()").End()
+
+	return tsm.innerStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+}

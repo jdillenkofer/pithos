@@ -656,3 +656,44 @@ func (mbs *metadataBlobStorage) ListMultipartUploads(ctx context.Context, bucket
 	listMultipartUploadsResult := convertListMultipartUploadsResult(*mListMultipartUploadsResult)
 	return &listMultipartUploadsResult, nil
 }
+
+func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) storage.ListPartsResult {
+	return storage.ListPartsResult{
+		Bucket:               mlistPartsResult.Bucket,
+		Key:                  mlistPartsResult.Key,
+		UploadId:             mlistPartsResult.UploadId,
+		PartNumberMarker:     mlistPartsResult.PartNumberMarker,
+		NextPartNumberMarker: mlistPartsResult.NextPartNumberMarker,
+		MaxParts:             mlistPartsResult.MaxParts,
+		IsTruncated:          mlistPartsResult.IsTruncated,
+		Parts: sliceutils.Map(func(part *metadatastore.Part) *storage.Part {
+			return &storage.Part{
+				ETag:         part.ETag,
+				LastModified: part.LastModified,
+				PartNumber:   part.PartNumber,
+				Size:         part.Size,
+			}
+		}, mlistPartsResult.Parts),
+	}
+}
+
+func (mbs *metadataBlobStorage) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	mListPartsResult, err := mbs.metadataStore.ListParts(ctx, tx, bucket, key, uploadId, partNumberMarker, maxParts)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	listPartsResult := convertListPartsResult(*mListPartsResult)
+	return &listPartsResult, nil
+}

@@ -570,3 +570,67 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	}
 	return &listMultipartUploadsResult, nil
 }
+
+func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil || objectEntity.UploadStatus != object.UploadStatusPending {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	blobs, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	partNumberMarkerI64, err := strconv.ParseInt(partNumberMarker, 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	partNumberMarkerI32 := int32(partNumberMarkerI64)
+
+	parts := []*metadatastore.Part{}
+	startOffset := -1
+	var nextPartNumberMarker *string = nil
+	isTruncated := false
+	for idx, blob := range blobs {
+		sequenceNumberI32 := int32(blob.SequenceNumber)
+		if sequenceNumberI32 <= partNumberMarkerI32 {
+			startOffset = idx
+			continue
+		}
+		parts = append(parts, &metadatastore.Part{
+			ETag:         blob.ETag,
+			LastModified: blob.UpdatedAt,
+			PartNumber:   sequenceNumberI32,
+			Size:         blob.Size,
+		})
+		if len(parts) >= int(maxParts) {
+			isTruncated = len(blobs)-(startOffset+1) > int(maxParts)
+			lastPartNumberMarker := strconv.Itoa(blob.SequenceNumber)
+			nextPartNumberMarker = &lastPartNumberMarker
+			break
+		}
+	}
+
+	return &metadatastore.ListPartsResult{
+		Bucket:               bucketName,
+		Key:                  key,
+		UploadId:             uploadId,
+		PartNumberMarker:     partNumberMarker,
+		NextPartNumberMarker: nextPartNumberMarker,
+		MaxParts:             maxParts,
+		IsTruncated:          isTruncated,
+		Parts:                parts,
+	}, nil
+}

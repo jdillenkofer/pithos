@@ -113,3 +113,9 @@ func (tmsm *tracingMetadataStoreMiddleware) ListMultipartUploads(ctx context.Con
 
 	return tmsm.innerMetadataStore.ListMultipartUploads(ctx, tx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
+
+func (tmsm *tracingMetadataStoreMiddleware) ListParts(ctx context.Context, tx *sql.Tx, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+	defer trace.StartRegion(ctx, tmsm.regionName+".ListParts()").End()
+
+	return tmsm.innerMetadataStore.ListParts(ctx, tx, bucket, key, uploadId, partNumberMarker, maxParts)
+}
