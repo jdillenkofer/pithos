@@ -453,6 +453,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}
 
 	objectEntity.UploadStatus = object.UploadStatusCompleted
+	objectEntity.UploadId = ""
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
