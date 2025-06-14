@@ -550,13 +550,11 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	uploadId := query.Get(uploadIdQuery)
 	partNumberMarker := query.Get(partNumberMarkerQuery)
 	maxParts := query.Get(maxPartsQuery)
-
 	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
 	if err != nil {
-		handleError(err, w, r)
-		return
+		maxPartsI64 = 1000
 	}
-	if maxPartsI64 < 1 || maxPartsI64 > 1000 {
+	if maxPartsI64 < 0 || maxPartsI64 > 1000 {
 		w.WriteHeader(400)
 		return
 	}

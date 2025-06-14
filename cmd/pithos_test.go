@@ -833,6 +833,167 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, body, objectBytes)
 		})
 
+		t.Run("it should allow listing parts of multipart uploads"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+
+			if err != nil {
+				assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+			}
+			assert.NotNil(t, createMultiPartUploadResult)
+			assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+			assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+			uploadId := createMultiPartUploadResult.UploadId
+			assert.NotNil(t, uploadId)
+
+			// listParts (but empty)
+			listPartsResult, err := s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: uploadId,
+			})
+			if err != nil {
+				assert.Fail(t, "ListParts failed", "err %v", err)
+			}
+			assert.NotNil(t, listPartsResult)
+			assert.Equal(t, *bucketName, *listPartsResult.Bucket)
+			assert.Equal(t, *key, *listPartsResult.Key)
+			assert.Equal(t, *uploadId, *listPartsResult.UploadId)
+			assert.Len(t, listPartsResult.Parts, 0)
+			assert.False(t, *listPartsResult.IsTruncated)
+
+			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Body:       bytes.NewReader(body[2:]),
+				Key:        key,
+				UploadId:   uploadId,
+				PartNumber: aws.Int32(2),
+			})
+
+			if err != nil {
+				assert.Fail(t, "UploadPart failed", "err %v", err)
+			}
+			assert.NotNil(t, uploadPartResult)
+
+			listPartsResult, err = s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: uploadId,
+				MaxParts: aws.Int32(1),
+			})
+			if err != nil {
+				assert.Fail(t, "ListParts failed", "err %v", err)
+			}
+			assert.NotNil(t, listPartsResult)
+			assert.Equal(t, *bucketName, *listPartsResult.Bucket)
+			assert.Equal(t, *key, *listPartsResult.Key)
+			assert.Equal(t, *uploadId, *listPartsResult.UploadId)
+			assert.Equal(t, int32(1), *listPartsResult.MaxParts)
+			assert.Len(t, listPartsResult.Parts, 1)
+			firstPart := listPartsResult.Parts[0]
+			assert.Equal(t, int32(2), *firstPart.PartNumber)
+			assert.Equal(t, int64(len(body[2:])), *firstPart.Size)
+			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *firstPart.ETag)
+			assert.False(t, *listPartsResult.IsTruncated)
+
+			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Body:       bytes.NewReader(body[0:2]),
+				Key:        key,
+				UploadId:   uploadId,
+				PartNumber: aws.Int32(1),
+			})
+
+			if err != nil {
+				assert.Fail(t, "UploadPart failed", "err %v", err)
+			}
+			assert.NotNil(t, uploadPartResult)
+
+			// listParts with limit
+			listPartsResult, err = s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: uploadId,
+				MaxParts: aws.Int32(1),
+			})
+			if err != nil {
+				assert.Fail(t, "ListParts failed", "err %v", err)
+			}
+			assert.NotNil(t, listPartsResult)
+			assert.Equal(t, *bucketName, *listPartsResult.Bucket)
+			assert.Equal(t, *key, *listPartsResult.Key)
+			assert.Equal(t, *uploadId, *listPartsResult.UploadId)
+			assert.Equal(t, int32(1), *listPartsResult.MaxParts)
+			assert.Len(t, listPartsResult.Parts, 1)
+			firstPart = listPartsResult.Parts[0]
+			assert.Equal(t, int32(1), *firstPart.PartNumber)
+			assert.Equal(t, int64(len(body[0:2])), *firstPart.Size)
+			assert.Equal(t, "\"a64cf5823262686e1a28b2245be34ce0\"", *firstPart.ETag)
+			assert.True(t, *listPartsResult.IsTruncated)
+
+			// listParts with partNumberMarker offset
+			listPartsResult, err = s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:           bucketName,
+				Key:              key,
+				UploadId:         uploadId,
+				PartNumberMarker: aws.String("1"),
+				MaxParts:         aws.Int32(1),
+			})
+			if err != nil {
+				assert.Fail(t, "ListParts failed", "err %v", err)
+			}
+			assert.NotNil(t, listPartsResult)
+			assert.Equal(t, *bucketName, *listPartsResult.Bucket)
+			assert.Equal(t, *key, *listPartsResult.Key)
+			assert.Equal(t, *uploadId, *listPartsResult.UploadId)
+			assert.Equal(t, "1", *listPartsResult.PartNumberMarker)
+			assert.Equal(t, int32(1), *listPartsResult.MaxParts)
+			assert.Len(t, listPartsResult.Parts, 1)
+			firstPart = listPartsResult.Parts[0]
+			assert.Equal(t, int32(2), *firstPart.PartNumber)
+			assert.Equal(t, int64(len(body[2:])), *firstPart.Size)
+			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *firstPart.ETag)
+			assert.False(t, *listPartsResult.IsTruncated)
+
+			// listParts (all)
+			listPartsResult, err = s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: uploadId,
+				MaxParts: aws.Int32(2),
+			})
+			if err != nil {
+				assert.Fail(t, "ListParts failed", "err %v", err)
+			}
+			assert.NotNil(t, listPartsResult)
+			assert.Equal(t, *bucketName, *listPartsResult.Bucket)
+			assert.Equal(t, *key, *listPartsResult.Key)
+			assert.Equal(t, *uploadId, *listPartsResult.UploadId)
+			assert.Equal(t, int32(2), *listPartsResult.MaxParts)
+			assert.Len(t, listPartsResult.Parts, 2)
+			assert.False(t, *listPartsResult.IsTruncated)
+			firstPart = listPartsResult.Parts[0]
+			assert.Equal(t, int32(1), *firstPart.PartNumber)
+			assert.Equal(t, int64(len(body[0:2])), *firstPart.Size)
+			assert.Equal(t, "\"a64cf5823262686e1a28b2245be34ce0\"", *firstPart.ETag)
+			secondPart := listPartsResult.Parts[1]
+			assert.Equal(t, int32(2), *secondPart.PartNumber)
+			assert.Equal(t, int64(len(body[2:])), *secondPart.Size)
+			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *secondPart.ETag)
+		})
+
 		t.Run("it should allow cancellation of multipart uploads"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)

@@ -593,11 +593,14 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		return nil, err
 	}
 
-	partNumberMarkerI64, err := strconv.ParseInt(partNumberMarker, 10, 32)
-	if err != nil {
-		return nil, err
+	var partNumberMarkerI32 int32 = 0
+	if partNumberMarker != "" {
+		partNumberMarkerI64, err := strconv.ParseInt(partNumberMarker, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		partNumberMarkerI32 = int32(partNumberMarkerI64)
 	}
-	partNumberMarkerI32 := int32(partNumberMarkerI64)
 
 	parts := []*metadatastore.Part{}
 	startOffset := -1
