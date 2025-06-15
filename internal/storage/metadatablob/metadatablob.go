@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"hash/crc32"
+	"hash/crc64"
 	"io"
 	"log"
 	"time"
@@ -366,6 +367,17 @@ func calculateCrc32c(reader io.Reader) (*string, error) {
 	return &hexSum, nil
 }
 
+func calculateCrc64Nvme(reader io.Reader) (*string, error) {
+	hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -534,15 +546,16 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 }
 
 type hashResult struct {
-	crc32  string
-	crc32c string
-	etag   string
-	sha1   string
-	sha256 string
+	crc64nvme string
+	crc32     string
+	crc32c    string
+	etag      string
+	sha1      string
+	sha256    string
 }
 
 func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *hashResult, error) {
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(6)
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
 
 	doneChan := make(chan struct{}, 1)
 	errChan := make(chan error, 1)
@@ -608,6 +621,17 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return
 		}
 		crc32cChan <- *crc32c
+	}()
+
+	crc64nvmeChan := make(chan string, 1)
+	errChan7 := make(chan error, 1)
+	go func() {
+		crc64nvme, err := calculateCrc64Nvme(readers[6])
+		if err != nil {
+			errChan7 <- err
+			return
+		}
+		crc64nvmeChan <- *crc64nvme
 	}()
 
 	// @Note: We need a anonymous function here,
@@ -678,12 +702,23 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return nil, nil, err
 		}
 	}
+
+	var crc64nvme string
+	select {
+	case crc64nvme = <-crc64nvmeChan:
+	case err := <-errChan7:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	hashes := &hashResult{
-		crc32:  crc32,
-		crc32c: crc32c,
-		etag:   etag,
-		sha1:   sha1,
-		sha256: sha256,
+		crc64nvme: crc64nvme,
+		crc32:     crc32,
+		crc32c:    crc32c,
+		etag:      etag,
+		sha1:      sha1,
+		sha256:    sha256,
 	}
 	return originalSize, hashes, nil
 }
