@@ -3,6 +3,7 @@ package metadatablob
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
 	"io"
@@ -319,6 +320,17 @@ func calculateETag(reader io.Reader) (*string, error) {
 	return &etag, nil
 }
 
+func calculateSha1(reader io.Reader) (*string, error) {
+	hash := sha1.New()
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -350,7 +362,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	originalSize, etag, err := mbs.uploadBlobAndCalculateEtag(ctx, tx, *blobId, reader)
+	originalSize, hashes, err := mbs.uploadBlobAndCalculateHashes(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -360,12 +372,12 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		Key:          key,
 		ContentType:  contentType,
 		LastModified: time.Now(),
-		ETag:         *etag,
+		ETag:         hashes.etag,
 		Size:         *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
 				Id:   *blobId,
-				ETag: *etag,
+				ETag: hashes.etag,
 				Size: *originalSize,
 			},
 		},
@@ -462,7 +474,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	originalSize, etag, err := mbs.uploadBlobAndCalculateEtag(ctx, tx, *blobId, reader)
+	originalSize, hashes, err := mbs.uploadBlobAndCalculateHashes(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -470,7 +482,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 
 	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
 		Id:   *blobId,
-		ETag: *etag,
+		ETag: hashes.etag,
 		Size: *originalSize,
 	})
 	if err != nil {
@@ -482,12 +494,17 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 	return &storage.UploadPartResult{
-		ETag: *etag,
+		ETag: hashes.etag,
 	}, nil
 }
 
-func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *string, error) {
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(2)
+type hashResult struct {
+	etag string
+	sha1 string
+}
+
+func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *hashResult, error) {
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(3)
 
 	doneChan := make(chan struct{}, 1)
 	errChan := make(chan error, 1)
@@ -509,6 +526,17 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, 
 			return
 		}
 		etagChan <- *etag
+	}()
+
+	sha1Chan := make(chan string, 1)
+	errChan3 := make(chan error, 1)
+	go func() {
+		sha1, err := calculateSha1(readers[2])
+		if err != nil {
+			errChan3 <- err
+			return
+		}
+		sha1Chan <- *sha1
 	}()
 
 	// @Note: We need a anonymous function here,
@@ -543,7 +571,17 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateEtag(ctx context.Context, 
 			return nil, nil, err
 		}
 	}
-	return originalSize, &etag, nil
+
+	var sha1 string
+	select {
+	case sha1 = <-sha1Chan:
+	case err := <-errChan3:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	hashes := &hashResult{etag: etag, sha1: sha1}
+	return originalSize, hashes, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {
