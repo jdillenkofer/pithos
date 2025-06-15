@@ -355,6 +355,17 @@ func calculateCrc32(reader io.Reader) (*string, error) {
 	return &hexSum, nil
 }
 
+func calculateCrc32c(reader io.Reader) (*string, error) {
+	hash := crc32.New(crc32.MakeTable(0x82F63B78))
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -524,13 +535,14 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 
 type hashResult struct {
 	crc32  string
+	crc32c string
 	etag   string
 	sha1   string
 	sha256 string
 }
 
 func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *hashResult, error) {
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(5)
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(6)
 
 	doneChan := make(chan struct{}, 1)
 	errChan := make(chan error, 1)
@@ -585,6 +597,17 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return
 		}
 		crc32Chan <- *crc32
+	}()
+
+	crc32cChan := make(chan string, 1)
+	errChan6 := make(chan error, 1)
+	go func() {
+		crc32c, err := calculateCrc32c(readers[5])
+		if err != nil {
+			errChan6 <- err
+			return
+		}
+		crc32cChan <- *crc32c
 	}()
 
 	// @Note: We need a anonymous function here,
@@ -646,8 +669,18 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return nil, nil, err
 		}
 	}
+
+	var crc32c string
+	select {
+	case crc32c = <-crc32cChan:
+	case err := <-errChan6:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	hashes := &hashResult{
 		crc32:  crc32,
+		crc32c: crc32c,
 		etag:   etag,
 		sha1:   sha1,
 		sha256: sha256,
