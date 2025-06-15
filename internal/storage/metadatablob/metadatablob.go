@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"io"
@@ -331,6 +332,17 @@ func calculateSha1(reader io.Reader) (*string, error) {
 	return &hexSum, nil
 }
 
+func calculateSha256(reader io.Reader) (*string, error) {
+	hash := sha256.New()
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	hexSum := hex.EncodeToString(sum)
+	return &hexSum, nil
+}
+
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -499,12 +511,13 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 }
 
 type hashResult struct {
-	etag string
-	sha1 string
+	etag   string
+	sha1   string
+	sha256 string
 }
 
 func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *hashResult, error) {
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(3)
+	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(4)
 
 	doneChan := make(chan struct{}, 1)
 	errChan := make(chan error, 1)
@@ -537,6 +550,17 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return
 		}
 		sha1Chan <- *sha1
+	}()
+
+	sha256Chan := make(chan string, 1)
+	errChan4 := make(chan error, 1)
+	go func() {
+		sha256, err := calculateSha256(readers[3])
+		if err != nil {
+			errChan4 <- err
+			return
+		}
+		sha256Chan <- *sha256
 	}()
 
 	// @Note: We need a anonymous function here,
@@ -580,7 +604,20 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 			return nil, nil, err
 		}
 	}
-	hashes := &hashResult{etag: etag, sha1: sha1}
+
+	var sha256 string
+	select {
+	case sha256 = <-sha256Chan:
+	case err := <-errChan4:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	hashes := &hashResult{
+		etag:   etag,
+		sha1:   sha1,
+		sha256: sha256,
+	}
 	return originalSize, hashes, nil
 }
 
