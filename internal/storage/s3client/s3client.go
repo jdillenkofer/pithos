@@ -131,7 +131,8 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucket string, prefi
 			Key:          *object.Key,
 			LastModified: *object.LastModified,
 			ETag:         *object.ETag,
-			Size:         *object.Size,
+			// @TODO: checksums
+			Size: *object.Size,
 		}
 	}, listObjectsResult.Contents)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -157,10 +158,15 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucket string, key st
 		return nil, err
 	}
 	return &storage.Object{
-		Key:          key,
-		LastModified: *headObjectResult.LastModified,
-		ETag:         *headObjectResult.ETag,
-		Size:         *headObjectResult.ContentLength,
+		Key:               key,
+		LastModified:      *headObjectResult.LastModified,
+		ETag:              *headObjectResult.ETag,
+		ChecksumCRC32:     headObjectResult.ChecksumCRC32,
+		ChecksumCRC32C:    headObjectResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: headObjectResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      headObjectResult.ChecksumSHA1,
+		ChecksumSHA256:    headObjectResult.ChecksumSHA256,
+		Size:              *headObjectResult.ContentLength,
 	}, nil
 }
 
@@ -375,10 +381,15 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucket string, key str
 		IsTruncated:          *listPartsResult.IsTruncated,
 		Parts: sliceutils.Map(func(part types.Part) *storage.Part {
 			return &storage.Part{
-				ETag:         *part.ETag,
-				LastModified: *part.LastModified,
-				PartNumber:   *part.PartNumber,
-				Size:         *part.Size,
+				ETag:              *part.ETag,
+				ChecksumCRC32:     part.ChecksumCRC32,
+				ChecksumCRC32C:    part.ChecksumCRC32C,
+				ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+				ChecksumSHA1:      part.ChecksumSHA1,
+				ChecksumSHA256:    part.ChecksumSHA256,
+				LastModified:      *part.LastModified,
+				PartNumber:        *part.PartNumber,
+				Size:              *part.Size,
 			}
 		}, listPartsResult.Parts),
 	}, nil

@@ -21,11 +21,17 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id           *ulid.ULID
-	BucketName   string
-	Key          string
-	ContentType  string
-	ETag         string
+	Id                *ulid.ULID
+	BucketName        string
+	Key               string
+	ContentType       string
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+	// @TODO: Add checksum type i.e. FULL or COMPOSITE
 	Size         int64
 	UploadStatus string
 	UploadId     string
