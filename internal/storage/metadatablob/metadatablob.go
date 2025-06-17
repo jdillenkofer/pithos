@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -422,7 +423,6 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	checksumTypeFullObject := metadatastore.ChecksumTypeFullObject
 	object := metadatastore.Object{
 		Key:               key,
 		ContentType:       contentType,
@@ -433,7 +433,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
 		ChecksumSHA1:      &hashes.checksumSHA1,
 		ChecksumSHA256:    &hashes.checksumSHA256,
-		ChecksumType:      &checksumTypeFullObject,
+		ChecksumType:      ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
 		Size:              *originalSize,
 		Blobs: []metadatastore.Blob{
 			{

@@ -3,12 +3,18 @@ package sql
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"hash/crc32"
+	"hash/crc64"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
@@ -438,19 +444,120 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 	// Validate SequenceNumbers and calculate totalSize
 	var totalSize int64 = 0
-	hash := md5.New()
+	etagMd5Hash := md5.New()
+
+	crc32Hash := crc32.NewIEEE()
+	crc32cHash := crc32.New(crc32.MakeTable(0x82F63B78))
+	crc64NvmeHash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+	sha1Hash := sha1.New()
+	sha256Hash := sha256.New()
+
+	skipCrc32 := false
+	skipCrc32c := false
+	skipCrc64Nvme := false
+	skipSha1 := false
+	skipSha256 := false
+
 	for i, blobEntity := range blobEntities {
 		if i+1 != blobEntity.SequenceNumber {
 			return nil, metadatastore.ErrUploadWithInvalidSequenceNumber
 		}
 		totalSize += blobEntity.Size
 
-		_, err = hash.Write([]byte(blobEntity.ETag))
+		_, err = etagMd5Hash.Write([]byte(blobEntity.ETag))
 		if err != nil {
 			return nil, err
 		}
+
+		if blobEntity.ChecksumCRC32 != nil {
+			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32)
+			if err != nil {
+				return nil, err
+			}
+			_, err = crc32Hash.Write(data)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			skipCrc32 = true
+		}
+
+		if blobEntity.ChecksumCRC32C != nil {
+			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32C)
+			if err != nil {
+				return nil, err
+			}
+			_, err = crc32cHash.Write(data)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			skipCrc32c = true
+		}
+
+		if blobEntity.ChecksumCRC64NVME != nil {
+			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC64NVME)
+			if err != nil {
+				return nil, err
+			}
+			_, err = crc64NvmeHash.Write(data)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			skipCrc64Nvme = true
+		}
+
+		if blobEntity.ChecksumSHA1 != nil {
+			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA1)
+			if err != nil {
+				return nil, err
+			}
+			_, err = sha1Hash.Write(data)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			skipSha1 = true
+		}
+
+		if blobEntity.ChecksumSHA256 != nil {
+			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA256)
+			if err != nil {
+				return nil, err
+			}
+			_, err = sha256Hash.Write(data)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			skipSha256 = true
+		}
 	}
-	etag := "\"" + hex.EncodeToString(hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)) + "\""
+
+	etag := "\"" + hex.EncodeToString(etagMd5Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)) + "\""
+
+	var crc32Digest *string = nil
+	var crc32cDigest *string = nil
+	var crc64NvmeDigest *string = nil
+	var sha1Digest *string = nil
+	var sha256Digest *string = nil
+
+	if !skipCrc32 {
+		crc32Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	}
+	if !skipCrc32c {
+		crc32cDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32cHash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	}
+	if !skipCrc64Nvme {
+		crc64NvmeDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc64NvmeHash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	}
+	if !skipSha1 {
+		sha1Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha1Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	}
+	if !skipSha256 {
+		sha256Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha256Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	}
 
 	deletedBlobs := []metadatastore.Blob{}
 
@@ -489,14 +596,16 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
-	checksumTypeComposite := metadatastore.ChecksumTypeComposite
-
 	objectEntity.UploadStatus = object.UploadStatusCompleted
 	objectEntity.UploadId = ""
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
-	// @TODO: calculate composite checksums
-	objectEntity.ChecksumType = &checksumTypeComposite
+	objectEntity.ChecksumCRC32 = crc32Digest
+	objectEntity.ChecksumCRC32C = crc32cDigest
+	objectEntity.ChecksumCRC64NVME = crc64NvmeDigest
+	objectEntity.ChecksumSHA1 = sha1Digest
+	objectEntity.ChecksumSHA256 = sha256Digest
+	objectEntity.ChecksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeComposite)
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 	if err != nil {
 		return nil, err
