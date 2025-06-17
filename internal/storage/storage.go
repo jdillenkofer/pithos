@@ -39,12 +39,13 @@ type UploadPartResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
-	Location       string
-	ETag           string
-	ChecksumCRC32  string
-	ChecksumCRC32C string
-	ChecksumSHA1   string
-	ChecksumSHA256 string
+	Location          string
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
 }
 
 type Upload struct {

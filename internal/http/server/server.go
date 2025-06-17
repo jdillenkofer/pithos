@@ -152,15 +152,16 @@ type InitiateMultipartUploadResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
-	XMLName        xml.Name `xml:"CompleteMultipartUploadResult"`
-	Location       string   `xml:"Location"`
-	Bucket         string   `xml:"Bucket"`
-	Key            string   `xml:"Key"`
-	ETag           string   `xml:"ETag"`
-	ChecksumCRC32  string   `xml:"ChecksumCRC32"`
-	ChecksumCRC32C string   `xml:"ChecksumCRC32C"`
-	ChecksumSHA1   string   `xml:"ChecksumSHA1"`
-	ChecksumSHA256 string   `xml:"ChecksumSHA256"`
+	XMLName           xml.Name `xml:"CompleteMultipartUploadResult"`
+	Location          string   `xml:"Location"`
+	Bucket            string   `xml:"Bucket"`
+	Key               string   `xml:"Key"`
+	ETag              string   `xml:"ETag"`
+	ChecksumCRC32     *string  `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    *string  `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME *string  `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      *string  `xml:"ChecksumSHA1"`
+	ChecksumSHA256    *string  `xml:"ChecksumSHA256"`
 }
 
 type Upload struct {

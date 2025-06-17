@@ -282,12 +282,13 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucket s
 		return nil, err
 	}
 	return &storage.CompleteMultipartUploadResult{
-		Location:       *completeMultipartUploadResult.Location,
-		ETag:           *completeMultipartUploadResult.ETag,
-		ChecksumSHA1:   *completeMultipartUploadResult.ChecksumSHA1,
-		ChecksumCRC32:  *completeMultipartUploadResult.ChecksumCRC32,
-		ChecksumCRC32C: *completeMultipartUploadResult.ChecksumCRC32C,
-		ChecksumSHA256: *completeMultipartUploadResult.ChecksumSHA256,
+		Location:          *completeMultipartUploadResult.Location,
+		ETag:              *completeMultipartUploadResult.ETag,
+		ChecksumCRC32:     completeMultipartUploadResult.ChecksumCRC32,
+		ChecksumCRC32C:    completeMultipartUploadResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: completeMultipartUploadResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      completeMultipartUploadResult.ChecksumSHA1,
+		ChecksumSHA256:    completeMultipartUploadResult.ChecksumSHA256,
 	}, nil
 }
 
