@@ -18,12 +18,17 @@ type Bucket struct {
 }
 
 type Object struct {
-	Key          string
-	ContentType  string // only set in HeadObject and PutObject
-	LastModified time.Time
-	ETag         string
-	Size         int64
-	Blobs        []Blob
+	Key               string
+	ContentType       string // only set in HeadObject and PutObject
+	LastModified      time.Time
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+	Size              int64
+	Blobs             []Blob
 }
 
 type ListBucketResult struct {
@@ -83,10 +88,15 @@ type ListMultipartUploadsResult struct {
 }
 
 type Part struct {
-	ETag         string
-	LastModified time.Time
-	PartNumber   int32
-	Size         int64
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+	LastModified      time.Time
+	PartNumber        int32
+	Size              int64
 }
 
 type ListPartsResult struct {

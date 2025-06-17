@@ -175,11 +175,16 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key, prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				objects = append(objects, metadatastore.Object{
-					Key:          objectEntity.Key,
-					LastModified: objectEntity.UpdatedAt,
-					ETag:         objectEntity.ETag,
-					Size:         objectEntity.Size,
-					Blobs:        blobs,
+					Key:               objectEntity.Key,
+					LastModified:      objectEntity.UpdatedAt,
+					ETag:              objectEntity.ETag,
+					ChecksumCRC32:     objectEntity.ChecksumCRC32,
+					ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
+					ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
+					ChecksumSHA1:      objectEntity.ChecksumSHA1,
+					ChecksumSHA256:    objectEntity.ChecksumSHA256,
+					Size:              objectEntity.Size,
+					Blobs:             blobs,
 				})
 			}
 		}
@@ -239,12 +244,17 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, blobEntities)
 
 	return &metadatastore.Object{
-		Key:          key,
-		ContentType:  objectEntity.ContentType,
-		LastModified: objectEntity.UpdatedAt,
-		ETag:         objectEntity.ETag,
-		Size:         objectEntity.Size,
-		Blobs:        blobs,
+		Key:               key,
+		ContentType:       objectEntity.ContentType,
+		LastModified:      objectEntity.UpdatedAt,
+		ETag:              objectEntity.ETag,
+		ChecksumCRC32:     objectEntity.ChecksumCRC32,
+		ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
+		ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
+		ChecksumSHA1:      objectEntity.ChecksumSHA1,
+		ChecksumSHA256:    objectEntity.ChecksumSHA256,
+		Size:              objectEntity.Size,
+		Blobs:             blobs,
 	}, nil
 }
 
@@ -644,10 +654,15 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 			continue
 		}
 		parts = append(parts, &metadatastore.Part{
-			ETag:         blob.ETag,
-			LastModified: blob.UpdatedAt,
-			PartNumber:   sequenceNumberI32,
-			Size:         blob.Size,
+			ETag:              blob.ETag,
+			ChecksumCRC32:     blob.ChecksumCRC32,
+			ChecksumCRC32C:    blob.ChecksumCRC32C,
+			ChecksumCRC64NVME: blob.ChecksumCRC64NVME,
+			ChecksumSHA1:      blob.ChecksumSHA1,
+			ChecksumSHA256:    blob.ChecksumSHA256,
+			LastModified:      blob.UpdatedAt,
+			PartNumber:        sequenceNumberI32,
+			Size:              blob.Size,
 		})
 		if len(parts) >= int(maxParts) {
 			isTruncated = len(blobs)-(startOffset+1) > int(maxParts)

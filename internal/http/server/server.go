@@ -187,12 +187,12 @@ type ListMultipartUploadsResult struct {
 }
 
 type Part struct {
+	ETag              string  `xml:"ETag"`
 	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
 	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
 	ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
 	ChecksumSHA1      *string `xml:"ChecksumSHA1"`
 	ChecksumSHA256    *string `xml:"ChecksumSHA256"`
-	ETag              string  `xml:"ETag"`
 	LastModified      string  `xml:"LastModified"`
 	PartNumber        int32   `xml:"PartNumber"`
 	Size              int64   `xml:"Size"`
@@ -577,10 +577,15 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		IsTruncated:          result.IsTruncated,
 		Parts: sliceutils.Map(func(part *storage.Part) *Part {
 			return &Part{
-				ETag:         part.ETag,
-				LastModified: part.LastModified.UTC().Format(time.RFC3339),
-				PartNumber:   part.PartNumber,
-				Size:         part.Size,
+				ETag:              part.ETag,
+				ChecksumCRC32:     part.ChecksumCRC32,
+				ChecksumCRC32C:    part.ChecksumCRC32C,
+				ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+				ChecksumSHA1:      part.ChecksumSHA1,
+				ChecksumSHA256:    part.ChecksumSHA256,
+				LastModified:      part.LastModified.UTC().Format(time.RFC3339),
+				PartNumber:        part.PartNumber,
+				Size:              part.Size,
 			}
 		}, result.Parts),
 		StorageClass: storageClassStandard,

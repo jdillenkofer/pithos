@@ -191,11 +191,16 @@ func (mbs *metadataBlobStorage) HeadBucket(ctx context.Context, bucket string) (
 
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
-		Key:          mObject.Key,
-		ContentType:  mObject.ContentType,
-		LastModified: mObject.LastModified,
-		ETag:         mObject.ETag,
-		Size:         mObject.Size,
+		Key:               mObject.Key,
+		ContentType:       mObject.ContentType,
+		LastModified:      mObject.LastModified,
+		ETag:              mObject.ETag,
+		ChecksumCRC32:     mObject.ChecksumCRC32,
+		ChecksumCRC32C:    mObject.ChecksumCRC32C,
+		ChecksumCRC64NVME: mObject.ChecksumCRC64NVME,
+		ChecksumSHA1:      mObject.ChecksumSHA1,
+		ChecksumSHA256:    mObject.ChecksumSHA256,
+		Size:              mObject.Size,
 	}
 }
 
@@ -416,11 +421,16 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	}
 
 	object := metadatastore.Object{
-		Key:          key,
-		ContentType:  contentType,
-		LastModified: time.Now(),
-		ETag:         hashes.etag,
-		Size:         *originalSize,
+		Key:               key,
+		ContentType:       contentType,
+		LastModified:      time.Now(),
+		ETag:              hashes.etag,
+		ChecksumCRC32:     &hashes.checksumCRC32,
+		ChecksumCRC32C:    &hashes.checksumCRC32C,
+		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
+		ChecksumSHA1:      &hashes.checksumSHA1,
+		ChecksumSHA256:    &hashes.checksumSHA256,
+		Size:              *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
 				Id:                *blobId,
@@ -855,10 +865,15 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 		IsTruncated:          mlistPartsResult.IsTruncated,
 		Parts: sliceutils.Map(func(part *metadatastore.Part) *storage.Part {
 			return &storage.Part{
-				ETag:         part.ETag,
-				LastModified: part.LastModified,
-				PartNumber:   part.PartNumber,
-				Size:         part.Size,
+				ETag:              part.ETag,
+				ChecksumCRC32:     part.ChecksumCRC32,
+				ChecksumCRC32C:    part.ChecksumCRC32C,
+				ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+				ChecksumSHA1:      part.ChecksumSHA1,
+				ChecksumSHA256:    part.ChecksumSHA256,
+				LastModified:      part.LastModified,
+				PartNumber:        part.PartNumber,
+				Size:              part.Size,
 			}
 		}, mlistPartsResult.Parts),
 	}
