@@ -14,9 +14,9 @@ type sqliteRepository struct {
 
 const (
 	findInUseBlobIdsStmt                            = "SELECT blob_id FROM blobs"
-	findBlobsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC"
-	insertBlobStmt                                  = "INSERT INTO blobs (id, blob_id, object_id, etag, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)"
-	updateBlobByIdStmt                              = "UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?"
+	findBlobsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC"
+	insertBlobStmt                                  = "INSERT INTO blobs (id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	updateBlobByIdStmt                              = "UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, checksum_crc32 = ?, checksum_crc32c = ?, checksum_crc64nvme = ?, checksum_sha1 = ?, checksum_sha256 = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?"
 	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
 )
 
@@ -29,24 +29,34 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 	var blobId string
 	var objectId string
 	var etag string
+	var checksumCRC32 *string
+	var checksumCRC32C *string
+	var checksumCRC64NVME *string
+	var checksumSHA1 *string
+	var checksumSHA256 *string
 	var size int64
 	var sequenceNumber int
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobRows.Scan(&id, &blobId, &objectId, &etag, &size, &sequenceNumber, &createdAt, &updatedAt)
+	err := blobRows.Scan(&id, &blobId, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
 	blobEntity := blob.Entity{
-		Id:             &ulidId,
-		BlobId:         ulid.MustParse(blobId),
-		ObjectId:       ulid.MustParse(objectId),
-		ETag:           etag,
-		Size:           size,
-		SequenceNumber: sequenceNumber,
-		CreatedAt:      createdAt,
-		UpdatedAt:      updatedAt,
+		Id:                &ulidId,
+		BlobId:            ulid.MustParse(blobId),
+		ObjectId:          ulid.MustParse(objectId),
+		ETag:              etag,
+		ChecksumCRC32:     checksumCRC32,
+		ChecksumCRC32C:    checksumCRC32C,
+		ChecksumCRC64NVME: checksumCRC64NVME,
+		ChecksumSHA1:      checksumSHA1,
+		ChecksumSHA256:    checksumSHA256,
+		Size:              size,
+		SequenceNumber:    sequenceNumber,
+		CreatedAt:         createdAt,
+		UpdatedAt:         updatedAt,
 	}
 	return &blobEntity, nil
 }
@@ -93,12 +103,12 @@ func (br *sqliteRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob
 		blob.Id = &id
 		blob.CreatedAt = time.Now()
 		blob.UpdatedAt = blob.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBlobStmt, blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBlobStmt, blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.ChecksumCRC32, blob.ChecksumCRC32C, blob.ChecksumCRC64NVME, blob.ChecksumSHA1, blob.ChecksumSHA256, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
 		return err
 	}
 
 	blob.UpdatedAt = time.Now()
-	_, err := tx.ExecContext(ctx, updateBlobByIdStmt, blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
+	_, err := tx.ExecContext(ctx, updateBlobByIdStmt, blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.ChecksumCRC32, blob.ChecksumCRC32C, blob.ChecksumCRC64NVME, blob.ChecksumSHA1, blob.ChecksumSHA256, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
 	return err
 }
 

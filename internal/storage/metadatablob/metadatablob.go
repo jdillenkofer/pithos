@@ -423,9 +423,14 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		Size:         *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
-				Id:   *blobId,
-				ETag: hashes.etag,
-				Size: *originalSize,
+				Id:                *blobId,
+				ETag:              hashes.etag,
+				ChecksumCRC32:     &hashes.checksumCRC32,
+				ChecksumCRC32C:    &hashes.checksumCRC32C,
+				ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
+				ChecksumSHA1:      &hashes.checksumSHA1,
+				ChecksumSHA256:    &hashes.checksumSHA256,
+				Size:              *originalSize,
 			},
 		},
 	}
@@ -528,9 +533,14 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 	}
 
 	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
-		Id:   *blobId,
-		ETag: hashes.etag,
-		Size: *originalSize,
+		Id:                *blobId,
+		ETag:              hashes.etag,
+		ChecksumCRC32:     &hashes.checksumCRC32,
+		ChecksumCRC32C:    &hashes.checksumCRC32C,
+		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
+		ChecksumSHA1:      &hashes.checksumSHA1,
+		ChecksumSHA256:    &hashes.checksumSHA256,
+		Size:              *originalSize,
 	})
 	if err != nil {
 		tx.Rollback()

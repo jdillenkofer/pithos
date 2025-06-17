@@ -33,9 +33,14 @@ type ListBucketResult struct {
 }
 
 type Blob struct {
-	Id   blobstore.BlobId
-	Size int64
-	ETag string
+	Id                blobstore.BlobId
+	Size              int64
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
 }
 
 type InitiateMultipartUploadResult struct {
