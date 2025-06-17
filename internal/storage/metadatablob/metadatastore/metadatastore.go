@@ -27,6 +27,7 @@ type Object struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+	ChecksumType      *string
 	Size              int64
 	Blobs             []Blob
 }
@@ -61,6 +62,7 @@ type CompleteMultipartUploadResult struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+	ChecksumType      *string
 }
 
 type AbortMultipartResult struct {
@@ -109,6 +111,9 @@ type ListPartsResult struct {
 	IsTruncated          bool
 	Parts                []*Part
 }
+
+const ChecksumTypeFullObject string = "FULL_OBJECT"
+const ChecksumTypeComposite string = "COMPOSITE"
 
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")

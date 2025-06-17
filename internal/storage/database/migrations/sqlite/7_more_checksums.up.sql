@@ -9,3 +9,4 @@ ALTER TABLE objects ADD COLUMN checksum_crc32c TEXT;
 ALTER TABLE objects ADD COLUMN checksum_crc64nvme TEXT;
 ALTER TABLE objects ADD COLUMN checksum_sha1 TEXT;
 ALTER TABLE objects ADD COLUMN checksum_sha256 TEXT;
+ALTER TABLE objects ADD COLUMN checksum_type TEXT;

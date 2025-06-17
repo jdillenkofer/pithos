@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"hash/crc32"
 	"hash/crc64"
@@ -200,6 +201,7 @@ func convertObject(mObject metadatastore.Object) storage.Object {
 		ChecksumCRC64NVME: mObject.ChecksumCRC64NVME,
 		ChecksumSHA1:      mObject.ChecksumSHA1,
 		ChecksumSHA256:    mObject.ChecksumSHA256,
+		ChecksumType:      mObject.ChecksumType,
 		Size:              mObject.Size,
 	}
 }
@@ -328,28 +330,6 @@ func calculateETag(reader io.Reader) (*string, error) {
 	return &etag, nil
 }
 
-func calculateSha1(reader io.Reader) (*string, error) {
-	hash := sha1.New()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
-}
-
-func calculateSha256(reader io.Reader) (*string, error) {
-	hash := sha256.New()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
-}
-
 func calculateCrc32(reader io.Reader) (*string, error) {
 	hash := crc32.NewIEEE()
 	_, err := io.Copy(hash, reader)
@@ -357,8 +337,8 @@ func calculateCrc32(reader io.Reader) (*string, error) {
 		return nil, err
 	}
 	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
+	base64Sum := base64.StdEncoding.EncodeToString(sum)
+	return &base64Sum, nil
 }
 
 func calculateCrc32c(reader io.Reader) (*string, error) {
@@ -368,8 +348,8 @@ func calculateCrc32c(reader io.Reader) (*string, error) {
 		return nil, err
 	}
 	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
+	base64Sum := base64.StdEncoding.EncodeToString(sum)
+	return &base64Sum, nil
 }
 
 func calculateCrc64Nvme(reader io.Reader) (*string, error) {
@@ -379,8 +359,30 @@ func calculateCrc64Nvme(reader io.Reader) (*string, error) {
 		return nil, err
 	}
 	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	return &hexSum, nil
+	base64Sum := base64.StdEncoding.EncodeToString(sum)
+	return &base64Sum, nil
+}
+
+func calculateSha1(reader io.Reader) (*string, error) {
+	hash := sha1.New()
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	base64Sum := base64.StdEncoding.EncodeToString(sum)
+	return &base64Sum, nil
+}
+
+func calculateSha256(reader io.Reader) (*string, error) {
+	hash := sha256.New()
+	_, err := io.Copy(hash, reader)
+	if err != nil {
+		return nil, err
+	}
+	sum := hash.Sum([]byte{})
+	base64Sum := base64.StdEncoding.EncodeToString(sum)
+	return &base64Sum, nil
 }
 
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
@@ -420,6 +422,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
+	checksumTypeFullObject := metadatastore.ChecksumTypeFullObject
 	object := metadatastore.Object{
 		Key:               key,
 		ContentType:       contentType,
@@ -430,6 +433,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
 		ChecksumSHA1:      &hashes.checksumSHA1,
 		ChecksumSHA256:    &hashes.checksumSHA256,
+		ChecksumType:      &checksumTypeFullObject,
 		Size:              *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
@@ -751,6 +755,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 		ChecksumCRC32C: result.ChecksumCRC32C,
 		ChecksumSHA1:   result.ChecksumSHA1,
 		ChecksumSHA256: result.ChecksumSHA256,
+		ChecksumType:   result.ChecksumType,
 	}
 }
 

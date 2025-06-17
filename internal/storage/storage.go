@@ -26,6 +26,7 @@ type Object struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+	ChecksumType      *string
 	Size              int64
 }
 
@@ -51,6 +52,7 @@ type CompleteMultipartUploadResult struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+	ChecksumType      *string
 }
 
 type Upload struct {
