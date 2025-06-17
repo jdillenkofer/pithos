@@ -409,7 +409,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	originalSize, hashes, err := mbs.uploadBlobAndCalculateHashes(ctx, tx, *blobId, reader)
+	originalSize, hashes, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -521,7 +521,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	originalSize, hashes, err := mbs.uploadBlobAndCalculateHashes(ctx, tx, *blobId, reader)
+	originalSize, hashes, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -545,16 +545,16 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 	}, nil
 }
 
-type hashResult struct {
-	crc64nvme string
-	crc32     string
-	crc32c    string
-	etag      string
-	sha1      string
-	sha256    string
+type checksumResult struct {
+	etag              string
+	checksumCRC32     string
+	checksumCRC32C    string
+	checksumCRC64NVME string
+	checksumSHA1      string
+	checksumSHA256    string
 }
 
-func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *hashResult, error) {
+func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *checksumResult, error) {
 	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
 
 	doneChan := make(chan struct{}, 1)
@@ -667,60 +667,60 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateHashes(ctx context.Context
 		}
 	}
 
-	var sha1 string
+	var checksumSHA1 string
 	select {
-	case sha1 = <-sha1Chan:
+	case checksumSHA1 = <-sha1Chan:
 	case err := <-errChan3:
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	var sha256 string
+	var checksumSHA256 string
 	select {
-	case sha256 = <-sha256Chan:
+	case checksumSHA256 = <-sha256Chan:
 	case err := <-errChan4:
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	var crc32 string
+	var checksumCRC32 string
 	select {
-	case crc32 = <-crc32Chan:
+	case checksumCRC32 = <-crc32Chan:
 	case err := <-errChan5:
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	var crc32c string
+	var checksumCRC32C string
 	select {
-	case crc32c = <-crc32cChan:
+	case checksumCRC32C = <-crc32cChan:
 	case err := <-errChan6:
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	var crc64nvme string
+	var checksumCRC64NVME string
 	select {
-	case crc64nvme = <-crc64nvmeChan:
+	case checksumCRC64NVME = <-crc64nvmeChan:
 	case err := <-errChan7:
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	hashes := &hashResult{
-		crc64nvme: crc64nvme,
-		crc32:     crc32,
-		crc32c:    crc32c,
-		etag:      etag,
-		sha1:      sha1,
-		sha256:    sha256,
+	checksums := &checksumResult{
+		etag:              etag,
+		checksumCRC32:     checksumCRC32,
+		checksumCRC32C:    checksumCRC32C,
+		checksumCRC64NVME: checksumCRC64NVME,
+		checksumSHA1:      checksumSHA1,
+		checksumSHA256:    checksumSHA256,
 	}
-	return originalSize, hashes, nil
+	return originalSize, checksums, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {

@@ -43,13 +43,14 @@ type InitiateMultipartUploadResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
-	DeletedBlobs   []Blob
-	Location       string
-	ETag           string
-	ChecksumCRC32  string
-	ChecksumCRC32C string
-	ChecksumSHA1   string
-	ChecksumSHA256 string
+	DeletedBlobs      []Blob
+	Location          string
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
 }
 
 type AbortMultipartResult struct {
