@@ -166,6 +166,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucket string, key st
 		ChecksumCRC64NVME: headObjectResult.ChecksumCRC64NVME,
 		ChecksumSHA1:      headObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    headObjectResult.ChecksumSHA256,
+		ChecksumType:      (*string)(&headObjectResult.ChecksumType),
 		Size:              *headObjectResult.ContentLength,
 	}, nil
 }
@@ -295,6 +296,7 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucket s
 		ChecksumCRC64NVME: completeMultipartUploadResult.ChecksumCRC64NVME,
 		ChecksumSHA1:      completeMultipartUploadResult.ChecksumSHA1,
 		ChecksumSHA256:    completeMultipartUploadResult.ChecksumSHA256,
+		ChecksumType:      (*string)(&completeMultipartUploadResult.ChecksumType),
 	}, nil
 }
 

@@ -92,6 +92,12 @@ const etagHeader = "ETag"
 const lastModifiedHeader = "Last-Modified"
 const contentTypeHeader = "Content-Type"
 const locationHeader = "Location"
+const checksumTypeHeader = "x-amz-checksum-type"
+const checksumCRC32Header = "x-amz-checksum-crc32"
+const checksumCRC32CHeader = "x-amz-checksum-crc32c"
+const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
+const checksumSHA1Header = "x-amz-checksum-sha1"
+const checksumSHA256Header = "x-amz-checksum-sha256"
 
 const applicationXmlContentType = "application/xml"
 
@@ -162,6 +168,7 @@ type CompleteMultipartUploadResult struct {
 	ChecksumCRC64NVME *string  `xml:"ChecksumCRC64NVME"`
 	ChecksumSHA1      *string  `xml:"ChecksumSHA1"`
 	ChecksumSHA256    *string  `xml:"ChecksumSHA256"`
+	ChecksumType      *string  `xml:"ChecksumType"`
 }
 
 type Upload struct {
@@ -453,8 +460,27 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	gmtTimeLoc := time.FixedZone("GMT", 0)
 	w.Header().Set(etagHeader, object.ETag)
+	if object.ChecksumType != nil {
+		w.Header().Set(checksumTypeHeader, *object.ChecksumType)
+	}
+	if object.ChecksumCRC32 != nil {
+		w.Header().Set(checksumCRC32Header, *object.ChecksumCRC32)
+	}
+	if object.ChecksumCRC32C != nil {
+		w.Header().Set(checksumCRC32CHeader, *object.ChecksumCRC32C)
+	}
+	if object.ChecksumCRC64NVME != nil {
+		w.Header().Set(checksumCRC64NVMEHeader, *object.ChecksumCRC64NVME)
+	}
+	if object.ChecksumSHA1 != nil {
+		w.Header().Set(checksumSHA1Header, *object.ChecksumSHA1)
+	}
+	if object.ChecksumSHA256 != nil {
+		w.Header().Set(checksumSHA256Header, *object.ChecksumSHA256)
+	}
+
+	gmtTimeLoc := time.FixedZone("GMT", 0)
 	w.Header().Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
 	w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
@@ -757,6 +783,7 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 		ChecksumCRC32C: result.ChecksumCRC32C,
 		ChecksumSHA1:   result.ChecksumSHA1,
 		ChecksumSHA256: result.ChecksumSHA256,
+		ChecksumType:   result.ChecksumType,
 	}
 
 	w.WriteHeader(200)

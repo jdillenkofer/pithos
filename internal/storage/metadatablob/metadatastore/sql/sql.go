@@ -183,6 +183,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
 					ChecksumSHA1:      objectEntity.ChecksumSHA1,
 					ChecksumSHA256:    objectEntity.ChecksumSHA256,
+					ChecksumType:      objectEntity.ChecksumType,
 					Size:              objectEntity.Size,
 					Blobs:             blobs,
 				})
@@ -253,6 +254,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
 		ChecksumSHA1:      objectEntity.ChecksumSHA1,
 		ChecksumSHA256:    objectEntity.ChecksumSHA256,
+		ChecksumType:      objectEntity.ChecksumType,
 		Size:              objectEntity.Size,
 		Blobs:             blobs,
 	}, nil
@@ -487,18 +489,28 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
+	checksumTypeComposite := metadatastore.ChecksumTypeComposite
+
 	objectEntity.UploadStatus = object.UploadStatusCompleted
 	objectEntity.UploadId = ""
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
+	// @TODO: calculate composite checksums
+	objectEntity.ChecksumType = &checksumTypeComposite
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 	if err != nil {
 		return nil, err
 	}
 
 	return &metadatastore.CompleteMultipartUploadResult{
-		DeletedBlobs: deletedBlobs,
-		ETag:         etag,
+		DeletedBlobs:      deletedBlobs,
+		ETag:              objectEntity.ETag,
+		ChecksumCRC32:     objectEntity.ChecksumCRC32,
+		ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
+		ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
+		ChecksumSHA1:      objectEntity.ChecksumSHA1,
+		ChecksumSHA256:    objectEntity.ChecksumSHA256,
+		ChecksumType:      objectEntity.ChecksumType,
 	}, nil
 }
 

@@ -31,12 +31,12 @@ type Entity struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
-	// @TODO: Add checksum type i.e. FULL or COMPOSITE
-	Size         int64
-	UploadStatus string
-	UploadId     string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ChecksumType      *string
+	Size              int64
+	UploadStatus      string
+	UploadId          string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 const (
