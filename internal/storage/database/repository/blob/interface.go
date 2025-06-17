@@ -16,12 +16,17 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id             *ulid.ULID
-	BlobId         ulid.ULID
-	ObjectId       ulid.ULID
-	ETag           string
-	Size           int64
-	SequenceNumber int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	Id                *ulid.ULID
+	BlobId            ulid.ULID
+	ObjectId          ulid.ULID
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+	Size              int64
+	SequenceNumber    int
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }

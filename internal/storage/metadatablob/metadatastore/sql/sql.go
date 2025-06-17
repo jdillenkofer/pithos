@@ -161,9 +161,14 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			blobs := []metadatastore.Blob{}
 			for _, blobEntity := range blobEntities {
 				blobStruc := metadatastore.Blob{
-					Id:   blobEntity.BlobId,
-					ETag: blobEntity.ETag,
-					Size: blobEntity.Size,
+					Id:                blobEntity.BlobId,
+					ETag:              blobEntity.ETag,
+					ChecksumCRC32:     blobEntity.ChecksumCRC32,
+					ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
+					ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
+					ChecksumSHA1:      blobEntity.ChecksumSHA1,
+					ChecksumSHA256:    blobEntity.ChecksumSHA256,
+					Size:              blobEntity.Size,
 				}
 				blobs = append(blobs, blobStruc)
 			}
@@ -222,9 +227,14 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}
 	blobs := sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
 		return metadatastore.Blob{
-			Id:   blobEntity.BlobId,
-			ETag: blobEntity.ETag,
-			Size: blobEntity.Size,
+			Id:                blobEntity.BlobId,
+			ETag:              blobEntity.ETag,
+			ChecksumCRC32:     blobEntity.ChecksumCRC32,
+			ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
+			ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
+			ChecksumSHA1:      blobEntity.ChecksumSHA1,
+			ChecksumSHA256:    blobEntity.ChecksumSHA256,
+			Size:              blobEntity.Size,
 		}
 	}, blobEntities)
 
@@ -278,11 +288,16 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	sequenceNumber := 0
 	for _, blobStruc := range obj.Blobs {
 		blobEntity := blob.Entity{
-			BlobId:         blobStruc.Id,
-			ObjectId:       *objectId,
-			ETag:           blobStruc.ETag,
-			Size:           blobStruc.Size,
-			SequenceNumber: sequenceNumber,
+			BlobId:            blobStruc.Id,
+			ObjectId:          *objectId,
+			ETag:              blobStruc.ETag,
+			ChecksumCRC32:     blobStruc.ChecksumCRC32,
+			ChecksumCRC32C:    blobStruc.ChecksumCRC32C,
+			ChecksumCRC64NVME: blobStruc.ChecksumCRC64NVME,
+			ChecksumSHA1:      blobStruc.ChecksumSHA1,
+			ChecksumSHA256:    blobStruc.ChecksumSHA256,
+			Size:              blobStruc.Size,
+			SequenceNumber:    sequenceNumber,
 		}
 		err = sms.blobRepository.SaveBlob(ctx, tx, &blobEntity)
 		if err != nil {
@@ -369,11 +384,16 @@ func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	}
 
 	blobEntity := blob.Entity{
-		BlobId:         blb.Id,
-		ObjectId:       *objectEntity.Id,
-		ETag:           blb.ETag,
-		Size:           blb.Size,
-		SequenceNumber: int(partNumber),
+		BlobId:            blb.Id,
+		ObjectId:          *objectEntity.Id,
+		ETag:              blb.ETag,
+		ChecksumCRC32:     blb.ChecksumCRC32,
+		ChecksumCRC32C:    blb.ChecksumCRC32C,
+		ChecksumCRC64NVME: blb.ChecksumCRC64NVME,
+		ChecksumSHA1:      blb.ChecksumSHA1,
+		ChecksumSHA256:    blb.ChecksumSHA256,
+		Size:              blb.Size,
+		SequenceNumber:    int(partNumber),
 	}
 	err = sms.blobRepository.SaveBlob(ctx, tx, &blobEntity)
 	if err != nil {
@@ -440,9 +460,14 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 		deletedBlobs = sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
 			return metadatastore.Blob{
-				Id:   blobEntity.BlobId,
-				ETag: blobEntity.ETag,
-				Size: blobEntity.Size,
+				Id:                blobEntity.BlobId,
+				ETag:              blobEntity.ETag,
+				ChecksumCRC32:     blobEntity.ChecksumCRC32,
+				ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
+				ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
+				ChecksumSHA1:      blobEntity.ChecksumSHA1,
+				ChecksumSHA256:    blobEntity.ChecksumSHA256,
+				Size:              blobEntity.Size,
 			}
 		}, oldBlobEntities)
 
@@ -496,9 +521,14 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 
 	blobs := sliceutils.Map(func(blobEntity blob.Entity) metadatastore.Blob {
 		return metadatastore.Blob{
-			Id:   blobEntity.BlobId,
-			ETag: blobEntity.ETag,
-			Size: blobEntity.Size,
+			Id:                blobEntity.BlobId,
+			ETag:              blobEntity.ETag,
+			ChecksumCRC32:     blobEntity.ChecksumCRC32,
+			ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
+			ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
+			ChecksumSHA1:      blobEntity.ChecksumSHA1,
+			ChecksumSHA256:    blobEntity.ChecksumSHA256,
+			Size:              blobEntity.Size,
 		}
 	}, blobEntities)
 
