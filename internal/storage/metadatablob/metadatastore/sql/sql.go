@@ -9,11 +9,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"hash/crc32"
-	"hash/crc64"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/crcutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -373,6 +373,8 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		Size:         -1,
 		UploadId:     ulid.Make().String(),
 		UploadStatus: object.UploadStatusPending,
+		// @TODO: get checksumType from parameter
+		ChecksumType: ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
@@ -442,21 +444,33 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		return nil, err
 	}
 
+	checksumType := metadatastore.ChecksumTypeFullObject
+	if objectEntity.ChecksumType != nil {
+		checksumType = *objectEntity.ChecksumType
+	}
+
 	// Validate SequenceNumbers and calculate totalSize
 	var totalSize int64 = 0
 	etagMd5Hash := md5.New()
-
-	crc32Hash := crc32.NewIEEE()
-	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	crc64NvmeHash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-	sha1Hash := sha1.New()
-	sha256Hash := sha256.New()
 
 	skipCrc32 := false
 	skipCrc32c := false
 	skipCrc64Nvme := false
 	skipSha1 := false
 	skipSha256 := false
+
+	// -- The following variables are only used by checksumType Composite
+	crc32Hash := crc32.NewIEEE()
+	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	sha1Hash := sha1.New()
+	sha256Hash := sha256.New()
+	// --
+
+	// -- The following variables are only used by checksumType FullObject
+	var crc32Combined *[]byte = nil
+	var crc32cCombined *[]byte = nil
+	var crc64NvmeCombined *[]byte = nil
+	// --
 
 	for i, blobEntity := range blobEntities {
 		if i+1 != blobEntity.SequenceNumber {
@@ -469,68 +483,105 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, err
 		}
 
-		if blobEntity.ChecksumCRC32 != nil {
-			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32)
-			if err != nil {
-				return nil, err
+		if checksumType == metadatastore.ChecksumTypeComposite {
+			if blobEntity.ChecksumCRC32 != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32)
+				if err != nil {
+					return nil, err
+				}
+				_, err = crc32Hash.Write(data)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				skipCrc32 = true
 			}
-			_, err = crc32Hash.Write(data)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			skipCrc32 = true
-		}
 
-		if blobEntity.ChecksumCRC32C != nil {
-			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32C)
-			if err != nil {
-				return nil, err
+			if blobEntity.ChecksumCRC32C != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32C)
+				if err != nil {
+					return nil, err
+				}
+				_, err = crc32cHash.Write(data)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				skipCrc32c = true
 			}
-			_, err = crc32cHash.Write(data)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			skipCrc32c = true
-		}
 
-		if blobEntity.ChecksumCRC64NVME != nil {
-			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC64NVME)
-			if err != nil {
-				return nil, err
-			}
-			_, err = crc64NvmeHash.Write(data)
-			if err != nil {
-				return nil, err
-			}
-		} else {
+			// not supported for checksumType Composite
 			skipCrc64Nvme = true
-		}
 
-		if blobEntity.ChecksumSHA1 != nil {
-			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA1)
-			if err != nil {
-				return nil, err
+			if blobEntity.ChecksumSHA1 != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA1)
+				if err != nil {
+					return nil, err
+				}
+				_, err = sha1Hash.Write(data)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				skipSha1 = true
 			}
-			_, err = sha1Hash.Write(data)
-			if err != nil {
-				return nil, err
+
+			if blobEntity.ChecksumSHA256 != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA256)
+				if err != nil {
+					return nil, err
+				}
+				_, err = sha256Hash.Write(data)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				skipSha256 = true
 			}
-		} else {
+		} else if checksumType == metadatastore.ChecksumTypeFullObject {
+			if blobEntity.ChecksumCRC32 != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32)
+				if err != nil {
+					return nil, err
+				}
+				if crc32Combined == nil {
+					crc32Combined = &data
+				} else {
+					crc32Combined = ptrutils.ToPtr(crcutils.CombineCrc32(*crc32Combined, data, blobEntity.Size))
+				}
+			} else {
+				skipCrc32 = true
+			}
+
+			if blobEntity.ChecksumCRC32C != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC32C)
+				if err != nil {
+					return nil, err
+				}
+				if crc32cCombined == nil {
+					crc32cCombined = &data
+				} else {
+					crc32cCombined = ptrutils.ToPtr(crcutils.CombineCrc32c(*crc32cCombined, data, blobEntity.Size))
+				}
+			} else {
+				skipCrc32c = true
+			}
+
+			if blobEntity.ChecksumCRC64NVME != nil {
+				data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumCRC64NVME)
+				if err != nil {
+					return nil, err
+				}
+				if crc64NvmeCombined == nil {
+					crc64NvmeCombined = &data
+				} else {
+					crc64NvmeCombined = ptrutils.ToPtr(crcutils.CombineCrc64Nvme(*crc64NvmeCombined, data, blobEntity.Size))
+				}
+			} else {
+				skipCrc64Nvme = true
+			}
+
 			skipSha1 = true
-		}
-
-		if blobEntity.ChecksumSHA256 != nil {
-			data, err := base64.StdEncoding.DecodeString(*blobEntity.ChecksumSHA256)
-			if err != nil {
-				return nil, err
-			}
-			_, err = sha256Hash.Write(data)
-			if err != nil {
-				return nil, err
-			}
-		} else {
 			skipSha256 = true
 		}
 	}
@@ -543,20 +594,29 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	var sha1Digest *string = nil
 	var sha256Digest *string = nil
 
-	if !skipCrc32 {
-		crc32Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
-	}
-	if !skipCrc32c {
-		crc32cDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32cHash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
-	}
-	if !skipCrc64Nvme {
-		crc64NvmeDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc64NvmeHash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
-	}
-	if !skipSha1 {
-		sha1Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha1Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
-	}
-	if !skipSha256 {
-		sha256Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha256Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+	if checksumType == metadatastore.ChecksumTypeComposite {
+		if !skipCrc32 {
+			crc32Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+		}
+		if !skipCrc32c {
+			crc32cDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(crc32cHash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+		}
+		if !skipSha1 {
+			sha1Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha1Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+		}
+		if !skipSha256 {
+			sha256Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(sha256Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)))
+		}
+	} else if checksumType == metadatastore.ChecksumTypeFullObject {
+		if !skipCrc32 && crc32Combined != nil {
+			crc32Digest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(*crc32Combined))
+		}
+		if !skipCrc32c && crc32cCombined != nil {
+			crc32cDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(*crc32cCombined))
+		}
+		if !skipCrc64Nvme && crc64NvmeCombined != nil {
+			crc64NvmeDigest = ptrutils.ToPtr(base64.StdEncoding.EncodeToString(*crc64NvmeCombined))
+		}
 	}
 
 	deletedBlobs := []metadatastore.Blob{}
@@ -605,7 +665,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	objectEntity.ChecksumCRC64NVME = crc64NvmeDigest
 	objectEntity.ChecksumSHA1 = sha1Digest
 	objectEntity.ChecksumSHA256 = sha256Digest
-	objectEntity.ChecksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeComposite)
+	objectEntity.ChecksumType = ptrutils.ToPtr(checksumType)
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 	if err != nil {
 		return nil, err
