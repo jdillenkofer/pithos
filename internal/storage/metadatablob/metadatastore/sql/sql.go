@@ -447,7 +447,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	etagMd5Hash := md5.New()
 
 	crc32Hash := crc32.NewIEEE()
-	crc32cHash := crc32.New(crc32.MakeTable(0x82F63B78))
+	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	crc64NvmeHash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
 	sha1Hash := sha1.New()
 	sha256Hash := sha256.New()
