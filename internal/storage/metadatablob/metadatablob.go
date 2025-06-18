@@ -343,7 +343,7 @@ func calculateCrc32(reader io.Reader) (*string, error) {
 }
 
 func calculateCrc32c(reader io.Reader) (*string, error) {
-	hash := crc32.New(crc32.MakeTable(0x82F63B78))
+	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	_, err := io.Copy(hash, reader)
 	if err != nil {
 		return nil, err
