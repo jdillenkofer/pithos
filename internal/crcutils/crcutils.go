@@ -5,6 +5,9 @@ import (
 	"math"
 )
 
+// This was ported over from localstack and allows you to efficiently combine crc checksums
+// https://github.com/localstack/localstack/blob/ea0a194102807b59c44e74dc355ef1dd07981ed8/localstack-core/localstack/services/s3/utils.py#L256
+
 func gf2_matrix_square(square *[]uint64, mat *[]uint64) {
 	for n := range len(*mat) {
 		(*square)[n] = gf2_matrix_times(*mat, (*mat)[n])
