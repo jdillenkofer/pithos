@@ -112,8 +112,8 @@ type ListPartsResult struct {
 	Parts                []*Part
 }
 
-const ChecksumTypeFullObject string = "FULL_OBJECT"
-const ChecksumTypeComposite string = "COMPOSITE"
+const ChecksumTypeFullObject = "FULL_OBJECT"
+const ChecksumTypeComposite = "COMPOSITE"
 
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")

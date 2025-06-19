@@ -39,9 +39,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const accessKeyId string = "AKIAIOSFODNN7EXAMPLE"
-const secretAccessKey string = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-const region string = "eu-central-1"
+const accessKeyId = "AKIAIOSFODNN7EXAMPLE"
+const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+const region = "eu-central-1"
 const blobStoreEncryptionPassword = "test"
 
 var bucketName *string = aws.String("test")
