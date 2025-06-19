@@ -282,12 +282,12 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 	return reader, nil
 }
 
-func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
 	})
 
-	err := psm.innerStorage.PutObject(ctx, bucket, key, contentType, reader)
+	err := psm.innerStorage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return err

@@ -145,14 +145,14 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	return reader, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	err = cs.innerStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser)
+	err = cs.innerStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
 	if err != nil {
 		return err
 	}

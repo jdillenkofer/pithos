@@ -386,7 +386,7 @@ func calculateSha256(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -417,7 +417,13 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	originalSize, hashes, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	originalSize, calculatedChecksums, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	err = validateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -427,23 +433,23 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		Key:               key,
 		ContentType:       contentType,
 		LastModified:      time.Now(),
-		ETag:              hashes.etag,
-		ChecksumCRC32:     &hashes.checksumCRC32,
-		ChecksumCRC32C:    &hashes.checksumCRC32C,
-		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
-		ChecksumSHA1:      &hashes.checksumSHA1,
-		ChecksumSHA256:    &hashes.checksumSHA256,
+		ETag:              calculatedChecksums.etag,
+		ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
+		ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
+		ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
+		ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
+		ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
 		ChecksumType:      ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
 		Size:              *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
 				Id:                *blobId,
-				ETag:              hashes.etag,
-				ChecksumCRC32:     &hashes.checksumCRC32,
-				ChecksumCRC32C:    &hashes.checksumCRC32C,
-				ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
-				ChecksumSHA1:      &hashes.checksumSHA1,
-				ChecksumSHA256:    &hashes.checksumSHA256,
+				ETag:              calculatedChecksums.etag,
+				ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
+				ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
+				ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
+				ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
+				ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
 				Size:              *originalSize,
 			},
 		},
@@ -460,6 +466,42 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
+	return nil
+}
+
+func validateChecksums(checksumInput storage.ChecksumInput, calculatedChecksums checksumResult) error {
+	if checksumInput.ETag != nil {
+		if *checksumInput.ETag != calculatedChecksums.etag {
+			log.Println("ETAG", *checksumInput.ETag, calculatedChecksums.etag)
+			return metadatastore.ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC32 != nil {
+		if *checksumInput.ChecksumCRC32 != calculatedChecksums.checksumCRC32 {
+			log.Println("CRC32", *checksumInput.ChecksumCRC32, calculatedChecksums.checksumCRC32)
+			return metadatastore.ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC32C != nil {
+		if *checksumInput.ChecksumCRC32C != calculatedChecksums.checksumCRC32C {
+			return metadatastore.ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC64NVME != nil {
+		if *checksumInput.ChecksumCRC64NVME != calculatedChecksums.checksumCRC64NVME {
+			return metadatastore.ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumSHA1 != nil {
+		if *checksumInput.ChecksumSHA1 != calculatedChecksums.checksumSHA1 {
+			return metadatastore.ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumSHA256 != nil {
+		if *checksumInput.ChecksumSHA256 != calculatedChecksums.checksumSHA256 {
+			return metadatastore.ErrBadDigest
+		}
+	}
 	return nil
 }
 

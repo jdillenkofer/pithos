@@ -100,10 +100,10 @@ func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucket strin
 	return tsm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".PutObject()").End()
 
-	return tsm.innerStorage.PutObject(ctx, bucket, key, contentType, reader)
+	return tsm.innerStorage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
 }
 
 func (tsm *tracingStorageMiddleware) DeleteObject(ctx context.Context, bucket string, key string) error {
