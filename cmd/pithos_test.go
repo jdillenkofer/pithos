@@ -239,6 +239,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 }
 
 func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, testSuffix string, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool)) {
+	isShortRun := testing.Short()
 	for _, usePathStyle := range []bool{false, true} {
 		hostOrPathStyleSuffix := ""
 		if usePathStyle {
@@ -247,11 +248,17 @@ func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, tes
 			hostOrPathStyleSuffix = " using host style"
 		}
 		for _, useReplication := range []bool{false, true} {
+			if useReplication && isShortRun {
+				continue
+			}
 			replicationSuffix := hostOrPathStyleSuffix
 			if useReplication {
 				replicationSuffix += " replicated"
 			}
 			for _, useFilesystemBlobStore := range []bool{false, true} {
+				if useFilesystemBlobStore && isShortRun {
+					continue
+				}
 				blobStoreSuffix := replicationSuffix
 				if useFilesystemBlobStore {
 					blobStoreSuffix += " with filesystemBlobStore"
@@ -259,11 +266,17 @@ func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, tes
 					blobStoreSuffix += " with sqlBlobStore"
 				}
 				for _, encryptBlobStore := range []bool{false, true} {
+					if !encryptBlobStore && isShortRun {
+						continue
+					}
 					encryptBlobStoreSuffix := blobStoreSuffix
 					if encryptBlobStore {
 						encryptBlobStoreSuffix += " (encrypted)"
 					}
 					for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+						if wrapBlobStoreWithOutbox && isShortRun {
+							continue
+						}
 						testSuffix := encryptBlobStoreSuffix
 						if wrapBlobStoreWithOutbox {
 							testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
@@ -277,9 +290,6 @@ func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, tes
 }
 
 func TestCreateBucket(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -326,9 +336,6 @@ func TestCreateBucket(t *testing.T) {
 }
 
 func TestHeadBucket(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -357,9 +364,6 @@ func TestHeadBucket(t *testing.T) {
 }
 
 func TestListBuckets(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -416,9 +420,6 @@ func TestListBuckets(t *testing.T) {
 }
 
 func TestPutObject(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -542,9 +543,6 @@ func TestPutObject(t *testing.T) {
 }
 
 func TestMultipartUpload(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -1354,9 +1352,6 @@ func TestMultipartUpload(t *testing.T) {
 }
 
 func TestGetObject(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -1616,9 +1611,6 @@ func TestGetObject(t *testing.T) {
 }
 
 func TestDeleteObject(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -1696,9 +1688,6 @@ func TestDeleteObject(t *testing.T) {
 }
 
 func TestDeleteBucket(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
@@ -1834,9 +1823,6 @@ func TestDeleteBucket(t *testing.T) {
 }
 
 func TestListObjects(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	t.Parallel()
 
