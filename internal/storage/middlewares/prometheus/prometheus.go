@@ -322,13 +322,13 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 	return initiateMultipartUploadResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
+func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	bytesUploaded := 0
 	data = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(data), func(n int) {
 		bytesUploaded += n
 	})
 
-	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data)
+	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
 		return nil, err

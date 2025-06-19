@@ -852,6 +852,8 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	partNumber := query.Get(partNumberQuery)
+	checksumInput := extractChecksumInput(r)
+
 	log.Printf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)\n", key, bucket, uploadId, partNumber)
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
@@ -867,7 +869,7 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberI32, r.Body)
+	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberI32, r.Body, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
 		return

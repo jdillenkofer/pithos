@@ -135,9 +135,9 @@ func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Conte
 	return storage.CreateMultipartUpload(ctx, bucket, key, contentType)
 }
 
-func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
+func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	storage := csm.lookupStorage(bucket)
-	return storage.UploadPart(ctx, bucket, key, uploadId, partNumber, reader)
+	return storage.UploadPart(ctx, bucket, key, uploadId, partNumber, reader, checksumInput)
 }
 
 func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {

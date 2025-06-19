@@ -568,7 +568,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
+func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -582,7 +582,13 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	originalSize, hashes, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	originalSize, calculatedChecksums, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	err = validateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -590,12 +596,12 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 
 	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
 		Id:                *blobId,
-		ETag:              hashes.etag,
-		ChecksumCRC32:     &hashes.checksumCRC32,
-		ChecksumCRC32C:    &hashes.checksumCRC32C,
-		ChecksumCRC64NVME: &hashes.checksumCRC64NVME,
-		ChecksumSHA1:      &hashes.checksumSHA1,
-		ChecksumSHA256:    &hashes.checksumSHA256,
+		ETag:              calculatedChecksums.etag,
+		ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
+		ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
+		ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
+		ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
+		ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
 		Size:              *originalSize,
 	})
 	if err != nil {
@@ -607,7 +613,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 	return &storage.UploadPartResult{
-		ETag: hashes.etag,
+		ETag: calculatedChecksums.etag,
 	}, nil
 }
 
