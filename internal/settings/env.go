@@ -6,17 +6,17 @@ import (
 	"strings"
 )
 
-const envKeyPrefix string = "PITHOS"
+const envKeyPrefix = "PITHOS"
 
-const accessKeyIdEnvKey string = envKeyPrefix + "_ACCESS_KEY_ID"
-const secretAccessKeyEnvKey string = envKeyPrefix + "_SECRET_ACCESS_KEY"
-const regionEnvKey string = envKeyPrefix + "_REGION"
-const domainEnvKey string = envKeyPrefix + "_DOMAIN"
-const bindAddressEnvKey string = envKeyPrefix + "_BIND_ADDRESS"
-const portEnvKey string = envKeyPrefix + "_PORT"
-const monitoringPortEnvKey string = envKeyPrefix + "_MONITORING_PORT"
-const monitoringPortEnabledEnvKey string = envKeyPrefix + "_MONITORING_PORT_ENABLED"
-const storageJsonPathEnvKey string = envKeyPrefix + "_STORAGE_JSON_PATH"
+const accessKeyIdEnvKey = envKeyPrefix + "_ACCESS_KEY_ID"
+const secretAccessKeyEnvKey = envKeyPrefix + "_SECRET_ACCESS_KEY"
+const regionEnvKey = envKeyPrefix + "_REGION"
+const domainEnvKey = envKeyPrefix + "_DOMAIN"
+const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
+const portEnvKey = envKeyPrefix + "_PORT"
+const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
+const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
+const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 
 func getStringFromEnv(envKey string) *string {
 	val := os.Getenv(envKey)
