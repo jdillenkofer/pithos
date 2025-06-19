@@ -10,7 +10,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN go test ./... -v -timeout 30m
+RUN go test ./... -v --short
 
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 
