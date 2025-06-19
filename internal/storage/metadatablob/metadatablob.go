@@ -603,59 +603,59 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 		etagChan <- *etag
 	}()
 
-	sha1Chan := make(chan string, 1)
+	crc32Chan := make(chan string, 1)
 	errChan3 := make(chan error, 1)
 	go func() {
-		sha1, err := calculateSha1(readers[2])
+		crc32, err := calculateCrc32(readers[2])
 		if err != nil {
 			errChan3 <- err
-			return
-		}
-		sha1Chan <- *sha1
-	}()
-
-	sha256Chan := make(chan string, 1)
-	errChan4 := make(chan error, 1)
-	go func() {
-		sha256, err := calculateSha256(readers[3])
-		if err != nil {
-			errChan4 <- err
-			return
-		}
-		sha256Chan <- *sha256
-	}()
-
-	crc32Chan := make(chan string, 1)
-	errChan5 := make(chan error, 1)
-	go func() {
-		crc32, err := calculateCrc32(readers[4])
-		if err != nil {
-			errChan5 <- err
 			return
 		}
 		crc32Chan <- *crc32
 	}()
 
 	crc32cChan := make(chan string, 1)
-	errChan6 := make(chan error, 1)
+	errChan4 := make(chan error, 1)
 	go func() {
-		crc32c, err := calculateCrc32c(readers[5])
+		crc32c, err := calculateCrc32c(readers[3])
 		if err != nil {
-			errChan6 <- err
+			errChan4 <- err
 			return
 		}
 		crc32cChan <- *crc32c
 	}()
 
 	crc64nvmeChan := make(chan string, 1)
+	errChan5 := make(chan error, 1)
+	go func() {
+		crc64nvme, err := calculateCrc64Nvme(readers[4])
+		if err != nil {
+			errChan5 <- err
+			return
+		}
+		crc64nvmeChan <- *crc64nvme
+	}()
+
+	sha1Chan := make(chan string, 1)
+	errChan6 := make(chan error, 1)
+	go func() {
+		sha1, err := calculateSha1(readers[5])
+		if err != nil {
+			errChan6 <- err
+			return
+		}
+		sha1Chan <- *sha1
+	}()
+
+	sha256Chan := make(chan string, 1)
 	errChan7 := make(chan error, 1)
 	go func() {
-		crc64nvme, err := calculateCrc64Nvme(readers[6])
+		sha256, err := calculateSha256(readers[6])
 		if err != nil {
 			errChan7 <- err
 			return
 		}
-		crc64nvmeChan <- *crc64nvme
+		sha256Chan <- *sha256
 	}()
 
 	// @Note: We need a anonymous function here,
@@ -691,28 +691,10 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 		}
 	}
 
-	var checksumSHA1 string
-	select {
-	case checksumSHA1 = <-sha1Chan:
-	case err := <-errChan3:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumSHA256 string
-	select {
-	case checksumSHA256 = <-sha256Chan:
-	case err := <-errChan4:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
 	var checksumCRC32 string
 	select {
 	case checksumCRC32 = <-crc32Chan:
-	case err := <-errChan5:
+	case err := <-errChan3:
 		if err != nil {
 			return nil, nil, err
 		}
@@ -721,7 +703,7 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 	var checksumCRC32C string
 	select {
 	case checksumCRC32C = <-crc32cChan:
-	case err := <-errChan6:
+	case err := <-errChan4:
 		if err != nil {
 			return nil, nil, err
 		}
@@ -730,6 +712,24 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 	var checksumCRC64NVME string
 	select {
 	case checksumCRC64NVME = <-crc64nvmeChan:
+	case err := <-errChan5:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	var checksumSHA1 string
+	select {
+	case checksumSHA1 = <-sha1Chan:
+	case err := <-errChan6:
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	var checksumSHA256 string
+	select {
+	case checksumSHA256 = <-sha256Chan:
 	case err := <-errChan7:
 		if err != nil {
 			return nil, nil, err
