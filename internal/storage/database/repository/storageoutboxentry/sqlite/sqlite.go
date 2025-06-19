@@ -32,7 +32,7 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	var operation string
 	var bucket string
 	var key string
-	var contentType string
+	var contentType *string
 	var data []byte
 	var ordinal int
 	var createdAt time.Time

@@ -23,7 +23,7 @@ type Entity struct {
 	Operation   string
 	Bucket      string
 	Key         string
-	ContentType string
+	ContentType *string
 	Data        []byte
 	Ordinal     int
 	CreatedAt   time.Time

@@ -365,7 +365,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
@@ -404,12 +404,12 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucket string, key st
 	return nil
 }
 
-func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
+func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
+	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 }
 
 func (os *outboxStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
