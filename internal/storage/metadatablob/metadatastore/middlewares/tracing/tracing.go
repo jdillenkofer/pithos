@@ -84,10 +84,10 @@ func (tmsm *tracingMetadataStoreMiddleware) DeleteObject(ctx context.Context, tx
 	return tmsm.innerMetadataStore.DeleteObject(ctx, tx, bucketName, key)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".CreateMultipartUpload()").End()
 
-	return tmsm.innerMetadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, contentType)
+	return tmsm.innerMetadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, contentType, checksumType)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob metadatastore.Blob) error {

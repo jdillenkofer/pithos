@@ -93,7 +93,7 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 			return err
 		}
 		// @TODO: Use checksumInput
-		err = destination.PutObject(ctx, bucketName, sourceObject.Key, "", obj, storage.ChecksumInput{})
+		err = destination.PutObject(ctx, bucketName, sourceObject.Key, nil, obj, storage.ChecksumInput{})
 		if err != nil {
 			return err
 		}

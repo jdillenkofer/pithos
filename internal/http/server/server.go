@@ -681,8 +681,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := "application/octet-stream"
-	if object.ContentType != "" {
-		contentType = object.ContentType
+	if object.ContentType != nil {
+		contentType = *object.ContentType
 	}
 	w.Header().Set(contentTypeHeader, contentType)
 
@@ -780,9 +780,10 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
-	contentType := r.Header.Get(contentTypeHeader)
+	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
+	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
-	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key, contentType)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -887,7 +888,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
-	contentType := r.Header.Get(contentTypeHeader)
+	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 
 	checksumInput := extractChecksumInput(r)
 

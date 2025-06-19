@@ -119,7 +119,7 @@ func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key 
 	return rs.primaryStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -158,14 +158,14 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucket string, k
 	return nil
 }
 
-func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
+func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 	if err != nil {
 		return nil, err
 	}
 	var secondaryUploadIds []string = []string{}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucket, key, contentType)
+		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 		if err != nil {
 			return nil, err
 		}

@@ -24,7 +24,7 @@ type Entity struct {
 	Id                *ulid.ULID
 	BucketName        string
 	Key               string
-	ContentType       string
+	ContentType       *string
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -34,7 +34,7 @@ type Entity struct {
 	ChecksumType      *string
 	Size              int64
 	UploadStatus      string
-	UploadId          string
+	UploadId          *string
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }

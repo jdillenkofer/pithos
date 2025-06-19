@@ -199,15 +199,11 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
-	var contentTypeStr *string = nil
-	if contentType != "" {
-		contentTypeStr = aws.String(contentType)
-	}
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	_, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucket),
 		Key:         aws.String(key),
-		ContentType: contentTypeStr,
+		ContentType: contentType,
 		Body:        reader,
 		// @TODO: Use checksumInput
 	})
@@ -234,15 +230,16 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucket string, key 
 	return nil
 }
 
-func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
-	var contentTypeStr *string = nil
-	if contentType != "" {
-		contentTypeStr = aws.String(contentType)
+func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	checksumTypeStr := types.ChecksumTypeFullObject
+	if checksumType != nil {
+		checksumTypeStr = types.ChecksumType(*checksumType)
 	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		ContentType: contentTypeStr,
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(key),
+		ContentType:  contentType,
+		ChecksumType: checksumTypeStr,
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {

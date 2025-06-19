@@ -19,7 +19,7 @@ type Bucket struct {
 
 type Object struct {
 	Key               string
-	ContentType       string // only set in HeadObject and PutObject
+	ContentType       *string // only set in HeadObject and PutObject
 	LastModified      time.Time
 	ETag              string
 	ChecksumCRC32     *string
@@ -135,7 +135,7 @@ type MetadataStore interface {
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName string, object *Object) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error
-	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
@@ -265,7 +265,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, "")
+	initiateMultipartUploadResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -313,7 +313,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, "")
+	initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
 	if err != nil {
 		tx.Rollback()
 		return err

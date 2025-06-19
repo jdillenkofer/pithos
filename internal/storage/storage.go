@@ -18,7 +18,7 @@ type Bucket struct {
 
 type Object struct {
 	Key               string
-	ContentType       string
+	ContentType       *string
 	LastModified      time.Time
 	ETag              string
 	ChecksumCRC32     *string
@@ -126,9 +126,9 @@ type Storage interface {
 	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
 	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
-	PutObject(ctx context.Context, bucket string, key string, contentType string, data io.Reader, checksumInput ChecksumInput) error
+	PutObject(ctx context.Context, bucket string, key string, contentType *string, data io.Reader, checksumInput ChecksumInput) error
 	DeleteObject(ctx context.Context, bucket string, key string) error
-	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput ChecksumInput) (*UploadPartResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
@@ -192,7 +192,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return errors.New("invalid bucketName")
 		}
 
-		err = storage.PutObject(ctx, bucketName, key, "", data, ChecksumInput{})
+		err = storage.PutObject(ctx, bucketName, key, nil, data, ChecksumInput{})
 		if err != nil {
 			return err
 		}
@@ -224,7 +224,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, "")
+		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -249,7 +249,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, "")
+		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
 		if err != nil {
 			return err
 		}

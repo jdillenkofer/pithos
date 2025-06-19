@@ -120,7 +120,7 @@ func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucket s
 	return storage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	storage := csm.lookupStorage(bucket)
 	return storage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
 }
@@ -130,9 +130,9 @@ func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucke
 	return storage.DeleteObject(ctx, bucket, key)
 }
 
-func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*storage.InitiateMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	storage := csm.lookupStorage(bucket)
-	return storage.CreateMultipartUpload(ctx, bucket, key, contentType)
+	return storage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 }
 
 func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {

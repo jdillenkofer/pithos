@@ -33,7 +33,7 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	var id string
 	var bucketName string
 	var key string
-	var contentType string
+	var contentType *string
 	var etag string
 	var checksumCRC32 *string
 	var checksumCRC32C *string
@@ -42,11 +42,11 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	var checksumSHA256 *string
 	var checksumType *string
 	var size int64
-	var upload_status string
-	var upload_id string
+	var uploadStatus string
+	var uploadId *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &checksumType, &size, &upload_status, &upload_id, &createdAt, &updatedAt)
+	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &checksumType, &size, &uploadStatus, &uploadId, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +64,8 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 		ChecksumSHA256:    checksumSHA256,
 		ChecksumType:      checksumType,
 		Size:              size,
-		UploadStatus:      upload_status,
-		UploadId:          upload_id,
+		UploadStatus:      uploadStatus,
+		UploadId:          uploadId,
 		CreatedAt:         createdAt,
 		UpdatedAt:         updatedAt,
 	}

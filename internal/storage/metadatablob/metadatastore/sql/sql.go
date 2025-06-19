@@ -356,7 +356,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -371,10 +371,9 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		ContentType:  contentType,
 		ETag:         "",
 		Size:         -1,
-		UploadId:     ulid.Make().String(),
+		UploadId:     ptrutils.ToPtr(ulid.Make().String()),
 		UploadStatus: object.UploadStatusPending,
-		// @TODO: get checksumType from parameter
-		ChecksumType: ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
+		ChecksumType: checksumType,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
@@ -382,7 +381,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}
 
 	return &metadatastore.InitiateMultipartUploadResult{
-		UploadId: objectEntity.UploadId,
+		UploadId: *objectEntity.UploadId,
 	}, nil
 }
 
@@ -657,7 +656,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}
 
 	objectEntity.UploadStatus = object.UploadStatusCompleted
-	objectEntity.UploadId = ""
+	objectEntity.UploadId = nil
 	objectEntity.Size = totalSize
 	objectEntity.ETag = etag
 	objectEntity.ChecksumCRC32 = crc32Digest
@@ -768,12 +767,12 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
 					Key:       objectEntity.Key,
-					UploadId:  objectEntity.UploadId,
+					UploadId:  *objectEntity.UploadId,
 					Initiated: objectEntity.CreatedAt,
 				})
 			}
 			nextKeyMarker = objectEntity.Key
-			nextUploadIdMarker = objectEntity.UploadId
+			nextUploadIdMarker = *objectEntity.UploadId
 		}
 	}
 

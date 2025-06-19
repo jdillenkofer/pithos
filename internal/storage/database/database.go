@@ -156,11 +156,13 @@ func setupWriteableDatabase(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	err = enableForeignKeyConstraints(db)
+	// We run the migrations before activating foreignKey constraints,
+	// because otherwise some migrations would fail
+	err = applyDatabaseMigrations(db)
 	if err != nil {
 		return err
 	}
-	err = applyDatabaseMigrations(db)
+	err = enableForeignKeyConstraints(db)
 	if err != nil {
 		return err
 	}
