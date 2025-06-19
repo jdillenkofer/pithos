@@ -188,8 +188,8 @@ func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucket string
 	return initiateMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
-	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data)
+func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err
 	}

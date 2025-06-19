@@ -179,7 +179,7 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucket 
 	return initiateMultipartUploadResult, nil
 }
 
-func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader) (*storage.UploadPartResult, error) {
+func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -187,7 +187,7 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, byteReadSeekCloser)
+	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, byteReadSeekCloser, checksumInput)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.UploadPart(ctx, bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser)
+		_, err = secondaryStorage.UploadPart(ctx, bucket, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser, checksumInput)
 		if err != nil {
 			return nil, err
 		}

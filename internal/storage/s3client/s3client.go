@@ -256,13 +256,14 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket str
 	}, nil
 }
 
-func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*storage.UploadPartResult, error) {
+func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucket),
 		Key:        aws.String(key),
 		UploadId:   aws.String(uploadId),
 		PartNumber: aws.Int32(partNumber),
 		Body:       data,
+		// @TODO: Use checksumInput
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {

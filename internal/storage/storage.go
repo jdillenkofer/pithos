@@ -129,7 +129,7 @@ type Storage interface {
 	PutObject(ctx context.Context, bucket string, key string, contentType string, data io.Reader, checksumInput ChecksumInput) error
 	DeleteObject(ctx context.Context, bucket string, key string) error
 	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error)
+	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput ChecksumInput) (*UploadPartResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
@@ -234,7 +234,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data)
+		_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data, ChecksumInput{})
 		if err != nil {
 			return err
 		}
@@ -259,7 +259,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data)
+		_, err = storage.UploadPart(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, data, ChecksumInput{})
 		if err != nil {
 			return err
 		}
