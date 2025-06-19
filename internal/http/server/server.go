@@ -249,6 +249,28 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 	return &val
 }
 
+func setChecksumHeaders(headers http.Header, object *storage.Object) {
+	headers.Set(etagHeader, object.ETag)
+	if object.ChecksumType != nil {
+		headers.Set(checksumTypeHeader, *object.ChecksumType)
+	}
+	if object.ChecksumCRC32 != nil {
+		headers.Set(checksumCRC32Header, *object.ChecksumCRC32)
+	}
+	if object.ChecksumCRC32C != nil {
+		headers.Set(checksumCRC32CHeader, *object.ChecksumCRC32C)
+	}
+	if object.ChecksumCRC64NVME != nil {
+		headers.Set(checksumCRC64NVMEHeader, *object.ChecksumCRC64NVME)
+	}
+	if object.ChecksumSHA1 != nil {
+		headers.Set(checksumSHA1Header, *object.ChecksumSHA1)
+	}
+	if object.ChecksumSHA256 != nil {
+		headers.Set(checksumSHA256Header, *object.ChecksumSHA256)
+	}
+}
+
 func extractChecksumInput(r *http.Request) storage.ChecksumInput {
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
 	checksumAlgorithm := getHeaderAsPtr(r.Header, checksumAlgorithmHeader)
@@ -495,25 +517,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Set(etagHeader, object.ETag)
-	if object.ChecksumType != nil {
-		w.Header().Set(checksumTypeHeader, *object.ChecksumType)
-	}
-	if object.ChecksumCRC32 != nil {
-		w.Header().Set(checksumCRC32Header, *object.ChecksumCRC32)
-	}
-	if object.ChecksumCRC32C != nil {
-		w.Header().Set(checksumCRC32CHeader, *object.ChecksumCRC32C)
-	}
-	if object.ChecksumCRC64NVME != nil {
-		w.Header().Set(checksumCRC64NVMEHeader, *object.ChecksumCRC64NVME)
-	}
-	if object.ChecksumSHA1 != nil {
-		w.Header().Set(checksumSHA1Header, *object.ChecksumSHA1)
-	}
-	if object.ChecksumSHA256 != nil {
-		w.Header().Set(checksumSHA256Header, *object.ChecksumSHA256)
-	}
+	setChecksumHeaders(w.Header(), object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	w.Header().Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
