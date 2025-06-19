@@ -199,7 +199,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	var contentTypeStr *string = nil
 	if contentType != "" {
 		contentTypeStr = aws.String(contentType)
@@ -209,6 +209,7 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key str
 		Key:         aws.String(key),
 		ContentType: contentTypeStr,
 		Body:        reader,
+		// @TODO: Use checksumInput
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {

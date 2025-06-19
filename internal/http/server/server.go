@@ -37,8 +37,8 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrlistPartsHandler)
 	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
-	mux.HandleFunc("PUT /{bucket}/{key...}", server.putObjectHandler)
-	mux.HandleFunc("DELETE /{bucket}/{key...}", server.deleteObjectHandler)
+	mux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
+	mux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	var rootHandler http.Handler = mux
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
 	if accessKeyId != "" && secretAccessKey != "" {
@@ -91,8 +91,10 @@ const rangeHeader = "Range"
 const etagHeader = "ETag"
 const lastModifiedHeader = "Last-Modified"
 const contentTypeHeader = "Content-Type"
+const contentMd5Header = "Content-MD5"
 const locationHeader = "Location"
 const checksumTypeHeader = "x-amz-checksum-type"
+const checksumAlgorithmHeader = "x-amz-sdk-checksum-algorithm"
 const checksumCRC32Header = "x-amz-checksum-crc32"
 const checksumCRC32CHeader = "x-amz-checksum-crc32c"
 const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
@@ -239,6 +241,37 @@ func xmlMarshalWithDocType(v any) ([]byte, error) {
 	return xmlResponse, nil
 }
 
+func getHeaderAsPtr(headers http.Header, name string) *string {
+	val := headers.Get(name)
+	if val == "" {
+		return nil
+	}
+	return &val
+}
+
+func extractChecksumInput(r *http.Request) storage.ChecksumInput {
+	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
+	checksumAlgorithm := getHeaderAsPtr(r.Header, checksumAlgorithmHeader)
+	contentMd5 := getHeaderAsPtr(r.Header, contentMd5Header)
+	checksumCrc32 := getHeaderAsPtr(r.Header, checksumCRC32Header)
+	checksumCrc32c := getHeaderAsPtr(r.Header, checksumCRC32CHeader)
+	checksumCrc64Nvme := getHeaderAsPtr(r.Header, checksumCRC64NVMEHeader)
+	checksumSha1 := getHeaderAsPtr(r.Header, checksumSHA1Header)
+	checksumSha256 := getHeaderAsPtr(r.Header, checksumSHA256Header)
+
+	checksumInput := storage.ChecksumInput{
+		ChecksumType:      checksumType,
+		ChecksumAlgorithm: checksumAlgorithm,
+		ETag:              contentMd5,
+		ChecksumCRC32:     checksumCrc32,
+		ChecksumCRC32C:    checksumCrc32c,
+		ChecksumCRC64NVME: checksumCrc64Nvme,
+		ChecksumSHA1:      checksumSha1,
+		ChecksumSHA256:    checksumSha256,
+	}
+	return checksumInput
+}
+
 func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	statusCode := 500
 	errResponse := ErrorResponse{}
@@ -254,6 +287,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 409
 	case storage.ErrNoSuchKey:
 		statusCode = 404
+	case storage.ErrBadDigest:
+		statusCode = 400
 	default:
 		statusCode = 500
 		errResponse.Code = "InternalError"
@@ -848,11 +883,13 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue(keyPath)
 	contentType := r.Header.Get(contentTypeHeader)
 
+	checksumInput := extractChecksumInput(r)
+
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body)
+	err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -861,7 +898,7 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// UploadPart
@@ -904,7 +941,7 @@ func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// AbortMultipartUpload

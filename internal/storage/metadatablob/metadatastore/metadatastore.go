@@ -119,6 +119,7 @@ var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")
 var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
+var ErrBadDigest error = errors.New("BadDigest")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 

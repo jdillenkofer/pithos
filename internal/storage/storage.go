@@ -98,10 +98,22 @@ type ListPartsResult struct {
 	Parts                []*Part
 }
 
+type ChecksumInput struct {
+	ChecksumType      *string
+	ChecksumAlgorithm *string
+	ETag              *string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+}
+
 var ErrNoSuchBucket error = metadatastore.ErrNoSuchBucket
 var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
+var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 
 type Storage interface {
@@ -114,7 +126,7 @@ type Storage interface {
 	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
 	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
-	PutObject(ctx context.Context, bucket string, key string, contentType string, data io.Reader) error
+	PutObject(ctx context.Context, bucket string, key string, contentType string, data io.Reader, checksumInput ChecksumInput) error
 	DeleteObject(ctx context.Context, bucket string, key string) error
 	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader) (*UploadPartResult, error)
@@ -180,7 +192,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return errors.New("invalid bucketName")
 		}
 
-		err = storage.PutObject(ctx, bucketName, key, "", data)
+		err = storage.PutObject(ctx, bucketName, key, "", data, ChecksumInput{})
 		if err != nil {
 			return err
 		}

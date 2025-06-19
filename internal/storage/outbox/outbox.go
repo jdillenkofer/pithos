@@ -78,7 +78,8 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
-			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data))
+			// @TODO: Use checksumInput
+			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), storage.ChecksumInput{})
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -364,7 +365,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader) error {
+func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType string, reader io.Reader, checksumInput storage.ChecksumInput) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
