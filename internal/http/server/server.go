@@ -808,8 +808,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.createMultipartUpload()")
+func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.createMultipartUploadHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -833,8 +833,8 @@ func (s *Server) createMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
-func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.completeMultipartUpload()")
+func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.completeMultipartUploadHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -887,21 +887,21 @@ func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.Re
 
 	// CreateMultipartUpload
 	if query.Has(uploadsQuery) {
-		s.createMultipartUpload(w, r)
+		s.createMultipartUploadHandler(w, r)
 		return
 	}
 
 	// CompleteMultipartUpload
 	if query.Has(uploadIdQuery) {
-		s.completeMultipartUpload(w, r)
+		s.completeMultipartUploadHandler(w, r)
 		return
 	}
 
 	w.WriteHeader(404)
 }
 
-func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.uploadPart()")
+func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.uploadPartHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -941,8 +941,8 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.putObject()")
+func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.putObjectHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -976,16 +976,16 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 
 	// UploadPart
 	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
-		s.uploadPart(w, r)
+		s.uploadPartHandler(w, r)
 		return
 	}
 
 	// PutObject
-	s.putObject(w, r)
+	s.putObjectHandler(w, r)
 }
 
-func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.abortMultipartUpload()")
+func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.abortMultipartUploadHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -1000,8 +1000,8 @@ func (s *Server) abortMultipartUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (s *Server) deleteObject(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.deleteObject()")
+func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.deleteObjectHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
@@ -1019,10 +1019,10 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 
 	// AbortMultipartUpload
 	if query.Has(uploadIdQuery) {
-		s.abortMultipartUpload(w, r)
+		s.abortMultipartUploadHandler(w, r)
 		return
 	}
 
 	// DeleteObject
-	s.deleteObject(w, r)
+	s.deleteObjectHandler(w, r)
 }
