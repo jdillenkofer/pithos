@@ -105,29 +105,29 @@ const applicationXmlContentType = "application/xml"
 
 const storageClassStandard = "STANDARD"
 
-type Bucket struct {
+type BucketResult struct {
 	XMLName      xml.Name `xml:"Bucket"`
 	CreationDate string   `xml:"CreationDate"`
 	Name         string   `xml:"Name"`
 }
 
-type Owner struct {
+type OwnerResult struct {
 	XMLName     xml.Name `xml:"Owner"`
 	DisplayName string   `xml:"DisplayName"`
 	Id          string   `xml:"ID"`
 }
 
 type ListAllMyBucketsResult struct {
-	XMLName xml.Name  `xml:"ListAllMyBucketsResult"`
-	Buckets []*Bucket `xml:">Buckets"`
-	Owner   *Owner    `xml:"Owner"`
+	XMLName xml.Name        `xml:"ListAllMyBucketsResult"`
+	Buckets []*BucketResult `xml:">Buckets"`
+	Owner   *OwnerResult    `xml:"Owner"`
 }
 
 type Prefix struct {
 	XMLName xml.Name `xml:"Prefix"`
 }
 
-type Content struct {
+type ContentResult struct {
 	Key          string `xml:"Key"`
 	LastModified string `xml:"LastModified"`
 	ETag         string `xml:"ETag"`
@@ -135,21 +135,21 @@ type Content struct {
 	StorageClass string `xml:"StorageClass"`
 }
 
-type CommonPrefixes struct {
+type CommonPrefixResult struct {
 	Prefix string `xml:"Prefix"`
 }
 
 type ListBucketResult struct {
-	XMLName        xml.Name          `xml:"ListBucketResult"`
-	IsTruncated    bool              `xml:"IsTruncated"`
-	Contents       []*Content        `xml:"Contents"`
-	Name           string            `xml:"Name"`
-	Prefix         string            `xml:"Prefix"`
-	Delimiter      string            `xml:"Delimiter"`
-	MaxKeys        int32             `xml:"MaxKeys"`
-	CommonPrefixes []*CommonPrefixes `xml:"CommonPrefixes"`
-	KeyCount       int32             `xml:"KeyCount"`
-	StartAfter     string            `xml:"StartAfter"`
+	XMLName        xml.Name              `xml:"ListBucketResult"`
+	IsTruncated    bool                  `xml:"IsTruncated"`
+	Contents       []*ContentResult      `xml:"Contents"`
+	Name           string                `xml:"Name"`
+	Prefix         string                `xml:"Prefix"`
+	Delimiter      string                `xml:"Delimiter"`
+	MaxKeys        int32                 `xml:"MaxKeys"`
+	CommonPrefixes []*CommonPrefixResult `xml:"CommonPrefixes"`
+	KeyCount       int32                 `xml:"KeyCount"`
+	StartAfter     string                `xml:"StartAfter"`
 }
 
 type InitiateMultipartUploadResult struct {
@@ -157,6 +157,21 @@ type InitiateMultipartUploadResult struct {
 	Bucket   string   `xml:"Bucket"`
 	Key      string   `xml:"Key"`
 	UploadId string   `xml:"UploadId"`
+}
+
+type Part struct {
+	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
+	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
+	ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
+	ChecksumSHA1      *string `xml:"ChecksumSHA1"`
+	ChecksumSHA256    *string `xml:"ChecksumSHA256"`
+	ETag              string  `xml:"ETag"`
+	PartNumber        int32   `xml:"PartNumber"`
+}
+
+type CompleteMultipartUploadRequest struct {
+	XMLName xml.Name `xml:"CompleteMultipartUpload"`
+	Parts   []*Part  `xml:"Part"`
 }
 
 type CompleteMultipartUploadResult struct {
@@ -173,7 +188,7 @@ type CompleteMultipartUploadResult struct {
 	ChecksumType      *string  `xml:"ChecksumType"`
 }
 
-type Upload struct {
+type UploadResult struct {
 	Key          string `xml:"Key"`
 	UploadId     string `xml:"UploadId"`
 	Initiated    string `xml:"Initiated"`
@@ -181,21 +196,21 @@ type Upload struct {
 }
 
 type ListMultipartUploadsResult struct {
-	XMLName            xml.Name          `xml:"ListMultipartUploadsResult"`
-	Bucket             string            `xml:"Bucket"`
-	KeyMarker          string            `xml:"KeyMarker"`
-	UploadIdMarker     string            `xml:"UploadIdMarker"`
-	NextKeyMarker      string            `xml:"NextKeyMarker"`
-	NextUploadIdMarker string            `xml:"NextUploadIdMarker"`
-	MaxUploads         int32             `xml:"MaxUploads"`
-	IsTruncated        bool              `xml:"IsTruncated"`
-	Delimiter          string            `xml:"Delimiter"`
-	Prefix             string            `xml:"Prefix"`
-	Uploads            []*Upload         `xml:"Upload"`
-	CommonPrefixes     []*CommonPrefixes `xml:"CommonPrefixes"`
+	XMLName            xml.Name              `xml:"ListMultipartUploadsResult"`
+	Bucket             string                `xml:"Bucket"`
+	KeyMarker          string                `xml:"KeyMarker"`
+	UploadIdMarker     string                `xml:"UploadIdMarker"`
+	NextKeyMarker      string                `xml:"NextKeyMarker"`
+	NextUploadIdMarker string                `xml:"NextUploadIdMarker"`
+	MaxUploads         int32                 `xml:"MaxUploads"`
+	IsTruncated        bool                  `xml:"IsTruncated"`
+	Delimiter          string                `xml:"Delimiter"`
+	Prefix             string                `xml:"Prefix"`
+	Uploads            []*UploadResult       `xml:"Upload"`
+	CommonPrefixes     []*CommonPrefixResult `xml:"CommonPrefixes"`
 }
 
-type Part struct {
+type PartResult struct {
 	ETag              string  `xml:"ETag"`
 	ChecksumCRC32     *string `xml:"ChecksumCRC32"`
 	ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
@@ -208,15 +223,15 @@ type Part struct {
 }
 
 type ListPartsResult struct {
-	XMLName              xml.Name `xml:"ListPartsResult"`
-	Bucket               string   `xml:"Bucket"`
-	Key                  string   `xml:"Key"`
-	UploadId             string   `xml:"UploadId"`
-	PartNumberMarker     string   `xml:"PartNumberMarker"`
-	NextPartNumberMarker *string  `xml:"NextPartNumberMarker"`
-	MaxParts             int32    `xml:"MaxParts"`
-	IsTruncated          bool     `xml:"IsTruncated"`
-	Parts                []*Part  `xml:"Part"`
+	XMLName              xml.Name      `xml:"ListPartsResult"`
+	Bucket               string        `xml:"Bucket"`
+	Key                  string        `xml:"Key"`
+	UploadId             string        `xml:"UploadId"`
+	PartNumberMarker     string        `xml:"PartNumberMarker"`
+	NextPartNumberMarker *string       `xml:"NextPartNumberMarker"`
+	MaxParts             int32         `xml:"MaxParts"`
+	IsTruncated          bool          `xml:"IsTruncated"`
+	Parts                []*PartResult `xml:"Part"`
 	// @TODO: Initiator and Owner missing
 	StorageClass      string  `xml:"StorageClass"`
 	ChecksumAlgorithm *string `xml:"ChecksumAlgorithm"`
@@ -337,14 +352,10 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
-		Buckets: []*Bucket{},
-		Owner: &Owner{
-			DisplayName: "own-display-name",
-			Id:          "examplee7a2f25102679df27bb0ae12b3f85be6f290b936c4393484be31",
-		},
+		Buckets: []*BucketResult{},
 	}
 	for _, bucket := range buckets {
-		listAllMyBucketsResult.Buckets = append(listAllMyBucketsResult.Buckets, &Bucket{
+		listAllMyBucketsResult.Buckets = append(listAllMyBucketsResult.Buckets, &BucketResult{
 			Name:         bucket.Name,
 			CreationDate: bucket.CreationDate.UTC().Format(time.RFC3339),
 		})
@@ -407,14 +418,14 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		IsTruncated:        result.IsTruncated,
 		Delimiter:          result.Delimiter,
 		Prefix:             result.Prefix,
-		Uploads:            []*Upload{},
-		CommonPrefixes:     []*CommonPrefixes{},
+		Uploads:            []*UploadResult{},
+		CommonPrefixes:     []*CommonPrefixResult{},
 	}
 
 	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, upload := range result.Uploads {
-		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &Upload{
+		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
 			Key:          upload.Key,
 			UploadId:     upload.UploadId,
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
@@ -422,7 +433,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
-		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
+		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
 	}
 	out, _ := xmlMarshalWithDocType(listMultipartUploadsResult)
 	w.Write(out)
@@ -456,15 +467,15 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		StartAfter:     startAfter,
 		KeyCount:       int32(len(result.Objects)),
 		MaxKeys:        maxKeysI32,
-		CommonPrefixes: []*CommonPrefixes{},
+		CommonPrefixes: []*CommonPrefixResult{},
 		IsTruncated:    result.IsTruncated,
-		Contents:       []*Content{},
+		Contents:       []*ContentResult{},
 	}
 
 	w.Header().Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, object := range result.Objects {
-		listBucketResult.Contents = append(listBucketResult.Contents, &Content{
+		listBucketResult.Contents = append(listBucketResult.Contents, &ContentResult{
 			Key:          object.Key,
 			LastModified: object.LastModified.Format(time.RFC3339),
 			ETag:         object.ETag,
@@ -473,7 +484,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
-		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixes{Prefix: commonPrefix})
+		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
 	}
 	out, _ := xmlMarshalWithDocType(listBucketResult)
 	w.Write(out)
@@ -640,8 +651,8 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		NextPartNumberMarker: result.NextPartNumberMarker,
 		MaxParts:             result.MaxParts,
 		IsTruncated:          result.IsTruncated,
-		Parts: sliceutils.Map(func(part *storage.Part) *Part {
-			return &Part{
+		Parts: sliceutils.Map(func(part *storage.Part) *PartResult {
+			return &PartResult{
 				ETag:              part.ETag,
 				ChecksumCRC32:     part.ChecksumCRC32,
 				ChecksumCRC32C:    part.ChecksumCRC32C,
@@ -807,6 +818,22 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if len(data) > 0 {
+		// @TODO: if available use part checksums to verify upload
+		completeMultipartUploadRequest := CompleteMultipartUploadRequest{}
+		err = xml.Unmarshal(data, &completeMultipartUploadRequest)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+	}
+
 	log.Printf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
