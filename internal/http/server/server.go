@@ -14,6 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -268,11 +269,15 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 	return &val
 }
 
+func setChecksumType(headers http.Header, checksumType string) {
+	headers.Set(checksumTypeHeader, checksumType)
+}
+
 func setChecksumHeadersFromObject(headers http.Header, object *storage.Object) {
-	headers.Set(etagHeader, object.ETag)
 	if object.ChecksumType != nil {
-		headers.Set(checksumTypeHeader, *object.ChecksumType)
+		setChecksumType(headers, *object.ChecksumType)
 	}
+	headers.Set(etagHeader, object.ETag)
 	if object.ChecksumCRC32 != nil {
 		headers.Set(checksumCRC32Header, *object.ChecksumCRC32)
 	}
@@ -972,6 +977,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	})
+	setChecksumType(w.Header(), metadatastore.ChecksumTypeFullObject)
 	w.WriteHeader(200)
 }
 

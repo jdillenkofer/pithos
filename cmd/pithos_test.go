@@ -448,6 +448,38 @@ func TestPutObject(t *testing.T) {
 			assert.NotNil(t, putObjectResult)
 		})
 
+		for _, checksumAlgorithm := range []types.ChecksumAlgorithm{"CRC32", "CRC32C", "CRC64NVME", "SHA1", "SHA256"} {
+			t.Run("it should allow uploading an object with checksumAlgorithm "+string(checksumAlgorithm)+testSuffix, func(t *testing.T) {
+				s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+				t.Cleanup(cleanup)
+				createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+					Bucket: bucketName,
+				})
+				if err != nil {
+					assert.Fail(t, "CreateBucket failed", "err %v", err)
+				}
+				assert.NotNil(t, createBucketResult)
+
+				putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+					Bucket:            bucketName,
+					Body:              bytes.NewReader([]byte("Hello, first object!")),
+					Key:               key,
+					ChecksumAlgorithm: checksumAlgorithm,
+				})
+				if err != nil {
+					assert.Fail(t, "PutObject failed", "err %v", err)
+				}
+				assert.NotNil(t, putObjectResult)
+				assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *putObjectResult.ETag)
+				assert.Equal(t, "Bjck3A==", *putObjectResult.ChecksumCRC32)
+				assert.Equal(t, "H7cZCA==", *putObjectResult.ChecksumCRC32C)
+				assert.Equal(t, "4SEgZkEEyhY=", *putObjectResult.ChecksumCRC64NVME)
+				assert.Equal(t, "lMCBYNtqPCnP3avKVUtqfrThqHo=", *putObjectResult.ChecksumSHA1)
+				assert.Equal(t, "sctyzI/H+7x/oVR7Gwt7NiQ7kop4Ua/7SrVraELVDpI=", *putObjectResult.ChecksumSHA256)
+				assert.Equal(t, types.ChecksumTypeFullObject, putObjectResult.ChecksumType)
+			})
+		}
+
 		t.Run("it should allow uploading an object with a presigned url"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
