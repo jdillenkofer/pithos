@@ -47,10 +47,8 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	return rootHandler
 }
 
-func SetupMonitoringServer(dbs []database.Database) http.Handler {
-	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		for _, db := range dbs {
 			err := db.PingContext(ctx)
@@ -62,7 +60,13 @@ func SetupMonitoringServer(dbs []database.Database) http.Handler {
 		}
 		w.WriteHeader(200)
 		w.Write([]byte("Healthy"))
-	})
+	}
+}
+
+func SetupMonitoringServer(dbs []database.Database) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	mux.HandleFunc("GET /health", makeHealthCheckHandler(dbs))
 	var rootHandler http.Handler = mux
 	return rootHandler
 }
