@@ -196,8 +196,8 @@ func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key strin
 	return uploadPartResult, nil
 }
 
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
 	}

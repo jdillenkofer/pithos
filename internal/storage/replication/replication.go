@@ -209,15 +209,15 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucket string, key
 	return uploadPartResult, nil
 }
 
-func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucket, key, secondaryUploadIds[i])
+		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucket, key, secondaryUploadIds[i], checksumInput)
 		if err != nil {
 			return nil, err
 		}

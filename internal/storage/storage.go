@@ -41,7 +41,12 @@ type InitiateMultipartUploadResult struct {
 }
 
 type UploadPartResult struct {
-	ETag string
+	ETag              string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
 }
 
 type CompleteMultipartUploadResult struct {
@@ -98,16 +103,10 @@ type ListPartsResult struct {
 	Parts                []*Part
 }
 
-type ChecksumInput struct {
-	ChecksumType      *string
-	ChecksumAlgorithm *string
-	ETag              *string
-	ChecksumCRC32     *string
-	ChecksumCRC32C    *string
-	ChecksumCRC64NVME *string
-	ChecksumSHA1      *string
-	ChecksumSHA256    *string
-}
+type ChecksumInput = metadatastore.ChecksumInput
+type ChecksumValues = metadatastore.ChecksumValues
+
+var ValidateChecksums = metadatastore.ValidateChecksums
 
 var ErrNoSuchBucket error = metadatastore.ErrNoSuchBucket
 var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
@@ -130,7 +129,7 @@ type Storage interface {
 	DeleteObject(ctx context.Context, bucket string, key string) error
 	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
-	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
 	ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
@@ -239,7 +238,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		_, err = storage.CompleteMultipartUpload(ctx, bucketName, key, initiateMultipartUploadResult.UploadId)
+		_, err = storage.CompleteMultipartUpload(ctx, bucketName, key, initiateMultipartUploadResult.UploadId, nil)
 		if err != nil {
 			return err
 		}

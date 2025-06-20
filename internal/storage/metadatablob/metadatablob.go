@@ -423,7 +423,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	err = validateChecksums(checksumInput, *calculatedChecksums)
+	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -433,23 +433,23 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		Key:               key,
 		ContentType:       contentType,
 		LastModified:      time.Now(),
-		ETag:              calculatedChecksums.etag,
-		ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
-		ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
-		ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
-		ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
-		ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
+		ETag:              *calculatedChecksums.ETag,
+		ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
+		ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
+		ChecksumCRC64NVME: calculatedChecksums.ChecksumCRC64NVME,
+		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
+		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 		ChecksumType:      ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
 		Size:              *originalSize,
 		Blobs: []metadatastore.Blob{
 			{
 				Id:                *blobId,
-				ETag:              calculatedChecksums.etag,
-				ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
-				ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
-				ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
-				ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
-				ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
+				ETag:              *calculatedChecksums.ETag,
+				ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
+				ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
+				ChecksumCRC64NVME: calculatedChecksums.ChecksumCRC64NVME,
+				ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
+				ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 				Size:              *originalSize,
 			},
 		},
@@ -466,43 +466,6 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return err
 	}
 
-	return nil
-}
-
-func validateChecksums(checksumInput *storage.ChecksumInput, calculatedChecksums checksumResult) error {
-	if checksumInput == nil {
-		return nil
-	}
-	if checksumInput.ETag != nil {
-		if *checksumInput.ETag != calculatedChecksums.etag {
-			return metadatastore.ErrBadDigest
-		}
-	}
-	if checksumInput.ChecksumCRC32 != nil {
-		if *checksumInput.ChecksumCRC32 != calculatedChecksums.checksumCRC32 {
-			return metadatastore.ErrBadDigest
-		}
-	}
-	if checksumInput.ChecksumCRC32C != nil {
-		if *checksumInput.ChecksumCRC32C != calculatedChecksums.checksumCRC32C {
-			return metadatastore.ErrBadDigest
-		}
-	}
-	if checksumInput.ChecksumCRC64NVME != nil {
-		if *checksumInput.ChecksumCRC64NVME != calculatedChecksums.checksumCRC64NVME {
-			return metadatastore.ErrBadDigest
-		}
-	}
-	if checksumInput.ChecksumSHA1 != nil {
-		if *checksumInput.ChecksumSHA1 != calculatedChecksums.checksumSHA1 {
-			return metadatastore.ErrBadDigest
-		}
-	}
-	if checksumInput.ChecksumSHA256 != nil {
-		if *checksumInput.ChecksumSHA256 != calculatedChecksums.checksumSHA256 {
-			return metadatastore.ErrBadDigest
-		}
-	}
 	return nil
 }
 
@@ -589,7 +552,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	err = validateChecksums(checksumInput, *calculatedChecksums)
+	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -597,12 +560,12 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 
 	err = mbs.metadataStore.UploadPart(ctx, tx, bucket, key, uploadId, partNumber, metadatastore.Blob{
 		Id:                *blobId,
-		ETag:              calculatedChecksums.etag,
-		ChecksumCRC32:     &calculatedChecksums.checksumCRC32,
-		ChecksumCRC32C:    &calculatedChecksums.checksumCRC32C,
-		ChecksumCRC64NVME: &calculatedChecksums.checksumCRC64NVME,
-		ChecksumSHA1:      &calculatedChecksums.checksumSHA1,
-		ChecksumSHA256:    &calculatedChecksums.checksumSHA256,
+		ETag:              *calculatedChecksums.ETag,
+		ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
+		ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
+		ChecksumCRC64NVME: calculatedChecksums.ChecksumCRC64NVME,
+		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
+		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 		Size:              *originalSize,
 	})
 	if err != nil {
@@ -614,20 +577,16 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 	return &storage.UploadPartResult{
-		ETag: calculatedChecksums.etag,
+		ETag:              *calculatedChecksums.ETag,
+		ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
+		ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
+		ChecksumCRC64NVME: calculatedChecksums.ChecksumCRC64NVME,
+		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
+		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 	}, nil
 }
 
-type checksumResult struct {
-	etag              string
-	checksumCRC32     string
-	checksumCRC32C    string
-	checksumCRC64NVME string
-	checksumSHA1      string
-	checksumSHA256    string
-}
-
-func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *checksumResult, error) {
+func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *metadatastore.ChecksumValues, error) {
 	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
 
 	doneChan := make(chan struct{}, 1)
@@ -785,13 +744,13 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 		}
 	}
 
-	checksums := &checksumResult{
-		etag:              etag,
-		checksumCRC32:     checksumCRC32,
-		checksumCRC32C:    checksumCRC32C,
-		checksumCRC64NVME: checksumCRC64NVME,
-		checksumSHA1:      checksumSHA1,
-		checksumSHA256:    checksumSHA256,
+	checksums := &metadatastore.ChecksumValues{
+		ETag:              &etag,
+		ChecksumCRC32:     &checksumCRC32,
+		ChecksumCRC32C:    &checksumCRC32C,
+		ChecksumCRC64NVME: &checksumCRC64NVME,
+		ChecksumSHA1:      &checksumSHA1,
+		ChecksumSHA256:    &checksumSHA256,
 	}
 	return originalSize, checksums, nil
 }
@@ -808,7 +767,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 	}
 }
 
-func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
+func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -816,7 +775,7 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucket, key, uploadId)
+	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucket, key, uploadId, checksumInput)
 	if err != nil {
 		tx.Rollback()
 		return nil, err

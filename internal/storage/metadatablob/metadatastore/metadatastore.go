@@ -115,6 +115,63 @@ type ListPartsResult struct {
 const ChecksumTypeFullObject = "FULL_OBJECT"
 const ChecksumTypeComposite = "COMPOSITE"
 
+type ChecksumInput struct {
+	ChecksumType      *string
+	ChecksumAlgorithm *string
+	ETag              *string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+}
+
+type ChecksumValues struct {
+	ETag              *string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+}
+
+func ValidateChecksums(checksumInput *ChecksumInput, calculatedChecksums ChecksumValues) error {
+	if checksumInput == nil {
+		return nil
+	}
+	if checksumInput.ETag != nil && calculatedChecksums.ETag != nil {
+		if *checksumInput.ETag != *calculatedChecksums.ETag {
+			return ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC32 != nil && calculatedChecksums.ChecksumCRC32 != nil {
+		if *checksumInput.ChecksumCRC32 != *calculatedChecksums.ChecksumCRC32 {
+			return ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC32C != nil && calculatedChecksums.ChecksumCRC32C != nil {
+		if *checksumInput.ChecksumCRC32C != *calculatedChecksums.ChecksumCRC32C {
+			return ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumCRC64NVME != nil && calculatedChecksums.ChecksumCRC64NVME != nil {
+		if *checksumInput.ChecksumCRC64NVME != *calculatedChecksums.ChecksumCRC64NVME {
+			return ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumSHA1 != nil && calculatedChecksums.ChecksumSHA1 != nil {
+		if *checksumInput.ChecksumSHA1 != *calculatedChecksums.ChecksumSHA1 {
+			return ErrBadDigest
+		}
+	}
+	if checksumInput.ChecksumSHA256 != nil && calculatedChecksums.ChecksumSHA256 != nil {
+		if *checksumInput.ChecksumSHA256 != *calculatedChecksums.ChecksumSHA256 {
+			return ErrBadDigest
+		}
+	}
+	return nil
+}
+
 var ErrNoSuchBucket error = errors.New("NoSuchBucket")
 var ErrBucketAlreadyExists error = errors.New("BucketAlreadyExists")
 var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
@@ -137,7 +194,7 @@ type MetadataStore interface {
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error
 	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
-	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
 	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
 	ListParts(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
@@ -291,7 +348,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
+	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil)
 	if err != nil {
 		tx.Rollback()
 		return err

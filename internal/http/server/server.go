@@ -264,7 +264,7 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 	return &val
 }
 
-func setChecksumHeaders(headers http.Header, object *storage.Object) {
+func setChecksumHeadersFromObject(headers http.Header, object *storage.Object) {
 	headers.Set(etagHeader, object.ETag)
 	if object.ChecksumType != nil {
 		headers.Set(checksumTypeHeader, *object.ChecksumType)
@@ -283,6 +283,27 @@ func setChecksumHeaders(headers http.Header, object *storage.Object) {
 	}
 	if object.ChecksumSHA256 != nil {
 		headers.Set(checksumSHA256Header, *object.ChecksumSHA256)
+	}
+}
+
+func setChecksumHeadersFromChecksumValues(headers http.Header, checksumValues storage.ChecksumValues) {
+	if checksumValues.ETag != nil {
+		headers.Set(etagHeader, *checksumValues.ETag)
+	}
+	if checksumValues.ChecksumCRC32 != nil {
+		headers.Set(checksumCRC32Header, *checksumValues.ChecksumCRC32)
+	}
+	if checksumValues.ChecksumCRC32C != nil {
+		headers.Set(checksumCRC32CHeader, *checksumValues.ChecksumCRC32C)
+	}
+	if checksumValues.ChecksumCRC64NVME != nil {
+		headers.Set(checksumCRC64NVMEHeader, *checksumValues.ChecksumCRC64NVME)
+	}
+	if checksumValues.ChecksumSHA1 != nil {
+		headers.Set(checksumSHA1Header, *checksumValues.ChecksumSHA1)
+	}
+	if checksumValues.ChecksumSHA256 != nil {
+		headers.Set(checksumSHA256Header, *checksumValues.ChecksumSHA256)
 	}
 }
 
@@ -528,7 +549,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	setChecksumHeaders(w.Header(), object)
+	setChecksumHeadersFromObject(w.Header(), object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	w.Header().Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -818,6 +839,7 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 	key := r.PathValue(keyPath)
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
+	checksumInput := extractChecksumInput(r)
 
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -835,7 +857,7 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	log.Printf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
-	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -906,7 +928,14 @@ func (s *Server) uploadPart(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Set(etagHeader, uploadPartResult.ETag)
+	setChecksumHeadersFromChecksumValues(w.Header(), storage.ChecksumValues{
+		ETag:              &uploadPartResult.ETag,
+		ChecksumCRC32:     uploadPartResult.ChecksumCRC32,
+		ChecksumCRC32C:    uploadPartResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: uploadPartResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      uploadPartResult.ChecksumSHA1,
+		ChecksumSHA256:    uploadPartResult.ChecksumSHA256,
+	})
 	w.WriteHeader(200)
 }
 

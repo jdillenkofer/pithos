@@ -270,15 +270,21 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucket string, key st
 		return nil, err
 	}
 	return &storage.UploadPartResult{
-		ETag: *uploadPartResult.ETag,
+		ETag:              *uploadPartResult.ETag,
+		ChecksumCRC32:     uploadPartResult.ChecksumCRC32,
+		ChecksumCRC32C:    uploadPartResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: uploadPartResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      uploadPartResult.ChecksumSHA1,
+		ChecksumSHA256:    uploadPartResult.ChecksumSHA256,
 	}, nil
 }
 
-func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucket),
 		Key:      aws.String(key),
 		UploadId: aws.String(uploadId),
+		// @TODO: Use checksumInput
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
