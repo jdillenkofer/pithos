@@ -12,7 +12,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	store "github.com/jdillenkofer/pithos/internal/storage"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -97,7 +96,7 @@ func TestStorageMigrator(t *testing.T) {
 	assert.Nil(t, err)
 
 	// @TODO: Use checksumInput
-	err = storage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), store.ChecksumInput{})
+	err = storage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil)
 	assert.Nil(t, err)
 
 	storagePath2 := *tempDir2
