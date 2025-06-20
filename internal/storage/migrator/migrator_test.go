@@ -96,7 +96,7 @@ func TestStorageMigrator(t *testing.T) {
 	assert.Nil(t, err)
 
 	// @TODO: Use checksumInput
-	err = storage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil)
+	_, err = storage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil)
 	assert.Nil(t, err)
 
 	storagePath2 := *tempDir2

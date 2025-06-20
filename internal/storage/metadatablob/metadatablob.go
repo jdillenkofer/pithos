@@ -386,12 +386,12 @@ func calculateSha256(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
+func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// if we already have such an object,
@@ -399,14 +399,14 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucket, key)
 	if err != nil && err != storage.ErrNoSuchKey {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	if previousObject != nil {
 		for _, blob := range previousObject.Blobs {
 			err = mbs.blobStore.DeleteBlob(ctx, tx, blob.Id)
 			if err != nil {
 				tx.Rollback()
-				return err
+				return nil, err
 			}
 		}
 	}
@@ -414,19 +414,19 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	blobId, err := blobstore.GenerateBlobId()
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	originalSize, calculatedChecksums, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	object := metadatastore.Object{
@@ -458,15 +458,22 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	err = mbs.metadataStore.PutObject(ctx, tx, bucket, &object)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	err = tx.Commit()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &storage.PutObjectResult{
+		ETag:              &object.ETag,
+		ChecksumCRC32:     object.ChecksumCRC32,
+		ChecksumCRC32C:    object.ChecksumCRC32C,
+		ChecksumCRC64NVME: object.ChecksumCRC64NVME,
+		ChecksumSHA1:      object.ChecksumSHA1,
+		ChecksumSHA256:    object.ChecksumSHA256,
+	}, nil
 }
 
 func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucket string, key string) error {

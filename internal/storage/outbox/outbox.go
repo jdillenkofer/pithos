@@ -79,7 +79,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
 			// @TODO: Use checksumInput
-			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), nil)
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -365,26 +365,26 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
+func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucket, key, data)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	err = tx.Commit()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &storage.PutObjectResult{}, nil
 }
 
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucket string, key string) error {

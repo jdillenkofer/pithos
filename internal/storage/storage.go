@@ -36,6 +36,15 @@ type ListBucketResult struct {
 	IsTruncated    bool
 }
 
+type PutObjectResult struct {
+	ETag              *string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId string
 }
@@ -125,7 +134,7 @@ type Storage interface {
 	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
 	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
-	PutObject(ctx context.Context, bucket string, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) error
+	PutObject(ctx context.Context, bucket string, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucket string, key string) error
 	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
@@ -191,7 +200,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return errors.New("invalid bucketName")
 		}
 
-		err = storage.PutObject(ctx, bucketName, key, nil, data, nil)
+		_, err = storage.PutObject(ctx, bucketName, key, nil, data, nil)
 		if err != nil {
 			return err
 		}
