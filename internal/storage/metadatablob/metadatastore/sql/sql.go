@@ -292,12 +292,18 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		}
 	}
 	objectEntity := object.Entity{
-		BucketName:   bucketName,
-		ContentType:  obj.ContentType,
-		Key:          obj.Key,
-		ETag:         obj.ETag,
-		Size:         obj.Size,
-		UploadStatus: object.UploadStatusCompleted,
+		BucketName:        bucketName,
+		Key:               obj.Key,
+		ContentType:       obj.ContentType,
+		ETag:              obj.ETag,
+		ChecksumCRC32:     obj.ChecksumCRC32,
+		ChecksumCRC32C:    obj.ChecksumCRC32C,
+		ChecksumCRC64NVME: obj.ChecksumCRC64NVME,
+		ChecksumSHA1:      obj.ChecksumSHA1,
+		ChecksumSHA256:    obj.ChecksumSHA256,
+		ChecksumType:      obj.ChecksumType,
+		Size:              obj.Size,
+		UploadStatus:      object.UploadStatusCompleted,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	objectId := objectEntity.Id
@@ -366,15 +372,19 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
+	if checksumType == nil {
+		checksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject)
+	}
+
 	objectEntity := object.Entity{
 		BucketName:   bucketName,
 		Key:          key,
 		ContentType:  contentType,
 		ETag:         "",
+		ChecksumType: checksumType,
 		Size:         -1,
 		UploadId:     ptrutils.ToPtr(ulid.Make().String()),
 		UploadStatus: object.UploadStatusPending,
-		ChecksumType: checksumType,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
