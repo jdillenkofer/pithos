@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -635,6 +637,80 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Equal(t, body, objectBytes)
 		})
+
+		// We need a large enough payload to force a multipart upload
+		var largePayload []byte = make([]byte, manager.MinUploadPartSize*2)
+		r := rand.New(rand.NewSource(int64(1337)))
+		r.Read(largePayload)
+
+		for _, checksumAlgorithm := range []types.ChecksumAlgorithm{"CRC32", "CRC32C", "CRC64NVME", "SHA1", "SHA256"} {
+			t.Run("it should allow multipart uploads using checksumAlgorithm "+string(checksumAlgorithm)+testSuffix, func(t *testing.T) {
+				s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+				t.Cleanup(cleanup)
+				createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+					Bucket: bucketName,
+				})
+				if err != nil {
+					assert.Fail(t, "CreateBucket failed", "err %v", err)
+				}
+				assert.NotNil(t, createBucketResult)
+
+				uploader := manager.NewUploader(s3Client, func(u *manager.Uploader) {
+					u.Concurrency = 1
+					u.PartSize = manager.MinUploadPartSize
+				})
+				uploadOutput, err := uploader.Upload(context.Background(), &s3.PutObjectInput{
+					Bucket:            bucketName,
+					Key:               key,
+					Body:              bytes.NewReader(largePayload),
+					ChecksumAlgorithm: checksumAlgorithm,
+				})
+				if err != nil {
+					assert.Fail(t, "Upload failed", "err %v", err)
+				}
+				assert.NotNil(t, uploadOutput)
+				assert.Equal(t, key, uploadOutput.Key)
+				assert.Equal(t, 2, len(uploadOutput.CompletedParts))
+
+				firstPart := uploadOutput.CompletedParts[0]
+				assert.Equal(t, "\"32571c347a10c52443114d7adccdda7e\"", *firstPart.ETag)
+				assert.Equal(t, "ofCoFg==", *firstPart.ChecksumCRC32)
+				assert.Equal(t, "Abkn5A==", *firstPart.ChecksumCRC32C)
+				assert.Equal(t, "aNFz0eBLamw=", *firstPart.ChecksumCRC64NVME)
+				assert.Equal(t, "vaP4YsHAheW1JNwC9QjaFR+Mgxs=", *firstPart.ChecksumSHA1)
+				assert.Equal(t, "U6bAqRNZMqgKtspwYKBPvggn3jo8VmDB1YzZ+0Vf+KM=", *firstPart.ChecksumSHA256)
+				assert.Equal(t, int32(1), *firstPart.PartNumber)
+
+				secondPart := uploadOutput.CompletedParts[1]
+				assert.Equal(t, "\"ddcce51e31a68a3268905f2794b0bbb4\"", *secondPart.ETag)
+				assert.Equal(t, "HUzpnQ==", *secondPart.ChecksumCRC32)
+				assert.Equal(t, "2FK6Vg==", *secondPart.ChecksumCRC32C)
+				assert.Equal(t, "gBCc/dz5qRU=", *secondPart.ChecksumCRC64NVME)
+				assert.Equal(t, "/OkGPn2ayY9pA2v/JEo+B0hsUpg=", *secondPart.ChecksumSHA1)
+				assert.Equal(t, "drUohCpA8EjWtWwhvmxeNp6G/cb8/Y3X6h6FnCZs3Bk=", *secondPart.ChecksumSHA256)
+				assert.Equal(t, int32(2), *secondPart.PartNumber)
+
+				assert.Equal(t, "\"3e3689706ec8de577100eaa648d51fac-2\"", *uploadOutput.ETag)
+				assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
+				assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
+				assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
+				assert.Nil(t, uploadOutput.ChecksumSHA1)
+				assert.Nil(t, uploadOutput.ChecksumSHA256)
+
+				getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+				if err != nil {
+					assert.Fail(t, "GetObject failed", "err %v", err)
+				}
+				assert.NotNil(t, getObjectResult)
+				assert.NotNil(t, getObjectResult.Body)
+				objectBytes, err := io.ReadAll(getObjectResult.Body)
+				assert.Nil(t, err)
+				assert.Equal(t, largePayload, objectBytes)
+			})
+		}
 
 		t.Run("it should allow listing multipart uploads"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
