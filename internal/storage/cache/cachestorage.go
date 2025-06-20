@@ -145,7 +145,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	return reader, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -188,7 +188,7 @@ func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucket string
 	return initiateMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err

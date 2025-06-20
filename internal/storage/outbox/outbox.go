@@ -79,7 +79,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
 			// @TODO: Use checksumInput
-			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), storage.ChecksumInput{})
+			err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -365,7 +365,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucket string, key strin
 	return os.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
@@ -412,7 +412,7 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucket strin
 	return os.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 }
 
-func (os *outboxStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (os *outboxStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err

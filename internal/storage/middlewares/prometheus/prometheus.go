@@ -282,7 +282,7 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 	return reader, nil
 }
 
-func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
 	})
@@ -322,7 +322,7 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 	return initiateMultipartUploadResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	bytesUploaded := 0
 	data = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(data), func(n int) {
 		bytesUploaded += n

@@ -199,7 +199,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	_, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucket),
 		Key:         aws.String(key),
@@ -253,7 +253,7 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucket str
 	}, nil
 }
 
-func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucket),
 		Key:        aws.String(key),

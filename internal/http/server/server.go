@@ -286,7 +286,7 @@ func setChecksumHeaders(headers http.Header, object *storage.Object) {
 	}
 }
 
-func extractChecksumInput(r *http.Request) storage.ChecksumInput {
+func extractChecksumInput(r *http.Request) *storage.ChecksumInput {
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
 	checksumAlgorithm := getHeaderAsPtr(r.Header, checksumAlgorithmHeader)
 	contentMd5 := getHeaderAsPtr(r.Header, contentMd5Header)
@@ -306,7 +306,7 @@ func extractChecksumInput(r *http.Request) storage.ChecksumInput {
 		ChecksumSHA1:      checksumSha1,
 		ChecksumSHA256:    checksumSha256,
 	}
-	return checksumInput
+	return &checksumInput
 }
 
 func handleError(err error, w http.ResponseWriter, r *http.Request) {

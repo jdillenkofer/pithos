@@ -386,7 +386,7 @@ func calculateSha256(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -469,16 +469,17 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 	return nil
 }
 
-func validateChecksums(checksumInput storage.ChecksumInput, calculatedChecksums checksumResult) error {
+func validateChecksums(checksumInput *storage.ChecksumInput, calculatedChecksums checksumResult) error {
+	if checksumInput == nil {
+		return nil
+	}
 	if checksumInput.ETag != nil {
 		if *checksumInput.ETag != calculatedChecksums.etag {
-			log.Println("ETAG", *checksumInput.ETag, calculatedChecksums.etag)
 			return metadatastore.ErrBadDigest
 		}
 	}
 	if checksumInput.ChecksumCRC32 != nil {
 		if *checksumInput.ChecksumCRC32 != calculatedChecksums.checksumCRC32 {
-			log.Println("CRC32", *checksumInput.ChecksumCRC32, calculatedChecksums.checksumCRC32)
 			return metadatastore.ErrBadDigest
 		}
 	}
@@ -568,7 +569,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})

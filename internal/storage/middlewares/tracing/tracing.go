@@ -100,7 +100,7 @@ func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucket strin
 	return tsm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput storage.ChecksumInput) error {
+func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".PutObject()").End()
 
 	return tsm.innerStorage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
@@ -118,7 +118,7 @@ func (tsm *tracingStorageMiddleware) CreateMultipartUpload(ctx context.Context, 
 	return tsm.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 }
 
-func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".UploadPart()").End()
 
 	return tsm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, reader, checksumInput)
