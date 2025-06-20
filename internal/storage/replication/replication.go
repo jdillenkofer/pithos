@@ -119,29 +119,29 @@ func (rs *replicationStorage) GetObject(ctx context.Context, bucket string, key 
 	return rs.primaryStorage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
+func (rs *replicationStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	err = rs.primaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
+	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
 		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		err = secondaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
+		_, err = secondaryStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return putObjectResult, nil
 }
 
 func (rs *replicationStorage) DeleteObject(ctx context.Context, bucket string, key string) error {

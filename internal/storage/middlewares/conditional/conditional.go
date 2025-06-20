@@ -120,7 +120,7 @@ func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucket s
 	return storage.GetObject(ctx, bucket, key, startByte, endByte)
 }
 
-func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
+func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	storage := csm.lookupStorage(bucket)
 	return storage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
 }

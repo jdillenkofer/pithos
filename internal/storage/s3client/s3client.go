@@ -199,8 +199,8 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucket string, key str
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) error {
-	_, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+	putObjectResult, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucket),
 		Key:         aws.String(key),
 		ContentType: contentType,
@@ -209,10 +209,20 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucket string, key str
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
-		return storage.ErrNoSuchBucket
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	return err
+	return &storage.PutObjectResult{
+		ETag:              putObjectResult.ETag,
+		ChecksumCRC32:     putObjectResult.ChecksumCRC32,
+		ChecksumCRC32C:    putObjectResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: putObjectResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
+		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
+	}, nil
 }
 
 func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucket string, key string) error {

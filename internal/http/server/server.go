@@ -952,13 +952,21 @@ func (s *Server) putObject(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body, checksumInput)
+	putObjectResult, err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
-	w.WriteHeader(200)
 
+	setChecksumHeadersFromChecksumValues(w.Header(), storage.ChecksumValues{
+		ETag:              putObjectResult.ETag,
+		ChecksumCRC32:     putObjectResult.ChecksumCRC32,
+		ChecksumCRC32C:    putObjectResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: putObjectResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
+		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
+	})
+	w.WriteHeader(200)
 }
 
 func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
