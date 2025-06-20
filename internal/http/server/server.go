@@ -35,7 +35,7 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	mux.HandleFunc("PUT /{bucket}", server.createBucketHandler)
 	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
-	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrlistPartsHandler)
+	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
 	mux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
@@ -628,7 +628,7 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 	return byteRanges, nil
 }
 
-func (s *Server) getObjectOrlistPartsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(uploadIdQuery) {
 		s.listPartsHandler(w, r)
@@ -717,6 +717,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		contentType = *object.ContentType
 	}
 	w.Header().Set(contentTypeHeader, contentType)
+	setChecksumHeadersFromObject(w.Header(), object)
 
 	var readers []io.ReadCloser
 	var sizes []int64
