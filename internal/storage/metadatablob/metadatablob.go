@@ -764,13 +764,14 @@ func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Cont
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {
 	return storage.CompleteMultipartUploadResult{
-		Location:       result.Location,
-		ETag:           result.ETag,
-		ChecksumCRC32:  result.ChecksumCRC32,
-		ChecksumCRC32C: result.ChecksumCRC32C,
-		ChecksumSHA1:   result.ChecksumSHA1,
-		ChecksumSHA256: result.ChecksumSHA256,
-		ChecksumType:   result.ChecksumType,
+		Location:          result.Location,
+		ETag:              result.ETag,
+		ChecksumCRC32:     result.ChecksumCRC32,
+		ChecksumCRC32C:    result.ChecksumCRC32C,
+		ChecksumCRC64NVME: result.ChecksumCRC64NVME,
+		ChecksumSHA1:      result.ChecksumSHA1,
+		ChecksumSHA256:    result.ChecksumSHA256,
+		ChecksumType:      result.ChecksumType,
 	}
 }
 

@@ -864,15 +864,16 @@ func (s *Server) completeMultipartUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	completeMultipartUploadResult := CompleteMultipartUploadResult{
-		Location:       result.Location,
-		Bucket:         bucket,
-		Key:            key,
-		ETag:           result.ETag,
-		ChecksumCRC32:  result.ChecksumCRC32,
-		ChecksumCRC32C: result.ChecksumCRC32C,
-		ChecksumSHA1:   result.ChecksumSHA1,
-		ChecksumSHA256: result.ChecksumSHA256,
-		ChecksumType:   result.ChecksumType,
+		Location:          result.Location,
+		Bucket:            bucket,
+		Key:               key,
+		ETag:              result.ETag,
+		ChecksumCRC32:     result.ChecksumCRC32,
+		ChecksumCRC32C:    result.ChecksumCRC32C,
+		ChecksumCRC64NVME: result.ChecksumCRC64NVME,
+		ChecksumSHA1:      result.ChecksumSHA1,
+		ChecksumSHA256:    result.ChecksumSHA256,
+		ChecksumType:      result.ChecksumType,
 	}
 
 	w.WriteHeader(200)
