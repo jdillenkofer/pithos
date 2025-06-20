@@ -421,13 +421,13 @@ func (os *outboxStorage) UploadPart(ctx context.Context, bucket string, key stri
 	return os.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
 }
 
-func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
+func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+	return os.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 }
 
 func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {

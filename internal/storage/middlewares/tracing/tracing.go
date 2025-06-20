@@ -124,10 +124,10 @@ func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucket stri
 	return tsm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, reader, checksumInput)
 }
 
-func (tsm *tracingStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) (*storage.CompleteMultipartUploadResult, error) {
+func (tsm *tracingStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".CompleteMultipartUpload()").End()
 
-	return tsm.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId)
+	return tsm.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 }
 
 func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
