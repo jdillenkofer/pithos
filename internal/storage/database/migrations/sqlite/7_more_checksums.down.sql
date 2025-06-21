@@ -36,3 +36,8 @@ INSERT INTO objects2 SELECT id, bucket_name, key, content_type, etag, size, uplo
 DROP TABLE objects;
 
 ALTER TABLE objects2 RENAME TO objects;
+
+CREATE UNIQUE INDEX objects_completed_unique ON objects (bucket_name, key, upload_status)
+WHERE upload_status = 'COMPLETED';
+CREATE UNIQUE INDEX objects_pending_unique_upload_id ON objects (bucket_name, key, upload_status, upload_id)
+WHERE upload_status = 'PENDING';
