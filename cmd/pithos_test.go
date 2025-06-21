@@ -1795,6 +1795,51 @@ func TestDeleteObject(t *testing.T) {
 	})
 }
 
+func TestHeadObject(t *testing.T) {
+
+	t.Parallel()
+
+	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+		t.Run("it should allow head an object"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			headObjectResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "HeadObject failed", "err %v", err)
+			}
+			assert.NotNil(t, headObjectResult)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *headObjectResult.ETag)
+			assert.Equal(t, "Bjck3A==", *headObjectResult.ChecksumCRC32)
+			assert.Equal(t, "H7cZCA==", *headObjectResult.ChecksumCRC32C)
+			assert.Equal(t, "4SEgZkEEyhY=", *headObjectResult.ChecksumCRC64NVME)
+			assert.Equal(t, "lMCBYNtqPCnP3avKVUtqfrThqHo=", *headObjectResult.ChecksumSHA1)
+			assert.Equal(t, "sctyzI/H+7x/oVR7Gwt7NiQ7kop4Ua/7SrVraELVDpI=", *headObjectResult.ChecksumSHA256)
+			assert.Equal(t, types.ChecksumTypeFullObject, headObjectResult.ChecksumType)
+		})
+	})
+}
+
 func TestDeleteBucket(t *testing.T) {
 
 	t.Parallel()
