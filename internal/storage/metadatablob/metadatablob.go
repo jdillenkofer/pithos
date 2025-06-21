@@ -2,18 +2,12 @@ package metadatablob
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
-	"hash/crc32"
-	"hash/crc64"
 	"io"
 	"log"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
@@ -319,73 +313,6 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucket string, ke
 	return reader, nil
 }
 
-func calculateETag(reader io.Reader) (*string, error) {
-	hash := md5.New()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	etag := "\"" + hexSum + "\""
-	return &etag, nil
-}
-
-func calculateCrc32(reader io.Reader) (*string, error) {
-	hash := crc32.NewIEEE()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateCrc32c(reader io.Reader) (*string, error) {
-	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateCrc64Nvme(reader io.Reader) (*string, error) {
-	hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateSha1(reader io.Reader) (*string, error) {
-	hash := sha1.New()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateSha256(reader io.Reader) (*string, error) {
-	hash := sha256.New()
-	_, err := io.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
@@ -417,7 +344,9 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucket string, ke
 		return nil, err
 	}
 
-	originalSize, calculatedChecksums, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+		return mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -553,7 +482,9 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		return nil, err
 	}
 
-	originalSize, calculatedChecksums, err := mbs.uploadBlobAndCalculateChecksums(ctx, tx, *blobId, reader)
+	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+		return mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -591,175 +522,6 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucket string, k
 		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
 		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 	}, nil
-}
-
-func (mbs *metadataBlobStorage) uploadBlobAndCalculateChecksums(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) (*int64, *metadatastore.ChecksumValues, error) {
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
-
-	doneChan := make(chan struct{}, 1)
-	errChan := make(chan error, 1)
-	go func() {
-		err := mbs.blobStore.PutBlob(ctx, tx, blobId, readers[0])
-		if err != nil {
-			errChan <- err
-			return
-		}
-		doneChan <- struct{}{}
-	}()
-
-	etagChan := make(chan string, 1)
-	errChan2 := make(chan error, 1)
-	go func() {
-		etag, err := calculateETag(readers[1])
-		if err != nil {
-			errChan2 <- err
-			return
-		}
-		etagChan <- *etag
-	}()
-
-	crc32Chan := make(chan string, 1)
-	errChan3 := make(chan error, 1)
-	go func() {
-		crc32, err := calculateCrc32(readers[2])
-		if err != nil {
-			errChan3 <- err
-			return
-		}
-		crc32Chan <- *crc32
-	}()
-
-	crc32cChan := make(chan string, 1)
-	errChan4 := make(chan error, 1)
-	go func() {
-		crc32c, err := calculateCrc32c(readers[3])
-		if err != nil {
-			errChan4 <- err
-			return
-		}
-		crc32cChan <- *crc32c
-	}()
-
-	crc64nvmeChan := make(chan string, 1)
-	errChan5 := make(chan error, 1)
-	go func() {
-		crc64nvme, err := calculateCrc64Nvme(readers[4])
-		if err != nil {
-			errChan5 <- err
-			return
-		}
-		crc64nvmeChan <- *crc64nvme
-	}()
-
-	sha1Chan := make(chan string, 1)
-	errChan6 := make(chan error, 1)
-	go func() {
-		sha1, err := calculateSha1(readers[5])
-		if err != nil {
-			errChan6 <- err
-			return
-		}
-		sha1Chan <- *sha1
-	}()
-
-	sha256Chan := make(chan string, 1)
-	errChan7 := make(chan error, 1)
-	go func() {
-		sha256, err := calculateSha256(readers[6])
-		if err != nil {
-			errChan7 <- err
-			return
-		}
-		sha256Chan <- *sha256
-	}()
-
-	// @Note: We need a anonymous function here,
-	// because defers are always scoped to the function.
-	// But if we don't directly defer close after the copy,
-	// we deadlock the program
-	originalSize, err := func() (*int64, error) {
-		defer closer.Close()
-		originalSize, err := io.Copy(writer, reader)
-		if err != nil {
-			return nil, err
-		}
-		return &originalSize, nil
-	}()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	select {
-	case <-doneChan:
-	case err := <-errChan:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var etag string
-	select {
-	case etag = <-etagChan:
-	case err := <-errChan2:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC32 string
-	select {
-	case checksumCRC32 = <-crc32Chan:
-	case err := <-errChan3:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC32C string
-	select {
-	case checksumCRC32C = <-crc32cChan:
-	case err := <-errChan4:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC64NVME string
-	select {
-	case checksumCRC64NVME = <-crc64nvmeChan:
-	case err := <-errChan5:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumSHA1 string
-	select {
-	case checksumSHA1 = <-sha1Chan:
-	case err := <-errChan6:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumSHA256 string
-	select {
-	case checksumSHA256 = <-sha256Chan:
-	case err := <-errChan7:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	checksums := &metadatastore.ChecksumValues{
-		ETag:              &etag,
-		ChecksumCRC32:     &checksumCRC32,
-		ChecksumCRC32C:    &checksumCRC32C,
-		ChecksumCRC64NVME: &checksumCRC64NVME,
-		ChecksumSHA1:      &checksumSHA1,
-		ChecksumSHA256:    &checksumSHA256,
-	}
-	return originalSize, checksums, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {

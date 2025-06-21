@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
@@ -126,14 +127,7 @@ type ChecksumInput struct {
 	ChecksumSHA256    *string
 }
 
-type ChecksumValues struct {
-	ETag              *string
-	ChecksumCRC32     *string
-	ChecksumCRC32C    *string
-	ChecksumCRC64NVME *string
-	ChecksumSHA1      *string
-	ChecksumSHA256    *string
-}
+type ChecksumValues = checksumutils.ChecksumValues
 
 func ValidateChecksums(checksumInput *ChecksumInput, calculatedChecksums ChecksumValues) error {
 	if checksumInput == nil {

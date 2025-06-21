@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jdillenkofer/pithos/internal/crcutils"
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -558,7 +558,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 				if crc32Combined == nil {
 					crc32Combined = &data
 				} else {
-					crc32Combined = ptrutils.ToPtr(crcutils.CombineCrc32(*crc32Combined, data, blobEntity.Size))
+					crc32Combined = ptrutils.ToPtr(checksumutils.CombineCrc32(*crc32Combined, data, blobEntity.Size))
 				}
 			} else {
 				skipCrc32 = true
@@ -572,7 +572,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 				if crc32cCombined == nil {
 					crc32cCombined = &data
 				} else {
-					crc32cCombined = ptrutils.ToPtr(crcutils.CombineCrc32c(*crc32cCombined, data, blobEntity.Size))
+					crc32cCombined = ptrutils.ToPtr(checksumutils.CombineCrc32c(*crc32cCombined, data, blobEntity.Size))
 				}
 			} else {
 				skipCrc32c = true
@@ -586,7 +586,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 				if crc64NvmeCombined == nil {
 					crc64NvmeCombined = &data
 				} else {
-					crc64NvmeCombined = ptrutils.ToPtr(crcutils.CombineCrc64Nvme(*crc64NvmeCombined, data, blobEntity.Size))
+					crc64NvmeCombined = ptrutils.ToPtr(checksumutils.CombineCrc64Nvme(*crc64NvmeCombined, data, blobEntity.Size))
 				}
 			} else {
 				skipCrc64Nvme = true
