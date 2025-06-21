@@ -1,4 +1,4 @@
-package crcutils
+package checksumutils
 
 import (
 	"hash/crc32"

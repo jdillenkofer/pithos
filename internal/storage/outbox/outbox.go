@@ -10,9 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
@@ -370,21 +372,36 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucket string, key strin
 	if err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(reader)
+	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		return os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucket, key, data)
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucket, key, data)
+
+	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
 	}
+
 	err = tx.Commit()
 	if err != nil {
 		return nil, err
 	}
-	return &storage.PutObjectResult{}, nil
+	return &storage.PutObjectResult{
+		ETag:              calculatedChecksums.ETag,
+		ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
+		ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
+		ChecksumCRC64NVME: calculatedChecksums.ChecksumCRC64NVME,
+		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
+		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
+	}, nil
 }
 
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
