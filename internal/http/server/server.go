@@ -709,6 +709,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue(keyPath)
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
+	// @Concurrency: headObject and getObject run in different transactions and possibly return inconsistent data
 	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
