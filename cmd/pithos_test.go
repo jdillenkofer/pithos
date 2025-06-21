@@ -1497,6 +1497,13 @@ func TestGetObject(t *testing.T) {
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
 			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, "\"6cd3556deb0da54bca060b4c39479839\"", *getObjectResult.ETag)
+			assert.Equal(t, "6+bG5g==", *getObjectResult.ChecksumCRC32)
+			assert.Equal(t, "yKEG5Q==", *getObjectResult.ChecksumCRC32C)
+			assert.Equal(t, "n3hVaQAaPTQ=", *getObjectResult.ChecksumCRC64NVME)
+			assert.Equal(t, "lDpwLQbzRZmu4fjajvn3KWAx1pk=", *getObjectResult.ChecksumSHA1)
+			assert.Equal(t, "MV9b23bQeMQ7isAGTkoBZGErH853yGk0W/yUx1iU7dM=", *getObjectResult.ChecksumSHA256)
+			assert.Equal(t, types.ChecksumTypeFullObject, getObjectResult.ChecksumType)
 		})
 
 		t.Run("it should allow downloading the object with a presigned url"+testSuffix, func(t *testing.T) {
