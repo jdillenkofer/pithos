@@ -1012,6 +1012,11 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, int32(2), *firstPart.PartNumber)
 			assert.Equal(t, int64(len(body[2:])), *firstPart.Size)
 			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *firstPart.ETag)
+			assert.Equal(t, "2GpoVg==", *firstPart.ChecksumCRC32)
+			assert.Equal(t, "80iBtg==", *firstPart.ChecksumCRC32C)
+			assert.Equal(t, "Iy5Z/rXq8uI=", *firstPart.ChecksumCRC64NVME)
+			assert.Equal(t, "h1jfWItGBQfcDNMMI6FANuZJam4=", *firstPart.ChecksumSHA1)
+			assert.Equal(t, "QzRXKSwYas0BDNnAMkDZMLlliJd9xDozckIiOuCoaao=", *firstPart.ChecksumSHA256)
 			assert.False(t, *listPartsResult.IsTruncated)
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
@@ -1047,6 +1052,11 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, int32(1), *firstPart.PartNumber)
 			assert.Equal(t, int64(len(body[0:2])), *firstPart.Size)
 			assert.Equal(t, "\"a64cf5823262686e1a28b2245be34ce0\"", *firstPart.ETag)
+			assert.Equal(t, "RKFCJQ==", *firstPart.ChecksumCRC32)
+			assert.Equal(t, "x1X1EA==", *firstPart.ChecksumCRC32C)
+			assert.Equal(t, "MhUdjJvefpY=", *firstPart.ChecksumCRC64NVME)
+			assert.Equal(t, "U6QXeWx3eFEAOz8kMeju9WJewVs=", *firstPart.ChecksumSHA1)
+			assert.Equal(t, "MO/ftS/2f4Dat8uJ3P4O7IQSlmz+WDJJk2dLRhbWvRE=", *firstPart.ChecksumSHA256)
 			assert.True(t, *listPartsResult.IsTruncated)
 
 			// listParts with partNumberMarker offset
@@ -1071,6 +1081,11 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, int32(2), *firstPart.PartNumber)
 			assert.Equal(t, int64(len(body[2:])), *firstPart.Size)
 			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *firstPart.ETag)
+			assert.Equal(t, "2GpoVg==", *firstPart.ChecksumCRC32)
+			assert.Equal(t, "80iBtg==", *firstPart.ChecksumCRC32C)
+			assert.Equal(t, "Iy5Z/rXq8uI=", *firstPart.ChecksumCRC64NVME)
+			assert.Equal(t, "h1jfWItGBQfcDNMMI6FANuZJam4=", *firstPart.ChecksumSHA1)
+			assert.Equal(t, "QzRXKSwYas0BDNnAMkDZMLlliJd9xDozckIiOuCoaao=", *firstPart.ChecksumSHA256)
 			assert.False(t, *listPartsResult.IsTruncated)
 
 			// listParts (all)
@@ -1094,10 +1109,20 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, int32(1), *firstPart.PartNumber)
 			assert.Equal(t, int64(len(body[0:2])), *firstPart.Size)
 			assert.Equal(t, "\"a64cf5823262686e1a28b2245be34ce0\"", *firstPart.ETag)
+			assert.Equal(t, "RKFCJQ==", *firstPart.ChecksumCRC32)
+			assert.Equal(t, "x1X1EA==", *firstPart.ChecksumCRC32C)
+			assert.Equal(t, "MhUdjJvefpY=", *firstPart.ChecksumCRC64NVME)
+			assert.Equal(t, "U6QXeWx3eFEAOz8kMeju9WJewVs=", *firstPart.ChecksumSHA1)
+			assert.Equal(t, "MO/ftS/2f4Dat8uJ3P4O7IQSlmz+WDJJk2dLRhbWvRE=", *firstPart.ChecksumSHA256)
 			secondPart := listPartsResult.Parts[1]
 			assert.Equal(t, int32(2), *secondPart.PartNumber)
 			assert.Equal(t, int64(len(body[2:])), *secondPart.Size)
 			assert.Equal(t, "\"ea0cfed76183b9faf2e87ca949d9c4b8\"", *secondPart.ETag)
+			assert.Equal(t, "2GpoVg==", *secondPart.ChecksumCRC32)
+			assert.Equal(t, "80iBtg==", *secondPart.ChecksumCRC32C)
+			assert.Equal(t, "Iy5Z/rXq8uI=", *secondPart.ChecksumCRC64NVME)
+			assert.Equal(t, "h1jfWItGBQfcDNMMI6FANuZJam4=", *secondPart.ChecksumSHA1)
+			assert.Equal(t, "QzRXKSwYas0BDNnAMkDZMLlliJd9xDozckIiOuCoaao=", *secondPart.ChecksumSHA256)
 		})
 
 		t.Run("it should allow cancellation of multipart uploads"+testSuffix, func(t *testing.T) {
