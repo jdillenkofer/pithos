@@ -400,7 +400,7 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 	}
 	if !authorized {
 		log.Printf("Unauthorized request: %v", request)
-		w.WriteHeader(503)
+		w.WriteHeader(403)
 		return true
 	}
 	return false
