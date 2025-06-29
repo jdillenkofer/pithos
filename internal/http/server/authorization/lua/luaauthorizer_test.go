@@ -13,7 +13,8 @@ func TestAuthorizationAlwaysDenied(t *testing.T) {
 	  return false
 	end
 	`
-	authorizer := NewLuaAuthorizer(luaCode)
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
 	request := authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
@@ -33,7 +34,8 @@ func TestAuthorizationAlwaysAllowed(t *testing.T) {
 	  return true
 	end
 	`
-	authorizer := NewLuaAuthorizer(luaCode)
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
 	request := authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
@@ -53,7 +55,8 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 	  return request.operation == "PutObject"
 	end
 	`
-	authorizer := NewLuaAuthorizer(luaCode)
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
 	allowedRequest := authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
@@ -86,7 +89,8 @@ func TestNestedStructWorks(t *testing.T) {
 	  return authorization.accessKeyId == "AKIAIOSFODNN7EXAMPLE" and request.operation == "PutObject"
 	end
 	`
-	authorizer := NewLuaAuthorizer(luaCode)
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
 	allowedRequest := authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{

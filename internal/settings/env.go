@@ -17,6 +17,7 @@ const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
+const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 
 func getStringFromEnv(envKey string) *string {
 	val := os.Getenv(envKey)
@@ -59,6 +60,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
+	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	return &Settings{
 		accessKeyId:           accessKeyId,
 		secretAccessKey:       secretAccessKey,
@@ -69,5 +71,6 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPort:        monitoringPort,
 		monitoringPortEnabled: monitoringPortEnabled,
 		storageJsonPath:       storageJsonPath,
+		authorizerPath:        authorizerPath,
 	}, nil
 }

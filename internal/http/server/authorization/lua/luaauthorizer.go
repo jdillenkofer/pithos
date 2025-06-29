@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"time"
@@ -11,18 +12,33 @@ import (
 
 const authorizationFunctionName = "authorizeRequest"
 
-type authorizationError struct {
-	error
-}
+var errAuthorizationFunctionNotFound = errors.New("authorization function " + authorizationFunctionName + " not found in Lua code")
 
 type LuaAuthorizer struct {
 	code string
 }
 
-func NewLuaAuthorizer(code string) *LuaAuthorizer {
-	return &LuaAuthorizer{
+func (authorizer *LuaAuthorizer) dryRun() error {
+	_, err := authorizer.AuthorizeRequest(&authorization.Request{
+		Operation: authorization.OperationPutObject,
+		Authorization: authorization.Authorization{
+			AccessKeyId: "AKIAIOSFODNN7EXAMPLE",
+		},
+		Bucket: nil,
+		Key:    nil,
+	})
+	return err
+}
+
+func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
+	luaAuthorizer := &LuaAuthorizer{
 		code: code,
 	}
+	err := luaAuthorizer.dryRun()
+	if err != nil {
+		return nil, err
+	}
+	return luaAuthorizer, nil
 }
 
 func pushNullableString(L *lua.State, str *string) {
@@ -132,13 +148,16 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(request *authorization.Request
 	lua.OpenLibraries(L)
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
-		return false, &authorizationError{error: err}
+		return false, err
 	}
 	L.Global(authorizationFunctionName)
+	if !L.IsFunction(-1) {
+		return false, errAuthorizationFunctionNotFound
+	}
 	pushGoType(L, request)
 	err = L.ProtectedCall(1, 1, 0)
 	if err != nil {
-		return false, &authorizationError{error: err}
+		return false, err
 	}
 	res := L.ToBoolean(1)
 	L.Pop(1)

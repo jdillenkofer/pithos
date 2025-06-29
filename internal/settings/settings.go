@@ -12,6 +12,7 @@ const defaultPort = 9000
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
+const defaultAuthorizerPath = "./authorizer.lua"
 
 const mergableTagKey = "mergable"
 
@@ -25,6 +26,7 @@ type Settings struct {
 	monitoringPort        *int    `mergable:""`
 	monitoringPortEnabled *bool   `mergable:""`
 	storageJsonPath       *string `mergable:""`
+	authorizerPath        *string `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -68,6 +70,10 @@ func (s *Settings) MonitoringPortEnabled() bool {
 
 func (s *Settings) StorageJsonPath() string {
 	return valueOrDefault(s.storageJsonPath, defaultStorageJsonPath)
+}
+
+func (s *Settings) AuthorizerPath() string {
+	return valueOrDefault(s.authorizerPath, defaultAuthorizerPath)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {

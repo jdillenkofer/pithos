@@ -66,6 +66,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
+	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
@@ -82,5 +83,6 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		monitoringPort:        monitoringPortAccessor(),
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
+		authorizerPath:        authorizerPathAccessor(),
 	}, nil
 }

@@ -49,6 +49,12 @@ const defaultStorageConfig = `
 }
 `
 
+const defaultAuthorizationCode = `
+function authorizeRequest(request)
+  return true
+end
+`
+
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 
@@ -98,13 +104,10 @@ func serve(ctx context.Context) {
 		}
 	}()
 
-	// TODO: Load this from a file
-	authorizationCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-	`
-	requestAuthorizer := lua.NewLuaAuthorizer(authorizationCode)
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath())
+	if err != nil {
+		log.Fatalf("Could not create LuaAuthorizer: %s", err)
+	}
 
 	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
@@ -130,6 +133,16 @@ func serve(ctx context.Context) {
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
 	log.Fatal(httpServer.ListenAndServe())
+}
+
+func loadRequestAuthorizer(authorizerPath string) (*lua.LuaAuthorizer, error) {
+	authorizerCode, err := os.ReadFile(authorizerPath)
+	if err != nil {
+		log.Println("Couldn't load authorizer: ", err)
+		log.Println("Using defaultAuthorizationCode (which allows every operation) as fallback")
+		authorizerCode = []byte(defaultAuthorizationCode)
+	}
+	return lua.NewLuaAuthorizer(string(authorizerCode))
 }
 
 func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {

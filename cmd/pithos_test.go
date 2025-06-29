@@ -116,7 +116,10 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	  return true
 	end
 	`
-	requestAuthorizer := lua.NewLuaAuthorizer(authorizationCode)
+	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+	if err != nil {
+		log.Fatalf("Could not create LuaAuthorizer: %s", err)
+	}
 
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	db, err := database.OpenDatabase(dbPath)
