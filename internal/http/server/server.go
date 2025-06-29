@@ -37,6 +37,7 @@ func SetupServer(credentials []settings.Credentials, region string, baseEndpoint
 		storage:           storage,
 	}
 	mux := http.NewServeMux()
+	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	mux.HandleFunc("GET /", server.listBucketsHandler)
 	mux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
 	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsHandler)
