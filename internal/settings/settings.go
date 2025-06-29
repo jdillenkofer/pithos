@@ -16,17 +16,21 @@ const defaultAuthorizerPath = "./authorizer.lua"
 
 const mergableTagKey = "mergable"
 
+type Credentials struct {
+	AccessKeyId     string
+	SecretAccessKey string
+}
+
 type Settings struct {
-	accessKeyId           *string `mergable:""`
-	secretAccessKey       *string `mergable:""`
-	region                *string `mergable:""`
-	domain                *string `mergable:""`
-	bindAddress           *string `mergable:""`
-	port                  *int    `mergable:""`
-	monitoringPort        *int    `mergable:""`
-	monitoringPortEnabled *bool   `mergable:""`
-	storageJsonPath       *string `mergable:""`
-	authorizerPath        *string `mergable:""`
+	credentials           []Credentials `mergable:""`
+	region                *string       `mergable:""`
+	domain                *string       `mergable:""`
+	bindAddress           *string       `mergable:""`
+	port                  *int          `mergable:""`
+	monitoringPort        *int          `mergable:""`
+	monitoringPortEnabled *bool         `mergable:""`
+	storageJsonPath       *string       `mergable:""`
+	authorizerPath        *string       `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -36,12 +40,11 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 	return *v
 }
 
-func (s *Settings) AccessKeyId() string {
-	return valueOrDefault(s.accessKeyId, "")
-}
-
-func (s *Settings) SecretAccessKey() string {
-	return valueOrDefault(s.secretAccessKey, "")
+func (s *Settings) Credentials() []Credentials {
+	if s.credentials == nil {
+		return []Credentials{}
+	}
+	return s.credentials
 }
 
 func (s *Settings) Region() string {

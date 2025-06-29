@@ -30,6 +30,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry/sqlite"
@@ -156,7 +157,13 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		}
 	}
 
-	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, requestAuthorizer, store))
+	credentials := []settings.Credentials{
+		{
+			AccessKeyId:     accessKeyId,
+			SecretAccessKey: secretAccessKey,
+		},
+	}
+	ts := httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, requestAuthorizer, store))
 
 	if useReplication {
 		originalTs := ts
@@ -234,7 +241,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
 			}
 		}
-		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, requestAuthorizer, store2))
+		ts = httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, requestAuthorizer, store2))
 	}
 
 	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)

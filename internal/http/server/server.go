@@ -16,6 +16,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
@@ -30,7 +31,7 @@ type Server struct {
 	storage           storage.Storage
 }
 
-func SetupServer(accessKeyId string, secretAccessKey string, region string, baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
+func SetupServer(credentials []settings.Credentials, region string, baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
 		storage:           storage,
@@ -48,14 +49,14 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	mux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	var rootHandler http.Handler = mux
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
-	if accessKeyId != "" && secretAccessKey != "" {
-		validCredentials := []authentication.Credentials{
-			{
-				AccessKeyId:     accessKeyId,
-				SecretAccessKey: secretAccessKey,
-			},
-		}
-		rootHandler = authentication.MakeSignatureMiddleware(validCredentials, region, rootHandler)
+	if credentials != nil {
+		authCredentials := sliceutils.Map(func(cred settings.Credentials) authentication.Credentials {
+			return authentication.Credentials{
+				AccessKeyId:     cred.AccessKeyId,
+				SecretAccessKey: cred.SecretAccessKey,
+			}
+		}, credentials)
+		rootHandler = authentication.MakeSignatureMiddleware(authCredentials, region, rootHandler)
 	}
 	return rootHandler
 }
