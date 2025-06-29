@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"

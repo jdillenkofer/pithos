@@ -3,7 +3,7 @@ package lua
 import (
 	"testing"
 
-	"github.com/jdillenkofer/pithos/internal/authorization"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/stretchr/testify/assert"
 )
 

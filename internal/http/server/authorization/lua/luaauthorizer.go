@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Shopify/go-lua"
-	"github.com/jdillenkofer/pithos/internal/authorization"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 )
 
 const authorizationFunctionName = "authorizeRequest"
