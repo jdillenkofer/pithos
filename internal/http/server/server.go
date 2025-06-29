@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
@@ -48,13 +49,13 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	var rootHandler http.Handler = mux
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
 	if accessKeyId != "" && secretAccessKey != "" {
-		validCredentials := []middlewares.Credentials{
+		validCredentials := []authentication.Credentials{
 			{
 				AccessKeyId:     accessKeyId,
 				SecretAccessKey: secretAccessKey,
 			},
 		}
-		rootHandler = middlewares.MakeSignatureMiddleware(validCredentials, region, rootHandler)
+		rootHandler = authentication.MakeSignatureMiddleware(validCredentials, region, rootHandler)
 	}
 	return rootHandler
 }
@@ -382,7 +383,7 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
-	accessKeyId, _ := ctx.Value(middlewares.AccessKeyIdContextKey{}).(string)
+	accessKeyId, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
 	request := &authorization.Request{
 		Operation: operation,
 		Authorization: authorization.Authorization{
