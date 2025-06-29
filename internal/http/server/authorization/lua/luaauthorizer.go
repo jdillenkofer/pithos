@@ -154,7 +154,7 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(request *authorization.Request
 	if !L.IsFunction(-1) {
 		return false, errAuthorizationFunctionNotFound
 	}
-	pushGoType(L, request)
+	pushRequest(L, request)
 	err = L.ProtectedCall(1, 1, 0)
 	if err != nil {
 		return false, err
@@ -162,4 +162,27 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(request *authorization.Request
 	res := L.ToBoolean(1)
 	L.Pop(1)
 	return res, nil
+}
+
+func isReadOnly(operation string) bool {
+	var isReadOnly bool
+	switch operation {
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject:
+		isReadOnly = true
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject:
+		isReadOnly = false
+	}
+	return isReadOnly
+}
+
+func pushRequest(L *lua.State, request *authorization.Request) {
+	pushGoType(L, request)
+	L.PushGoFunction(func(L *lua.State) int {
+		L.Field(1, "operation")
+		operation, _ := L.ToString(-1)
+		isReadOnly := isReadOnly(operation)
+		L.PushBoolean(isReadOnly)
+		return 1
+	})
+	L.SetField(-2, "isReadOnly")
 }
