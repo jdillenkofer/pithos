@@ -48,7 +48,13 @@ func SetupServer(accessKeyId string, secretAccessKey string, region string, base
 	var rootHandler http.Handler = mux
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
 	if accessKeyId != "" && secretAccessKey != "" {
-		rootHandler = middlewares.MakeSignatureMiddleware(accessKeyId, secretAccessKey, region, rootHandler)
+		validCredentials := []middlewares.Credentials{
+			{
+				AccessKeyId:     accessKeyId,
+				SecretAccessKey: secretAccessKey,
+			},
+		}
+		rootHandler = middlewares.MakeSignatureMiddleware(validCredentials, region, rootHandler)
 	}
 	return rootHandler
 }

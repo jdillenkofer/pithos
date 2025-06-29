@@ -207,7 +207,7 @@ func createScope(date string, region string, service string, request string) str
 	return date + "/" + region + "/" + service + "/" + request
 }
 
-func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
+func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
 	const signatureAlgorithm = "AWS4-HMAC-SHA256"
 	const expectedService = "s3"
 	const expectedRequest = "aws4_request"
@@ -282,9 +282,13 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		return nil, false
 	}
 	accessKeyId := accessKeyIdAndScope[0]
-	if accessKeyId != expectedAccessKeyId {
+	foundIndex := slices.IndexFunc(validCredentials, func(c Credentials) bool {
+		return c.AccessKeyId == accessKeyId
+	})
+	if foundIndex < 0 {
 		return nil, false
 	}
+	expectedCredentials := validCredentials[foundIndex]
 	date := accessKeyIdAndScope[1]
 	if date != expectedDate {
 		return nil, false
@@ -319,14 +323,19 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	signedHeadersArray := strings.Split(signedHeaders, ";")
 
 	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
-	signingKey := createSigningKey(expectedSecretAccessKey, expectedDate, region, expectedService, expectedRequest)
+	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, stringToSign)
 	return &accessKeyId, signature == calculatedSignature
 }
 
-func MakeSignatureMiddleware(accessKeyId string, secretAccessKey string, region string, next http.Handler) http.Handler {
+type Credentials struct {
+	AccessKeyId     string
+	SecretAccessKey string
+}
+
+func MakeSignatureMiddleware(validCredentials []Credentials, region string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		usedAccessKeyId, isAuthenticated := checkAuthentication(accessKeyId, secretAccessKey, region, r)
+		usedAccessKeyId, isAuthenticated := checkAuthentication(validCredentials, region, r)
 		if isAuthenticated {
 			r = r.Clone(context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId))
 			next.ServeHTTP(w, r)
