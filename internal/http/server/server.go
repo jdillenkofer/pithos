@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -11,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
@@ -22,12 +25,14 @@ import (
 )
 
 type Server struct {
-	storage storage.Storage
+	requestAuthorizer authorization.RequestAuthorizer
+	storage           storage.Storage
 }
 
-func SetupServer(accessKeyId string, secretAccessKey string, region string, baseEndpoint string, storage storage.Storage) http.Handler {
+func SetupServer(accessKeyId string, secretAccessKey string, region string, baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
-		storage: storage,
+		requestAuthorizer: requestAuthorizer,
+		storage:           storage,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", server.listBucketsHandler)
@@ -370,9 +375,37 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	w.Write(xmlErrorResponse)
 }
 
+func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
+	accessKeyId, _ := ctx.Value(middlewares.AccessKeyIdContextKey{}).(string)
+	request := &authorization.Request{
+		Operation: operation,
+		Authorization: authorization.Authorization{
+			AccessKeyId: accessKeyId,
+		},
+		Bucket: bucket,
+		Key:    key,
+	}
+	authorized, err := s.requestAuthorizer.AuthorizeRequest(request)
+	if err != nil {
+		log.Printf("Authorization error: %v", err)
+		handleError(err, w, r)
+		return true
+	}
+	if !authorized {
+		log.Printf("Unauthorized request: %v", request)
+		w.WriteHeader(503)
+		return true
+	}
+	return false
+}
+
 func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listBucketsHandler()")
 	defer task.End()
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListBuckets, nil, nil, w, r)
+	if shouldReturn {
+		return
+	}
 	log.Println("Listing Buckets")
 	buckets, err := s.storage.ListBuckets(ctx)
 	if err != nil {
@@ -398,6 +431,10 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.headBucketHandler()")
 	defer task.End()
 	bucketName := r.PathValue(bucketPath)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadBucket, ptrutils.ToPtr(bucketName), nil, w, r)
+	if shouldReturn {
+		return
+	}
 	log.Printf("Head bucket %s\n", bucketName)
 	_, err := s.storage.HeadBucket(ctx, bucketName)
 	if err != nil {
@@ -420,6 +457,12 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	ctx, task := trace.NewTask(r.Context(), "Server.listMultipartUploadsHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListMultipartUploads, ptrutils.ToPtr(bucket), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
 	query := r.URL.Query()
 	prefix := query.Get(prefixQuery)
 	delimiter := query.Get(delimiterQuery)
@@ -473,6 +516,12 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucket), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
 	query := r.URL.Query()
 	prefix := query.Get(prefixQuery)
 	delimiter := query.Get(delimiterQuery)
@@ -524,6 +573,12 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.createBucketHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateBucket, ptrutils.ToPtr(bucket), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
 	log.Printf("Creating bucket %s\n", bucket)
 	err := s.storage.CreateBucket(ctx, bucket)
 	if err != nil {
@@ -538,6 +593,12 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.deleteBucketHandler()")
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucket, ptrutils.ToPtr(bucket), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
 	log.Printf("Deleting bucket %s\n", bucket)
 	err := s.storage.DeleteBucket(ctx, bucket)
 	if err != nil {
@@ -552,6 +613,12 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	log.Printf("Head object with key %s in bucket %s\n", key, bucket)
 	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
@@ -654,6 +721,12 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListParts, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	uploadId := query.Get(uploadIdQuery)
 	partNumberMarker := query.Get(partNumberMarkerQuery)
 	maxParts := query.Get(maxPartsQuery)
@@ -707,6 +780,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	log.Printf("Getting object with key %s from bucket %s\n", key, bucket)
 	// @Concurrency: headObject and getObject run in different transactions and possibly return inconsistent data
@@ -823,6 +902,12 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
 	log.Printf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket)
@@ -848,6 +933,12 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCompleteMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	checksumInput := extractChecksumInput(r)
@@ -915,6 +1006,12 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationUploadPart, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	partNumber := query.Get(partNumberQuery)
@@ -956,6 +1053,12 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 
 	checksumInput := extractChecksumInput(r)
@@ -1000,6 +1103,12 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationAbortMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	log.Printf("AbortMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket)
@@ -1016,6 +1125,12 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	defer task.End()
 	bucket := r.PathValue(bucketPath)
 	key := r.PathValue(keyPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	if shouldReturn {
+		return
+	}
+
 	log.Printf("Deleting object with key %s from bucket %s\n", key, bucket)
 	err := s.storage.DeleteObject(ctx, bucket, key)
 	if err != nil {

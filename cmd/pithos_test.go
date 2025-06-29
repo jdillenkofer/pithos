@@ -28,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/jdillenkofer/pithos/internal/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -110,6 +111,13 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 
 	baseEndpoint := "localhost"
 
+	authorizationCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+	`
+	requestAuthorizer := lua.NewLuaAuthorizer(authorizationCode)
+
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
@@ -145,7 +153,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		}
 	}
 
-	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store))
+	ts := httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, requestAuthorizer, store))
 
 	if useReplication {
 		originalTs := ts
@@ -223,7 +231,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
 			}
 		}
-		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, store2))
+		ts = httptest.NewServer(server.SetupServer(accessKeyId, secretAccessKey, region, baseEndpoint, requestAuthorizer, store2))
 	}
 
 	s3Client = setupS3Client(baseEndpoint, ts.Listener.Addr().String(), usePathStyle)

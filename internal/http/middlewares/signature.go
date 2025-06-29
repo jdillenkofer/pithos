@@ -3,6 +3,7 @@ package middlewares
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 )
+
+type AccessKeyIdContextKey struct{}
 
 func hmacSha256(secret []byte, data []byte) []byte {
 	hmac := hmac.New(sha256.New, secret)
@@ -204,7 +207,7 @@ func createScope(date string, region string, service string, request string) str
 	return date + "/" + region + "/" + service + "/" + request
 }
 
-func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) bool {
+func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey string, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
 	const signatureAlgorithm = "AWS4-HMAC-SHA256"
 	const expectedService = "s3"
 	const expectedRequest = "aws4_request"
@@ -227,10 +230,10 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		expires := query.Get("X-Amz-Expires")
 		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
 		if err != nil {
-			return false
+			return nil, false
 		}
 		if parsedExpired < 1 || parsedExpired > 604800 {
-			return false
+			return nil, false
 		}
 		expirationDuration = time.Duration(parsedExpired) * time.Second
 		signedHeaders = query.Get("X-Amz-SignedHeaders")
@@ -239,17 +242,17 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		isPresigned = false
 		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
 		if !found {
-			return false
+			return nil, false
 		}
 		authFields := strings.Split(authorizationHeader, ",")
 		if len(authFields) != 3 {
-			return false
+			return nil, false
 		}
 
 		credential = strings.TrimSpace(authFields[0])
 		credential, found = strings.CutPrefix(credential, "Credential=")
 		if !found {
-			return false
+			return nil, false
 		}
 
 		// Use Date header (https://developer.mozilla.org/de/docs/Web/HTTP/Headers/Date), if x-amz-date is not specified
@@ -264,53 +267,53 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 		signedHeaders = strings.TrimSpace(authFields[1])
 		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
 		if !found {
-			return false
+			return nil, false
 		}
 
 		signature = strings.TrimSpace(authFields[2])
 		signature, found = strings.CutPrefix(signature, "Signature=")
 		if !found {
-			return false
+			return nil, false
 		}
 	}
 
 	accessKeyIdAndScope := strings.Split(credential, "/")
 	if len(accessKeyIdAndScope) != 5 {
-		return false
+		return nil, false
 	}
 	accessKeyId := accessKeyIdAndScope[0]
 	if accessKeyId != expectedAccessKeyId {
-		return false
+		return nil, false
 	}
 	date := accessKeyIdAndScope[1]
 	if date != expectedDate {
-		return false
+		return nil, false
 	}
 	region := accessKeyIdAndScope[2]
 	if region != expectedRegion {
-		return false
+		return nil, false
 	}
 
 	service := accessKeyIdAndScope[3]
 	if service != expectedService {
-		return false
+		return nil, false
 	}
 
 	request := accessKeyIdAndScope[4]
 	if request != expectedRequest {
-		return false
+		return nil, false
 	}
 
 	scope := createScope(expectedDate, region, service, request)
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
-		return false
+		return nil, false
 	}
 
 	signedHeadersArray := strings.Split(signedHeaders, ";")
@@ -318,13 +321,14 @@ func checkAuthentication(expectedAccessKeyId string, expectedSecretAccessKey str
 	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
 	signingKey := createSigningKey(expectedSecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, stringToSign)
-	return signature == calculatedSignature
+	return &accessKeyId, signature == calculatedSignature
 }
 
 func MakeSignatureMiddleware(accessKeyId string, secretAccessKey string, region string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isAuthenticated := checkAuthentication(accessKeyId, secretAccessKey, region, r)
+		usedAccessKeyId, isAuthenticated := checkAuthentication(accessKeyId, secretAccessKey, region, r)
 		if isAuthenticated {
+			r = r.Clone(context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId))
 			next.ServeHTTP(w, r)
 		} else {
 			w.WriteHeader(401)

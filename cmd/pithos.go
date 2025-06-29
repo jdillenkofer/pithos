@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/jdillenkofer/pithos/internal/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
@@ -97,7 +98,15 @@ func serve(ctx context.Context) {
 		}
 	}()
 
-	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
+	// TODO: Load this from a file
+	authorizationCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+	`
+	requestAuthorizer := lua.NewLuaAuthorizer(authorizationCode)
+
+	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
