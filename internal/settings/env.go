@@ -8,8 +8,8 @@ import (
 
 const envKeyPrefix = "PITHOS"
 
-const accessKeyIdEnvKey = envKeyPrefix + "_ACCESS_KEY_ID"
-const secretAccessKeyEnvKey = envKeyPrefix + "_SECRET_ACCESS_KEY"
+const legacyAccessKeyIdEnvKey = envKeyPrefix + "_ACCESS_KEY_ID"
+const legacySecretAccessKeyEnvKey = envKeyPrefix + "_SECRET_ACCESS_KEY"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
 const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
@@ -17,6 +17,41 @@ const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
+const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
+
+func getCredentialsFromEnv() []Credentials {
+	// Check for legacy environment variables first
+	accessKeyId := getStringFromEnv(legacyAccessKeyIdEnvKey)
+	secretAccessKey := getStringFromEnv(legacySecretAccessKeyEnvKey)
+
+	if accessKeyId != nil && secretAccessKey != nil {
+		return []Credentials{
+			{
+				AccessKeyId:     *accessKeyId,
+				SecretAccessKey: *secretAccessKey,
+			},
+		}
+	}
+
+	// Check for new environment variables
+	var credentials []Credentials = nil
+	for {
+		i := len(credentials) + 1
+		accessKeyId := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_ACCESS_KEY_ID")
+		secretAccessKey := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_SECRET_ACCESS_KEY")
+
+		if accessKeyId == nil || secretAccessKey == nil {
+			break
+		}
+
+		credentials = append(credentials, Credentials{
+			AccessKeyId:     *accessKeyId,
+			SecretAccessKey: *secretAccessKey,
+		})
+	}
+
+	return credentials
+}
 
 func getStringFromEnv(envKey string) *string {
 	val := os.Getenv(envKey)
@@ -50,8 +85,7 @@ func getBoolFromEnv(envKey string) *bool {
 }
 
 func loadSettingsFromEnv() (*Settings, error) {
-	accessKeyId := getStringFromEnv(accessKeyIdEnvKey)
-	secretAccessKey := getStringFromEnv(secretAccessKeyEnvKey)
+	credentials := getCredentialsFromEnv()
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
@@ -59,9 +93,9 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
+	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	return &Settings{
-		accessKeyId:           accessKeyId,
-		secretAccessKey:       secretAccessKey,
+		credentials:           credentials,
 		region:                region,
 		domain:                domain,
 		bindAddress:           bindAddress,
@@ -69,5 +103,6 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPort:        monitoringPort,
 		monitoringPortEnabled: monitoringPortEnabled,
 		storageJsonPath:       storageJsonPath,
+		authorizerPath:        authorizerPath,
 	}, nil
 }

@@ -57,8 +57,6 @@ func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, des
 
 func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
-	accessKeyIdAccessor := registerStringFlag(serveCommand, "accessKeyId", "", "the access key id")
-	secretAccessKeyAccessor := registerStringFlag(serveCommand, "secretAccessKey", "", "the secret access key")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
 	bindAddressAccessor := registerStringFlag(serveCommand, "bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
@@ -66,6 +64,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
+	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
@@ -73,8 +72,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	}
 
 	return &Settings{
-		accessKeyId:           accessKeyIdAccessor(),
-		secretAccessKey:       secretAccessKeyAccessor(),
+		credentials:           nil, // Credentials are not set via command line args
 		region:                regionAccessor(),
 		domain:                domainAccessor(),
 		bindAddress:           bindAddressAccessor(),
@@ -82,5 +80,6 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		monitoringPort:        monitoringPortAccessor(),
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
+		authorizerPath:        authorizerPathAccessor(),
 	}, nil
 }

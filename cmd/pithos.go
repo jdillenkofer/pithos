@@ -12,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
@@ -46,6 +47,12 @@ const defaultStorageConfig = `
 	}
   }
 }
+`
+
+const defaultAuthorizationCode = `
+function authorizeRequest(request)
+  return true
+end
 `
 
 const subcommandServe = "serve"
@@ -97,7 +104,12 @@ func serve(ctx context.Context) {
 		}
 	}()
 
-	handler := server.SetupServer(settings.AccessKeyId(), settings.SecretAccessKey(), settings.Region(), settings.Domain(), store)
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath())
+	if err != nil {
+		log.Fatalf("Could not create LuaAuthorizer: %s", err)
+	}
+
+	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
@@ -121,6 +133,16 @@ func serve(ctx context.Context) {
 
 	log.Printf("Listening with s3 api on http://%v\n", addr)
 	log.Fatal(httpServer.ListenAndServe())
+}
+
+func loadRequestAuthorizer(authorizerPath string) (*lua.LuaAuthorizer, error) {
+	authorizerCode, err := os.ReadFile(authorizerPath)
+	if err != nil {
+		log.Println("Couldn't load authorizer: ", err)
+		log.Println("Using defaultAuthorizationCode (which allows every operation) as fallback")
+		authorizerCode = []byte(defaultAuthorizationCode)
+	}
+	return lua.NewLuaAuthorizer(string(authorizerCode))
 }
 
 func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
