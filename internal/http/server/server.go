@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -330,7 +331,7 @@ func setChecksumHeadersFromChecksumValues(headers http.Header, checksumValues st
 	}
 }
 
-func extractChecksumInput(r *http.Request) *storage.ChecksumInput {
+func extractChecksumInput(r *http.Request) (*storage.ChecksumInput, error) {
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
 	checksumAlgorithm := getHeaderAsPtr(r.Header, checksumAlgorithmHeader)
 	contentMd5 := getHeaderAsPtr(r.Header, contentMd5Header)
@@ -340,17 +341,26 @@ func extractChecksumInput(r *http.Request) *storage.ChecksumInput {
 	checksumSha1 := getHeaderAsPtr(r.Header, checksumSHA1Header)
 	checksumSha256 := getHeaderAsPtr(r.Header, checksumSHA256Header)
 
+	var etagStr *string = nil
+	if contentMd5 != nil {
+		etag, err := base64.StdEncoding.DecodeString(*contentMd5)
+		if err != nil {
+			return nil, err
+		}
+		etagStr = ptrutils.ToPtr(fmt.Sprintf("\"%x\"", etag))
+	}
+
 	checksumInput := storage.ChecksumInput{
 		ChecksumType:      checksumType,
 		ChecksumAlgorithm: checksumAlgorithm,
-		ETag:              contentMd5,
+		ETag:              etagStr,
 		ChecksumCRC32:     checksumCrc32,
 		ChecksumCRC32C:    checksumCrc32c,
 		ChecksumCRC64NVME: checksumCrc64Nvme,
 		ChecksumSHA1:      checksumSha1,
 		ChecksumSHA256:    checksumSha256,
 	}
-	return &checksumInput
+	return &checksumInput, nil
 }
 
 func handleError(err error, w http.ResponseWriter, r *http.Request) {
@@ -950,7 +960,11 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
-	checksumInput := extractChecksumInput(r)
+	checksumInput, err := extractChecksumInput(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -1024,7 +1038,11 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
 	partNumber := query.Get(partNumberQuery)
-	checksumInput := extractChecksumInput(r)
+	checksumInput, err := extractChecksumInput(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
 	log.Printf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)\n", key, bucket, uploadId, partNumber)
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
@@ -1070,7 +1088,11 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 
-	checksumInput := extractChecksumInput(r)
+	checksumInput, err := extractChecksumInput(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
 	log.Printf("Putting object with key %s to bucket %s\n", key, bucket)
 	if r.Header.Get(expectHeader) == "100-continue" {
