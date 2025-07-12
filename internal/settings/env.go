@@ -35,12 +35,15 @@ func getCredentialsFromEnv() []Credentials {
 
 	// Check for new environment variables
 	var credentials []Credentials = nil
-	for {
-		i := len(credentials) + 1
+	for i := 0; ; i++ {
 		accessKeyId := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_ACCESS_KEY_ID")
 		secretAccessKey := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_SECRET_ACCESS_KEY")
 
 		if accessKeyId == nil || secretAccessKey == nil {
+			// This allows the index to start from 0 or 1
+			if i == 0 {
+				continue
+			}
 			break
 		}
 
