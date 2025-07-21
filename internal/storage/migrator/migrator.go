@@ -3,7 +3,8 @@ package migrator
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
@@ -24,7 +25,7 @@ func MigrateStorage(ctx context.Context, source storage.Storage, destination sto
 		return err
 	}
 	for i, sourceBucket := range allSourceBuckets {
-		log.Printf("Migrating bucket \"%s\" (%d/%d items [%.2f%%])\n", sourceBucket.Name, i, len(allSourceBuckets), float64(i)/float64(len(allSourceBuckets))*100.0)
+		slog.Info(fmt.Sprintf("Migrating bucket \"%s\" (%d/%d items [%.2f%%])\n", sourceBucket.Name, i, len(allSourceBuckets), float64(i)/float64(len(allSourceBuckets))*100.0))
 		err = migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx, source, destination, sourceBucket.Name)
 		if err != nil {
 			return err
@@ -87,7 +88,7 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 		totalBytes += sourceObject.Size
 	}
 	for i, sourceObject := range sourceObjects {
-		log.Printf("Migrating object \"%s\" from bucket \"%s\" (%d/%d items [%.2f%%]; %d/%d bytes [%.2f%%])\n", sourceObject.Key, bucketName, i, len(sourceObjects), (float64(i)+1.0)/float64(len(sourceObjects))*100.0, copiedBytes, totalBytes, float64(copiedBytes)*100.0/float64(totalBytes))
+		slog.Info(fmt.Sprintf("Migrating object \"%s\" from bucket \"%s\" (%d/%d items [%.2f%%]; %d/%d bytes [%.2f%%])\n", sourceObject.Key, bucketName, i, len(sourceObjects), (float64(i)+1.0)/float64(len(sourceObjects))*100.0, copiedBytes, totalBytes, float64(copiedBytes)*100.0/float64(totalBytes)))
 		obj, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
 		if err != nil {
 			return err

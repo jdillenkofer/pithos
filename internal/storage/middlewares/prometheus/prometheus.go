@@ -3,7 +3,7 @@ package prometheus
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -180,9 +180,9 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 		psm.metricsMeasuringTaskHandle.Cancel()
 		joinedWithTimeout := psm.metricsMeasuringTaskHandle.JoinWithTimeout(30 * time.Second)
 		if joinedWithTimeout {
-			log.Println("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined with timeout of 30s")
+			slog.Debug("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined with timeout of 30s")
 		} else {
-			log.Println("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined without timeout")
+			slog.Debug("PrometheusStorageMiddleware.metricsMeasuringTaskHandle joined without timeout")
 		}
 	}
 

@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"reflect"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -421,7 +422,8 @@ func (s *S3ClientStorageConfiguration) Instantiate(diProvider dependencyinjectio
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(s.AccessKeyId.Value(), s.SecretAccessKey.Value(), "")),
 	)
 	if err != nil {
-		log.Fatalf("Could not loadDefaultConfig: %s", err)
+		slog.Error(fmt.Sprintf("Could not loadDefaultConfig: %s", err))
+		return nil, err
 	}
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = s.UsePathStyle

@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"runtime/trace"
 	"sync/atomic"
 	"time"
@@ -95,7 +96,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		default:
-			log.Println("Invalid operation", entry.Operation, "during outbox processing.")
+			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
 			tx.Rollback()
 			time.Sleep(5 * time.Second)
 			return
@@ -113,7 +114,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		processedOutboxEntryCount += 1
 	}
 	if processedOutboxEntryCount > 0 {
-		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
+		slog.Debug(fmt.Sprintf("Processed %d outbox entries\n", processedOutboxEntryCount))
 	}
 }
 
@@ -126,7 +127,7 @@ out:
 		select {
 		case _, ok := <-os.triggerChannel:
 			if !ok {
-				log.Println("Stopping outboxStorage processing")
+				slog.Debug("Stopping outboxStorage processing")
 				break out
 			}
 		case <-time.After(1 * time.Second):
@@ -160,9 +161,9 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 		if os.outboxProcessingTaskHandle != nil {
 			joinedWithTimeout := os.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
 			if joinedWithTimeout {
-				log.Println("OutboxStorage.outboxProcessingTaskHandle joined with timeout of 30s")
+				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined with timeout of 30s")
 			} else {
-				log.Println("OutboxStorage.outboxProcessingTaskHandle joined without timeout")
+				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined without timeout")
 			}
 		}
 		os.triggerChannelClosed = true

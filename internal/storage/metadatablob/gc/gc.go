@@ -3,7 +3,8 @@ package gc
 import (
 	"context"
 	"database/sql"
-	"log"
+	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,12 +49,12 @@ func (blobGC *blobGC) RunGCLoop(stopRunning *atomic.Bool) {
 	for !stopRunning.Load() {
 		newWriteOperationCount := blobGC.writeOperations.Load()
 		if newWriteOperationCount > lastWriteOperationCount {
-			log.Println("Running blob garbage collector")
+			slog.Debug("Running blob garbage collector")
 			err := blobGC.runGC()
 			if err != nil {
-				log.Printf("Failure while running garbage collector: %s\n", err)
+				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s\n", err))
 			} else {
-				log.Println("Ran blob garbage collector successfully")
+				slog.Debug("Ran blob garbage collector successfully")
 			}
 		}
 		lastWriteOperationCount = newWriteOperationCount
@@ -107,7 +108,7 @@ func (blobGC *blobGC) runGC() error {
 		}
 	}
 
-	log.Printf("Garbage Collection deleted %d blobs\n", numDeletedBlobs)
+	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d blobs\n", numDeletedBlobs))
 
 	err = tx.Commit()
 	if err != nil {

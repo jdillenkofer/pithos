@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"io"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
@@ -72,14 +72,14 @@ func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.Println("Stopping GCLoop task")
+	slog.Debug("Stopping GCLoop task")
 	if mbs.gcTaskHandle != nil {
 		mbs.gcTaskHandle.Cancel()
 		joinedWithTimeout := mbs.gcTaskHandle.JoinWithTimeout(30 * time.Second)
 		if joinedWithTimeout {
-			log.Println("GCLoop joined with timeout of 30s")
+			slog.Debug("GCLoop joined with timeout of 30s")
 		} else {
-			log.Println("GCLoop joined without timeout")
+			slog.Debug("GCLoop joined without timeout")
 		}
 	}
 	err = mbs.metadataStore.Stop(ctx)
