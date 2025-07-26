@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,55 @@ func TestCreateSignatureFromRequest(t *testing.T) {
 
 	signature := createSignature(signingKey, stringToSign)
 	assert.Equal(t, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41", signature)
+}
+
+func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
+	// Example from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-streaming.html
+	var r *http.Request = &http.Request{}
+	r.Method = "PUT"
+	r.URL = &url.URL{}
+	r.URL.Path = "/examplebucket/chunkObject.txt"
+	r.Host = "s3.amazonaws.com"
+	r.Header = http.Header{}
+	r.Header.Add("x-amz-date", "20130524T000000Z")
+	r.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+	r.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class,Signature=4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
+	r.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+	r.Header.Add("Content-Encoding", "aws-chunked")
+	r.Header.Add("x-amz-decoded-content-length", "66560")
+	r.Header.Add("Content-Length", "66824")
+	content := []byte(
+		"10000;chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648\r\n" + strings.Repeat("a", 65536) + "\r\n" +
+			"400;chunk-signature=0055627c9e194cb4542bae2aa5492e3c1575bbb81b612b7d234b86a503ef5497\r\n" + strings.Repeat("a", 1024) + "\r\n" +
+			"0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n\r\n")
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
+
+	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+	date := "20130524"
+	region := "us-east-1"
+	service := "s3"
+	request := "aws4_request"
+
+	scope := createScope(date, region, service, request)
+	assert.Equal(t, "20130524/us-east-1/s3/aws4_request", scope)
+
+	isPresigned := false
+
+	stringToSign := generateStringToSign(r, date+"T000000Z", scope, []string{"content-encoding", "content-length", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class"}, isPresigned)
+	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\ncee3fed04b70f867d036f722359b0b1f2f0e5dc0efadbc082b76c4c60e316455", stringToSign)
+
+	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
+
+	seedSignature := createSignature(signingKey, stringToSign)
+	assert.Equal(t, "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9", seedSignature)
+
+	data, err := io.ReadAll(r.Body)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte(strings.Repeat("a", 65536+1024)), data)
+
+	err = r.Body.Close()
+	assert.NoError(t, err)
 }
 
 func TestCreateSignatureFromPresignedRequest(t *testing.T) {

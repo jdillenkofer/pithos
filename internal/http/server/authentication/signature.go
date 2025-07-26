@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -16,6 +17,16 @@ import (
 	"strings"
 	"time"
 )
+
+const contentSHA256Header = "x-amz-content-sha256"
+const contentSHA256UnsignedPayload = "UNSIGNED-PAYLOAD"
+const contentSHA256StreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+
+const signatureAlgorithm = "AWS4-HMAC-SHA256"
+const expectedService = "s3"
+const expectedRequest = "aws4_request"
+
+const contentEncodingAwsChunked = "aws-chunked"
 
 type AccessKeyIdContextKey struct{}
 
@@ -186,8 +197,12 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	canonicalRequest += generateCanonicalQueryString(r) + "\n"
 	canonicalRequest += generateCanonicalHeaders(r, headersToInclude) + "\n"
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
-	if isPresigned || r.Header.Get("x-amz-content-sha256") == "UNSIGNED-PAYLOAD" {
-		canonicalRequest += "UNSIGNED-PAYLOAD"
+
+	contentSHA256 := r.Header.Get(contentSHA256Header)
+	if isPresigned || contentSHA256 == contentSHA256UnsignedPayload {
+		canonicalRequest += contentSHA256UnsignedPayload
+	} else if contentSHA256 == contentSHA256StreamingPayload {
+		canonicalRequest += contentSHA256StreamingPayload
 	} else {
 		canonicalRequest += generateHashedPayload(r)
 	}
@@ -201,7 +216,7 @@ func generateStringToSign(r *http.Request, timestamp string, scope string, heade
 	dataSha256 := sha256Hash.Sum(nil)
 	canonicalRequestHexSha256 := hex.EncodeToString(dataSha256)
 
-	return "AWS4-HMAC-SHA256" + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
+	return signatureAlgorithm + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
 }
 
 func createScope(date string, region string, service string, request string) string {
@@ -209,9 +224,6 @@ func createScope(date string, region string, service string, request string) str
 }
 
 func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
-	const signatureAlgorithm = "AWS4-HMAC-SHA256"
-	const expectedService = "s3"
-	const expectedRequest = "aws4_request"
 	now := time.Now().UTC()
 	expectedDate := now.Format("20060102")
 
@@ -221,6 +233,12 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	var signedHeaders string
 	var signature string
 	var isPresigned bool
+
+	isAwsChunked := false
+	contentEncodingHeader := r.Header.Get("Content-Encoding")
+	if contentEncodingHeader != "" && strings.HasPrefix(contentEncodingHeader, contentEncodingAwsChunked) {
+		isAwsChunked = true
+	}
 
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
@@ -351,7 +369,89 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		slog.Debug("Received signature: " + signature)
 		return nil, false
 	}
+
+	if isAwsChunked {
+		slog.Debug("Request is using AWS Chunked Transfer Encoding")
+		contentEncodingHeader, _ := strings.CutPrefix(contentEncodingHeader, contentEncodingAwsChunked+",")
+		if contentEncodingHeader != "" {
+			r.Header.Set("Content-Encoding", contentEncodingHeader)
+		} else {
+			r.Header.Del("Content-Encoding")
+		}
+		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
+		r.Header.Del("x-amz-decoded-content-length")
+		r.Body = newAwsChunkReadCloser(r.Body, calculatedSignature)
+	}
+
 	return &accessKeyId, isSignatureValid
+}
+
+type awsChunkReadCloser struct {
+	innerCloser         io.Closer
+	innerBuf            *bufio.Reader
+	chunkBytesRemaining int64
+	chunkSignature      string
+	previousSignature   string
+}
+
+func newAwsChunkReadCloser(inner io.ReadCloser, previousSignature string) *awsChunkReadCloser {
+	return &awsChunkReadCloser{
+		innerCloser:         inner,
+		innerBuf:            bufio.NewReader(inner),
+		chunkBytesRemaining: -1, // -1 indicates that we are not currently reading a chunk
+		chunkSignature:      "",
+		previousSignature:   previousSignature,
+	}
+}
+
+func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
+	if r.chunkBytesRemaining <= 0 {
+		chunkMetadata, err := r.innerBuf.ReadBytes('\n')
+		if err != nil {
+			return 0, err
+		}
+		split := bytes.SplitN(bytes.Trim(chunkMetadata, "\r\n"), []byte(";chunk-signature="), 2)
+		hexLen := string(split[0])
+		signature := string(split[1])
+		r.chunkSignature = signature
+
+		length, err := strconv.ParseUint(hexLen, 16, 64)
+		if err != nil {
+			return 0, err
+		}
+		r.chunkBytesRemaining = int64(length)
+		if length == 0 {
+			_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
+			if err != nil {
+				return 0, err
+			}
+			// @TODO: verify last chunk signature
+			return 0, io.EOF // End of the chunked transfer
+		}
+	}
+
+	if len(p) > int(r.chunkBytesRemaining) {
+		p = p[:r.chunkBytesRemaining] // Limit the read to the remaining bytes in the chunk
+	}
+	n, err = io.ReadFull(r.innerBuf, p)
+	r.chunkBytesRemaining -= int64(n)
+	if r.chunkBytesRemaining == 0 {
+		_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
+		if err != nil {
+			return 0, err
+		}
+		// @TODO: verify the chunk signature
+		r.previousSignature = r.chunkSignature
+	}
+	return n, err
+}
+
+func (r *awsChunkReadCloser) Close() error {
+	err := r.innerCloser.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type Credentials struct {
