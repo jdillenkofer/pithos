@@ -233,11 +233,11 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		slog.Debug("X-Amz-Credential: " + credential + " X-Amz-Date: " + timestamp + " X-Amz-Expires: " + expires)
 		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
 		if err != nil {
-			slog.Warn("Failed to parse X-Amz-Expires: " + err.Error())
+			slog.Debug("Failed to parse X-Amz-Expires: " + err.Error())
 			return nil, false
 		}
 		if parsedExpired < 1 || parsedExpired > 604800 {
-			slog.Warn("X-Amz-Expires must be between 1 and 604800 seconds")
+			slog.Debug("X-Amz-Expires must be between 1 and 604800 seconds")
 			return nil, false
 		}
 		expirationDuration = time.Duration(parsedExpired) * time.Second
@@ -248,19 +248,19 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		isPresigned = false
 		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
 		if !found {
-			slog.Warn("Authorization header does not start with " + signatureAlgorithm)
+			slog.Debug("Authorization header does not start with " + signatureAlgorithm)
 			return nil, false
 		}
 		authFields := strings.Split(authorizationHeader, ",")
 		if len(authFields) != 3 {
-			slog.Warn("Authorization header does not contain exactly 3 fields")
+			slog.Debug("Authorization header does not contain exactly 3 fields")
 			return nil, false
 		}
 
 		credential = strings.TrimSpace(authFields[0])
 		credential, found = strings.CutPrefix(credential, "Credential=")
 		if !found {
-			slog.Warn("Authorization header does not contain Credential field")
+			slog.Debug("Authorization header does not contain Credential field")
 			return nil, false
 		}
 
@@ -276,21 +276,21 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		signedHeaders = strings.TrimSpace(authFields[1])
 		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
 		if !found {
-			slog.Warn("Authorization header does not contain SignedHeaders field")
+			slog.Debug("Authorization header does not contain SignedHeaders field")
 			return nil, false
 		}
 
 		signature = strings.TrimSpace(authFields[2])
 		signature, found = strings.CutPrefix(signature, "Signature=")
 		if !found {
-			slog.Warn("Authorization header does not contain Signature field")
+			slog.Debug("Authorization header does not contain Signature field")
 			return nil, false
 		}
 	}
 
 	accessKeyIdAndScope := strings.Split(credential, "/")
 	if len(accessKeyIdAndScope) != 5 {
-		slog.Warn("Credential field does not contain exactly 5 parts")
+		slog.Debug("Credential field does not contain exactly 5 parts")
 		return nil, false
 	}
 	accessKeyId := accessKeyIdAndScope[0]
@@ -298,30 +298,30 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		return c.AccessKeyId == accessKeyId
 	})
 	if foundIndex < 0 {
-		slog.Warn("Access key ID not found in valid credentials")
+		slog.Debug("Access key ID not found in valid credentials")
 		return nil, false
 	}
 	expectedCredentials := validCredentials[foundIndex]
 	date := accessKeyIdAndScope[1]
 	if date != expectedDate {
-		slog.Warn("Date in credential does not match expected date")
+		slog.Debug("Date in credential does not match expected date")
 		return nil, false
 	}
 	region := accessKeyIdAndScope[2]
 	if region != expectedRegion {
-		slog.Warn("Region in credential does not match expected region")
+		slog.Debug("Region in credential does not match expected region")
 		return nil, false
 	}
 
 	service := accessKeyIdAndScope[3]
 	if service != expectedService {
-		slog.Warn("Service in credential does not match expected service")
+		slog.Debug("Service in credential does not match expected service")
 		return nil, false
 	}
 
 	request := accessKeyIdAndScope[4]
 	if request != expectedRequest {
-		slog.Warn("Request in credential does not match expected request")
+		slog.Debug("Request in credential does not match expected request")
 		return nil, false
 	}
 
@@ -329,13 +329,13 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
 	if err != nil {
-		slog.Warn("Failed to parse timestamp: " + err.Error())
+		slog.Debug("Failed to parse timestamp: " + err.Error())
 		return nil, false
 	}
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
-		slog.Warn("Timestamp is not within the valid range (" + beforeTimestamp.Format(time.RFC3339) + " - " + expiredTimestamp.Format(time.RFC3339) + ")")
+		slog.Debug("Timestamp is not within the valid range (" + beforeTimestamp.Format(time.RFC3339) + " - " + expiredTimestamp.Format(time.RFC3339) + ")")
 		return nil, false
 	}
 
@@ -346,7 +346,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	calculatedSignature := createSignature(signingKey, stringToSign)
 	isSignatureValid := signature == calculatedSignature
 	if !isSignatureValid {
-		slog.Warn("Signature does not match calculated signature")
+		slog.Debug("Signature does not match calculated signature")
 		slog.Debug("Expected signature: " + calculatedSignature)
 		slog.Debug("Received signature: " + signature)
 		return nil, false
