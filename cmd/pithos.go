@@ -69,7 +69,7 @@ func main() {
 
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s [options]\n", os.Args[0], subcommandServe, subcommandMigrateStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage))
 		os.Exit(1)
 	}
 
@@ -80,7 +80,7 @@ func main() {
 	case subcommandMigrateStorage:
 		migrateStorage(ctx)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s'.\n", subcommand, subcommandServe, subcommandMigrateStorage))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage))
 		os.Exit(1)
 	}
 }
@@ -139,12 +139,12 @@ func serve(ctx context.Context) {
 			Handler:     monitoringHandler,
 		}
 		go (func() {
-			slog.Info(fmt.Sprintf("Listening with monitoring api on http://%v\n", monitoringAddr))
+			slog.Info(fmt.Sprintf("Listening with monitoring api on http://%v", monitoringAddr))
 			httpMonitoringServer.ListenAndServe()
 		})()
 	}
 
-	slog.Info(fmt.Sprintf("Listening with s3 api on http://%v\n", addr))
+	slog.Info(fmt.Sprintf("Listening with s3 api on http://%v", addr))
 	err = httpServer.ListenAndServe()
 	if err != nil {
 		slog.Error(fmt.Sprintf("Error while starting http server: %s", err))
@@ -208,7 +208,7 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 
 func migrateStorage(ctx context.Context) {
 	if len(os.Args) < 4 {
-		slog.Info(fmt.Sprintf("Usage: %s %s [source-config.json] [destination-config.json]\n", os.Args[0], subcommandMigrateStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s [source-config.json] [destination-config.json]", os.Args[0], subcommandMigrateStorage))
 		os.Exit(1)
 	}
 	sourceStorageConfig := os.Args[2]

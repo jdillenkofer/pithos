@@ -114,7 +114,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		processedOutboxEntryCount += 1
 	}
 	if processedOutboxEntryCount > 0 {
-		slog.Debug(fmt.Sprintf("Processed %d outbox entries\n", processedOutboxEntryCount))
+		slog.Debug(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
 	}
 }
 

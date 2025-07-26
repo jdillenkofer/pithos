@@ -92,7 +92,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}
 	if processedOutboxEntryCount > 0 {
-		slog.Debug(fmt.Sprintf("Processed %d outbox entries\n", processedOutboxEntryCount))
+		slog.Debug(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
 	}
 }
 

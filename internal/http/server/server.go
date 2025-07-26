@@ -454,7 +454,7 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	if shouldReturn {
 		return
 	}
-	slog.Debug(fmt.Sprintf("Head bucket %s\n", bucketName))
+	slog.Debug(fmt.Sprintf("Head bucket %s", bucketName))
 	_, err := s.storage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -552,7 +552,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxKeysI32 := int32(maxKeysI64)
 
-	slog.Debug(fmt.Sprintf("Listing objects in bucket %s\n", bucket))
+	slog.Debug(fmt.Sprintf("Listing objects in bucket %s", bucket))
 	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysI32)
 	if err != nil {
 		handleError(err, w, r)
@@ -598,7 +598,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("Creating bucket %s\n", bucket))
+	slog.Debug(fmt.Sprintf("Creating bucket %s", bucket))
 	err := s.storage.CreateBucket(ctx, bucket)
 	if err != nil {
 		handleError(err, w, r)
@@ -618,7 +618,7 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("Deleting bucket %s\n", bucket))
+	slog.Debug(fmt.Sprintf("Deleting bucket %s", bucket))
 	err := s.storage.DeleteBucket(ctx, bucket)
 	if err != nil {
 		handleError(err, w, r)
@@ -638,7 +638,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("Head object with key %s in bucket %s\n", key, bucket))
+	slog.Debug(fmt.Sprintf("Head object with key %s in bucket %s", key, bucket))
 	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)
@@ -806,7 +806,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rangeHeaderValue := r.Header.Get(rangeHeader)
-	slog.Debug(fmt.Sprintf("Getting object with key %s from bucket %s\n", key, bucket))
+	slog.Debug(fmt.Sprintf("Getting object with key %s from bucket %s", key, bucket))
 	// @Concurrency: headObject and getObject run in different transactions and possibly return inconsistent data
 	object, err := s.storage.HeadObject(ctx, bucket, key)
 	if err != nil {
@@ -929,7 +929,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
-	slog.Debug(fmt.Sprintf("CreateMultipartUpload with key %s to bucket %s\n", key, bucket))
+	slog.Debug(fmt.Sprintf("CreateMultipartUpload with key %s to bucket %s", key, bucket))
 	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
 	if err != nil {
 		handleError(err, w, r)
@@ -981,7 +981,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	slog.Debug(fmt.Sprintf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket))
+	slog.Debug(fmt.Sprintf("CompleteMultipartUpload with key %s and uploadId %s to bucket %s", key, uploadId, bucket))
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
@@ -1044,7 +1044,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)\n", key, bucket, uploadId, partNumber))
+	slog.Debug(fmt.Sprintf("UploadPart with key %s to bucket %s (uploadId %s, partNumber %s)", key, bucket, uploadId, partNumber))
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
 		return
@@ -1094,7 +1094,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("Putting object with key %s to bucket %s\n", key, bucket))
+	slog.Debug(fmt.Sprintf("Putting object with key %s to bucket %s", key, bucket))
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
@@ -1142,7 +1142,7 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
-	slog.Debug(fmt.Sprintf("AbortMultipartUpload with key %s and uploadId %s to bucket %s\n", key, uploadId, bucket))
+	slog.Debug(fmt.Sprintf("AbortMultipartUpload with key %s and uploadId %s to bucket %s", key, uploadId, bucket))
 	err := s.storage.AbortMultipartUpload(ctx, bucket, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)
@@ -1162,7 +1162,7 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug(fmt.Sprintf("Deleting object with key %s from bucket %s\n", key, bucket))
+	slog.Debug(fmt.Sprintf("Deleting object with key %s from bucket %s", key, bucket))
 	err := s.storage.DeleteObject(ctx, bucket, key)
 	if err != nil {
 		handleError(err, w, r)

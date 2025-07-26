@@ -52,7 +52,7 @@ func (blobGC *blobGC) RunGCLoop(stopRunning *atomic.Bool) {
 			slog.Debug("Running blob garbage collector")
 			err := blobGC.runGC()
 			if err != nil {
-				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s\n", err))
+				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s", err))
 			} else {
 				slog.Debug("Ran blob garbage collector successfully")
 			}
@@ -108,7 +108,7 @@ func (blobGC *blobGC) runGC() error {
 		}
 	}
 
-	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d blobs\n", numDeletedBlobs))
+	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d blobs", numDeletedBlobs))
 
 	err = tx.Commit()
 	if err != nil {
