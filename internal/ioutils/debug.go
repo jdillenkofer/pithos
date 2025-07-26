@@ -1,8 +1,9 @@
 package ioutils
 
 import (
+	"fmt"
 	"io"
-	"log"
+	"log/slog"
 )
 
 type debugReadCloser struct {
@@ -24,16 +25,16 @@ func NewDebugReadCloser(name string, innerReadCloser io.ReadCloser) io.ReadClose
 }
 
 func (d *debugReadCloser) Read(p []byte) (int, error) {
-	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")"))
 	n, err := d.innerReadCloser.Read(p)
-	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")"))
 	return n, err
 }
 
 func (d *debugReadCloser) Close() error {
-	log.Println("DebugReadCloser", d.name, "Close()")
+	slog.Debug(fmt.Sprint("DebugReadCloser", d.name, "Close()"))
 	err := d.innerReadCloser.Close()
-	log.Println("DebugReadCloser", d.name, "Close() = err: ", err)
+	slog.Debug(fmt.Sprint("DebugReadCloser", d.name, "Close() = err: ", err))
 	return err
 }
 
@@ -43,22 +44,22 @@ type debugReadSeekCloser struct {
 }
 
 func (d *debugReadSeekCloser) Read(p []byte) (int, error) {
-	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ")"))
 	n, err := d.innerReadSeekCloser.Read(p)
-	log.Println("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Read(", "len(p):", len(p), ") = (n: ", n, ", err:", err, ")"))
 	return n, err
 }
 
 func (d *debugReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
-	log.Println("DebugReadSeekCloser", d.name, "Seek(", offset, ",", whence, ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Seek(", offset, ",", whence, ")"))
 	n, err := d.innerReadSeekCloser.Seek(offset, whence)
-	log.Println("DebugReadSeekCloser", d.name, "Seek(", offset, ",", whence, ") = (n: ", n, ", err:", err, ")")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Seek(", offset, ",", whence, ") = (n: ", n, ", err:", err, ")"))
 	return n, err
 }
 
 func (d *debugReadSeekCloser) Close() error {
-	log.Println("DebugReadSeekCloser", d.name, "Close()")
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Close()"))
 	err := d.innerReadSeekCloser.Close()
-	log.Println("DebugReadSeekCloser", d.name, "Close() = err: ", err)
+	slog.Debug(fmt.Sprint("DebugReadSeekCloser", d.name, "Close() = err: ", err))
 	return err
 }

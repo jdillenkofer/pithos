@@ -1,7 +1,8 @@
 package outbox
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,68 +22,82 @@ import (
 func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
-		log.Fatalf("Could not create temp directory: %s", err)
+		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
+		os.Exit(1)
 	}
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
-		log.Fatal("Couldn't open database")
+		slog.Error("Couldn't open database")
+		os.Exit(1)
 	}
 	defer func() {
 		err = db.Close()
 		if err != nil {
-			log.Fatalf("Could not close database %s", err)
+			slog.Error(fmt.Sprintf("Could not close database %s", err))
+			os.Exit(1)
 		}
 		err = os.RemoveAll(storagePath)
 		if err != nil {
-			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
+			slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath, err))
+			os.Exit(1)
 		}
 	}()
 
 	blobStore, err := filesystemBlobStore.New(storagePath)
 	if err != nil {
-		log.Fatalf("Could not create SqlBlobStore: %s", err)
+		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		os.Exit(1)
 	}
 
 	bucketRepository, err := sqliteBucket.NewRepository()
 	if err != nil {
-		log.Fatalf("Could not create BucketRepository: %s", err)
+		slog.Error(fmt.Sprintf("Could not create BucketRepository: %s", err))
+		os.Exit(1)
 	}
 	objectRepository, err := sqliteObject.NewRepository()
 	if err != nil {
-		log.Fatalf("Could not create ObjectRepository: %s", err)
+		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
+		os.Exit(1)
 	}
 	blobRepository, err := sqliteBlob.NewRepository()
 	if err != nil {
-		log.Fatalf("Could not create BlobRepository: %s", err)
+		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
+		os.Exit(1)
 	}
 	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
 	if err != nil {
-		log.Fatalf("Could not create SqlMetadataStore: %s", err)
+		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
+		os.Exit(1)
 	}
 
 	metadataBlobStorage, err := metadatablob.NewStorage(db, metadataStore, blobStore)
 	if err != nil {
-		log.Fatalf("Could not create SqlBlobStore: %s", err)
+		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		os.Exit(1)
 	}
 
 	storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
-		log.Fatalf("Could not create temp directory: %s", err)
+		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
+		os.Exit(1)
 	}
 	dbPath2 := filepath.Join(storagePath2, "pithos.db")
 	db2, err := database.OpenDatabase(dbPath2)
 	if err != nil {
-		log.Fatal("Couldn't open database")
+		slog.Error("Couldn't open database")
+		os.Exit(1)
 	}
 	defer func() {
 		err = db2.Close()
 		if err != nil {
-			log.Fatalf("Could not close database %s", err)
+			slog.Error(fmt.Sprintf("Could not close database %s", err))
+			os.Exit(1)
 		}
 		err = os.RemoveAll(storagePath2)
 		if err != nil {
-			log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
+			slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath2, err))
+			os.Exit(1)
 		}
 	}()
 
@@ -93,12 +108,14 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	// In the future i want to redesign storage implementations to use the already open transaction.
 	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
 	if err != nil {
-		log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
+		slog.Error(fmt.Sprintf("Could not create StorageOutboxEntryRepository: %s", err))
+		os.Exit(1)
 
 	}
 	outboxStorage, err := NewStorage(db2, metadataBlobStorage, storageOutboxEntryRepository)
 	if err != nil {
-		log.Fatalf("Could not create OutboxStorage: %s", err)
+		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
+		os.Exit(1)
 	}
 
 	content := []byte("OutboxStorage")

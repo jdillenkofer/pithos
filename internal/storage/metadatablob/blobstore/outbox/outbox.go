@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"runtime/trace"
 	"sync/atomic"
 	"time"
@@ -73,7 +74,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		default:
-			log.Println("Invalid operation", entry.Operation, "during outbox processing.")
+			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
 			tx.Rollback()
 			time.Sleep(5 * time.Second)
 			return
@@ -91,7 +92,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}
 	if processedOutboxEntryCount > 0 {
-		log.Printf("Processed %d outbox entries\n", processedOutboxEntryCount)
+		slog.Debug(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
 	}
 }
 
@@ -104,7 +105,7 @@ out:
 		select {
 		case _, ok := <-obs.triggerChannel:
 			if !ok {
-				log.Println("Stopping OutboxBlobStore processing")
+				slog.Debug("Stopping OutboxBlobStore processing")
 				break out
 			}
 		case <-time.After(1 * time.Second):
@@ -126,9 +127,9 @@ func (obs *outboxBlobStore) Stop(ctx context.Context) error {
 		if obs.outboxProcessingTaskHandle != nil {
 			joinedWithTimeout := obs.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
 			if joinedWithTimeout {
-				log.Println("OutboxBlobStore.outboxProcessingTaskHandle joined with timeout of 30s")
+				slog.Debug("OutboxBlobStore.outboxProcessingTaskHandle joined with timeout of 30s")
 			} else {
-				log.Println("OutboxBlobStore.outboxProcessingTaskHandle joined without timeout")
+				slog.Debug("OutboxBlobStore.outboxProcessingTaskHandle joined without timeout")
 			}
 		}
 		obs.triggerChannelClosed = true

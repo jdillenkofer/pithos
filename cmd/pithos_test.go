@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net"
 	"net/http"
@@ -89,11 +89,13 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
 	if err != nil {
-		log.Fatalf("Could not loadDefaultConfig: %s", err)
+		slog.Error(fmt.Sprintf("Could not loadDefaultConfig: %s", err))
+		os.Exit(1)
 	}
 	addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
 	if err != nil {
-		log.Fatalf("Could not resolveTcpAddr: %s", err)
+		slog.Error(fmt.Sprintf("Could not resolveTcpAddr: %s", err))
+		os.Exit(1)
 	}
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = usePathStyle
@@ -107,7 +109,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	registry := prometheus.NewRegistry()
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
-		log.Fatalf("Could not create temp directory: %s", err)
+		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
+		os.Exit(1)
 	}
 
 	baseEndpoint := "localhost"
@@ -119,13 +122,15 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	`
 	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
 	if err != nil {
-		log.Fatalf("Could not create LuaAuthorizer: %s", err)
+		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
+		os.Exit(1)
 	}
 
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	db, err := database.OpenDatabase(dbPath)
 	if err != nil {
-		log.Fatalf("Couldn't open database: %s", err)
+		slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
+		os.Exit(1)
 	}
 	encryptionPassword := ""
 	if encryptBlobStore {
@@ -136,24 +141,28 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	if !useReplication {
 		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
 		if err != nil {
-			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
+			slog.Error(fmt.Sprintf("Could not create prometheusStorageMiddleware: %s", err))
+			os.Exit(1)
 		}
 	}
 
 	err = store.Start(ctx)
 	if err != nil {
-		log.Fatalf("Couldn't start storage: %s", err)
+		slog.Error(fmt.Sprintf("Couldn't start storage: %s", err))
+		os.Exit(1)
 	}
 	closeStorage := func() {
 		err := store.Stop(ctx)
 		if err != nil {
-			log.Fatalf("Couldn't stop storage: %s", err)
+			slog.Error(fmt.Sprintf("Couldn't stop storage: %s", err))
+			os.Exit(1)
 		}
 	}
 	closeDatabase := func() {
 		err = db.Close()
 		if err != nil {
-			log.Fatalf("Couldn't close database: %s", err)
+			slog.Error(fmt.Sprintf("Couldn't close database: %s", err))
+			os.Exit(1)
 		}
 	}
 
@@ -171,12 +180,14 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		originalCloseDatabase := closeDatabase
 		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
 		if err != nil {
-			log.Fatalf("Could not create temp directory: %s", err)
+			slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
+			os.Exit(1)
 		}
 		dbPath2 := filepath.Join(storagePath2, "pithos.db")
 		db2, err := database.OpenDatabase(dbPath2)
 		if err != nil {
-			log.Fatalf("Couldn't open database: %s", err)
+			slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
+			os.Exit(1)
 		}
 		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemBlobStore, encryptionPassword, wrapBlobStoreWithOutbox)
 
@@ -184,48 +195,57 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		var s3ClientStorage storage.Storage
 		s3ClientStorage, err = s3client.NewStorage(s3Client)
 		if err != nil {
-			log.Fatalf("Could not create s3ClientStorage: %s", err)
+			slog.Error(fmt.Sprintf("Could not create s3ClientStorage: %s", err))
+			os.Exit(1)
 		}
 		s3ClientStorage, err = tracingStorageMiddleware.NewStorageMiddleware("S3ClientStorage", s3ClientStorage)
 		if err != nil {
-			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
+			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
+			os.Exit(1)
 		}
 
 		var outboxStorage storage.Storage
 		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
 		if err != nil {
-			log.Fatalf("Could not create StorageOutboxEntryRepository: %s", err)
+			slog.Error(fmt.Sprintf("Could not create StorageOutboxEntryRepository: %s", err))
+			os.Exit(1)
 
 		}
 		outboxStorage, err = outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
 		if err != nil {
-			log.Fatalf("Could not create outboxStorage: %s", err)
+			slog.Error(fmt.Sprintf("Could not create outboxStorage: %s", err))
+			os.Exit(1)
 		}
 
 		outboxStorage, err = tracingStorageMiddleware.NewStorageMiddleware("OutboxStorage", outboxStorage)
 		if err != nil {
-			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
+			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
+			os.Exit(1)
 		}
 
 		var store2 storage.Storage
 		store2, err = replication.NewStorage(localStore, outboxStorage)
 		if err != nil {
-			log.Fatalf("Could not create replicationStorage: %s", err)
+			slog.Error(fmt.Sprintf("Could not create replicationStorage: %s", err))
+			os.Exit(1)
 		}
 
 		store2, err = tracingStorageMiddleware.NewStorageMiddleware("ReplicationStorage", store2)
 		if err != nil {
-			log.Fatalf("Error during TracingStorageMiddleware: %s", err)
+			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
+			os.Exit(1)
 		}
 
 		store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
 		if err != nil {
-			log.Fatalf("Could not create prometheusStorageMiddleware: %s", err)
+			slog.Error(fmt.Sprintf("Could not create prometheusStorageMiddleware: %s", err))
+			os.Exit(1)
 		}
 
 		err = store2.Start(ctx)
 		if err != nil {
-			log.Fatalf("Couldn't start storage: %s", err)
+			slog.Error(fmt.Sprintf("Couldn't start storage: %s", err))
+			os.Exit(1)
 		}
 
 		closeStorage = func() {
@@ -238,7 +258,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			db2.Close()
 			err = os.RemoveAll(storagePath2)
 			if err != nil {
-				log.Fatalf("Could not remove storagePath %s: %s", storagePath2, err)
+				slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath2, err))
+				os.Exit(1)
 			}
 		}
 		ts = httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, requestAuthorizer, store2))
@@ -252,7 +273,8 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 		closeDatabase()
 		err = os.RemoveAll(storagePath)
 		if err != nil {
-			log.Fatalf("Could not remove storagePath %s: %s", storagePath, err)
+			slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath, err))
+			os.Exit(1)
 		}
 	}
 	return
