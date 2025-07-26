@@ -2,6 +2,7 @@ package lua
 
 import (
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -148,19 +149,23 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(request *authorization.Request
 	lua.OpenLibraries(L)
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
+		slog.Error("Error while executing Lua code", "error", err)
 		return false, err
 	}
 	L.Global(authorizationFunctionName)
 	if !L.IsFunction(-1) {
+		slog.Error("Authorization function not found in Lua code", "functionName", authorizationFunctionName)
 		return false, errAuthorizationFunctionNotFound
 	}
 	pushRequest(L, request)
 	err = L.ProtectedCall(1, 1, 0)
 	if err != nil {
+		slog.Error("Error while calling authorization function", "error", err)
 		return false, err
 	}
 	res := L.ToBoolean(1)
 	L.Pop(1)
+	slog.Debug("Authorization result", "operation", request.Operation, "isAuthorized", res)
 	return res, nil
 }
 
