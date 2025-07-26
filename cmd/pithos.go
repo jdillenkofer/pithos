@@ -60,7 +60,8 @@ const subcommandMigrateStorage = "migrate-storage"
 
 func main() {
 	var programLevel = new(slog.LevelVar)
-	programLevel.Set(slog.LevelDebug)
+	// @TODO: Add setting to set the log level
+	// programLevel.Set(slog.LevelDebug)
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     programLevel,
