@@ -8,6 +8,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"hash"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,6 +29,8 @@ const expectedService = "s3"
 const expectedRequest = "aws4_request"
 
 const contentEncodingAwsChunked = "aws-chunked"
+
+var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 
 type AccessKeyIdContextKey struct{}
 
@@ -219,6 +223,15 @@ func generateStringToSign(r *http.Request, timestamp string, scope string, heade
 	return signatureAlgorithm + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
 }
 
+func generateStringToSignForChunk(timestamp string, scope string, previousSignature string, chunkHasher hash.Hash) string {
+	sha256Hash := sha256.New()
+	sha256Hash.Write([]byte(""))
+	dataSha256 := sha256Hash.Sum(nil)
+	emptyHashHex := hex.EncodeToString(dataSha256)
+
+	return signatureAlgorithm + "-PAYLOAD" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + emptyHashHex + "\n" + hex.EncodeToString(chunkHasher.Sum(nil))
+}
+
 func createScope(date string, region string, service string, request string) string {
 	return date + "/" + region + "/" + service + "/" + request
 }
@@ -380,7 +393,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		}
 		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
 		r.Header.Del("x-amz-decoded-content-length")
-		r.Body = newAwsChunkReadCloser(r.Body, calculatedSignature)
+		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey)
 	}
 
 	return &accessKeyId, isSignatureValid
@@ -391,17 +404,41 @@ type awsChunkReadCloser struct {
 	innerBuf            *bufio.Reader
 	chunkBytesRemaining int64
 	chunkSignature      string
+	timestamp           string
+	scope               string
 	previousSignature   string
+	chunkHasher         hash.Hash
+	signingKey          []byte
 }
 
-func newAwsChunkReadCloser(inner io.ReadCloser, previousSignature string) *awsChunkReadCloser {
+func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte) *awsChunkReadCloser {
 	return &awsChunkReadCloser{
 		innerCloser:         inner,
 		innerBuf:            bufio.NewReader(inner),
 		chunkBytesRemaining: -1, // -1 indicates that we are not currently reading a chunk
 		chunkSignature:      "",
+		timestamp:           timestamp,
+		scope:               scope,
 		previousSignature:   previousSignature,
+		chunkHasher:         sha256.New(),
+		signingKey:          signingKey,
 	}
+}
+
+func (r *awsChunkReadCloser) validateSignature() error {
+	stringToSign := generateStringToSignForChunk(r.timestamp, r.scope, r.previousSignature, r.chunkHasher)
+	calculatedSignature := createSignature(r.signingKey, stringToSign)
+	isSignatureValid := r.chunkSignature == calculatedSignature
+	if !isSignatureValid {
+		slog.Debug("Chunk signature does not match calculated chunk signature")
+		slog.Debug("Expected chunk signature: " + calculatedSignature)
+		slog.Debug("Received chunk signature: " + r.chunkSignature)
+		return ErrChunkSignatureMismatch
+	}
+
+	r.chunkHasher.Reset()
+	r.previousSignature = r.chunkSignature
+	return nil
 }
 
 func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
@@ -425,7 +462,10 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 			if err != nil {
 				return 0, err
 			}
-			// @TODO: verify last chunk signature
+			err = r.validateSignature()
+			if err != nil {
+				return 0, err
+			}
 			return 0, io.EOF // End of the chunked transfer
 		}
 	}
@@ -434,14 +474,17 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		p = p[:r.chunkBytesRemaining] // Limit the read to the remaining bytes in the chunk
 	}
 	n, err = io.ReadFull(r.innerBuf, p)
+	r.chunkHasher.Write(p[:n])
 	r.chunkBytesRemaining -= int64(n)
 	if r.chunkBytesRemaining == 0 {
 		_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
 		if err != nil {
 			return 0, err
 		}
-		// @TODO: verify the chunk signature
-		r.previousSignature = r.chunkSignature
+		err = r.validateSignature()
+		if err != nil {
+			return 0, err
+		}
 	}
 	return n, err
 }
