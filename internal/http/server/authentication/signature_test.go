@@ -72,7 +72,6 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 		"10000;chunk-signature=ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648\r\n" + strings.Repeat("a", 65536) + "\r\n" +
 			"400;chunk-signature=0055627c9e194cb4542bae2aa5492e3c1575bbb81b612b7d234b86a503ef5497\r\n" + strings.Repeat("a", 1024) + "\r\n" +
 			"0;chunk-signature=b6c6ea8a5354eaf15b3cb7646744f4275b71ea724fed81ceb9323e279d449df9\r\n\r\n")
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9")
 
 	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
@@ -86,13 +85,17 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 
 	isPresigned := false
 
-	stringToSign := generateStringToSign(r, date+"T000000Z", scope, []string{"content-encoding", "content-length", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class"}, isPresigned)
+	timestamp := date + "T000000Z"
+	stringToSign := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "content-length", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class"}, isPresigned)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\ncee3fed04b70f867d036f722359b0b1f2f0e5dc0efadbc082b76c4c60e316455", stringToSign)
 
 	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
 
+	expectedSignature := "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9"
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey)
+
 	seedSignature := createSignature(signingKey, stringToSign)
-	assert.Equal(t, "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9", seedSignature)
+	assert.Equal(t, expectedSignature, seedSignature)
 
 	data, err := io.ReadAll(r.Body)
 	assert.NoError(t, err)
