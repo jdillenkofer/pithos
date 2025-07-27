@@ -92,7 +92,65 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
 
 	expectedSignature := "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9"
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey)
+	hasTrailingHeader := false
+	skipChunkValidation := false
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, skipChunkValidation)
+
+	seedSignature := createSignature(signingKey, stringToSign)
+	assert.Equal(t, expectedSignature, seedSignature)
+
+	data, err := io.ReadAll(r.Body)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte(strings.Repeat("a", 65536+1024)), data)
+
+	err = r.Body.Close()
+	assert.NoError(t, err)
+}
+
+func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) {
+	var r *http.Request = &http.Request{}
+	r.Method = "PUT"
+	r.URL = &url.URL{}
+	r.URL.Path = "/examplebucket/chunkObject.txt"
+	r.Host = "s3.amazonaws.com"
+	r.Header = http.Header{}
+	r.Header.Add("x-amz-date", "20130524T000000Z")
+	r.Header.Add("x-amz-storage-class", "REDUCED_REDUNDANCY")
+	r.Header.Add("Authorization", "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request,SignedHeaders=content-encoding;content-length;host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-storage-class,Signature=106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e")
+	r.Header.Add("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER")
+	r.Header.Add("Content-Encoding", "aws-chunked")
+	r.Header.Add("x-amz-decoded-content-length", "66560")
+	r.Header.Add("x-amz-trailer", "x-amz-checksum-crc32c")
+	r.Header.Add("Content-Length", "66824")
+	content := []byte(
+		"10000;chunk-signature=b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2\r\n" + strings.Repeat("a", 65536) + "\r\n" +
+			"400;chunk-signature=1c1344b170168f8e65b41376b44b20fe354e373826ccbbe2c1d40a8cae51e5c7\r\n" + strings.Repeat("a", 1024) + "\r\n" +
+			"0;chunk-signature=2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992\r\n\r\n" +
+			"x-amz-checksum-crc32c:sOO8/Q==\r\n" +
+			"x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n")
+
+	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+	date := "20130524"
+	region := "us-east-1"
+	service := "s3"
+	request := "aws4_request"
+
+	scope := createScope(date, region, service, request)
+	assert.Equal(t, "20130524/us-east-1/s3/aws4_request", scope)
+
+	isPresigned := false
+
+	timestamp := date + "T000000Z"
+	stringToSign := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class", "x-amz-trailer"}, isPresigned)
+	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n44d48b8c2f70eae815a0198cc73d7a546a73a93359c070abbaa5e6c7de112559", stringToSign)
+
+	signingKey := createSigningKey(secretAccessKey, date, region, service, request)
+
+	expectedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
+	hasTrailingHeader := true
+	skipChunkValidation := false
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, skipChunkValidation)
 
 	seedSignature := createSignature(signingKey, stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)

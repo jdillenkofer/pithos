@@ -22,7 +22,10 @@ import (
 
 const contentSHA256Header = "x-amz-content-sha256"
 const contentSHA256UnsignedPayload = "UNSIGNED-PAYLOAD"
+const contentSHA256StreamingUnsignedPayload = "STREAMING-UNSIGNED-PAYLOAD"
+const contentSHA256StreamingUnsignedPayloadTrailing = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 const contentSHA256StreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+const contentSHA256StreamingPayloadTrailing = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
 
 const signatureAlgorithm = "AWS4-HMAC-SHA256"
 const expectedService = "s3"
@@ -205,8 +208,14 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	contentSHA256 := r.Header.Get(contentSHA256Header)
 	if isPresigned || contentSHA256 == contentSHA256UnsignedPayload {
 		canonicalRequest += contentSHA256UnsignedPayload
+	} else if contentSHA256 == contentSHA256StreamingUnsignedPayload {
+		canonicalRequest += contentSHA256StreamingUnsignedPayload
+	} else if contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing {
+		canonicalRequest += contentSHA256StreamingUnsignedPayloadTrailing
 	} else if contentSHA256 == contentSHA256StreamingPayload {
 		canonicalRequest += contentSHA256StreamingPayload
+	} else if contentSHA256 == contentSHA256StreamingPayloadTrailing {
+		canonicalRequest += contentSHA256StreamingPayloadTrailing
 	} else {
 		canonicalRequest += generateHashedPayload(r)
 	}
@@ -393,7 +402,10 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		}
 		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
 		r.Header.Del("x-amz-decoded-content-length")
-		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey)
+		contentSHA256 := r.Header.Get(contentSHA256Header)
+		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing
+		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
+		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, skipChunkValidation)
 	}
 
 	return &accessKeyId, isSignatureValid
@@ -409,9 +421,11 @@ type awsChunkReadCloser struct {
 	previousSignature   string
 	chunkHasher         hash.Hash
 	signingKey          []byte
+	hasTrailingHeader   bool
+	skipChunkValidation bool
 }
 
-func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte) *awsChunkReadCloser {
+func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, skipChunkValidation bool) *awsChunkReadCloser {
 	return &awsChunkReadCloser{
 		innerCloser:         inner,
 		innerBuf:            bufio.NewReader(inner),
@@ -422,6 +436,8 @@ func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, 
 		previousSignature:   previousSignature,
 		chunkHasher:         sha256.New(),
 		signingKey:          signingKey,
+		hasTrailingHeader:   hasTrailingHeader,
+		skipChunkValidation: skipChunkValidation,
 	}
 }
 
@@ -449,8 +465,14 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		}
 		split := bytes.SplitN(bytes.Trim(chunkMetadata, "\r\n"), []byte(";chunk-signature="), 2)
 		hexLen := string(split[0])
-		signature := string(split[1])
-		r.chunkSignature = signature
+		if len(split) != 2 {
+			if !r.skipChunkValidation {
+				return 0, ErrChunkSignatureMismatch
+			}
+		} else {
+			signature := string(split[1])
+			r.chunkSignature = signature
+		}
 
 		length, err := strconv.ParseUint(hexLen, 16, 64)
 		if err != nil {
@@ -462,9 +484,18 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 			if err != nil {
 				return 0, err
 			}
-			err = r.validateSignature()
-			if err != nil {
-				return 0, err
+			if !r.skipChunkValidation {
+				err = r.validateSignature()
+				if err != nil {
+					return 0, err
+				}
+			}
+			if r.hasTrailingHeader {
+				// @TODO: validate the trailing header
+				checksum, _ := r.innerBuf.ReadString('\n')
+				trailerSignature, _ := r.innerBuf.ReadString('\n')
+				slog.Debug("Trailing header checksum: " + checksum)
+				slog.Debug("Trailing header signature: " + trailerSignature)
 			}
 			return 0, io.EOF // End of the chunked transfer
 		}
@@ -474,16 +505,20 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		p = p[:r.chunkBytesRemaining] // Limit the read to the remaining bytes in the chunk
 	}
 	n, err = io.ReadFull(r.innerBuf, p)
-	r.chunkHasher.Write(p[:n])
+	if !r.skipChunkValidation {
+		r.chunkHasher.Write(p[:n])
+	}
 	r.chunkBytesRemaining -= int64(n)
 	if r.chunkBytesRemaining == 0 {
 		_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
 		if err != nil {
 			return 0, err
 		}
-		err = r.validateSignature()
-		if err != nil {
-			return 0, err
+		if !r.skipChunkValidation {
+			err = r.validateSignature()
+			if err != nil {
+				return 0, err
+			}
 		}
 	}
 	return n, err
