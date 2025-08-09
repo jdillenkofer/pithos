@@ -187,18 +187,21 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 	return signedHeaders
 }
 
-func generateHashedPayload(r *http.Request) string {
-	// @TODO: error handling
-	// @TODO: cache request body to disk
+func generateHashedPayload(r *http.Request) (*string, error) {
+	// @TODO: maybe cache request body to disk
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 	sha256Hash := sha256.New()
-	sha256Hash.Write(bodyBytes)
+	_, err := sha256Hash.Write(bodyBytes)
+	if err != nil {
+		return nil, err
+	}
 	dataSha256 := sha256Hash.Sum(nil)
-	return hex.EncodeToString(dataSha256)
+	hexSha256 := hex.EncodeToString(dataSha256)
+	return &hexSha256, nil
 }
 
-func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPresigned bool) string {
+func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPresigned bool) (*string, error) {
 	canonicalRequest := generateCanonicalHttpMethod(r) + "\n"
 	canonicalRequest += generateCanonicalURI(r) + "\n"
 	canonicalRequest += generateCanonicalQueryString(r) + "\n"
@@ -217,19 +220,27 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	} else if contentSHA256 == contentSHA256StreamingPayloadTrailing {
 		canonicalRequest += contentSHA256StreamingPayloadTrailing
 	} else {
-		canonicalRequest += generateHashedPayload(r)
+		hashedPayload, err := generateHashedPayload(r)
+		if err != nil {
+			return nil, err
+		}
+		canonicalRequest += *hashedPayload
 	}
-	return canonicalRequest
+	return &canonicalRequest, nil
 }
 
-func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string, isPresigned bool) string {
-	canonicalRequest := generateCanonicalRequest(r, headersToInclude, isPresigned)
+func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string, isPresigned bool) (*string, error) {
+	canonicalRequest, err := generateCanonicalRequest(r, headersToInclude, isPresigned)
+	if err != nil {
+		return nil, err
+	}
 	sha256Hash := sha256.New()
-	sha256Hash.Write([]byte(canonicalRequest))
+	sha256Hash.Write([]byte(*canonicalRequest))
 	dataSha256 := sha256Hash.Sum(nil)
 	canonicalRequestHexSha256 := hex.EncodeToString(dataSha256)
 
-	return signatureAlgorithm + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
+	stringToSign := signatureAlgorithm + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
+	return &stringToSign, nil
 }
 
 func generateStringToSignForChunk(timestamp string, scope string, previousSignature string, chunkHasher hash.Hash) string {
@@ -381,9 +392,13 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	signedHeadersArray := strings.Split(signedHeaders, ";")
 
-	stringToSign := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
+	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
+	if err != nil {
+		slog.Debug("Failed to generate string to sign: " + err.Error())
+		return nil, false
+	}
 	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, expectedDate, region, expectedService, expectedRequest)
-	calculatedSignature := createSignature(signingKey, stringToSign)
+	calculatedSignature := createSignature(signingKey, *stringToSign)
 	isSignatureValid := signature == calculatedSignature
 	if !isSignatureValid {
 		slog.Debug("Signature does not match calculated signature")
