@@ -95,8 +95,9 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 
 	expectedSignature := "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9"
 	hasTrailingHeader := false
+	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -152,8 +153,9 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 
 	expectedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
 	hasTrailingHeader := true
+	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
