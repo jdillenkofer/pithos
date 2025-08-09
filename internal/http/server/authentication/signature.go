@@ -252,6 +252,14 @@ func generateStringToSignForChunk(timestamp string, scope string, previousSignat
 	return signatureAlgorithm + "-PAYLOAD" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + emptyHashHex + "\n" + hex.EncodeToString(chunkHasher.Sum(nil))
 }
 
+func generateStringToSignForTrailerChunk(timestamp string, scope string, previousSignature string, trailingChecksumHeader string) string {
+	sha256Hash := sha256.New()
+	sha256Hash.Write([]byte(trailingChecksumHeader + "\n"))
+	dataSha256 := sha256Hash.Sum(nil)
+	hexHash := hex.EncodeToString(dataSha256)
+	return signatureAlgorithm + "-TRAILER" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + hexHash
+}
+
 func createScope(date string, region string, service string, request string) string {
 	return date + "/" + region + "/" + service + "/" + request
 }
@@ -419,40 +427,43 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		r.Header.Del("x-amz-decoded-content-length")
 		contentSHA256 := r.Header.Get(contentSHA256Header)
 		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing
+		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, skipChunkValidation)
+		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 	}
 
 	return &accessKeyId, isSignatureValid
 }
 
 type awsChunkReadCloser struct {
-	innerCloser         io.Closer
-	innerBuf            *bufio.Reader
-	chunkBytesRemaining int64
-	chunkSignature      string
-	timestamp           string
-	scope               string
-	previousSignature   string
-	chunkHasher         hash.Hash
-	signingKey          []byte
-	hasTrailingHeader   bool
-	skipChunkValidation bool
+	innerCloser                    io.Closer
+	innerBuf                       *bufio.Reader
+	chunkBytesRemaining            int64
+	chunkSignature                 string
+	timestamp                      string
+	scope                          string
+	previousSignature              string
+	chunkHasher                    hash.Hash
+	signingKey                     []byte
+	hasTrailingHeader              bool
+	hasTrailingHeaderWithSignature bool
+	skipChunkValidation            bool
 }
 
-func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, skipChunkValidation bool) *awsChunkReadCloser {
+func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool) *awsChunkReadCloser {
 	return &awsChunkReadCloser{
-		innerCloser:         inner,
-		innerBuf:            bufio.NewReader(inner),
-		chunkBytesRemaining: -1, // -1 indicates that we are not currently reading a chunk
-		chunkSignature:      "",
-		timestamp:           timestamp,
-		scope:               scope,
-		previousSignature:   previousSignature,
-		chunkHasher:         sha256.New(),
-		signingKey:          signingKey,
-		hasTrailingHeader:   hasTrailingHeader,
-		skipChunkValidation: skipChunkValidation,
+		innerCloser:                    inner,
+		innerBuf:                       bufio.NewReader(inner),
+		chunkBytesRemaining:            -1, // -1 indicates that we are not currently reading a chunk
+		chunkSignature:                 "",
+		timestamp:                      timestamp,
+		scope:                          scope,
+		previousSignature:              previousSignature,
+		chunkHasher:                    sha256.New(),
+		signingKey:                     signingKey,
+		hasTrailingHeader:              hasTrailingHeader,
+		hasTrailingHeaderWithSignature: hasTrailingHeaderWithSignature,
+		skipChunkValidation:            skipChunkValidation,
 	}
 }
 
@@ -506,11 +517,26 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				}
 			}
 			if r.hasTrailingHeader {
-				// @TODO: validate the trailing header
-				checksum, _ := r.innerBuf.ReadString('\n')
+				// @TODO: validate the trailing header checksum
+				checksumHeader, _ := r.innerBuf.ReadString('\n')
 				trailerSignature, _ := r.innerBuf.ReadString('\n')
-				slog.Debug("Trailing header checksum: " + checksum)
-				slog.Debug("Trailing header signature: " + trailerSignature)
+				checksumHeader = strings.TrimSpace(checksumHeader)
+				trailerSignature = strings.TrimSpace(trailerSignature)
+				trailerSignature = strings.TrimPrefix(trailerSignature, "x-amz-trailer-signature:")
+				slog.Debug("Trailing header checksum: " + checksumHeader)
+
+				if r.hasTrailingHeaderWithSignature {
+					slog.Debug("Trailing header signature: " + trailerSignature)
+					stringToSign := generateStringToSignForTrailerChunk(r.timestamp, r.scope, r.previousSignature, checksumHeader)
+					calculatedSignature := createSignature(r.signingKey, stringToSign)
+					isSignatureValid := trailerSignature == calculatedSignature
+					if !isSignatureValid {
+						slog.Debug("Trailing header signature does not match calculated signature")
+						slog.Debug("Expected trailing header signature: " + calculatedSignature)
+						slog.Debug("Received trailing header signature: " + trailerSignature)
+						return 0, ErrChunkSignatureMismatch
+					}
+				}
 			}
 			return 0, io.EOF // End of the chunked transfer
 		}
