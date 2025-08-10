@@ -18,6 +18,7 @@ const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
+const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
 
 func getCredentialsFromEnv() []Credentials {
 	// Check for legacy environment variables first
@@ -97,6 +98,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
+	logLevel := getStringFromEnv(logLevelEnvKey)
 	return &Settings{
 		credentials:           credentials,
 		region:                region,
@@ -107,5 +109,6 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabled,
 		storageJsonPath:       storageJsonPath,
 		authorizerPath:        authorizerPath,
+		logLevel:              logLevel,
 	}, nil
 }

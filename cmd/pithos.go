@@ -59,25 +59,18 @@ const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 
 func main() {
-	var programLevel = new(slog.LevelVar)
-	// @TODO: Add setting to set the log level
-	// programLevel.Set(slog.LevelDebug)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     programLevel,
-	}))
-	slog.SetDefault(logger)
-
 	ctx := context.Background()
 	if len(os.Args) < 2 {
 		slog.Info(fmt.Sprintf("Usage: %s %s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage))
 		os.Exit(1)
 	}
 
+	logLevelVar := setupLogging()
+
 	subcommand := os.Args[1]
 	switch subcommand {
 	case subcommandServe:
-		serve(ctx)
+		serve(ctx, logLevelVar)
 	case subcommandMigrateStorage:
 		migrateStorage(ctx)
 	default:
@@ -86,12 +79,25 @@ func main() {
 	}
 }
 
-func serve(ctx context.Context) {
+func setupLogging() *slog.LevelVar {
+	var logLevelVar = new(slog.LevelVar)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     logLevelVar,
+	}))
+	slog.SetDefault(logger)
+	return logLevelVar
+}
+
+func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	settings, err := settings.LoadSettings(os.Args[2:])
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while loading settings: ", err))
 		os.Exit(1)
 	}
+
+	logLevel := settings.LogLevel()
+	logLevelVar.Set(logLevel)
 
 	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
 
