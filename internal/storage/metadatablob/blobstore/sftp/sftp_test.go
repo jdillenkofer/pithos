@@ -156,7 +156,7 @@ func TestSftpBlobStore(t *testing.T) {
 				os.Exit(1)
 			}
 			dbPath := filepath.Join(storagePath, "pithos.db")
-			db, err := database.OpenDatabase(dbPath)
+			db, err := database.OpenDatabase(database.DB_TYPE_SQLITE, dbPath)
 			if err != nil {
 				slog.Error("Couldn't open database")
 				os.Exit(1)

@@ -30,7 +30,7 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 
 func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	if s.dbInstance == nil {
-		dbInstance, err := database.OpenDatabase(s.DbPath.Value())
+		dbInstance, err := database.OpenDatabase(database.DB_TYPE_SQLITE, s.DbPath.Value())
 		if err != nil {
 			return nil, err
 		}
