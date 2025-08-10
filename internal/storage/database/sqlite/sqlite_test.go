@@ -14,6 +14,7 @@ func TestMigrateUp(t *testing.T) {
 
 	m, err := createMigrateInstance(db)
 	assert.Nil(t, err)
+	defer db.Close()
 
 	err = m.Up()
 	if err != nil {
@@ -27,6 +28,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 
 	m, err := createMigrateInstance(db)
 	assert.Nil(t, err)
+	defer db.Close()
 
 	err = m.Up()
 	if err != nil {
@@ -45,6 +47,7 @@ func TestMigrateUpAndDownAndUp(t *testing.T) {
 
 	m, err := createMigrateInstance(db)
 	assert.Nil(t, err)
+	defer db.Close()
 
 	err = m.Up()
 	if err != nil {
