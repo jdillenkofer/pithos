@@ -65,6 +65,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
+	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
 
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
@@ -81,5 +82,6 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
 		authorizerPath:        authorizerPathAccessor(),
+		logLevel:              logLevelAccessor(),
 	}, nil
 }

@@ -1,7 +1,9 @@
 package settings
 
 import (
+	"log/slog"
 	"reflect"
+	"strings"
 	"unsafe"
 )
 
@@ -31,6 +33,7 @@ type Settings struct {
 	monitoringPortEnabled *bool         `mergable:""`
 	storageJsonPath       *string       `mergable:""`
 	authorizerPath        *string       `mergable:""`
+	logLevel              *string       `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -77,6 +80,23 @@ func (s *Settings) StorageJsonPath() string {
 
 func (s *Settings) AuthorizerPath() string {
 	return valueOrDefault(s.authorizerPath, defaultAuthorizerPath)
+}
+
+func (s *Settings) LogLevel() slog.Level {
+	logLevel := valueOrDefault(s.logLevel, slog.LevelInfo.String())
+	switch strings.ToUpper(logLevel) {
+	case slog.LevelDebug.String():
+		return slog.LevelDebug
+	case slog.LevelInfo.String():
+		return slog.LevelInfo
+	case slog.LevelWarn.String():
+		return slog.LevelWarn
+	case slog.LevelError.String():
+		return slog.LevelError
+	default:
+		slog.Warn("Unknown log level, defaulting to Info", "logLevel", logLevel)
+		return slog.LevelInfo
+	}
 }
 
 func getUnexportedField(field reflect.Value) interface{} {
