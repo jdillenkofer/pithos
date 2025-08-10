@@ -127,7 +127,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 	}
 
 	dbPath := filepath.Join(storagePath, "pithos.db")
-	db, err := database.OpenDatabase(dbPath)
+	db, err := database.OpenDatabase(database.DB_TYPE_SQLITE, dbPath)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
 		os.Exit(1)
@@ -184,7 +184,7 @@ func setupTestServer(usePathStyle bool, useReplication bool, useFilesystemBlobSt
 			os.Exit(1)
 		}
 		dbPath2 := filepath.Join(storagePath2, "pithos.db")
-		db2, err := database.OpenDatabase(dbPath2)
+		db2, err := database.OpenDatabase(database.DB_TYPE_SQLITE, dbPath2)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
 			os.Exit(1)
