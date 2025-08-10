@@ -8,6 +8,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,7 +16,7 @@ func TestMigrateUp(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
+	sourceDriver, err := iofs.New(migrationsFilesystem, sqlite.SQLITE_MIGRATION_PATH)
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
@@ -34,7 +35,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
+	sourceDriver, err := iofs.New(migrationsFilesystem, sqlite.SQLITE_MIGRATION_PATH)
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})
@@ -58,7 +59,7 @@ func TestMigrateUpAndDownAndUp(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
-	sourceDriver, err := iofs.New(migrationsFilesystem, "migrations/sqlite")
+	sourceDriver, err := iofs.New(migrationsFilesystem, sqlite.SQLITE_MIGRATION_PATH)
 	assert.Nil(t, err)
 
 	databaseDriver, err := sqlite3.WithInstance(db, &sqlite3.Config{})

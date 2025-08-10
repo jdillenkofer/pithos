@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent/sqlite"
+	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/stretchr/testify/assert"
 )
