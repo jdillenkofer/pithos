@@ -176,18 +176,13 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 }
 
 func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucket string, key string, data []byte) error {
-	ordinal, err := os.storageOutboxEntryRepository.NextOrdinal(ctx, tx)
-	if err != nil {
-		return err
-	}
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucket,
 		Key:       key,
 		Data:      data,
-		Ordinal:   *ordinal,
 	}
-	err = os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &entry)
+	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &entry)
 	if err != nil {
 		return err
 	}
@@ -253,7 +248,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 		return nil
 	}
 
-	lastOrdinal := lastStorageOutboxEntry.Ordinal
+	lastId := lastStorageOutboxEntry.Id
 
 	for {
 		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -272,7 +267,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 		if entry == nil {
 			return nil
 		}
-		if entry.Ordinal > lastOrdinal {
+		if (*entry.Id).Compare(*lastId) > 0 {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -297,7 +292,7 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 		return nil
 	}
 
-	lastOrdinal := lastStorageOutboxEntry.Ordinal
+	lastId := lastStorageOutboxEntry.Id
 
 	for {
 		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -316,7 +311,7 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 		if entry == nil {
 			return nil
 		}
-		if entry.Ordinal > lastOrdinal {
+		if (*entry.Id).Compare(*lastId) > 0 {
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
