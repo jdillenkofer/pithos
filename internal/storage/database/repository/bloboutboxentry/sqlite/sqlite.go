@@ -13,12 +13,11 @@ type sqliteRepository struct {
 }
 
 const (
-	nextOrdinalBlobOutboxEntryStmt             = "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM blob_outbox_entries"
-	findLastBlobOutboxEntryByBlobIdStmt        = "SELECT id, operation, blob_id, content, ordinal, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = ? ORDER BY ordinal DESC LIMIT 1"
-	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT id, operation, blob_id, content, MAX(ordinal), created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
-	findFirstBlobOutboxEntryStmt               = "SELECT id, operation, blob_id, content, ordinal, created_at, updated_at FROM blob_outbox_entries ORDER BY ordinal ASC LIMIT 1"
-	insertBlobOutboxEntryStmt                  = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, ordinal, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)"
-	updateBlobOutboxEntryByIdStmt              = "UPDATE blob_outbox_entries SET operation = ?, blob_id = ?, content = ?, ordinal = ?, updated_at = ? WHERE id = ?"
+	findLastBlobOutboxEntryByBlobIdStmt        = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = ? ORDER BY id DESC LIMIT 1"
+	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT MAX(id), operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
+	findFirstBlobOutboxEntryStmt               = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1"
+	insertBlobOutboxEntryStmt                  = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)"
+	updateBlobOutboxEntryByIdStmt              = "UPDATE blob_outbox_entries SET operation = ?, blob_id = ?, content = ?, updated_at = ? WHERE id = ?"
 	deleteBlobOutboxEntryByIdStmt              = "DELETE FROM blob_outbox_entries WHERE id = ?"
 )
 
@@ -31,10 +30,9 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry
 	var operation string
 	var blobId string
 	var content []byte
-	var ordinal int
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobOutboxRow.Scan(&id, &operation, &blobId, &content, &ordinal, &createdAt, &updatedAt)
+	err := blobOutboxRow.Scan(&id, &operation, &blobId, &content, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -48,7 +46,6 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry
 		Operation: operation,
 		BlobId:    ulidBlobId,
 		Content:   content,
-		Ordinal:   ordinal,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}, nil
@@ -60,10 +57,9 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxen
 	var operation string
 	var blobId string
 	var content []byte
-	var ordinal int
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobOutboxRows.Scan(&id, &operation, &blobId, &content, &ordinal, &createdAt, &updatedAt)
+	err := blobOutboxRows.Scan(&id, &operation, &blobId, &content, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -77,23 +73,9 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxen
 		Operation: operation,
 		BlobId:    ulidBlobId,
 		Content:   content,
-		Ordinal:   ordinal,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}, nil
-}
-
-func (bor *sqliteRepository) NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error) {
-	row := tx.QueryRowContext(ctx, nextOrdinalBlobOutboxEntryStmt)
-	var ordinal int
-	err := row.Scan(&ordinal)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &ordinal, nil
 }
 
 func (bor *sqliteRepository) FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*bloboutboxentry.Entity, error) {
@@ -137,12 +119,12 @@ func (bor *sqliteRepository) SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx
 		blobOutboxEntry.Id = &id
 		blobOutboxEntry.CreatedAt = time.Now()
 		blobOutboxEntry.UpdatedAt = blobOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBlobOutboxEntryStmt, blobOutboxEntry.Id.String(), blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.Ordinal, blobOutboxEntry.CreatedAt, blobOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBlobOutboxEntryStmt, blobOutboxEntry.Id.String(), blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.CreatedAt, blobOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	blobOutboxEntry.UpdatedAt = time.Now()
-	_, err := tx.ExecContext(ctx, updateBlobOutboxEntryByIdStmt, blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.Ordinal, blobOutboxEntry.UpdatedAt, blobOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updateBlobOutboxEntryByIdStmt, blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.UpdatedAt, blobOutboxEntry.Id.String())
 	return err
 }
 

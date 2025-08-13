@@ -138,17 +138,12 @@ func (obs *outboxBlobStore) Stop(ctx context.Context) error {
 }
 
 func (obs *outboxBlobStore) storeBlobOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, blobId blobstore.BlobId, content []byte) error {
-	ordinal, err := obs.blobOutboxEntryRepository.NextOrdinal(ctx, tx)
-	if err != nil {
-		return err
-	}
 	entry := blobOutboxEntry.Entity{
 		Operation: operation,
 		BlobId:    blobId,
 		Content:   content,
-		Ordinal:   *ordinal,
 	}
-	err = obs.blobOutboxEntryRepository.SaveBlobOutboxEntry(ctx, tx, &entry)
+	err := obs.blobOutboxEntryRepository.SaveBlobOutboxEntry(ctx, tx, &entry)
 	if err != nil {
 		return err
 	}

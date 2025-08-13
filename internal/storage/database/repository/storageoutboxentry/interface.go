@@ -9,7 +9,6 @@ import (
 )
 
 type Repository interface {
-	NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error)
 	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
@@ -25,7 +24,6 @@ type Entity struct {
 	Key         string
 	ContentType *string
 	Data        []byte
-	Ordinal     int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

@@ -9,7 +9,6 @@ import (
 )
 
 type Repository interface {
-	NextOrdinal(ctx context.Context, tx *sql.Tx) (*int, error)
 	FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*Entity, error)
 	FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Context, tx *sql.Tx) ([]Entity, error)
 	FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
@@ -22,7 +21,6 @@ type Entity struct {
 	Operation string
 	BlobId    ulid.ULID
 	Content   []byte
-	Ordinal   int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
