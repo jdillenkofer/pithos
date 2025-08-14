@@ -12,7 +12,7 @@ require (
 	github.com/aws/smithy-go v1.22.5
 	github.com/docker/go-connections v0.6.0
 	github.com/golang-migrate/migrate/v4 v4.18.3
-	github.com/mattn/go-sqlite3 v1.14.31
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/sftp v1.13.9
 	github.com/prometheus/client_golang v1.23.0
