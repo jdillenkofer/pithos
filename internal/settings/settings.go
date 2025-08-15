@@ -7,6 +7,7 @@ import (
 	"unsafe"
 )
 
+const defaultAuthenticationEnabled = true
 const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
@@ -24,6 +25,7 @@ type Credentials struct {
 }
 
 type Settings struct {
+	authenticationEnabled *bool         `mergable:""`
 	credentials           []Credentials `mergable:""`
 	region                *string       `mergable:""`
 	domain                *string       `mergable:""`
@@ -43,7 +45,14 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 	return *v
 }
 
+func (s *Settings) isAuthenticationEnabled() bool {
+	return valueOrDefault(s.authenticationEnabled, defaultAuthenticationEnabled)
+}
+
 func (s *Settings) Credentials() []Credentials {
+	if !s.isAuthenticationEnabled() {
+		return nil
+	}
 	if s.credentials == nil {
 		return []Credentials{}
 	}

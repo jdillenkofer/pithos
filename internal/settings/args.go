@@ -57,6 +57,7 @@ func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, des
 
 func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
+	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
 	bindAddressAccessor := registerStringFlag(serveCommand, "bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
@@ -73,6 +74,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	}
 
 	return &Settings{
+		authenticationEnabled: authenticationEnabledAccessor(),
 		credentials:           nil, // Credentials are not set via command line args
 		region:                regionAccessor(),
 		domain:                domainAccessor(),

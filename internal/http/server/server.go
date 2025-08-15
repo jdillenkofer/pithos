@@ -52,6 +52,7 @@ func SetupServer(credentials []settings.Credentials, region string, baseEndpoint
 	var rootHandler http.Handler = mux
 	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
 	if credentials != nil {
+		slog.Info("Authentication is enabled")
 		authCredentials := sliceutils.Map(func(cred settings.Credentials) authentication.Credentials {
 			return authentication.Credentials{
 				AccessKeyId:     cred.AccessKeyId,
@@ -59,6 +60,8 @@ func SetupServer(credentials []settings.Credentials, region string, baseEndpoint
 			}
 		}, credentials)
 		rootHandler = authentication.MakeSignatureMiddleware(authCredentials, region, rootHandler)
+	} else {
+		slog.Warn("Authentication is disabled, this is not recommended for production use")
 	}
 	return rootHandler
 }
