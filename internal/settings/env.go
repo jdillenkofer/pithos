@@ -10,6 +10,7 @@ const envKeyPrefix = "PITHOS"
 
 const legacyAccessKeyIdEnvKey = envKeyPrefix + "_ACCESS_KEY_ID"
 const legacySecretAccessKeyEnvKey = envKeyPrefix + "_SECRET_ACCESS_KEY"
+const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
 const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
@@ -90,6 +91,7 @@ func getBoolFromEnv(envKey string) *bool {
 
 func loadSettingsFromEnv() (*Settings, error) {
 	credentials := getCredentialsFromEnv()
+	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
@@ -100,6 +102,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
 	return &Settings{
+		authenticationEnabled: authenticationEnabled,
 		credentials:           credentials,
 		region:                region,
 		domain:                domain,
