@@ -1,5 +1,7 @@
 FROM golang:1.25.0-alpine3.22 AS app-builder
 
+ARG SKIP_TESTS=false
+
 RUN apk add --no-cache build-base
 
 WORKDIR /go/src/app
@@ -10,7 +12,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN go test ./... -v --short
+RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v --short; fi
 
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 

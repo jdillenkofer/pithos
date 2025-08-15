@@ -1,0 +1,217 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (without v prefix, e.g. 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  validate-version:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate version format
+        run: |
+          if ! echo "${{ github.event.inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: Version must be in format X.Y.Z (e.g. 1.0.0)"
+            exit 1
+          fi
+      - name: Configure Git
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+      - name: Create Tag
+        run: |
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  build-linux-amd64:
+    name: Build Linux AMD64 Binary
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Build Binary
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 1
+        run: |
+          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-linux-amd64 cmd/pithos.go
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-linux-amd64
+          path: pithos-linux-amd64
+
+  build-linux-arm64:
+    name: Build Linux ARM64 Binary
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Install Cross-Compilation Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Binary
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 1
+          CC: aarch64-linux-gnu-gcc
+        run: |
+          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-linux-arm64 cmd/pithos.go
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-linux-arm64
+          path: pithos-linux-arm64
+
+  build-darwin:
+    name: Build Darwin Binaries
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - os: darwin
+            arch: amd64
+            goos: darwin
+            goarch: amd64
+          - os: darwin
+            arch: arm64
+            goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Build Binary
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-${{ matrix.os }}-${{ matrix.arch }} cmd/pithos.go
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-${{ matrix.os }}-${{ matrix.arch }}
+          path: pithos-${{ matrix.os }}-${{ matrix.arch }}
+
+  build-docker-amd64:
+    name: Build Docker Image AMD64
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and Export Docker Image AMD64
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          outputs: type=docker,dest=pithos-amd64.tar
+          tags: jdillenkofer/pithos:${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}-amd64
+          build-args: |
+            SKIP_TESTS=true
+      - name: Upload Docker Image AMD64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-docker-amd64
+          path: pithos-amd64.tar
+
+  build-docker-arm64:
+    name: Build Docker Image ARM64
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and Export Docker Image ARM64
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          outputs: type=docker,dest=pithos-arm64.tar
+          tags: jdillenkofer/pithos:${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}-arm64
+          build-args: |
+            SKIP_TESTS=true
+      - name: Upload Docker Image ARM64
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-docker-arm64
+          path: pithos-arm64.tar
+
+  release:
+    name: Create Release
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin, build-docker-amd64, build-docker-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate Changelog
+        id: changelog
+        uses: TriPSs/conventional-changelog-action@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          output-file: "false"
+          skip-version-file: true
+          skip-commit: true
+          skip-bump: true
+      - name: Download Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          body: ${{ steps.changelog.outputs.clean_changelog }}
+          draft: false
+          prerelease: false
+          files: |
+            binaries/pithos-linux-amd64/pithos-linux-amd64
+            binaries/pithos-linux-arm64/pithos-linux-arm64
+            binaries/pithos-darwin-amd64/pithos-darwin-amd64
+            binaries/pithos-darwin-arm64/pithos-darwin-arm64
+            binaries/pithos-docker-amd64/pithos-amd64.tar
+            binaries/pithos-docker-arm64/pithos-arm64.tar
