@@ -13,11 +13,11 @@ type sqliteRepository struct {
 }
 
 const (
-	findBlobContentByIdStmt   = "SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = ?"
+	findBlobContentByIdStmt   = "SELECT id, content, created_at, updated_at FROM blob_contents WHERE id = $1"
 	findBlobContentIdsStmt    = "SELECT id FROM blob_contents"
-	insertBlobContentStmt     = "INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES(?, ?, ?, ?)"
-	updateBlobContentByIdStmt = "UPDATE blob_contents SET content = ?, updated_at = ? WHERE id = ?"
-	deleteBlobContentByIdStmt = "DELETE FROM blob_contents WHERE id = ?"
+	insertBlobContentStmt     = "INSERT INTO blob_contents (id, content, created_at, updated_at) VALUES($1, $2, $3, $4)"
+	updateBlobContentByIdStmt = "UPDATE blob_contents SET content = $1, updated_at = $2 WHERE id = $3"
+	deleteBlobContentByIdStmt = "DELETE FROM blob_contents WHERE id = $1"
 )
 
 func NewRepository() (blobcontent.Repository, error) {

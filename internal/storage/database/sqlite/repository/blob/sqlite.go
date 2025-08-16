@@ -14,10 +14,10 @@ type sqliteRepository struct {
 
 const (
 	findInUseBlobIdsStmt                            = "SELECT blob_id FROM blobs"
-	findBlobsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = ? ORDER BY sequence_number ASC"
-	insertBlobStmt                                  = "INSERT INTO blobs (id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-	updateBlobByIdStmt                              = "UPDATE blobs SET blob_id = ?, object_id = ?, etag = ?, checksum_crc32 = ?, checksum_crc32c = ?, checksum_crc64nvme = ?, checksum_sha1 = ?, checksum_sha256 = ?, size = ?, sequence_number = ?, updated_at = ? WHERE id = ?"
-	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = ?"
+	findBlobsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at FROM blobs WHERE object_id = $1 ORDER BY sequence_number ASC"
+	insertBlobStmt                                  = "INSERT INTO blobs (id, blob_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
+	updateBlobByIdStmt                              = "UPDATE blobs SET blob_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, updated_at = $11 WHERE id = $12"
+	deleteBlobByObjectIdStmt                        = "DELETE FROM blobs WHERE object_id = $1"
 )
 
 func NewRepository() (blob.Repository, error) {
