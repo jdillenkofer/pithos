@@ -6,12 +6,15 @@ import (
 	"errors"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 )
 
+type DatabaseType uint
+
 const (
-	DB_TYPE_SQLITE   = "sqlite"
-	DB_TYPE_POSTGRES = "postgres"
+	DB_TYPE_SQLITE DatabaseType = iota
+	DB_TYPE_POSTGRES
 )
 
 var errUnknownDatabaseType = errors.New("unknown database type")
@@ -22,13 +25,12 @@ type Database interface {
 	Close() error
 }
 
-func OpenDatabase(dbType string, dbUrl string) (Database, error) {
+func OpenDatabase(dbType DatabaseType, dbUrl string) (Database, error) {
 	switch dbType {
 	case DB_TYPE_SQLITE:
 		return sqlite.OpenDatabase(dbUrl)
 	case DB_TYPE_POSTGRES:
-		// Placeholder for future PostgreSQL implementation
-		return nil, errors.New("PostgreSQL support is not implemented yet")
+		return pgx.OpenDatabase(dbUrl)
 	default:
 		return nil, errUnknownDatabaseType
 	}
