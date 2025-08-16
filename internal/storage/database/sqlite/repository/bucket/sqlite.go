@@ -14,11 +14,11 @@ type sqliteRepository struct {
 
 const (
 	findAllBucketsStmt     = "SELECT id, name, created_at, updated_at FROM buckets"
-	findBucketByNameStmt   = "SELECT id, name, created_at, updated_at FROM buckets WHERE name = ?"
-	insertBucketStmt       = "INSERT INTO buckets (id, name, created_at, updated_at) VALUES(?, ?, ?, ?)"
-	updateBucketByIdStmt   = "UPDATE buckets SET name = ?, updated_at = ? WHERE id = ?"
-	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = ?"
-	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = ?"
+	findBucketByNameStmt   = "SELECT id, name, created_at, updated_at FROM buckets WHERE name = $1"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, created_at, updated_at) VALUES($1, $2, $3, $4)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, updated_at = $2 WHERE id = $3"
+	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = $1"
+	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = $1"
 )
 
 func NewRepository() (bucket.Repository, error) {
