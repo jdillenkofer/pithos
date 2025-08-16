@@ -78,7 +78,7 @@ func (bcr *sqliteRepository) PutBlobContent(ctx context.Context, tx *sql.Tx, blo
 	if err != nil {
 		return err
 	}
-	blobContent.CreatedAt = time.Now()
+	blobContent.CreatedAt = time.Now().UTC()
 	blobContent.UpdatedAt = blobContent.CreatedAt
 	_, err = tx.ExecContext(ctx, insertBlobContentStmt, blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
 	return err
@@ -88,13 +88,13 @@ func (bcr *sqliteRepository) SaveBlobContent(ctx context.Context, tx *sql.Tx, bl
 	if blobContent.Id == nil {
 		id := ulid.Make()
 		blobContent.Id = &id
-		blobContent.CreatedAt = time.Now()
+		blobContent.CreatedAt = time.Now().UTC()
 		blobContent.UpdatedAt = blobContent.CreatedAt
 		_, err := tx.ExecContext(ctx, insertBlobContentStmt, blobContent.Id.String(), blobContent.Content, blobContent.CreatedAt, blobContent.UpdatedAt)
 		return err
 	}
 
-	blobContent.UpdatedAt = time.Now()
+	blobContent.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateBlobContentByIdStmt, blobContent.Content, blobContent.UpdatedAt, blobContent.Id.String())
 	return err
 }

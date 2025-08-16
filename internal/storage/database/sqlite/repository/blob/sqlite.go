@@ -101,13 +101,13 @@ func (br *sqliteRepository) SaveBlob(ctx context.Context, tx *sql.Tx, blob *blob
 	if blob.Id == nil {
 		id := ulid.Make()
 		blob.Id = &id
-		blob.CreatedAt = time.Now()
+		blob.CreatedAt = time.Now().UTC()
 		blob.UpdatedAt = blob.CreatedAt
 		_, err := tx.ExecContext(ctx, insertBlobStmt, blob.Id.String(), blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.ChecksumCRC32, blob.ChecksumCRC32C, blob.ChecksumCRC64NVME, blob.ChecksumSHA1, blob.ChecksumSHA256, blob.Size, blob.SequenceNumber, blob.CreatedAt, blob.UpdatedAt)
 		return err
 	}
 
-	blob.UpdatedAt = time.Now()
+	blob.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateBlobByIdStmt, blob.BlobId.String(), blob.ObjectId.String(), blob.ETag, blob.ChecksumCRC32, blob.ChecksumCRC32C, blob.ChecksumCRC64NVME, blob.ChecksumSHA1, blob.ChecksumSHA256, blob.Size, blob.SequenceNumber, blob.UpdatedAt, blob.Id.String())
 	return err
 }

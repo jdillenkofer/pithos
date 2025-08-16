@@ -95,13 +95,13 @@ func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql
 	if storageOutboxEntry.Id == nil {
 		id := ulid.Make()
 		storageOutboxEntry.Id = &id
-		storageOutboxEntry.CreatedAt = time.Now()
+		storageOutboxEntry.CreatedAt = time.Now().UTC()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
 		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
-	storageOutboxEntry.UpdatedAt = time.Now()
+	storageOutboxEntry.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
 	return err
 }
