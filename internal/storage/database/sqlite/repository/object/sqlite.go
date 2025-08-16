@@ -76,12 +76,12 @@ func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *
 	if object.Id == nil {
 		id := ulid.Make()
 		object.Id = &id
-		object.CreatedAt = time.Now()
+		object.CreatedAt = time.Now().UTC()
 		object.UpdatedAt = object.CreatedAt
 		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName, object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
-	object.UpdatedAt = time.Now()
+	object.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName, object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }

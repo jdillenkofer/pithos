@@ -117,13 +117,13 @@ func (bor *sqliteRepository) SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx
 	if blobOutboxEntry.Id == nil {
 		id := ulid.Make()
 		blobOutboxEntry.Id = &id
-		blobOutboxEntry.CreatedAt = time.Now()
+		blobOutboxEntry.CreatedAt = time.Now().UTC()
 		blobOutboxEntry.UpdatedAt = blobOutboxEntry.CreatedAt
 		_, err := tx.ExecContext(ctx, insertBlobOutboxEntryStmt, blobOutboxEntry.Id.String(), blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.CreatedAt, blobOutboxEntry.UpdatedAt)
 		return err
 	}
 
-	blobOutboxEntry.UpdatedAt = time.Now()
+	blobOutboxEntry.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateBlobOutboxEntryByIdStmt, blobOutboxEntry.Operation, blobOutboxEntry.BlobId.String(), blobOutboxEntry.Content, blobOutboxEntry.UpdatedAt, blobOutboxEntry.Id.String())
 	return err
 }

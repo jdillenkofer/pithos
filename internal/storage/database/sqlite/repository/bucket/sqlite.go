@@ -81,12 +81,12 @@ func (br *sqliteRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *
 	if bucket.Id == nil {
 		id := ulid.Make()
 		bucket.Id = &id
-		bucket.CreatedAt = time.Now()
+		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
 		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
-	bucket.UpdatedAt = time.Now()
+	bucket.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }

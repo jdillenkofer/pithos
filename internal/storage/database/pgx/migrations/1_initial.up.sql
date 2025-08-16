@@ -1,15 +1,15 @@
 CREATE TABLE buckets (
   id TEXT NOT NULL PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
 );
 
 CREATE TABLE blob_contents (
   id TEXT NOT NULL primary key,
   content BYTEA NOT NULL,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
 );
 
 CREATE TABLE blob_outbox_entries (
@@ -17,8 +17,8 @@ CREATE TABLE blob_outbox_entries (
   operation TEXT NOT NULL,
   blob_id TEXT NOT NULL,
   content BYTEA NOT NULL,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
 );
 
 CREATE TABLE "objects" (
@@ -29,8 +29,8 @@ CREATE TABLE "objects" (
   size INTEGER NOT NULL,
   upload_status TEXT NOT NULL,
   upload_id TEXT,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
   content_type TEXT,
   checksum_crc32 TEXT,
   checksum_crc32c TEXT,
@@ -48,8 +48,8 @@ CREATE TABLE blobs (
   etag TEXT NOT NULL,
   size INTEGER NOT NULL,
   sequence_number INTEGER NOT NULL,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
   checksum_crc32 TEXT,
   checksum_crc32c TEXT,
   checksum_crc64nvme TEXT,
@@ -72,7 +72,7 @@ CREATE TABLE "storage_outbox_entries" (
   bucket TEXT NOT NULL,
   key TEXT NOT NULL,
   data BYTEA NOT NULL,
-  created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
   content_type TEXT
 );
