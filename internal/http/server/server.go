@@ -828,7 +828,6 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		contentType = *object.ContentType
 	}
 	w.Header().Set(contentTypeHeader, contentType)
-	setChecksumHeadersFromObject(w.Header(), object)
 
 	var readers []io.ReadCloser
 	var sizes []int64
@@ -856,6 +855,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			readers = append(readers, rangeReader)
 		}
 	} else {
+		// we only include the headers for requests without range headers
+		setChecksumHeadersFromObject(w.Header(), object)
 		reader, err := s.storage.GetObject(ctx, bucket, key, nil, nil)
 		if err != nil {
 			handleError(err, w, r)
