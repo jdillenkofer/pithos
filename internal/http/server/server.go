@@ -437,7 +437,8 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
 		Buckets: []*BucketResult{},
@@ -520,7 +521,8 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		CommonPrefixes:     []*CommonPrefixResult{},
 	}
 
-	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, upload := range result.Uploads {
 		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
@@ -576,7 +578,8 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Contents:       []*ContentResult{},
 	}
 
-	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	for _, object := range result.Objects {
 		listBucketResult.Contents = append(listBucketResult.Contents, &ContentResult{
@@ -610,7 +613,8 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	w.Header().Set(locationHeader, bucket)
+	responseHeaders := w.Header()
+	responseHeaders.Set(locationHeader, bucket)
 	w.WriteHeader(200)
 }
 
@@ -650,12 +654,13 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	setETagHeaderFromObject(w.Header(), object)
-	setChecksumHeadersFromObject(w.Header(), object)
+	responseHeaders := w.Header()
+	setETagHeaderFromObject(responseHeaders, object)
+	setChecksumHeadersFromObject(responseHeaders, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
-	w.Header().Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
-	w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
+	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 }
 
@@ -831,8 +836,9 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if object.ContentType != nil {
 		contentType = *object.ContentType
 	}
-	w.Header().Set(contentTypeHeader, contentType)
-	setETagHeaderFromObject(w.Header(), object)
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, contentType)
+	setETagHeaderFromObject(responseHeaders, object)
 
 	var readers []io.ReadCloser
 	var sizes []int64
@@ -861,7 +867,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// we only include the headers for requests without range headers
-		setChecksumHeadersFromObject(w.Header(), object)
+		setChecksumHeadersFromObject(responseHeaders, object)
 		reader, err := s.storage.GetObject(ctx, bucket, key, nil, nil)
 		if err != nil {
 			handleError(err, w, r)
@@ -878,8 +884,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			reader.Close()
 		}
 	})()
-	w.Header().Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
-	w.Header().Set(acceptRangesHeader, "bytes")
+	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(byteRanges) > 1 {
 		separator := ulid.Make().String()
 		rangeHeaderLength := int64(0)
@@ -897,8 +903,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		separatorLineLength := (2 /* -- */ + 2 /* \r\n */ + separatorLength)
 		endSeparatorLineLength := separatorLineLength + 2 /* \r\n */ + 2 /* -- at the end */
 		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*byteRangesCount + endSeparatorLineLength
-		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
-		w.Header().Set(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
+		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		responseHeaders.Set(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
 		w.WriteHeader(206)
 		for idx := range readers {
 			if idx > 0 {
@@ -912,14 +918,14 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		io.WriteString(w, fmt.Sprintf("\r\n--%s--\r\n", separator))
 	} else if len(byteRanges) == 1 {
-		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
 		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
-		w.Header().Set(contentRangeHeader, contentRangeValue)
+		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		io.CopyN(w, readers[0], totalSize)
 	} else {
-		w.Header().Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
+		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		io.CopyN(w, readers[0], totalSize)
 	}
@@ -1073,7 +1079,8 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	setChecksumHeadersFromChecksumValues(w.Header(), storage.ChecksumValues{
+	responseHeaders := w.Header()
+	setChecksumHeadersFromChecksumValues(responseHeaders, storage.ChecksumValues{
 		ETag:              &uploadPartResult.ETag,
 		ChecksumCRC32:     uploadPartResult.ChecksumCRC32,
 		ChecksumCRC32C:    uploadPartResult.ChecksumCRC32C,
@@ -1113,7 +1120,8 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	setChecksumHeadersFromChecksumValues(w.Header(), storage.ChecksumValues{
+	responseHeaders := w.Header()
+	setChecksumHeadersFromChecksumValues(responseHeaders, storage.ChecksumValues{
 		ETag:              putObjectResult.ETag,
 		ChecksumCRC32:     putObjectResult.ChecksumCRC32,
 		ChecksumCRC32C:    putObjectResult.ChecksumCRC32C,
@@ -1121,7 +1129,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	})
-	setChecksumType(w.Header(), metadatastore.ChecksumTypeFullObject)
+	setChecksumType(responseHeaders, metadatastore.ChecksumTypeFullObject)
 	w.WriteHeader(200)
 }
 
