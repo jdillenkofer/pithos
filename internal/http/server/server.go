@@ -287,6 +287,10 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 	return &val
 }
 
+func setETagHeaderFromObject(headers http.Header, object *storage.Object) {
+	headers.Set(etagHeader, object.ETag)
+}
+
 func setChecksumType(headers http.Header, checksumType string) {
 	headers.Set(checksumTypeHeader, checksumType)
 }
@@ -295,7 +299,6 @@ func setChecksumHeadersFromObject(headers http.Header, object *storage.Object) {
 	if object.ChecksumType != nil {
 		setChecksumType(headers, *object.ChecksumType)
 	}
-	headers.Set(etagHeader, object.ETag)
 	if object.ChecksumCRC32 != nil {
 		headers.Set(checksumCRC32Header, *object.ChecksumCRC32)
 	}
@@ -647,6 +650,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
+	setETagHeaderFromObject(w.Header(), object)
 	setChecksumHeadersFromObject(w.Header(), object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
@@ -828,6 +832,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		contentType = *object.ContentType
 	}
 	w.Header().Set(contentTypeHeader, contentType)
+	setETagHeaderFromObject(w.Header(), object)
 
 	var readers []io.ReadCloser
 	var sizes []int64
