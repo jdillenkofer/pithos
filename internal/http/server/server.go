@@ -660,6 +660,9 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
+	if object.ContentType != nil {
+		responseHeaders.Set(contentTypeHeader, *object.ContentType)
+	}
 	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(200)
 }
