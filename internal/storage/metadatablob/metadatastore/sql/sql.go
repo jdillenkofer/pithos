@@ -432,6 +432,12 @@ func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	return nil
 }
 
+func convertQuotedEtagHexDigestToBytes(etag string) ([]byte, error) {
+	etagWithoutLeadingQuote := strings.TrimPrefix(etag, "\"")
+	etagWithoutTrailingQuote := strings.TrimSuffix(etagWithoutLeadingQuote, "\"")
+	return hex.DecodeString(etagWithoutTrailingQuote)
+}
+
 func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -488,7 +494,11 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 		totalSize += blobEntity.Size
 
-		_, err = etagMd5Hash.Write([]byte(blobEntity.ETag))
+		blobEntityEtagDigest, err := convertQuotedEtagHexDigestToBytes(blobEntity.ETag)
+		if err != nil {
+			return nil, err
+		}
+		_, err = etagMd5Hash.Write(blobEntityEtagDigest)
 		if err != nil {
 			return nil, err
 		}

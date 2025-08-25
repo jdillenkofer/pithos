@@ -762,7 +762,7 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Equal(t, "drUohCpA8EjWtWwhvmxeNp6G/cb8/Y3X6h6FnCZs3Bk=", *secondPart.ChecksumSHA256)
 				assert.Equal(t, int32(2), *secondPart.PartNumber)
 
-				assert.Equal(t, "\"3e3689706ec8de577100eaa648d51fac-2\"", *uploadOutput.ETag)
+				assert.Equal(t, "\"b676ed737ae82cda0bc622cd80116002-2\"", *uploadOutput.ETag)
 				assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
 				assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
 				assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
