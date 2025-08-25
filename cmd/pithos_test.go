@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +122,114 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 	return postgresContainer, nil
 }
 
+type PgContainerPool struct {
+	containers chan *postgres.PostgresContainer
+	all        []*postgres.PostgresContainer
+	mu         sync.Mutex
+}
+
+// NewPgContainerPool starts n containers and returns a pool whose Checkout blocks until one is available.
+func NewPgContainerPool(ctx context.Context, n int) (*PgContainerPool, error) {
+	p := &PgContainerPool{
+		containers: make(chan *postgres.PostgresContainer, n),
+		all:        make([]*postgres.PostgresContainer, 0, n),
+	}
+
+	for i := 0; i < n; i++ {
+		pc, err := setupPostgresContainer(ctx)
+		if err != nil {
+			p.TerminateAll(ctx)
+			return nil, err
+		}
+		p.all = append(p.all, pc)
+		p.containers <- pc
+	}
+
+	return p, nil
+}
+
+// Checkout blocks until a container is available or ctx is done.
+func (p *PgContainerPool) Checkout(ctx context.Context) (*postgres.PostgresContainer, error) {
+	select {
+	case pc := <-p.containers:
+		return pc, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Return puts a container back into the pool.
+func (p *PgContainerPool) Return(pc *postgres.PostgresContainer) error {
+	// Basic safety: don't return nil
+	if pc == nil {
+		return errors.New("nil container")
+	}
+	p.containers <- pc
+	return nil
+}
+
+// TerminateAll stops all containers.
+func (p *PgContainerPool) TerminateAll(ctx context.Context) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pc := range p.all {
+		_ = pc.Container.Terminate(ctx)
+	}
+	// drain channel to allow GC
+loop:
+	for {
+		select {
+		case <-p.containers:
+		default:
+			break loop
+		}
+	}
+}
+
+// create a db pool with max 5 connections
+var pgContainerPool *PgContainerPool
+var pgContainerPoolOnce sync.Once
+var pgContainerPoolErr error
+
+func getPgContainerPool() (*PgContainerPool, error) {
+	pgContainerPoolOnce.Do(func() {
+		pgContainerPool, pgContainerPoolErr = NewPgContainerPool(context.Background(), 5)
+	})
+	return pgContainerPool, pgContainerPoolErr
+}
+
+func cleanPublicDatabaseSchema(ctx context.Context, db database.Database) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return nil
+	}
+	_, err = tx.Exec("DROP SCHEMA public CASCADE")
+	if err != nil {
+		return nil
+	}
+	_, err = tx.Exec("CREATE SCHEMA public AUTHORIZATION postgres")
+	if err != nil {
+		return nil
+	}
+	_, err = tx.Exec("GRANT ALL ON SCHEMA public TO postgres")
+	if err != nil {
+		return nil
+	}
+	_, err = tx.Exec("GRANT ALL ON SCHEMA public TO public")
+	if err != nil {
+		return nil
+	}
+	_, err = tx.Exec("COMMENT ON SCHEMA public IS 'standard public schema'")
+	if err != nil {
+		return nil
+	}
+	err = tx.Commit()
+	if err != nil {
+		return nil
+	}
+	return nil
+}
+
 func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePath string) (db database.Database, cleanup func(), err error) {
 	switch dbType {
 	case database.DB_TYPE_SQLITE:
@@ -128,18 +238,26 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 		db, err = database.OpenDatabase(dbType, dbPath)
 		return db, cleanup, err
 	case database.DB_TYPE_POSTGRES:
-		pgContainer, err := setupPostgresContainer(ctx)
+		pgContainerPool, err = getPgContainerPool()
+		if err != nil {
+			return nil, cleanup, err
+		}
+		pgContainer, err := pgContainerPool.Checkout(ctx)
 		if err != nil {
 			return nil, cleanup, err
 		}
 		cleanup = func() {
-			pgContainer.Terminate(ctx)
+			pgContainerPool.Return(pgContainer)
 		}
 		dbUrl, err := pgContainer.ConnectionString(ctx)
 		if err != nil {
 			return nil, cleanup, err
 		}
 		db, err = database.OpenDatabase(dbType, dbUrl)
+		cleanup = func() {
+			cleanPublicDatabaseSchema(ctx, db)
+			pgContainerPool.Return(pgContainer)
+		}
 		return db, cleanup, err
 	}
 	return nil, cleanup, errors.ErrUnsupported
@@ -199,8 +317,8 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		}
 	}
 	closeDatabase := func() {
-		err = db.Close()
 		dbCleanup()
+		err = db.Close()
 		if err != nil {
 			slog.Error(fmt.Sprintf("Couldn't close database: %s", err))
 			os.Exit(1)
