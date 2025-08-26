@@ -21,6 +21,10 @@ type BlobStore interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, reader io.Reader) error
+	// GetBlob returns a ReadCloser for the blob with the given blobId.
+	// If the blob does not exist, ErrBlobNotFound is returned
+	// or if we return a LazyReadSeekCloser, ErrBlobNotFound is returned upon the first read call.
+	// The caller is responsible for closing the ReadCloser.
 	GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadCloser, error)
 	GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error)
 	DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error
@@ -86,6 +90,7 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	tx.Commit()
 
 	getBlobResult, err := io.ReadAll(blobReader)
+	blobReader.Close()
 	if err != nil {
 		return err
 	}
@@ -108,10 +113,15 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	if err != nil {
 		return err
 	}
-	_, err = blobStore.GetBlob(ctx, tx, blobId)
+	blobReader, err = blobStore.GetBlob(ctx, tx, blobId)
 	if err != ErrBlobNotFound {
-		tx.Rollback()
-		return errors.New("expected ErrBlobNotFound")
+		// Maybe we are dealing with a blob store that returns a non-nil reader even if the blob is not found.
+		_, err = io.ReadAll(blobReader)
+		blobReader.Close()
+		if err != ErrBlobNotFound {
+			tx.Rollback()
+			return errors.New("expected ErrBlobNotFound")
+		}
 	}
 	tx.Commit()
 

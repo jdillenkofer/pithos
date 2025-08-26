@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 	"github.com/pkg/sftp"
@@ -146,16 +147,35 @@ func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 
 func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
 	filename := s.getFilename(blobId)
-	f, err := doRetriableOperation(func() (*sftp.File, error) {
-		return s.client.OpenFile(filename, os.O_RDONLY)
-	}, maxStpRetries, s.reconnectSftpClient)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, blobstore.ErrBlobNotFound
+	// @Perf: We skip the stat call here to reduce the number of roundtrips.
+	// This means that if the file doesn't exist, we will only find out when we try
+	// to read from it.
+	/*
+		_, err := doRetriableOperation(func() (*struct{}, error) {
+			_, err := s.client.Stat(filename)
+			return nil, err
+		}, maxStpRetries, s.reconnectSftpClient)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, blobstore.ErrBlobNotFound
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	return f, err
+	*/
+
+	f := ioutils.NewLazyReadSeekCloser(func() (io.ReadSeekCloser, error) {
+		return doRetriableOperation(func() (*sftp.File, error) {
+			f, err := s.client.OpenFile(filename, os.O_RDONLY)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil, blobstore.ErrBlobNotFound
+				}
+				return nil, err
+			}
+			return f, nil
+		}, maxStpRetries, s.reconnectSftpClient)
+	})
+	return f, nil
 }
 
 func (s *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
