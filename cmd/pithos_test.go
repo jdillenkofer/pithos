@@ -200,7 +200,7 @@ func getPgContainerPool() (*PgContainerPool, error) {
 	return pgContainerPool, pgContainerPoolErr
 }
 
-func cleanPublicDatabaseSchema(ctx context.Context, db database.Database) error {
+func cleanPublicDatabaseSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return nil
@@ -249,6 +249,26 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 			return nil, cleanup, err
 		}
 		cleanup = func() {
+			dbUrl, err := pgContainer.ConnectionString(ctx)
+			if err != nil {
+				slog.Error("Could not get connection string from pgContainer", slog.String("error", err.Error()))
+				return
+			}
+			db, err := sql.Open("pgx", dbUrl)
+			if err != nil {
+				slog.Error("Could not open db to clean public schema", slog.String("error", err.Error()))
+				return
+			}
+			err = cleanPublicDatabaseSchema(ctx, db)
+			if err != nil {
+				slog.Error("Could not clean public schema", slog.String("error", err.Error()))
+				return
+			}
+			err = db.Close()
+			if err != nil {
+				slog.Error("Could not close db after cleaning public schema", slog.String("error", err.Error()))
+				return
+			}
 			pgContainerPool.Return(pgContainer)
 		}
 		dbUrl, err := pgContainer.ConnectionString(ctx)
@@ -256,10 +276,6 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 			return nil, cleanup, err
 		}
 		db, err = pgx.OpenDatabase(dbUrl)
-		cleanup = func() {
-			cleanPublicDatabaseSchema(ctx, db)
-			pgContainerPool.Return(pgContainer)
-		}
 		return db, cleanup, err
 	}
 	return nil, cleanup, errors.ErrUnsupported
@@ -319,12 +335,12 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		}
 	}
 	closeDatabase := func() {
-		dbCleanup()
 		err = db.Close()
 		if err != nil {
 			slog.Error(fmt.Sprintf("Couldn't close database: %s", err))
 			os.Exit(1)
 		}
+		dbCleanup()
 	}
 
 	credentials := []settings.Credentials{
