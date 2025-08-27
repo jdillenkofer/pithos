@@ -7,9 +7,7 @@ import (
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/middlewares/tracing"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
@@ -90,15 +88,15 @@ func (s *SqlMetadataStoreConfiguration) Instantiate(diProvider dependencyinjecti
 	if err != nil {
 		return nil, err
 	}
-	bucketRepository, err := sqliteBucket.NewRepository()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
 		return nil, err
 	}
-	objectRepository, err := sqliteObject.NewRepository()
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
 	if err != nil {
 		return nil, err
 	}
-	blobRepository, err := sqliteBlob.NewRepository()
+	blobRepository, err := repositoryFactory.NewBlobRepository(db)
 	if err != nil {
 		return nil, err
 	}

@@ -8,11 +8,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
-	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bloboutboxentry"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
@@ -28,17 +24,17 @@ import (
 
 func CreateStorage(storagePath string, db database.Database, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
-	bucketRepository, err := sqliteBucket.NewRepository()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BucketRepository: %s", err))
 		os.Exit(1)
 	}
-	objectRepository, err := sqliteObject.NewRepository()
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := sqliteBlob.NewRepository()
+	blobRepository, err := repositoryFactory.NewBlobRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
 		os.Exit(1)
@@ -68,7 +64,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			os.Exit(1)
 		}
 	} else {
-		blobContentRepository, err := sqliteBlobContent.NewRepository()
+		blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
 			os.Exit(1)
@@ -97,7 +93,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		}
 	}
 	if wrapBlobStoreWithOutbox {
-		blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository()
+		blobOutboxEntryRepository, err := repositoryFactory.NewBlobOutboxEntryRepository(db)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not create BlobOutboxEntryRepository: %s", err))
 			os.Exit(1)

@@ -7,10 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/stretchr/testify/assert"
 )
@@ -40,17 +38,17 @@ func TestSqlMetadataStore(t *testing.T) {
 		}
 	}()
 
-	bucketRepository, err := sqliteBucket.NewRepository()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BucketRepository: %s", err))
 		os.Exit(1)
 	}
-	objectRepository, err := sqliteObject.NewRepository()
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := sqliteBlob.NewRepository()
+	blobRepository, err := repositoryFactory.NewBlobRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
 		os.Exit(1)
