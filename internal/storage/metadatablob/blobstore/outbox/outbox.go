@@ -47,7 +47,7 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 
-		entry, err := obs.blobOutboxEntryRepository.FindFirstBlobOutboxEntry(ctx, tx)
+		entry, err := obs.blobOutboxEntryRepository.FindFirstBlobOutboxEntryWithForUpdateLock(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			time.Sleep(5 * time.Second)

@@ -13,12 +13,13 @@ type pgxRepository struct {
 }
 
 const (
-	findLastBlobOutboxEntryByBlobIdStmt        = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT MAX(id), operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
-	findFirstBlobOutboxEntryStmt               = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
-	insertBlobOutboxEntryStmt                  = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
-	updateBlobOutboxEntryByIdStmt              = "UPDATE blob_outbox_entries SET operation = $1, blob_id = $2, content = $3, updated_at = $4 WHERE id = $5"
-	deleteBlobOutboxEntryByIdStmt              = "DELETE FROM blob_outbox_entries WHERE id = $1"
+	findLastBlobOutboxEntryByBlobIdStmt           = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = $1 ORDER BY id DESC LIMIT 1"
+	findLastBlobOutboxEntryGroupedByBlobIdStmt    = "SELECT MAX(id), operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
+	findFirstBlobOutboxEntryStmt                  = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1"
+	findFirstBlobOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
+	insertBlobOutboxEntryStmt                     = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
+	updateBlobOutboxEntryByIdStmt                 = "UPDATE blob_outbox_entries SET operation = $1, blob_id = $2, content = $3, updated_at = $4 WHERE id = $5"
+	deleteBlobOutboxEntryByIdStmt                 = "DELETE FROM blob_outbox_entries WHERE id = $1"
 )
 
 func NewRepository() (bloboutboxentry.Repository, error) {
@@ -106,6 +107,15 @@ func (bor *pgxRepository) FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Con
 
 func (bor *pgxRepository) FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*bloboutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findFirstBlobOutboxEntryStmt)
+	blobOutboxEntryEntity, err := convertRowToBlobOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return blobOutboxEntryEntity, nil
+}
+
+func (bor *pgxRepository) FindFirstBlobOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*bloboutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstBlobOutboxEntryWithForUpdateLockStmt)
 	blobOutboxEntryEntity, err := convertRowToBlobOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 
 type Repository interface {
 	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
+	FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
 	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
