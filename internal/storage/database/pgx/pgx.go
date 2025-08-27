@@ -8,6 +8,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 )
 
 //go:embed migrations/*.sql
@@ -42,7 +43,15 @@ func applyDatabaseMigrations(db *sql.DB) error {
 	return nil
 }
 
-func OpenDatabase(dbUrl string) (*sql.DB, error) {
+type pgxDatabase struct {
+	*sql.DB
+}
+
+func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {
+	return database.DB_TYPE_POSTGRES
+}
+
+func OpenDatabase(dbUrl string) (*pgxDatabase, error) {
 	db, err := sql.Open("pgx", dbUrl)
 	if err != nil {
 		return nil, err
@@ -52,7 +61,8 @@ func OpenDatabase(dbUrl string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	return db, nil
+	pgxDatabase := pgxDatabase{db}
+	return &pgxDatabase, nil
 }
 
 func setupDatabase(db *sql.DB) error {

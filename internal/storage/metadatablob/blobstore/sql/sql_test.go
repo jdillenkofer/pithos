@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/stretchr/testify/assert"
@@ -20,7 +20,7 @@ func TestSqlBlobStore(t *testing.T) {
 		os.Exit(1)
 	}
 	dbPath := filepath.Join(storagePath, "pithos.db")
-	db, err := database.OpenDatabase(database.DB_TYPE_SQLITE, dbPath)
+	db, err := sqlite.OpenDatabase(dbPath)
 	if err != nil {
 		slog.Error("Couldn't open database")
 		os.Exit(1)

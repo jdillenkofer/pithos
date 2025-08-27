@@ -35,6 +35,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
+	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
@@ -235,7 +237,7 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 	case database.DB_TYPE_SQLITE:
 		dbPath := filepath.Join(storagePath, "pithos.db")
 		cleanup = func() {}
-		db, err = database.OpenDatabase(dbType, dbPath)
+		db, err = sqlite.OpenDatabase(dbPath)
 		return db, cleanup, err
 	case database.DB_TYPE_POSTGRES:
 		pgContainerPool, err = getPgContainerPool()
@@ -253,7 +255,7 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 		if err != nil {
 			return nil, cleanup, err
 		}
-		db, err = database.OpenDatabase(dbType, dbUrl)
+		db, err = pgx.OpenDatabase(dbUrl)
 		cleanup = func() {
 			cleanPublicDatabaseSchema(ctx, db)
 			pgContainerPool.Return(pgContainer)
