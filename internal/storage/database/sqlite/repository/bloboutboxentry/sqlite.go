@@ -113,6 +113,10 @@ func (bor *sqliteRepository) FindFirstBlobOutboxEntry(ctx context.Context, tx *s
 	return blobOutboxEntryEntity, nil
 }
 
+func (bor *sqliteRepository) FindFirstBlobOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*bloboutboxentry.Entity, error) {
+	return bor.FindFirstBlobOutboxEntry(ctx, tx)
+}
+
 func (bor *sqliteRepository) SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx, blobOutboxEntry *bloboutboxentry.Entity) error {
 	if blobOutboxEntry.Id == nil {
 		id := ulid.Make()

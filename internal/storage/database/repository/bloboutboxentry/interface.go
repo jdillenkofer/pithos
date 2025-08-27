@@ -11,6 +11,7 @@ import (
 type Repository interface {
 	FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*Entity, error)
 	FindLastBlobOutboxEntryGroupedByBlobId(ctx context.Context, tx *sql.Tx) ([]Entity, error)
+	FindFirstBlobOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstBlobOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	SaveBlobOutboxEntry(ctx context.Context, tx *sql.Tx, blobOutboxEntry *Entity) error
 	DeleteBlobOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error

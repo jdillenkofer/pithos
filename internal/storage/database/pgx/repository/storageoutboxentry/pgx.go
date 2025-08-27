@@ -13,13 +13,14 @@ type pgxRepository struct {
 }
 
 const (
-	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
-	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketStmt  = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
-	insertStorageOutboxEntryStmt             = "INSERT INTO storage_outbox_entries (id, operation, bucket, key, content_type, data, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
-	updateStorageOutboxEntryByIdStmt         = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, data = $5, updated_at = $6 WHERE id = $7"
-	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = $1"
+	findFirstStorageOutboxEntryStmt                  = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
+	findFirstStorageOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
+	findLastStorageOutboxEntryStmt                   = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketStmt         = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketStmt          = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
+	insertStorageOutboxEntryStmt                     = "INSERT INTO storage_outbox_entries (id, operation, bucket, key, content_type, data, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
+	updateStorageOutboxEntryByIdStmt                 = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, data = $5, updated_at = $6 WHERE id = $7"
+	deleteStorageOutboxEntryByIdStmt                 = "DELETE FROM storage_outbox_entries WHERE id = $1"
 )
 
 func NewRepository() (storageoutboxentry.Repository, error) {
@@ -57,6 +58,15 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 
 func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt)
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
+func (sor *pgxRepository) FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryWithForUpdateLockStmt)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err

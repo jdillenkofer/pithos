@@ -54,7 +54,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx)
+		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryWithForUpdateLock(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			time.Sleep(5 * time.Second)

@@ -64,6 +64,10 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx
 	return storageOutboxEntryEntity, nil
 }
 
+func (sor *sqliteRepository) FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
+	return sor.FindFirstStorageOutboxEntry(ctx, tx)
+}
+
 func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
