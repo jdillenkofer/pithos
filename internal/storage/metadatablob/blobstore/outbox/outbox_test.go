@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bloboutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	"github.com/stretchr/testify/assert"
@@ -43,7 +43,7 @@ func TestOutboxBlobStore(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create FilesystemBlobStore: %s", err))
 		os.Exit(1)
 	}
-	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository()
+	blobOutboxEntryRepository, err := repositoryFactory.NewBlobOutboxEntryRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobOutboxEntryRepository: %s", err))
 		os.Exit(1)

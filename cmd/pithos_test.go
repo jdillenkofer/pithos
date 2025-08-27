@@ -36,8 +36,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	tracingStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
@@ -381,12 +381,13 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		}
 
 		var outboxStorage storage.Storage
-		storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
+
+		storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not create StorageOutboxEntryRepository: %s", err))
 			os.Exit(1)
-
 		}
+
 		outboxStorage, err = outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not create outboxStorage: %s", err))

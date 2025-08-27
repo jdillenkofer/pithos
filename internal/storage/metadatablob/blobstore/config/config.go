@@ -7,8 +7,7 @@ import (
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
-	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bloboutboxentry"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
@@ -157,7 +156,7 @@ func (o *OutboxBlobStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	blobOutboxEntryRepository, err := sqliteBlobOutboxEntry.NewRepository()
+	blobOutboxEntryRepository, err := repositoryFactory.NewBlobOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +236,7 @@ func (s *SqlBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.D
 	if err != nil {
 		return nil, err
 	}
-	blobContentRepository, err := sqliteBlobContent.NewRepository()
+	blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
 	if err != nil {
 		return nil, err
 	}

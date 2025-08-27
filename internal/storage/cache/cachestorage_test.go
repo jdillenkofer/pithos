@@ -13,11 +13,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
@@ -49,7 +46,7 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobContentRepository, err := sqliteBlobContent.NewRepository()
+	blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
 		os.Exit(1)
@@ -60,17 +57,17 @@ func TestCacheStorage(t *testing.T) {
 		os.Exit(1)
 	}
 
-	bucketRepository, err := sqliteBucket.NewRepository()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BucketRepository: %s", err))
 		os.Exit(1)
 	}
-	objectRepository, err := sqliteObject.NewRepository()
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := sqliteBlob.NewRepository()
+	blobRepository, err := repositoryFactory.NewBlobRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
 		os.Exit(1)

@@ -18,7 +18,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
 	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
-	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	blobStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/config"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
@@ -338,7 +338,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
+	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
 	}

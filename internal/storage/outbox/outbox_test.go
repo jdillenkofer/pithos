@@ -8,11 +8,8 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
-	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
-	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
@@ -50,17 +47,17 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		os.Exit(1)
 	}
 
-	bucketRepository, err := sqliteBucket.NewRepository()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BucketRepository: %s", err))
 		os.Exit(1)
 	}
-	objectRepository, err := sqliteObject.NewRepository()
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := sqliteBlob.NewRepository()
+	blobRepository, err := repositoryFactory.NewBlobRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
 		os.Exit(1)
@@ -106,7 +103,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 	// metadataBlobStorage would open separate transactions, we would deadlock the test.
 	// To avoid this each storage type gets its own db.
 	// In the future i want to redesign storage implementations to use the already open transaction.
-	storageOutboxEntryRepository, err := sqliteStorageOutboxEntry.NewRepository()
+	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create StorageOutboxEntryRepository: %s", err))
 		os.Exit(1)

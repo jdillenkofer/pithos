@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,7 +37,7 @@ func TestSqlBlobStore(t *testing.T) {
 			os.Exit(1)
 		}
 	}()
-	blobContentRepository, err := sqliteBlobContent.NewRepository()
+	blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
 		os.Exit(1)
