@@ -8,6 +8,7 @@ import (
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 )
 
 const (
@@ -30,7 +31,7 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 
 func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	if s.dbInstance == nil {
-		dbInstance, err := database.OpenDatabase(database.DB_TYPE_SQLITE, s.DbPath.Value())
+		dbInstance, err := sqlite.OpenDatabase(s.DbPath.Value())
 		if err != nil {
 			return nil, err
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 )
 
 //go:embed migrations/*.sql
@@ -114,6 +115,10 @@ func (sdb *sqliteDatabase) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (sdb *sqliteDatabase) GetDatabaseType() database.DatabaseType {
+	return database.DB_TYPE_SQLITE
 }
 
 func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
