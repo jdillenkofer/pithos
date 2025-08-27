@@ -13,7 +13,7 @@ type pgxRepository struct {
 }
 
 const (
-	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
+	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
 	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
 	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
 	findLastStorageOutboxEntryForBucketStmt  = "SELECT id, operation, bucket, key, content_type, data, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
