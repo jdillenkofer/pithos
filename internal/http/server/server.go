@@ -387,6 +387,7 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrBadDigest:
 		statusCode = 400
 	default:
+		slog.Error(fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
 		errResponse.Code = "InternalError"
 		errResponse.Message = "InternalError"
