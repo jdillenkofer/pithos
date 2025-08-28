@@ -14,7 +14,7 @@ type pgxRepository struct {
 
 const (
 	findLastBlobOutboxEntryByBlobIdStmt           = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastBlobOutboxEntryGroupedByBlobIdStmt    = "SELECT MAX(id), operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
+	findLastBlobOutboxEntryGroupedByBlobIdStmt    = "SELECT DISTINCT ON (blob_id) id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY blob_id, id DESC"
 	findFirstBlobOutboxEntryStmt                  = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1"
 	findFirstBlobOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
 	insertBlobOutboxEntryStmt                     = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
