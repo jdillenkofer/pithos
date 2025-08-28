@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 func createStorageFromJson(b []byte) (storage.Storage, error) {
@@ -36,6 +39,68 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 		return nil, err
 	}
 	return si.Instantiate(diContainer)
+}
+
+func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, error) {
+	username := "postgres"
+	password := "postgres"
+	dbname := "postgres"
+	postgresContainer, err := postgres.Run(ctx, "postgres:17.5-alpine3.22",
+		postgres.WithUsername(username),
+		postgres.WithPassword(password),
+		postgres.WithDatabase(dbname),
+		postgres.BasicWaitStrategies())
+	if err != nil {
+		return nil, err
+	}
+	return postgresContainer, nil
+}
+
+func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests")
+	}
+
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := t.Context()
+	pgContainer, err := setupPostgresContainer(ctx)
+	assert.Nil(t, err)
+	dbUrl, err := pgContainer.ConnectionString(ctx)
+	assert.Nil(t, err)
+	defer pgContainer.Terminate(ctx)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+	  "type": "MetadataBlobStorage",
+	  "db": {
+	    "type": "RegisterDatabaseReference",
+		"refName": "db",
+		"db": {
+	      "type": "PostgresDatabase",
+	      "dbUrl": "%v"
+	    }
+      },
+	  "metadataStore": {
+		"type": "SqlMetadataStore",
+		"db": {
+	      "type": "DatabaseReference",
+		  "refName": "db"
+	    }
+	  },
+	  "blobStore": {
+	    "type": "FilesystemBlobStore",
+		"root": "%v"
+	  }
+	}`, dbUrl, storagePath)
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
 }
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {

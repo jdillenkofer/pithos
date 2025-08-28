@@ -8,11 +8,13 @@ import (
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 )
 
 const (
 	sqliteDatabaseType            = "SqliteDatabase"
+	postgresDatabaseType          = "PostgresDatabase"
 	databaseReferenceType         = "DatabaseReference"
 	registerDatabaseReferenceType = "RegisterDatabaseReference"
 )
@@ -32,6 +34,34 @@ func (s *SqliteDatabaseConfiguration) RegisterReferences(diCollection dependency
 func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	if s.dbInstance == nil {
 		dbInstance, err := sqlite.OpenDatabase(s.DbPath.Value())
+		if err != nil {
+			return nil, err
+		}
+		s.dbInstance = dbInstance
+
+		dc, err := diProvider.LookupByType(reflect.TypeOf((*internalConfig.DbContainer)(nil)))
+		if err != nil {
+			return nil, err
+		}
+		dbContainer := dc.(*internalConfig.DbContainer)
+		dbContainer.AddDb(dbInstance)
+	}
+	return s.dbInstance, nil
+}
+
+type PostgresDatabaseConfiguration struct {
+	dbInstance database.Database
+	DbUrl      internalConfig.StringProvider `json:"dbUrl"`
+	internalConfig.DynamicJsonType
+}
+
+func (s *PostgresDatabaseConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
+func (s *PostgresDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
+	if s.dbInstance == nil {
+		dbInstance, err := pgx.OpenDatabase(s.DbUrl.Value())
 		if err != nil {
 			return nil, err
 		}
@@ -120,6 +150,8 @@ func CreateDatabaseInstantiatorFromJson(b []byte) (DatabaseInstantiator, error) 
 	switch dc.Type {
 	case sqliteDatabaseType:
 		di = &SqliteDatabaseConfiguration{}
+	case postgresDatabaseType:
+		di = &PostgresDatabaseConfiguration{}
 	case databaseReferenceType:
 		di = &DatabaseReferenceConfiguration{}
 	case registerDatabaseReferenceType:
