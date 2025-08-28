@@ -5,8 +5,8 @@ go 1.25
 require (
 	github.com/Shopify/go-lua v0.0.0-20250718183320-1e37f32ad7d0
 	github.com/aws/aws-sdk-go-v2 v1.38.1
-	github.com/aws/aws-sdk-go-v2/config v1.31.2
-	github.com/aws/aws-sdk-go-v2/credentials v1.18.6
+	github.com/aws/aws-sdk-go-v2/config v1.31.3
+	github.com/aws/aws-sdk-go-v2/credentials v1.18.7
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.87.1
 	github.com/aws/smithy-go v1.22.5
@@ -36,7 +36,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.28.2 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.33.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.34.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.38.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
