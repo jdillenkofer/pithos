@@ -14,7 +14,7 @@ type sqliteRepository struct {
 
 const (
 	findLastBlobOutboxEntryByBlobIdStmt        = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries WHERE blob_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT MAX(id), operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries GROUP BY blob_id"
+	findLastBlobOutboxEntryGroupedByBlobIdStmt = "SELECT e.id, e.operation, e.blob_id, e.content, e.created_at, e.updated_at FROM blob_outbox_entries e INNER JOIN ( SELECT blob_id, MAX(id) as max_id FROM blob_outbox_entries GROUP BY blob_id) m ON e.blob_id = m.blob_id AND e.id = m.max_id"
 	findFirstBlobOutboxEntryStmt               = "SELECT id, operation, blob_id, content, created_at, updated_at FROM blob_outbox_entries ORDER BY id ASC LIMIT 1"
 	insertBlobOutboxEntryStmt                  = "INSERT INTO blob_outbox_entries (id, operation, blob_id, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
 	updateBlobOutboxEntryByIdStmt              = "UPDATE blob_outbox_entries SET operation = $1, blob_id = $2, content = $3, updated_at = $4 WHERE id = $5"
