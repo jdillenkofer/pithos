@@ -28,7 +28,7 @@ jobs:
     - name: Run unit tests
       run: go test ./... -v -short
 
-  sqlite-host-integration:
+  sqlite-host-normal:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -37,10 +37,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (host style)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host
+    - name: Run SQLite integration tests (host style, no replication)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none
 
-  sqlite-path-integration:
+  sqlite-path-normal:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -49,10 +49,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (path style)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path
+    - name: Run SQLite integration tests (path style, no replication)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none
 
-  postgres-host-integration:
+  sqlite-host-replicated:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -61,10 +61,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host
+    - name: Run SQLite integration tests (host style, replicated)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated
 
-  postgres-path-integration:
+  sqlite-path-replicated:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -73,5 +73,53 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path
+    - name: Run SQLite integration tests (path style, replicated)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated
+
+  postgres-host-normal:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, no replication)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none
+
+  postgres-path-normal:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, no replication)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none
+
+  postgres-host-replicated:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, replicated)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated
+
+  postgres-path-replicated:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, replicated)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated
