@@ -123,6 +123,9 @@ var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
+var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
+
+var MaxEntitySize int64 = 512 * 1024 * 1024 // 512 MiB
 
 type Storage interface {
 	Start(ctx context.Context) error
