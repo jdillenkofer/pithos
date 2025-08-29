@@ -386,6 +386,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 404
 	case storage.ErrBadDigest:
 		statusCode = 400
+	case storage.ErrEntityTooLarge:
+		statusCode = 413
 	default:
 		slog.Error(fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
@@ -1043,6 +1045,22 @@ func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.Re
 	w.WriteHeader(404)
 }
 
+func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
+	contentLength := getHeaderAsPtr(r.Header, contentLengthHeader)
+	if contentLength != nil {
+		contentLengthI64, err := strconv.ParseInt(*contentLength, 10, 64)
+		if err != nil {
+			handleError(err, w, r)
+			return true
+		}
+		if contentLengthI64 > storage.MaxEntitySize {
+			handleError(storage.ErrEntityTooLarge, w, r)
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.uploadPartHandler()")
 	defer task.End()
@@ -1060,6 +1078,11 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	checksumInput, err := extractChecksumInput(r)
 	if err != nil {
 		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn = validateMaxEntitySize(r, w)
+	if shouldReturn {
 		return
 	}
 
@@ -1107,6 +1130,11 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
+
+	shouldReturn = validateMaxEntitySize(r, w)
+	if shouldReturn {
+		return
+	}
 
 	checksumInput, err := extractChecksumInput(r)
 	if err != nil {

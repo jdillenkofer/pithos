@@ -173,6 +173,7 @@ var ErrNoSuchKey error = errors.New("NoSuchKey")
 var ErrBadDigest error = errors.New("BadDigest")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
+var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 
 type MetadataStore interface {
 	Start(ctx context.Context) error
