@@ -7,6 +7,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,6 +33,7 @@ func createCacheEvictionPolicyFromJson(b []byte) (evictionpolicy.CacheEvictionPo
 }
 
 func TestCanCreateEvictNothingEvictionPolicyFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "EvictNothingEvictionPolicy"
 	}`
@@ -41,6 +43,7 @@ func TestCanCreateEvictNothingEvictionPolicyFromJson(t *testing.T) {
 }
 
 func TestCanCreateLFUEvictionPolicyFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "LFUEvictionPolicy",
 	  "evictionChecker": {

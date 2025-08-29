@@ -7,12 +7,14 @@ import (
 	"strconv"
 	"testing"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 const numTestRuns = 100
 
 func TestCrc32Combine(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	r := rand.New(rand.NewSource(int64(1337)))
 	t.Parallel()
 	for i := range numTestRuns {
@@ -45,6 +47,7 @@ func TestCrc32Combine(t *testing.T) {
 }
 
 func TestCrc32cCombine(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	r := rand.New(rand.NewSource(int64(1337)))
 	t.Parallel()
 	for i := range numTestRuns {
@@ -77,6 +80,7 @@ func TestCrc32cCombine(t *testing.T) {
 }
 
 func TestCrc64NvmeCombine(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	r := rand.New(rand.NewSource(int64(1337)))
 	t.Parallel()
 	for i := range numTestRuns {

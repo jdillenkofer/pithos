@@ -7,6 +7,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,6 +33,7 @@ func createEvictionCheckerFromJson(b []byte) (evictionchecker.EvictionChecker, e
 }
 
 func TestCanCreateFixedKeyLimitEvictionCheckerFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "FixedKeyLimit",
 	  "maxKeyLimit": 5
@@ -42,6 +44,7 @@ func TestCanCreateFixedKeyLimitEvictionCheckerFromJson(t *testing.T) {
 }
 
 func TestCanCreateFixedSizeLimitEvictionCheckerFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "FixedSizeLimit",
 	  "maxSizeLimit": 5

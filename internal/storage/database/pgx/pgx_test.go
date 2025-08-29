@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -27,6 +28,7 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 }
 
 func TestMigrateUp(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}
@@ -54,6 +56,7 @@ func TestMigrateUp(t *testing.T) {
 }
 
 func TestMigrateUpAndDown(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}
@@ -86,6 +89,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 }
 
 func TestMigrateUpAndDownAndUp(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}

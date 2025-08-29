@@ -14,10 +14,12 @@ import (
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestConditionalStorage(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))

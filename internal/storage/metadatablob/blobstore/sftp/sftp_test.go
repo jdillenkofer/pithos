@@ -17,6 +17,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -121,6 +122,7 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 }
 
 func TestSftpBlobStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}

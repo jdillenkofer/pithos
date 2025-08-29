@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/ssh"
 )
@@ -39,6 +40,7 @@ func createBlobStoreFromJson(b []byte) (blobstore.BlobStore, error) {
 }
 
 func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -55,6 +57,7 @@ func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateSftpBlobStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -124,6 +127,7 @@ func TestCanCreateSftpBlobStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -143,6 +147,7 @@ func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -163,6 +168,7 @@ func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -187,6 +193,7 @@ func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)

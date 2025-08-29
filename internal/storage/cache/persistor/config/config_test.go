@@ -8,6 +8,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,6 +34,8 @@ func createCachePersistorFromJson(b []byte) (persistor.CachePersistor, error) {
 }
 
 func TestCanCreateInMemoryPersistorFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	jsonData := `{
 	  "type": "InMemoryPersistor"
 	}`
@@ -43,6 +46,8 @@ func TestCanCreateInMemoryPersistorFromJson(t *testing.T) {
 }
 
 func TestCanCreateFilesystemPersistorFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
