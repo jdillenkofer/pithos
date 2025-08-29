@@ -145,7 +145,7 @@ The following storage backends and middlewares are available:
 
 ###### Primary Storage Backends
 - **MetadataBlobStorage**: A storage backend that separates metadata and blob storage
-  - Supports various metadata stores (SQL databases)
+  - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
   - Configurable blob stores (filesystem, SFTP)
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
   - Compatible with other S3-compatible services
@@ -163,31 +163,60 @@ The following storage backends and middlewares are available:
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 - **TracingStorage**: Provides tracing capabilities for debugging purposes
 
-The default configuration looks like this:
+The default configuration (using SQLite) looks like this:
 ```json
 {
   "type": "MetadataBlobStorage",
   "db": {
     "type": "RegisterDatabaseReference",
-	"refName": "db",
-	"db": {
+    "refName": "db",
+    "db": {
       "type": "SqliteDatabase",
-	  "dbPath": "./data/pithos.db"
-	}
+      "dbPath": "./data/pithos.db"
+    }
   },
   "metadataStore": {
     "type": "SqlMetadataStore",
-	"db": {
-	  "type": "DatabaseReference",
-	  "refName": "db"
-	}
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
   },
   "blobStore": {
     "type": "SqlBlobStore",
-	"db": {
-	  "type": "DatabaseReference",
-	  "refName": "db"
-	}
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
+  }
+}
+```
+
+For PostgreSQL, you can use this configuration:
+```json
+{
+  "type": "MetadataBlobStorage",
+  "db": {
+    "type": "RegisterDatabaseReference",
+    "refName": "db",
+    "db": {
+      "type": "PostgresDatabase",
+      "dbUrl": "postgres://pithos:your-password@localhost:5432/pithos"
+    }
+  },
+  "metadataStore": {
+    "type": "SqlMetadataStore",
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
+  },
+  "blobStore": {
+    "type": "SqlBlobStore",
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
   }
 }
 ```
