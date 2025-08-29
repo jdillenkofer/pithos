@@ -99,7 +99,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	logLevel := settings.LogLevel()
 	logLevelVar.Set(logLevel)
 
-	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
+	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath(), prometheus.DefaultRegisterer)
 
 	dbs := dbContainer.Dbs()
 
@@ -169,13 +169,13 @@ func loadRequestAuthorizer(authorizerPath string) (*lua.LuaAuthorizer, error) {
 	return lua.NewLuaAuthorizer(string(authorizerCode))
 }
 
-func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
+func loadStorageConfiguration(storageJsonPath string, prometheusRegisterer prometheus.Registerer) (*config.DbContainer, storage.Storage) {
 	diContainer, err := dependencyinjection.NewContainer()
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating diContainer: ", err))
 		os.Exit(1)
 	}
-	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.DefaultRegisterer)
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheusRegisterer)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while registering prometheus.Registerer in diContainer: ", err))
 		os.Exit(1)
@@ -221,7 +221,7 @@ func migrateStorage(ctx context.Context) {
 	sourceStorageConfig := os.Args[2]
 	destinationStorageConfig := os.Args[3]
 
-	sourceDbContainer, sourceStorage := loadStorageConfiguration(sourceStorageConfig)
+	sourceDbContainer, sourceStorage := loadStorageConfiguration(sourceStorageConfig, prometheus.NewRegistry())
 
 	sourceDbs := sourceDbContainer.Dbs()
 
@@ -246,7 +246,7 @@ func migrateStorage(ctx context.Context) {
 		}
 	}()
 
-	destinationDbContainer, destinationStorage := loadStorageConfiguration(destinationStorageConfig)
+	destinationDbContainer, destinationStorage := loadStorageConfiguration(destinationStorageConfig, prometheus.NewRegistry())
 
 	destinationDbs := destinationDbContainer.Dbs()
 
