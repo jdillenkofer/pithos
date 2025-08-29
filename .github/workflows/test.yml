@@ -17,194 +17,249 @@ on:
       - '.github/workflows/test.yml'
 
 jobs:
-  # Unit Tests
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run unit tests
-      run: go test ./... -v -short
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Run unit tests
+        run: go test ./... -v -short
 
-  # SQLite Tests - Normal Mode
-  sqlite-host-normal-sql:
+  integration-tests:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (host style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode none -blob-store sql
+    strategy:
+      matrix:
+        include:
+          # SQLite - host - normal
+          - db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            name: sqlite-host-normal-sql
 
-  sqlite-host-normal-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (host style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode none -blob-store filesystem
+          - db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encrypt: "true"
+            name: sqlite-host-normal-sql-encrypted
 
-  sqlite-path-normal-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (path style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode none -blob-store sql
+          - db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            name: sqlite-host-normal-fs
 
-  sqlite-path-normal-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (path style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode none -blob-store filesystem
+          - db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encrypt: "true"
+            name: sqlite-host-normal-fs-encrypted
 
-  # SQLite Tests - Replicated Mode
-  sqlite-host-replicated-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (host style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode replicated -blob-store sql
+          # SQLite - path - normal
+          - db: sqlite
+            path_style: path
+            repl_mode: none
+            blob_store: sql
+            name: sqlite-path-normal-sql
 
-  sqlite-host-replicated-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (host style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode replicated -blob-store filesystem
+          - db: sqlite
+            path_style: path
+            repl_mode: none
+            blob_store: sql
+            encrypt: "true"
+            name: sqlite-path-normal-sql-encrypted
 
-  sqlite-path-replicated-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (path style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode replicated -blob-store sql
+          - db: sqlite
+            path_style: path
+            repl_mode: none
+            blob_store: filesystem
+            name: sqlite-path-normal-fs
 
-  sqlite-path-replicated-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run SQLite integration tests (path style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode replicated -blob-store filesystem
+          - db: sqlite
+            path_style: path
+            repl_mode: none
+            blob_store: filesystem
+            encrypt: "true"
+            name: sqlite-path-normal-fs-encrypted
 
-  # PostgreSQL Tests - Normal Mode
-  postgres-host-normal-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode none -blob-store sql
+          # SQLite - host - replicated
+          - db: sqlite
+            path_style: host
+            repl_mode: replicated
+            blob_store: sql
+            name: sqlite-host-replicated-sql
 
-  postgres-host-normal-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode none -blob-store filesystem
+          - db: sqlite
+            path_style: host
+            repl_mode: replicated
+            blob_store: sql
+            encrypt: "true"
+            name: sqlite-host-replicated-sql-encrypted
 
-  postgres-path-normal-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode none -blob-store sql
+          - db: sqlite
+            path_style: host
+            repl_mode: replicated
+            blob_store: filesystem
+            name: sqlite-host-replicated-fs
 
-  postgres-path-normal-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode none -blob-store filesystem
+          - db: sqlite
+            path_style: host
+            repl_mode: replicated
+            blob_store: filesystem
+            encrypt: "true"
+            name: sqlite-host-replicated-fs-encrypted
 
-  # PostgreSQL Tests - Replicated Mode
-  postgres-host-replicated-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode replicated -blob-store sql
+          # SQLite - path - replicated
+          - db: sqlite
+            path_style: path
+            repl_mode: replicated
+            blob_store: sql
+            name: sqlite-path-replicated-sql
 
-  postgres-host-replicated-fs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode replicated -blob-store filesystem
+          - db: sqlite
+            path_style: path
+            repl_mode: replicated
+            blob_store: sql
+            encrypt: "true"
+            name: sqlite-path-replicated-sql-encrypted
 
-  postgres-path-replicated-sql:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode replicated -blob-store sql
+          - db: sqlite
+            path_style: path
+            repl_mode: replicated
+            blob_store: filesystem
+            name: sqlite-path-replicated-fs
 
-  postgres-path-replicated-fs:
-    runs-on: ubuntu-latest
+          - db: sqlite
+            path_style: path
+            repl_mode: replicated
+            blob_store: filesystem
+            encrypt: "true"
+            name: sqlite-path-replicated-fs-encrypted
+
+          # Postgres - host - normal
+          - db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            name: postgres-host-normal-sql
+
+          - db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encrypt: "true"
+            name: postgres-host-normal-sql-encrypted
+
+          - db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            name: postgres-host-normal-fs
+
+          - db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encrypt: "true"
+            name: postgres-host-normal-fs-encrypted
+
+          # Postgres - path - normal
+          - db: postgres
+            path_style: path
+            repl_mode: none
+            blob_store: sql
+            name: postgres-path-normal-sql
+
+          - db: postgres
+            path_style: path
+            repl_mode: none
+            blob_store: sql
+            encrypt: "true"
+            name: postgres-path-normal-sql-encrypted
+
+          - db: postgres
+            path_style: path
+            repl_mode: none
+            blob_store: filesystem
+            name: postgres-path-normal-fs
+
+          - db: postgres
+            path_style: path
+            repl_mode: none
+            blob_store: filesystem
+            encrypt: "true"
+            name: postgres-path-normal-fs-encrypted
+
+          # Postgres - host - replicated
+          - db: postgres
+            path_style: host
+            repl_mode: replicated
+            blob_store: sql
+            name: postgres-host-replicated-sql
+
+          - db: postgres
+            path_style: host
+            repl_mode: replicated
+            blob_store: sql
+            encrypt: "true"
+            name: postgres-host-replicated-sql-encrypted
+
+          - db: postgres
+            path_style: host
+            repl_mode: replicated
+            blob_store: filesystem
+            name: postgres-host-replicated-fs
+
+          - db: postgres
+            path_style: host
+            repl_mode: replicated
+            blob_store: filesystem
+            encrypt: "true"
+            name: postgres-host-replicated-fs-encrypted
+
+          # Postgres - path - replicated
+          - db: postgres
+            path_style: path
+            repl_mode: replicated
+            blob_store: sql
+            name: postgres-path-replicated-sql
+
+          - db: postgres
+            path_style: path
+            repl_mode: replicated
+            blob_store: sql
+            encrypt: "true"
+            name: postgres-path-replicated-sql-encrypted
+
+          - db: postgres
+            path_style: path
+            repl_mode: replicated
+            blob_store: filesystem
+            name: postgres-path-replicated-fs
+
+          - db: postgres
+            path_style: path
+            repl_mode: replicated
+            blob_store: filesystem
+            encrypt: "true"
+            name: postgres-path-replicated-fs-encrypted
+
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode replicated -blob-store filesystem
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Run integration tests
+        env:
+          TEST_NAME: ${{ matrix.name }}
+        run: |
+          args="-db ${{ matrix.db }} -path-style ${{ matrix.path_style }} -repl-mode ${{ matrix.repl_mode }} -blob-store ${{ matrix.blob_store }}"
+          if [ "${{ matrix.encrypt }}" = "true" ]; then args="$args -encrypt-blob-store"; fi
+          echo "Running: $TEST_NAME"
+          go test ./... -v -timeout 2h -integration $args
