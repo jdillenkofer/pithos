@@ -28,7 +28,7 @@ jobs:
     - name: Run unit tests
       run: go test ./... -v -short
 
-  sqlite-integration:
+  sqlite-host-integration:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -37,10 +37,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests
-      run: go test ./... -v -timeout 4h -integration -db sqlite
+    - name: Run SQLite integration tests (host style)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host
 
-  postgres-integration:
+  sqlite-path-integration:
     needs: unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -49,5 +49,29 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests
-      run: go test ./... -v -timeout 4h -integration -db postgres
+    - name: Run SQLite integration tests (path style)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path
+
+  postgres-host-integration:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host
+
+  postgres-path-integration:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path
