@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
 
@@ -89,16 +93,133 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 	}
 	for i, sourceObject := range sourceObjects {
 		slog.Info(fmt.Sprintf("Migrating object \"%s\" from bucket \"%s\" (%d/%d items [%.2f%%]; %d/%d bytes [%.2f%%])", sourceObject.Key, bucketName, i, len(sourceObjects), (float64(i)+1.0)/float64(len(sourceObjects))*100.0, copiedBytes, totalBytes, float64(copiedBytes)*100.0/float64(totalBytes)))
-		obj, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
-		if err != nil {
-			return err
-		}
-		// @TODO: Use checksumInput
-		_, err = destination.PutObject(ctx, bucketName, sourceObject.Key, nil, obj, nil)
-		if err != nil {
-			return err
+		err1 := migrateSingleObject(ctx, source, destination, bucketName, sourceObject)
+		if err1 != nil {
+			return err1
 		}
 		copiedBytes += sourceObject.Size
 	}
 	return nil
+}
+
+func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName string, sourceObject storage.Object) error {
+	obj, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer obj.Close()
+
+	tempFile, err := os.CreateTemp("", "pithos-migrator-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+	}()
+
+	_, err = io.Copy(tempFile, obj)
+	if err != nil {
+		return err
+	}
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+
+	adapter := NewStorageToS3UploadAPIClientAdapter(destination)
+	uploader := manager.NewUploader(adapter, func(u *manager.Uploader) {
+		u.Concurrency = 1
+	})
+	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket: &bucketName,
+		Key:    &sourceObject.Key,
+		Body:   tempFile,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Adapter from storage to manager.UploadAPIClient
+type StorageToS3UploadAPIClientAdapter struct {
+	storage storage.Storage
+}
+
+func NewStorageToS3UploadAPIClientAdapter(storage storage.Storage) *StorageToS3UploadAPIClientAdapter {
+	return &StorageToS3UploadAPIClientAdapter{
+		storage: storage,
+	}
+}
+
+func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Context, input *s3.CreateMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
+	result, err := a.storage.CreateMultipartUpload(ctx, *input.Bucket, *input.Key, input.ContentType, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3.CreateMultipartUploadOutput{
+		Bucket:   input.Bucket,
+		Key:      input.Key,
+		UploadId: &result.UploadId,
+	}, nil
+}
+
+func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, input *s3.UploadPartInput, opts ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
+	result, err := a.storage.UploadPart(ctx, *input.Bucket, *input.Key, *input.UploadId, *input.PartNumber, input.Body, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3.UploadPartOutput{
+		ETag:              &result.ETag,
+		ChecksumCRC32:     result.ChecksumCRC32,
+		ChecksumCRC32C:    result.ChecksumCRC32C,
+		ChecksumCRC64NVME: result.ChecksumCRC64NVME,
+		ChecksumSHA1:      result.ChecksumSHA1,
+		ChecksumSHA256:    result.ChecksumSHA256,
+	}, nil
+}
+
+func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
+	result, err := a.storage.CompleteMultipartUpload(ctx, *input.Bucket, *input.Key, *input.UploadId, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3.CompleteMultipartUploadOutput{
+		Bucket:         input.Bucket,
+		Key:            input.Key,
+		Location:       &result.Location,
+		ETag:           &result.ETag,
+		ChecksumCRC32:  result.ChecksumCRC32,
+		ChecksumCRC32C: result.ChecksumCRC32C,
+		ChecksumSHA1:   result.ChecksumSHA1,
+		ChecksumSHA256: result.ChecksumSHA256,
+	}, nil
+}
+
+func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput, opts ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
+	err := a.storage.AbortMultipartUpload(ctx, *input.Bucket, *input.Key, *input.UploadId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3.AbortMultipartUploadOutput{}, nil
+}
+
+func (a *StorageToS3UploadAPIClientAdapter) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	result, err := a.storage.PutObject(ctx, *input.Bucket, *input.Key, input.ContentType, input.Body, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return &s3.PutObjectOutput{
+		ETag:           result.ETag,
+		ChecksumCRC32:  result.ChecksumCRC32,
+		ChecksumCRC32C: result.ChecksumCRC32C,
+		ChecksumSHA1:   result.ChecksumSHA1,
+		ChecksumSHA256: result.ChecksumSHA256,
+	}, nil
 }
