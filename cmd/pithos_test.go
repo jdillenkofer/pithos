@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -53,12 +54,21 @@ const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 const region = "eu-central-1"
 const blobStoreEncryptionPassword = "test"
 
-var bucketName *string = aws.String("test")
-var bucketName2 *string = aws.String("test2")
-var keyPrefix *string = aws.String("my/test/key")
-var key *string = aws.String(*keyPrefix + "/hello_world.txt")
-var key2 *string = aws.String(*keyPrefix + "/hello_world2.txt")
-var body []byte = []byte("Hello, world!")
+var (
+	integration = flag.Bool("integration", false, "run integration tests")
+	dbType      = flag.String("db", "sqlite", "database type to use (sqlite or postgres)")
+	bucketName  = aws.String("test")
+	bucketName2 = aws.String("test2")
+	keyPrefix   = aws.String("my/test/key")
+	key         = aws.String(*keyPrefix + "/hello_world.txt")
+	key2        = aws.String(*keyPrefix + "/hello_world2.txt")
+	body        = []byte("Hello, world!")
+)
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	os.Exit(m.Run())
+}
 
 func customDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	endpointSplit := strings.SplitN(addr, ".", 2)
@@ -458,62 +468,68 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	return
 }
 
-func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool)) {
+func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool)) {
 	isShortRun := testing.Short()
-	for _, dbType := range []database.DatabaseType{database.DB_TYPE_SQLITE, database.DB_TYPE_POSTGRES} {
-		dbTypeSuffix := ""
-		switch dbType {
-		case database.DB_TYPE_SQLITE:
-			dbTypeSuffix = " using sqlite"
-		case database.DB_TYPE_POSTGRES:
-			dbTypeSuffix = " using postgres"
+	if isShortRun {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
+
+	var selectedDBType database.DatabaseType
+	dbTypeSuffix := ""
+
+	switch *dbType {
+	case "postgres":
+		selectedDBType = database.DB_TYPE_POSTGRES
+		dbTypeSuffix = " using postgres"
+	default:
+		selectedDBType = database.DB_TYPE_SQLITE
+		dbTypeSuffix = " using sqlite"
+	}
+	for _, usePathStyle := range []bool{false, true} {
+		hostOrPathStyleSuffix := dbTypeSuffix
+		if usePathStyle {
+			hostOrPathStyleSuffix += " using path style"
+		} else {
+			hostOrPathStyleSuffix += " using host style"
 		}
-		if dbType == database.DB_TYPE_POSTGRES && isShortRun {
-			continue
-		}
-		for _, usePathStyle := range []bool{false, true} {
-			hostOrPathStyleSuffix := dbTypeSuffix
-			if usePathStyle {
-				hostOrPathStyleSuffix += " using path style"
-			} else {
-				hostOrPathStyleSuffix += " using host style"
+		for _, useReplication := range []bool{false, true} {
+			if useReplication && isShortRun {
+				continue
 			}
-			for _, useReplication := range []bool{false, true} {
-				if useReplication && isShortRun {
+			replicationSuffix := hostOrPathStyleSuffix
+			if useReplication {
+				replicationSuffix += " replicated"
+			}
+			for _, useFilesystemBlobStore := range []bool{false, true} {
+				if useFilesystemBlobStore && isShortRun {
 					continue
 				}
-				replicationSuffix := hostOrPathStyleSuffix
-				if useReplication {
-					replicationSuffix += " replicated"
+				blobStoreSuffix := replicationSuffix
+				if useFilesystemBlobStore {
+					blobStoreSuffix += " with filesystemBlobStore"
+				} else {
+					blobStoreSuffix += " with sqlBlobStore"
 				}
-				for _, useFilesystemBlobStore := range []bool{false, true} {
-					if useFilesystemBlobStore && isShortRun {
+				for _, encryptBlobStore := range []bool{false, true} {
+					if !encryptBlobStore && isShortRun {
 						continue
 					}
-					blobStoreSuffix := replicationSuffix
-					if useFilesystemBlobStore {
-						blobStoreSuffix += " with filesystemBlobStore"
-					} else {
-						blobStoreSuffix += " with sqlBlobStore"
+					encryptBlobStoreSuffix := blobStoreSuffix
+					if encryptBlobStore {
+						encryptBlobStoreSuffix += " (encrypted)"
 					}
-					for _, encryptBlobStore := range []bool{false, true} {
-						if !encryptBlobStore && isShortRun {
+					for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+						if wrapBlobStoreWithOutbox && isShortRun {
 							continue
 						}
-						encryptBlobStoreSuffix := blobStoreSuffix
-						if encryptBlobStore {
-							encryptBlobStoreSuffix += " (encrypted)"
+						testSuffix := encryptBlobStoreSuffix
+						if wrapBlobStoreWithOutbox {
+							testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
 						}
-						for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
-							if wrapBlobStoreWithOutbox && isShortRun {
-								continue
-							}
-							testSuffix := encryptBlobStoreSuffix
-							if wrapBlobStoreWithOutbox {
-								testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
-							}
-							testFunc(t, testSuffix, dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-						}
+						testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 					}
 				}
 			}
@@ -522,10 +538,13 @@ func runTestsWithAllConfigurations(t *testing.T, testFunc func(t *testing.T, tes
 }
 
 func TestCreateBucket(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should create a bucket"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -568,10 +587,13 @@ func TestCreateBucket(t *testing.T) {
 }
 
 func TestHeadBucket(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should be able to see an existing bucket"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -596,10 +618,13 @@ func TestHeadBucket(t *testing.T) {
 }
 
 func TestListBuckets(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should be able to list all buckets"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -652,10 +677,13 @@ func TestListBuckets(t *testing.T) {
 }
 
 func TestPutObject(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should allow uploading an object"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -807,10 +835,13 @@ func TestPutObject(t *testing.T) {
 }
 
 func TestMultipartUpload(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -1715,10 +1746,13 @@ func TestMultipartUpload(t *testing.T) {
 }
 
 func TestGetObject(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should allow downloading the object"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -1981,10 +2015,13 @@ func TestGetObject(t *testing.T) {
 }
 
 func TestDeleteObject(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should allow deleting an object"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -2058,10 +2095,13 @@ func TestDeleteObject(t *testing.T) {
 }
 
 func TestHeadObject(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should allow head an object"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -2103,10 +2143,13 @@ func TestHeadObject(t *testing.T) {
 }
 
 func TestDeleteBucket(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should delete an existing bucket"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -2238,10 +2281,13 @@ func TestDeleteBucket(t *testing.T) {
 }
 
 func TestListObjects(t *testing.T) {
+	if !*integration {
+		t.Skip("Skipping integration test")
+	}
 
 	t.Parallel()
 
-	runTestsWithAllConfigurations(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
 		t.Run("it should list no objects"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
