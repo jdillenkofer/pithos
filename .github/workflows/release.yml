@@ -21,10 +21,60 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Validate version format
+      - name: Validate version format and check if greater than latest
         run: |
-          if ! echo "${{ github.event.inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # Function to compare two semver versions
+          # Returns: 1 if version1 > version2, 0 if equal, -1 if version1 < version2
+          compare_versions() {
+            local v1="$1"
+            local v2="$2"
+
+            IFS='.' read -r v1_major v1_minor v1_patch <<< "$v1"
+            IFS='.' read -r v2_major v2_minor v2_patch <<< "$v2"
+
+            # Convert to integers with proper base 10
+            v1_major=$((10#$v1_major))
+            v1_minor=$((10#$v1_minor))
+            v1_patch=$((10#$v1_patch))
+            v2_major=$((10#$v2_major))
+            v2_minor=$((10#$v2_minor))
+            v2_patch=$((10#$v2_patch))
+
+            if [ "$v1_major" -gt "$v2_major" ] || \
+               ([ "$v1_major" -eq "$v2_major" ] && [ "$v1_minor" -gt "$v2_minor" ]) || \
+               ([ "$v1_major" -eq "$v2_major" ] && [ "$v1_minor" -eq "$v2_minor" ] && [ "$v1_patch" -gt "$v2_patch" ]); then
+              echo "1"
+            elif [ "$v1_major" -eq "$v2_major" ] && [ "$v1_minor" -eq "$v2_minor" ] && [ "$v1_patch" -eq "$v2_patch" ]; then
+              echo "0"
+            else
+              echo "-1"
+            fi
+          }
+
+          new_version="${{ github.event.inputs.version }}"
+
+          # Validate version format
+          if ! echo "$new_version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Error: Version must be in format X.Y.Z (e.g. 1.0.0)"
+            exit 1
+          fi
+
+          latest_version="0.0.0"
+
+          # Find the latest version by comparing all tags
+          for tag in $(git tag); do
+            if [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              version=${tag#v}
+              if [ "$(compare_versions "$version" "$latest_version")" = "1" ]; then
+                latest_version="$version"
+              fi
+            fi
+          done
+
+          # Compare new version with latest version
+          comparison_result=$(compare_versions "$new_version" "$latest_version")
+          if [ "$comparison_result" != "1" ]; then
+            echo "Error: New version ($new_version) must be greater than latest version ($latest_version)"
             exit 1
           fi
       - name: Configure Git
