@@ -39,7 +39,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (host style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode none -blob-store sql
 
   sqlite-host-normal-fs:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (host style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode none -blob-store filesystem
 
   sqlite-path-normal-sql:
     runs-on: ubuntu-latest
@@ -61,7 +61,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (path style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode none -blob-store sql
 
   sqlite-path-normal-fs:
     runs-on: ubuntu-latest
@@ -72,7 +72,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (path style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode none -blob-store filesystem
 
   # SQLite Tests - Replicated Mode
   sqlite-host-replicated-sql:
@@ -84,7 +84,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (host style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode replicated -blob-store sql
 
   sqlite-host-replicated-fs:
     runs-on: ubuntu-latest
@@ -95,7 +95,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (host style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style host -repl-mode replicated -blob-store filesystem
 
   sqlite-path-replicated-sql:
     runs-on: ubuntu-latest
@@ -106,7 +106,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (path style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode replicated -blob-store sql
 
   sqlite-path-replicated-fs:
     runs-on: ubuntu-latest
@@ -117,7 +117,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run SQLite integration tests (path style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db sqlite -path-style path -repl-mode replicated -blob-store filesystem
 
   # PostgreSQL Tests - Normal Mode
   postgres-host-normal-sql:
@@ -129,7 +129,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (host style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode none -blob-store sql
 
   postgres-host-normal-fs:
     runs-on: ubuntu-latest
@@ -140,7 +140,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (host style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode none -blob-store filesystem
 
   postgres-path-normal-sql:
     runs-on: ubuntu-latest
@@ -151,7 +151,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (path style, no replication, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode none -blob-store sql
 
   postgres-path-normal-fs:
     runs-on: ubuntu-latest
@@ -162,7 +162,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (path style, no replication, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode none -blob-store filesystem
 
   # PostgreSQL Tests - Replicated Mode
   postgres-host-replicated-sql:
@@ -174,7 +174,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (host style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode replicated -blob-store sql
 
   postgres-host-replicated-fs:
     runs-on: ubuntu-latest
@@ -185,7 +185,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (host style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style host -repl-mode replicated -blob-store filesystem
 
   postgres-path-replicated-sql:
     runs-on: ubuntu-latest
@@ -196,7 +196,7 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (path style, replicated, SQL blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated -blob-store sql
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode replicated -blob-store sql
 
   postgres-path-replicated-fs:
     runs-on: ubuntu-latest
@@ -207,4 +207,4 @@ jobs:
       with:
         go-version: '1.25'
     - name: Run PostgreSQL integration tests (path style, replicated, filesystem blob store)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated -blob-store filesystem
+      run: go test ./... -v -timeout 2h -integration -db postgres -path-style path -repl-mode replicated -blob-store filesystem
