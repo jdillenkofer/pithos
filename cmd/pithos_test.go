@@ -57,6 +57,7 @@ const blobStoreEncryptionPassword = "test"
 var (
 	integration = flag.Bool("integration", false, "run integration tests")
 	dbType      = flag.String("db", "sqlite", "database type to use (sqlite or postgres)")
+	pathStyle   = flag.String("path-style", "host", "addressing style to use (host or path)")
 	bucketName  = aws.String("test")
 	bucketName2 = aws.String("test2")
 	keyPrefix   = aws.String("my/test/key")
@@ -488,49 +489,56 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 		selectedDBType = database.DB_TYPE_SQLITE
 		dbTypeSuffix = " using sqlite"
 	}
-	for _, usePathStyle := range []bool{false, true} {
-		hostOrPathStyleSuffix := dbTypeSuffix
-		if usePathStyle {
-			hostOrPathStyleSuffix += " using path style"
-		} else {
-			hostOrPathStyleSuffix += " using host style"
+
+	var usePathStyle bool
+	pathStyleSuffix := ""
+
+	switch *pathStyle {
+	case "path":
+		usePathStyle = true
+		pathStyleSuffix = " using path style"
+	default:
+		usePathStyle = false
+		pathStyleSuffix = " using host style"
+	}
+
+	dbTypeSuffix += pathStyleSuffix
+
+	for _, useReplication := range []bool{false, true} {
+		if useReplication && isShortRun {
+			continue
 		}
-		for _, useReplication := range []bool{false, true} {
-			if useReplication && isShortRun {
+		replicationSuffix := pathStyleSuffix
+		if useReplication {
+			replicationSuffix += " replicated"
+		}
+		for _, useFilesystemBlobStore := range []bool{false, true} {
+			if useFilesystemBlobStore && isShortRun {
 				continue
 			}
-			replicationSuffix := hostOrPathStyleSuffix
-			if useReplication {
-				replicationSuffix += " replicated"
+			blobStoreSuffix := replicationSuffix
+			if useFilesystemBlobStore {
+				blobStoreSuffix += " with filesystemBlobStore"
+			} else {
+				blobStoreSuffix += " with sqlBlobStore"
 			}
-			for _, useFilesystemBlobStore := range []bool{false, true} {
-				if useFilesystemBlobStore && isShortRun {
+			for _, encryptBlobStore := range []bool{false, true} {
+				if !encryptBlobStore && isShortRun {
 					continue
 				}
-				blobStoreSuffix := replicationSuffix
-				if useFilesystemBlobStore {
-					blobStoreSuffix += " with filesystemBlobStore"
-				} else {
-					blobStoreSuffix += " with sqlBlobStore"
+				encryptBlobStoreSuffix := blobStoreSuffix
+				if encryptBlobStore {
+					encryptBlobStoreSuffix += " (encrypted)"
 				}
-				for _, encryptBlobStore := range []bool{false, true} {
-					if !encryptBlobStore && isShortRun {
+				for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+					if wrapBlobStoreWithOutbox && isShortRun {
 						continue
 					}
-					encryptBlobStoreSuffix := blobStoreSuffix
-					if encryptBlobStore {
-						encryptBlobStoreSuffix += " (encrypted)"
+					testSuffix := encryptBlobStoreSuffix
+					if wrapBlobStoreWithOutbox {
+						testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
 					}
-					for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
-						if wrapBlobStoreWithOutbox && isShortRun {
-							continue
-						}
-						testSuffix := encryptBlobStoreSuffix
-						if wrapBlobStoreWithOutbox {
-							testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
-						}
-						testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-					}
+					testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 				}
 			}
 		}
