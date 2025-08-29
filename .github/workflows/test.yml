@@ -17,6 +17,7 @@ on:
       - '.github/workflows/test.yml'
 
 jobs:
+  # Unit Tests
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -28,7 +29,8 @@ jobs:
     - name: Run unit tests
       run: go test ./... -v -short
 
-  sqlite-host-normal:
+  # SQLite Tests - Normal Mode
+  sqlite-host-normal-sql:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -36,10 +38,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (host style, no replication)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none
+    - name: Run SQLite integration tests (host style, no replication, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none -blob-store sql
 
-  sqlite-path-normal:
+  sqlite-host-normal-fs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -47,10 +49,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (path style, no replication)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none
+    - name: Run SQLite integration tests (host style, no replication, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode none -blob-store filesystem
 
-  sqlite-host-replicated:
+  sqlite-path-normal-sql:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -58,10 +60,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (host style, replicated)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated
+    - name: Run SQLite integration tests (path style, no replication, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none -blob-store sql
 
-  sqlite-path-replicated:
+  sqlite-path-normal-fs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -69,10 +71,11 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run SQLite integration tests (path style, replicated)
-      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated
+    - name: Run SQLite integration tests (path style, no replication, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode none -blob-store filesystem
 
-  postgres-host-normal:
+  # SQLite Tests - Replicated Mode
+  sqlite-host-replicated-sql:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -80,10 +83,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, no replication)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none
+    - name: Run SQLite integration tests (host style, replicated, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated -blob-store sql
 
-  postgres-path-normal:
+  sqlite-host-replicated-fs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -91,10 +94,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, no replication)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none
+    - name: Run SQLite integration tests (host style, replicated, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style host -repl-mode replicated -blob-store filesystem
 
-  postgres-host-replicated:
+  sqlite-path-replicated-sql:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -102,10 +105,10 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (host style, replicated)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated
+    - name: Run SQLite integration tests (path style, replicated, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated -blob-store sql
 
-  postgres-path-replicated:
+  sqlite-path-replicated-fs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -113,5 +116,95 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.25'
-    - name: Run PostgreSQL integration tests (path style, replicated)
-      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated
+    - name: Run SQLite integration tests (path style, replicated, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db sqlite -path-style path -repl-mode replicated -blob-store filesystem
+
+  # PostgreSQL Tests - Normal Mode
+  postgres-host-normal-sql:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, no replication, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none -blob-store sql
+
+  postgres-host-normal-fs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, no replication, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode none -blob-store filesystem
+
+  postgres-path-normal-sql:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, no replication, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none -blob-store sql
+
+  postgres-path-normal-fs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, no replication, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode none -blob-store filesystem
+
+  # PostgreSQL Tests - Replicated Mode
+  postgres-host-replicated-sql:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, replicated, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated -blob-store sql
+
+  postgres-host-replicated-fs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (host style, replicated, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style host -repl-mode replicated -blob-store filesystem
+
+  postgres-path-replicated-sql:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, replicated, SQL blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated -blob-store sql
+
+  postgres-path-replicated-fs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+    - name: Run PostgreSQL integration tests (path style, replicated, filesystem blob store)
+      run: go test ./... -v -timeout 4h -integration -db postgres -path-style path -repl-mode replicated -blob-store filesystem

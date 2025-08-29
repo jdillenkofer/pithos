@@ -10,6 +10,7 @@ var (
 	DBType      = flag.String("db", "sqlite", "database type to use (sqlite or postgres)")
 	PathStyle   = flag.String("path-style", "host", "addressing style to use (host or path)")
 	ReplMode    = flag.String("repl-mode", "none", "replication mode to use (none or replicated)")
+	BlobStore   = flag.String("blob-store", "sql", "blob store to use (sql or filesystem)")
 )
 
 // SkipIfIntegration skips the test if -integration flag is set (for unit tests)

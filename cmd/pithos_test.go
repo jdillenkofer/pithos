@@ -519,34 +519,38 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	}
 
 	suffix += replicationSuffix
-	for _, useFilesystemBlobStore := range []bool{false, true} {
-		if useFilesystemBlobStore && isShortRun {
+
+	var useFilesystemBlobStore bool
+	blobStoreSuffix := ""
+
+	switch *testutils.BlobStore {
+	case "filesystem":
+		useFilesystemBlobStore = true
+		blobStoreSuffix = " with filesystemBlobStore"
+	default:
+		useFilesystemBlobStore = false
+		blobStoreSuffix = " with sqlBlobStore"
+	}
+
+	suffix += blobStoreSuffix
+
+	for _, encryptBlobStore := range []bool{false, true} {
+		if !encryptBlobStore && isShortRun {
 			continue
 		}
-		blobStoreSuffix := suffix
-		if useFilesystemBlobStore {
-			blobStoreSuffix += " with filesystemBlobStore"
-		} else {
-			blobStoreSuffix += " with sqlBlobStore"
+		encryptBlobStoreSuffix := suffix
+		if encryptBlobStore {
+			encryptBlobStoreSuffix += " (encrypted)"
 		}
-		for _, encryptBlobStore := range []bool{false, true} {
-			if !encryptBlobStore && isShortRun {
+		for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+			if wrapBlobStoreWithOutbox && isShortRun {
 				continue
 			}
-			encryptBlobStoreSuffix := blobStoreSuffix
-			if encryptBlobStore {
-				encryptBlobStoreSuffix += " (encrypted)"
+			testSuffix := encryptBlobStoreSuffix
+			if wrapBlobStoreWithOutbox {
+				testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
 			}
-			for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
-				if wrapBlobStoreWithOutbox && isShortRun {
-					continue
-				}
-				testSuffix := encryptBlobStoreSuffix
-				if wrapBlobStoreWithOutbox {
-					testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
-				}
-				testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			}
+			testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 		}
 	}
 }
