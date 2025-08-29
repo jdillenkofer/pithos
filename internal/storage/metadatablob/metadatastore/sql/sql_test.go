@@ -10,10 +10,12 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSqlMetadataStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))

@@ -3,12 +3,15 @@ package settings
 import (
 	"testing"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func addrOf[T any](t T) *T { return &t }
 
 func TestMergeSettingsTwoNils(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	a := Settings{
 		domain: nil,
 	}
@@ -23,6 +26,8 @@ func TestMergeSettingsTwoNils(t *testing.T) {
 }
 
 func TestMergeSettingsNilAndValue(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	a := Settings{
 		domain: nil,
 	}
@@ -37,6 +42,8 @@ func TestMergeSettingsNilAndValue(t *testing.T) {
 }
 
 func TestMergeSettingsTwoValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	a := Settings{
 		domain: addrOf("test"),
 	}

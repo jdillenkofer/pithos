@@ -4,10 +4,12 @@ import (
 	"testing"
 	"testing/iotest"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSimpleMultiReadSeekCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
 	reader := NewByteReadSeekCloser(content)
 	multiReadCloser := NewMultiReadCloser(reader)
@@ -16,6 +18,7 @@ func TestSimpleMultiReadSeekCloser(t *testing.T) {
 }
 
 func TestDualMultiReadSeekCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'}
 	reader := NewByteReadSeekCloser(content[0:5])
 	reader2 := NewByteReadSeekCloser(content[5:11])
@@ -25,6 +28,7 @@ func TestDualMultiReadSeekCloser(t *testing.T) {
 }
 
 func TestTripleMultiReadSeekCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'}
 	reader := NewByteReadSeekCloser(content[0:5])
 	reader2 := NewByteReadSeekCloser(content[5:7])
@@ -35,6 +39,7 @@ func TestTripleMultiReadSeekCloser(t *testing.T) {
 }
 
 func TestQuadMultiReadSeekCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'}
 	reader := NewByteReadSeekCloser(content[0:5])
 	reader2 := NewByteReadSeekCloser(content[5:7])
@@ -46,6 +51,7 @@ func TestQuadMultiReadSeekCloser(t *testing.T) {
 }
 
 func TestSimpleLimitedEndReadSeekCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
 	reader := NewByteReadSeekCloser(content)
 	limitedEndReadSeekCloser := NewLimitedEndReadCloser(reader, 2)
@@ -54,6 +60,7 @@ func TestSimpleLimitedEndReadSeekCloser(t *testing.T) {
 }
 
 func TestSimpleDebugReadCloser(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	content := []byte{'a', 'b', 'c', 'd', 'e', 'f'}
 	reader := NewByteReadSeekCloser(content)
 	debugReadCloser := NewDebugReadCloser("Debug", reader)

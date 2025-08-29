@@ -10,6 +10,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
@@ -57,6 +58,8 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 }
 
 func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}
@@ -104,6 +107,8 @@ func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 }
 
 func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -139,6 +144,8 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateCacheStorageFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -186,6 +193,8 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -247,6 +256,8 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -285,6 +296,8 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -324,6 +337,8 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 }
 
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -366,6 +381,8 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateReplicationStorageFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -405,6 +422,8 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 }
 
 func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -463,6 +482,8 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 }
 
 func TestCanCreateS3ClientStorageFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	jsonData := `{
 	  "type": "S3ClientStorage",
 	  "baseEndpoint": "http://localhost:9090/",

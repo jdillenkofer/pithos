@@ -7,6 +7,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/cache"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,6 +33,7 @@ func createCacheFromJson(b []byte) (cache.Cache, error) {
 }
 
 func TestCanCreateCacheFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "GenericCache",
 	  "cachePesistor": {

@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
@@ -43,6 +44,7 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 }
 
 func TestStorageMigrator(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	// Arrange
 	const bucketName = "test"
 	const objectKey = "zzz"

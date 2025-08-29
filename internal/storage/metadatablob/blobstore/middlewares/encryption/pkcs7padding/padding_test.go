@@ -3,9 +3,12 @@ package pkcs7padding
 import (
 	"fmt"
 	"testing"
+
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 )
 
 func TestPaddingForDifferentLengths(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	var lengths = []int{1, 5, 10, 25, 50, 100, 150, 200}
 	for _, length := range lengths {
 		testName := fmt.Sprintf("TestPadding with length %d", length)

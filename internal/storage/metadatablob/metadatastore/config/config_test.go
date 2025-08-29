@@ -9,6 +9,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,6 +35,7 @@ func createMetadataStoreFromJson(b []byte) (metadatastore.MetadataStore, error) 
 }
 
 func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)
@@ -54,6 +56,7 @@ func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 }
 
 func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
 	t.Cleanup(cleanup)

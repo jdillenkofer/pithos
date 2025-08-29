@@ -7,10 +7,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
 	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFixedKeyLimitEvictionChecker(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ec, err := fixedkeylimit.New(3)
 	assert.Nil(t, err)
 
@@ -28,6 +30,7 @@ func TestFixedKeyLimitEvictionChecker(t *testing.T) {
 }
 
 func TestFixedSizeLimitEvictionChecker(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ec, err := fixedsizelimit.New(3)
 	assert.Nil(t, err)
 
@@ -43,6 +46,7 @@ func TestFixedSizeLimitEvictionChecker(t *testing.T) {
 }
 
 func TestLFUCacheEvictionPolicy(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ec, err := fixedsizelimit.New(3)
 	assert.Nil(t, err)
 

@@ -45,6 +45,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -55,10 +56,6 @@ const region = "eu-central-1"
 const blobStoreEncryptionPassword = "test"
 
 var (
-	integration = flag.Bool("integration", false, "run integration tests")
-	dbType      = flag.String("db", "sqlite", "database type to use (sqlite or postgres)")
-	pathStyle   = flag.String("path-style", "host", "addressing style to use (host or path)")
-	replMode    = flag.String("repl-mode", "none", "replication mode to use (none or replicated)")
 	bucketName  = aws.String("test")
 	bucketName2 = aws.String("test2")
 	keyPrefix   = aws.String("my/test/key")
@@ -475,7 +472,7 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	if isShortRun {
 		t.Skip("Skipping integration test in short mode")
 	}
-	if !*integration {
+	if !*testutils.Integration {
 		t.Skip("Skipping integration test")
 	}
 
@@ -484,7 +481,7 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	var selectedDBType database.DatabaseType
 	dbTypeSuffix := ""
 
-	switch *dbType {
+	switch *testutils.DBType {
 	case "postgres":
 		selectedDBType = database.DB_TYPE_POSTGRES
 		dbTypeSuffix = " using postgres"
@@ -498,7 +495,7 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	var usePathStyle bool
 	pathStyleSuffix := ""
 
-	switch *pathStyle {
+	switch *testutils.PathStyle {
 	case "path":
 		usePathStyle = true
 		pathStyleSuffix = " using path style"
@@ -512,7 +509,7 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	var useReplication bool
 	replicationSuffix := ""
 
-	switch *replMode {
+	switch *testutils.ReplMode {
 	case "replicated":
 		useReplication = true
 		replicationSuffix = " replicated"
@@ -555,9 +552,7 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 }
 
 func TestCreateBucket(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -604,9 +599,7 @@ func TestCreateBucket(t *testing.T) {
 }
 
 func TestHeadBucket(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -635,9 +628,7 @@ func TestHeadBucket(t *testing.T) {
 }
 
 func TestListBuckets(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -694,9 +685,7 @@ func TestListBuckets(t *testing.T) {
 }
 
 func TestPutObject(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -852,9 +841,7 @@ func TestPutObject(t *testing.T) {
 }
 
 func TestMultipartUpload(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -1763,9 +1750,7 @@ func TestMultipartUpload(t *testing.T) {
 }
 
 func TestGetObject(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -2032,9 +2017,7 @@ func TestGetObject(t *testing.T) {
 }
 
 func TestDeleteObject(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -2112,9 +2095,7 @@ func TestDeleteObject(t *testing.T) {
 }
 
 func TestHeadObject(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -2160,9 +2141,7 @@ func TestHeadObject(t *testing.T) {
 }
 
 func TestDeleteBucket(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 
@@ -2298,9 +2277,7 @@ func TestDeleteBucket(t *testing.T) {
 }
 
 func TestListObjects(t *testing.T) {
-	if !*integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
 	t.Parallel()
 

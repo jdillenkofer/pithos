@@ -5,10 +5,12 @@ import (
 	"os"
 	"testing"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCanCreateStringProviderFromRawStringJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `"String"`
 	stringProvider := StringProvider{}
 	err := json.Unmarshal([]byte(jsonData), &stringProvider)
@@ -17,6 +19,7 @@ func TestCanCreateStringProviderFromRawStringJson(t *testing.T) {
 }
 
 func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "EnvKey",
 	  "envKey": "PITHOS_ENV_KEY_STRING_TEST"
@@ -30,6 +33,7 @@ func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
 }
 
 func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `1`
 	int64Provider := Int64Provider{}
 	err := json.Unmarshal([]byte(jsonData), &int64Provider)
@@ -38,6 +42,7 @@ func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {
 }
 
 func TestCanCreateInt64ProviderFromEnvKeyStringJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "EnvKey",
 	  "envKey": "PITHOS_ENV_KEY_INT64_TEST"

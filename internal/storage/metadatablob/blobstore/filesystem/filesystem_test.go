@@ -9,11 +9,14 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	filesystemBlobStore := filesystemBlobStore{"."}
 	blobId := ulid.Make()
 	filename := filesystemBlobStore.getFilename(blobId)
@@ -23,6 +26,8 @@ func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
 }
 
 func TestFilesystemBlobStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))

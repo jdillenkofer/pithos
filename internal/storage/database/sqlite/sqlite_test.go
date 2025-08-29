@@ -5,10 +5,12 @@ import (
 	"testing"
 
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMigrateUp(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
@@ -23,6 +25,7 @@ func TestMigrateUp(t *testing.T) {
 }
 
 func TestMigrateUpAndDown(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
@@ -42,6 +45,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 }
 
 func TestMigrateUpAndDownAndUp(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.Nil(t, err)
 
