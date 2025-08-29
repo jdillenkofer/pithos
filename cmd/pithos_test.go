@@ -472,15 +472,11 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	if isShortRun {
 		t.Skip("Skipping integration test in short mode")
 	}
-	if !*testutils.Integration {
-		t.Skip("Skipping integration test")
-	}
+	testutils.SkipIfNotIntegration(t)
 
-	suffix := ""
-
+	// Determine selected DB type
 	var selectedDBType database.DatabaseType
 	dbTypeSuffix := ""
-
 	switch *testutils.DBType {
 	case "postgres":
 		selectedDBType = database.DB_TYPE_POSTGRES
@@ -490,11 +486,9 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 		dbTypeSuffix = " using sqlite"
 	}
 
-	suffix += dbTypeSuffix
-
+	// Determine path style
 	var usePathStyle bool
 	pathStyleSuffix := ""
-
 	switch *testutils.PathStyle {
 	case "path":
 		usePathStyle = true
@@ -504,11 +498,9 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 		pathStyleSuffix = " using host style"
 	}
 
-	suffix += pathStyleSuffix
-
+	// Determine replication
 	var useReplication bool
 	replicationSuffix := ""
-
 	switch *testutils.ReplMode {
 	case "replicated":
 		useReplication = true
@@ -518,11 +510,9 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 		replicationSuffix = ""
 	}
 
-	suffix += replicationSuffix
-
+	// Determine blob store
 	var useFilesystemBlobStore bool
 	blobStoreSuffix := ""
-
 	switch *testutils.BlobStore {
 	case "filesystem":
 		useFilesystemBlobStore = true
@@ -531,27 +521,25 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 		useFilesystemBlobStore = false
 		blobStoreSuffix = " with sqlBlobStore"
 	}
+	var encryptBlobStore bool
+	encryptSuffix := ""
+	switch {
+	case *testutils.EncryptBlobStore:
+		encryptBlobStore = true
+		encryptSuffix = " (encrypted)"
+	default:
+		encryptBlobStore = false
+		encryptSuffix = ""
+	}
 
-	suffix += blobStoreSuffix
+	baseSuffix := dbTypeSuffix + pathStyleSuffix + replicationSuffix + blobStoreSuffix + encryptSuffix
 
-	for _, encryptBlobStore := range []bool{false, true} {
-		if !encryptBlobStore && isShortRun {
-			continue
+	for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
+		testSuffix := baseSuffix
+		if wrapBlobStoreWithOutbox {
+			testSuffix += " (using transactional outbox)"
 		}
-		encryptBlobStoreSuffix := suffix
-		if encryptBlobStore {
-			encryptBlobStoreSuffix += " (encrypted)"
-		}
-		for _, wrapBlobStoreWithOutbox := range []bool{false, true} {
-			if wrapBlobStoreWithOutbox && isShortRun {
-				continue
-			}
-			testSuffix := encryptBlobStoreSuffix
-			if wrapBlobStoreWithOutbox {
-				testSuffix = encryptBlobStoreSuffix + " (using transactional outbox)"
-			}
-			testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-		}
+		testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 	}
 }
 
