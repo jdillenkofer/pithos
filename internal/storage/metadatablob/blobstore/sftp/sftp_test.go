@@ -123,9 +123,6 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 
 func TestSftpBlobStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
