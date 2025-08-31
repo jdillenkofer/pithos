@@ -125,7 +125,7 @@ var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 
-var MaxEntitySize int64 = 512 * 1024 * 1024 // 512 MiB
+var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
 type Storage interface {
 	Start(ctx context.Context) error
