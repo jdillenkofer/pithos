@@ -1045,7 +1045,11 @@ func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.Re
 	w.WriteHeader(404)
 }
 
+// validateMaxEntitySize ensures that the request body does not exceed the maximum allowed entity size.
+// It returns true if the request is invalid and the handler should return immediately.
+// It also sets r.Body to a MaxBytesReader to enforce the limit during reading.
 func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, storage.MaxEntitySize+1)
 	contentLength := getHeaderAsPtr(r.Header, contentLengthHeader)
 	if contentLength != nil {
 		contentLengthI64, err := strconv.ParseInt(*contentLength, 10, 64)
@@ -1103,6 +1107,9 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberI32, r.Body, checksumInput)
 	if err != nil {
+		if _, ok := err.(*http.MaxBytesError); ok {
+			err = storage.ErrEntityTooLarge
+		}
 		handleError(err, w, r)
 		return
 	}
@@ -1148,6 +1155,9 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	putObjectResult, err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body, checksumInput)
 	if err != nil {
+		if _, ok := err.(*http.MaxBytesError); ok {
+			err = storage.ErrEntityTooLarge
+		}
 		handleError(err, w, r)
 		return
 	}
