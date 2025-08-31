@@ -60,10 +60,6 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	if testing.Short() {
-		t.Skip("Skipping integration tests")
-	}
-
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := t.Context()

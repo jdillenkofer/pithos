@@ -468,10 +468,6 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 }
 
 func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool)) {
-	isShortRun := testing.Short()
-	if isShortRun {
-		t.Skip("Skipping integration test in short mode")
-	}
 	testutils.SkipIfNotIntegration(t)
 
 	// Determine selected DB type

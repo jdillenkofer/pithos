@@ -54,11 +54,11 @@ go build -o pithos ./cmd/pithos.go
 
 ### Running Tests
 ```sh
-go test ./... --timeout 60m
+go test ./... --integration
 ```
-For a shorter test run execution with a subset of storage backends and features, you can use:
+To run the unit tests with a subset of storage backends and features, you can use:
 ```sh
-go test ./... --short
+go test ./...
 ```
 
 ### Docker

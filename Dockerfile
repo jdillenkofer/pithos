@@ -12,7 +12,7 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v --short; fi
+RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
 
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 
