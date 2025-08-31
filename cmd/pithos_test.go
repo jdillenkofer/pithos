@@ -825,6 +825,37 @@ func TestPutObject(t *testing.T) {
 			}
 			assert.NotNil(t, putObjectResult)
 		})
+
+		t.Run("it should hit the upload limit when uploading an object that is too large"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			// We need a large enough payload to exceed the maximum allowed size
+			var largePayload []byte = make([]byte, storage.MaxEntitySize+1)
+			r := rand.New(rand.NewSource(int64(1337)))
+			r.Read(largePayload)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(largePayload),
+				Key:    key,
+			})
+			assert.Nil(t, putObjectResult)
+			if err == nil {
+				assert.Fail(t, "PutObject should have failed due to size limit")
+			}
+			var smithyOperationError *smithy.OperationError
+			if !errors.As(err, &smithyOperationError) {
+				assert.Fail(t, "Expected error smithy.OperationError", "err %v", err)
+			}
+		})
 	})
 }
 
@@ -1733,6 +1764,54 @@ func TestMultipartUpload(t *testing.T) {
 			objectBytes, err := io.ReadAll(getObjectResult.Body)
 			assert.Nil(t, err)
 			assert.Equal(t, body, objectBytes)
+		})
+
+		t.Run("it should hit the upload limit when uploading a part that is too large"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			createMultiPartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+
+			if err != nil {
+				assert.Fail(t, "CreateMultiPartUpload failed", "err %v", err)
+			}
+			assert.NotNil(t, createMultiPartUploadResult)
+			assert.Equal(t, *bucketName, *createMultiPartUploadResult.Bucket)
+			assert.Equal(t, *key, *createMultiPartUploadResult.Key)
+			uploadId := createMultiPartUploadResult.UploadId
+			assert.NotNil(t, uploadId)
+
+			// We need a large enough payload to exceed the maximum allowed size
+			var largePayload []byte = make([]byte, storage.MaxEntitySize+1)
+			r := rand.New(rand.NewSource(int64(1337)))
+			r.Read(largePayload)
+
+			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Body:       bytes.NewReader(largePayload),
+				Key:        key,
+				UploadId:   uploadId,
+				PartNumber: aws.Int32(1),
+			})
+
+			assert.Nil(t, uploadPartResult)
+			if err == nil {
+				assert.Fail(t, "UploadPart should have failed due to size limit")
+			}
+			var smithyOperationError *smithy.OperationError
+			if !errors.As(err, &smithyOperationError) {
+				assert.Fail(t, "Expected error smithy.OperationError", "err %v", err)
+			}
 		})
 	})
 }
