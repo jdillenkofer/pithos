@@ -15,7 +15,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/sftp v1.13.9
-	github.com/prometheus/client_golang v1.23.0
+	github.com/prometheus/client_golang v1.23.1
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.38.0
@@ -58,6 +58,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa // indirect
@@ -84,7 +85,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.65.0 // indirect
+	github.com/prometheus/common v0.66.0 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.25.7 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
@@ -100,6 +101,7 @@ require (
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
-	google.golang.org/protobuf v1.36.7 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
