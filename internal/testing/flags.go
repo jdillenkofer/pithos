@@ -2,6 +2,8 @@ package testing
 
 import (
 	"flag"
+	"os"
+	"runtime"
 	"testing"
 )
 
@@ -25,5 +27,12 @@ func SkipIfIntegration(t *testing.T) {
 func SkipIfNotIntegration(t *testing.T) {
 	if !*Integration {
 		t.Skip("Skipping integration test")
+	}
+}
+
+// SkipOnWindowsInGitHubActions skips the test if it is running on Windows in GitHub Actions
+func SkipOnWindowsInGitHubActions(t *testing.T) {
+	if runtime.GOOS == "windows" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("Skipping test on Windows in GitHub Actions")
 	}
 }

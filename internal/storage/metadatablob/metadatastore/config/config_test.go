@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/config"
@@ -46,9 +47,9 @@ func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 	  "type": "SqlMetadataStore",
 	  "db": {
 	    "type": "SqliteDatabase",
-		"dbPath": "%v"
+		"dbPath": %s
 	  }
-	}`, dbPath)
+	}`, strconv.Quote(dbPath))
 
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -69,10 +70,10 @@ func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
 	    "type": "SqlMetadataStore",
 	    "db": {
 	      "type": "SqliteDatabase",
-		  "dbPath": "%v"
+		  "dbPath": %s
 	    }
 	  }
-	}`, dbPath)
+	}`, strconv.Quote(dbPath))
 
 	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)

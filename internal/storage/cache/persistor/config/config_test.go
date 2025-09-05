@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/config"
@@ -55,8 +56,8 @@ func TestCanCreateFilesystemPersistorFromJson(t *testing.T) {
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
 	  "type": "FilesystemPersistor",
-	  "root": "%v"
-	}`, storagePath)
+	  "root": %s
+	}`, strconv.Quote(storagePath))
 
 	cachePersistor, err := createCachePersistorFromJson([]byte(jsonData))
 	assert.Nil(t, err)
