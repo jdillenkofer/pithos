@@ -11,6 +11,11 @@ on:
         description: 'Version number (without v prefix, e.g. 1.0.0)'
         required: true
         type: string
+      dryrun:
+        description: 'Dry Run (no release creation, only build and artifacts)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   validate-version:
@@ -23,6 +28,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate version format and check if greater than latest
+        if: github.event.inputs.dryrun != 'true'
         run: |
           # Function to compare two semver versions
           # Returns: 1 if version1 > version2, 0 if equal, -1 if version1 < version2
@@ -83,6 +89,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
       - name: Create Tag
+        if: github.event.inputs.dryrun != 'true'
         run: |
           git tag "v${{ github.event.inputs.version }}"
           git push origin "v${{ github.event.inputs.version }}"
@@ -226,9 +233,33 @@ jobs:
           name: pithos-docker-arm64
           path: pithos-arm64.tar
 
+  build-windows:
+    name: Build Windows AMD64 Binary
+    needs: [validate-version]
+    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+      - name: Build Binary
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 1
+        run: |
+          go build -ldflags="-s -w" -o pithos-windows-amd64.exe cmd/pithos.go
+      - name: Upload Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pithos-windows-amd64
+          path: pithos-windows-amd64.exe
   release:
     name: Create Release
-    needs: [build-linux-amd64, build-linux-arm64, build-darwin, build-docker-amd64, build-docker-arm64]
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin, build-docker-amd64, build-docker-arm64, build-windows]
+    if: github.event.inputs.dryrun != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -257,3 +288,4 @@ jobs:
             binaries/pithos-darwin-arm64/pithos-darwin-arm64
             binaries/pithos-docker-amd64/pithos-amd64.tar
             binaries/pithos-docker-arm64/pithos-arm64.tar
+            binaries/pithos-windows-amd64/pithos-windows-amd64.exe
