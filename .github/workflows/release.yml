@@ -85,6 +85,7 @@ jobs:
             exit 1
           fi
       - name: Configure Git
+        if: github.event.inputs.dryrun != 'true'
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
