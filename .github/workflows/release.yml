@@ -16,11 +16,6 @@ on:
         required: false
         default: 'false'
         type: boolean
-      skip_tests:
-        description: 'Skip all tests (not recommended)'
-        required: false
-        default: 'false'
-        type: boolean
 
 jobs:
   validate-version:
@@ -103,7 +98,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   run-tests:
     name: Run All Tests
-    if: github.event.inputs.skip_tests != 'true'
     uses: ./.github/workflows/test.yml
     with: {}
     secrets: inherit
