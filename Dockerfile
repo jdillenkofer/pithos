@@ -14,15 +14,26 @@ COPY internal/ internal/
 
 RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
 
+# Create non-root user (UID 10001)
+RUN adduser -D -u 10001 appuser
+
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
+
+# Change ownership of the binary to appuser
+RUN chown 10001:10001 /go/bin/pithos
 
 FROM scratch
 
 WORKDIR /app
 
+# Copy binary and minimal passwd file for user mapping
 COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
+COPY --from=app-builder /etc/passwd /etc/passwd
 
 EXPOSE 9000
+
+# Run as non-root user
+USER 10001
 
 ENTRYPOINT ["/usr/local/bin/pithos", "serve"]
 
