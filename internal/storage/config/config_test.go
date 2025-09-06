@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/config"
@@ -59,6 +60,8 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 
 func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -75,27 +78,27 @@ func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-	  "type": "MetadataBlobStorage",
-	  "db": {
-	    "type": "RegisterDatabaseReference",
-		"refName": "db",
-		"db": {
-	      "type": "PostgresDatabase",
-	      "dbUrl": "%v"
-	    }
-      },
-	  "metadataStore": {
-		"type": "SqlMetadataStore",
-		"db": {
-	      "type": "DatabaseReference",
-		  "refName": "db"
-	    }
-	  },
-	  "blobStore": {
-	    "type": "FilesystemBlobStore",
-		"root": "%v"
-	  }
-	}`, dbUrl, storagePath)
+			"type": "MetadataBlobStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "PostgresDatabase",
+					"dbUrl": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"blobStore": {
+				"type": "FilesystemBlobStore",
+				"root": %s
+			}
+		}`, strconv.Quote(dbUrl), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -112,27 +115,27 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "MetadataBlobStorage",
-	  "db": {
-	    "type": "RegisterDatabaseReference",
-		"refName": "db",
-		"db": {
-	      "type": "SqliteDatabase",
-	      "dbPath": "%v"
-	    }
-      },
-	  "metadataStore": {
-		"type": "SqlMetadataStore",
-		"db": {
-	      "type": "DatabaseReference",
-		  "refName": "db"
-	    }
-	  },
-	  "blobStore": {
-	    "type": "FilesystemBlobStore",
-		"root": "%v"
-	  }
-	}`, dbPath, storagePath)
+			"type": "MetadataBlobStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"blobStore": {
+				"type": "FilesystemBlobStore",
+				"root": %s
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -149,39 +152,39 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "CacheStorage",
-	  "cache": {
-	    "type": "GenericCache",
-		"cachePesistor": {
-		  "type": "InMemoryPersistor"
-		},
-		"cacheEvictionPolicy": {
-	      "type": "EvictNothingEvictionPolicy"
-		}
-	  },
-	  "innerStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-	      "type": "RegisterDatabaseReference",
-		  "refName": "db",
-		  "db": {
-	        "type": "SqliteDatabase",
-		    "dbPath": "%v"
-	      }
-        },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  }
-	}`, dbPath, storagePath)
+			"type": "CacheStorage",
+			"cache": {
+				"type": "GenericCache",
+				"cachePesistor": {
+					"type": "InMemoryPersistor"
+				},
+				"cacheEvictionPolicy": {
+					"type": "EvictNothingEvictionPolicy"
+				}
+			},
+			"innerStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -207,7 +210,7 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 				"refName": "db",
 				"db": {
 					"type": "SqliteDatabase",
-					"dbPath": "%v"
+					"dbPath": %s
 				}
 			},
 			"metadataStore": {
@@ -219,7 +222,7 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 			},
 			"blobStore": {
 				"type": "FilesystemBlobStore",
-				"root": "%v"
+				"root": %s
 			}
 		}
 	  },
@@ -244,7 +247,7 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 				}
 			}
 		}
-	}`, dbPath, storagePath)
+	}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -261,30 +264,30 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "PrometheusStorageMiddleware",
-	  "innerStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-	      "type": "RegisterDatabaseReference",
-		  "refName": "db",
-		  "db": {
-	        "type": "SqliteDatabase",
-		    "dbPath": "%v"
-	      }
-        },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  }
-	}`, dbPath, storagePath)
+			"type": "PrometheusStorageMiddleware",
+			"innerStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -301,31 +304,31 @@ func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "TracingStorageMiddleware",
-	  "regionName": "metadataBlobStorage",
-	  "innerStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-	      "type": "RegisterDatabaseReference",
-		  "refName": "db",
-		  "db": {
-	        "type": "SqliteDatabase",
-		    "dbPath": "%v"
-	      }
-        },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  }
-	}`, dbPath, storagePath)
+			"type": "TracingStorageMiddleware",
+			"regionName": "metadataBlobStorage",
+			"innerStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -342,34 +345,34 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "OutboxStorage",
-	  "db": {
-	    "type": "RegisterDatabaseReference",
-	    "refName": "db",
-		"db": {
-	      "type": "SqliteDatabase",
-		  "dbPath": "%v"
-	    }
-      },
-	  "innerStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-		  "type": "DatabaseReference",
-		  "refName": "db"
-	    },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  }
-	}`, dbPath, storagePath)
+			"type": "OutboxStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"innerStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -386,31 +389,31 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "ReplicationStorage",
-	  "primaryStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-	      "type": "RegisterDatabaseReference",
-		  "refName": "db",
-		  "db": {
-	        "type": "SqliteDatabase",
-		    "dbPath": "%v"
-	      }
-        },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  },
-	  "secondaryStorages": []
-	}`, dbPath, storagePath)
+			"type": "ReplicationStorage",
+			"primaryStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			},
+			"secondaryStorages": []
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -427,50 +430,50 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "ReplicationStorage",
-	  "primaryStorage": {
-	    "type": "MetadataBlobStorage",
-		"db": {
-	      "type": "RegisterDatabaseReference",
-		  "refName": "db",
-		  "db": {
-	        "type": "SqliteDatabase",
-		    "dbPath": "%v"
-	      }
-        },
-	    "metadataStore": {
-		  "type": "SqlMetadataStore",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      }
-	    },
-	    "blobStore": {
-	      "type": "FilesystemBlobStore",
-		  "root": "%v"
-	    }
-	  },
-	  "secondaryStorages": [
-		{
-		  "type": "MetadataBlobStorage",
-		  "db": {
-	        "type": "DatabaseReference",
-		    "refName": "db"
-	      },
-		  "metadataStore": {
-			"type": "SqlMetadataStore",
-		    "db": {
-	          "type": "DatabaseReference",
-		      "refName": "db"
-	        }
-		  },
-		  "blobStore": {
-	        "type": "FilesystemBlobStore",
-		    "root": "%v"
-	      }
-		} 
-	  ]
-	}`, dbPath, storagePath, storagePath)
+			"type": "ReplicationStorage",
+			"primaryStorage": {
+				"type": "MetadataBlobStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"blobStore": {
+					"type": "FilesystemBlobStore",
+					"root": %s
+				}
+			},
+			"secondaryStorages": [
+				{
+					"type": "MetadataBlobStorage",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					},
+					"metadataStore": {
+						"type": "SqlMetadataStore",
+						"db": {
+							"type": "DatabaseReference",
+							"refName": "db"
+						}
+					},
+					"blobStore": {
+						"type": "FilesystemBlobStore",
+						"root": %s
+					}
+				}
+			]
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)

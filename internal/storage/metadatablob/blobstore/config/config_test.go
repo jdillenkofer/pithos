@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/config"
@@ -47,9 +48,9 @@ func TestCanCreateFilesystemBlobStoreFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-	  "type": "FilesystemBlobStore",
-	  "root": "%v"
-	}`, storagePath)
+				 "type": "FilesystemBlobStore",
+				 "root": %s
+			 }`, strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -84,42 +85,42 @@ func TestCanCreateSftpBlobStoreFromJson(t *testing.T) {
 	hostKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDe1NeJm4Ys7jZIXkCT0aASrBHKASVq9cVIbp+oBzCP13z62ILmQ4awd0toQmrz5oP53Mc102s/y3ayzgeMdwg/mvopzmGtb1zqxLel84OlMUEMX492qera0esgJ9tiJTfixabyADY/KJ8euTLbi/WhJ3IxEWlR6cbeaJMGDtO9n/b4d32pjrr4WYb14lZhEQlYN9xccco6P9bqASSBh7dIxUroZX8ogZSAcRJ9B6+6mXE6bm84jDv50traduDd1JQDjw39d8Mk7WPo9ZCcvnDC9HaM4Yg9S5pWMLmIL0jY2cCFQCQ6qRCfebIABTIEeuz49ZMD/VrPGHrcLYoxUlLMhziEsKWeYmRN/ODQ6uJNyacOHum9aigUEXUvACijNDbeGSxC9FxEl8euHVYV6tiW167qeYowIIjU5hJDd4NT5Qtu3RG+ZkSVzhaBbyln5FbImg7QrX3j3wDtFMCHfhl2oSWaEF+oLirMzOLmV1zcN5GlrUdGvxMZNFkR5gmCeErHf4JT+G2XdE/EkaEG63W+QSfgKWpqAIPwsIHshpbF/W23eFvJ/XzhjmNidHy0/vIwj5XqnibKhb4EXDVoXACxigKt1AKNE/9sS/E2p7/YeGiJ9keoaHzYbCviFokzONgZb4WZc+FXIVom5C4SEhUesEVheTLdTXzvZ6FnHzQvqQ=="
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-	  "type": "SftpBlobStore",
-	  "addr": "%v",
-	  "sshClientConfig": {
-		"user": "user",
-		"authMethods": [
-		  {
-		    "type": "PasswordAuthMethod",
-			"password": "test"
-		  },
-		  {
-		    "type": "PublicKeyAuthMethod",
-			"signers": [
-			  {
-			    "type": "Signer",
-				"path": "%v"
-			  },
-			  {
-			    "type": "SignerWithPassphrase",
-				"path": "%v",
-				"passphrase": "%v"
-			  }
-			]
-		  }
-		],
-		"hostKeyCallback": {
-		  "type": "FixedHostKeyCallback",
-		  "hostKey": "%v"
-		},
-		"hostKeyAlgorithms": [
-		  "rsa-sha2-256", 
-		  "rsa-sha2-512"
-		],
-		"connectionTimeout": "5s"
-	  },
-	  "root": "%v"
-	}`, addr, privateKeyPath, privateKeyWithPassphrasePath, passphrase, hostKey, storagePath)
+				 "type": "SftpBlobStore",
+				 "addr": %s,
+				 "sshClientConfig": {
+							 "user": "user",
+							 "authMethods": [
+								 {
+									 "type": "PasswordAuthMethod",
+											 "password": "test"
+								 },
+								 {
+									 "type": "PublicKeyAuthMethod",
+											 "signers": [
+												 {
+													 "type": "Signer",
+															 "path": %s
+												 },
+												 {
+													 "type": "SignerWithPassphrase",
+															 "path": %s,
+															 "passphrase": %s
+												 }
+											 ]
+								 }
+							 ],
+							 "hostKeyCallback": {
+								 "type": "FixedHostKeyCallback",
+								 "hostKey": %s
+							 },
+							 "hostKeyAlgorithms": [
+								 "rsa-sha2-256", 
+								 "rsa-sha2-512"
+							 ],
+							 "connectionTimeout": "5s"
+				 },
+				 "root": %s
+			 }`, strconv.Quote(addr), strconv.Quote(privateKeyPath), strconv.Quote(privateKeyWithPassphrasePath), strconv.Quote(passphrase), strconv.Quote(hostKey), strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -134,12 +135,12 @@ func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-	  "type": "EncryptionBlobStoreMiddleware",
-	  "innerBlobStore": {
-	    "type": "FilesystemBlobStore",
-	    "root": "%v"
-	  }
-	}`, storagePath)
+				 "type": "EncryptionBlobStoreMiddleware",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -154,13 +155,13 @@ func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-	  "type": "TracingBlobStoreMiddleware",
-	  "regionName": "FilesystemBlobStore",
-	  "innerBlobStore": {
-	    "type": "FilesystemBlobStore",
-	    "root": "%v"
-	  }
-	}`, storagePath)
+				 "type": "TracingBlobStoreMiddleware",
+				 "regionName": "FilesystemBlobStore",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -176,16 +177,16 @@ func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "OutboxBlobStore",
-	  "db": {
-	    "type": "SqliteDatabase",
-		"dbPath": "%v"
-	  },
-	  "innerBlobStore": {
-	    "type": "FilesystemBlobStore",
-	    "root": "%v"
-	  }
-	}`, dbPath, storagePath)
+				 "type": "OutboxBlobStore",
+				 "db": {
+					 "type": "SqliteDatabase",
+							 "dbPath": %s
+				 },
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
@@ -201,12 +202,12 @@ func TestCanCreateSqlBlobStoreFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-	  "type": "SqlBlobStore",
-	  "db": {
-	    "type": "SqliteDatabase",
-		"dbPath": "%v"
-	  }
-	}`, dbPath)
+				 "type": "SqlBlobStore",
+				 "db": {
+					 "type": "SqliteDatabase",
+							 "dbPath": %s
+				 }
+			 }`, strconv.Quote(dbPath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)

@@ -477,6 +477,9 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	case "postgres":
 		selectedDBType = database.DB_TYPE_POSTGRES
 		dbTypeSuffix = " using postgres"
+		// Only skip on Windows in GitHub Actions if Postgres is used
+		testutils.SkipOnWindowsInGitHubActions(t)
+		testutils.SkipOnMacOSInGitHubActions(t)
 	default:
 		selectedDBType = database.DB_TYPE_SQLITE
 		dbTypeSuffix = " using sqlite"

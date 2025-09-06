@@ -123,6 +123,8 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 
 func TestSftpBlobStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -160,7 +162,8 @@ func TestSftpBlobStore(t *testing.T) {
 				}
 			}()
 
-			sftpBlobStore, err := New(sshAddr, clientConfig, "/tmp/pithos")
+			tmpPath := filepath.Join(os.TempDir(), "pithos")
+			sftpBlobStore, err := New(sshAddr, clientConfig, tmpPath)
 			if err != nil {
 				slog.Error(fmt.Sprintf("Could not create SftpBlobStore: %s", err))
 				os.Exit(1)
