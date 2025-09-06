@@ -30,6 +30,7 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 func TestMigrateUp(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -56,6 +57,7 @@ func TestMigrateUp(t *testing.T) {
 func TestMigrateUpAndDown(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -87,6 +89,7 @@ func TestMigrateUpAndDown(t *testing.T) {
 func TestMigrateUpAndDownAndUp(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 

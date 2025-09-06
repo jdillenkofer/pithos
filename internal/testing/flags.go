@@ -36,3 +36,10 @@ func SkipOnWindowsInGitHubActions(t *testing.T) {
 		t.Skip("Skipping test on Windows in GitHub Actions")
 	}
 }
+
+// SkipOnMacOSInGitHubActions skips the test if it is running on macOS in GitHub Actions
+func SkipOnMacOSInGitHubActions(t *testing.T) {
+	if runtime.GOOS == "darwin" && os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("Skipping test on macOS in GitHub Actions")
+	}
+}
