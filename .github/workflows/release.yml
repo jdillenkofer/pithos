@@ -1,5 +1,5 @@
 name: Create Release
-run-name: Create Release ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+run-name: ${{ github.event.inputs.dryrun == 'true' && 'Release (dryrun)' || (github.event.inputs.version && format('Release v{0}', github.event.inputs.version) || format('Release {0}', github.ref_name)) }}
 
 on:
   push:
