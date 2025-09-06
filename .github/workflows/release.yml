@@ -16,6 +16,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      skip_tests:
+        description: 'Skip all tests (not recommended)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   validate-version:
@@ -96,10 +101,19 @@ jobs:
           git push origin "v${{ github.event.inputs.version }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run-tests:
+    name: Run All Tests
+    if: github.event.inputs.skip_tests != 'true'
+    uses: ./.github/workflows/test.yml
+    with: {}
+    secrets: inherit
+
   build-linux-amd64:
     name: Build Linux AMD64 Binary
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,8 +136,10 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux ARM64 Binary
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -151,8 +167,10 @@ jobs:
 
   build-darwin:
     name: Build Darwin Binaries
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: macos-latest
     strategy:
       matrix:
@@ -186,8 +204,10 @@ jobs:
 
   build-docker-amd64:
     name: Build Docker Image AMD64
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -211,8 +231,10 @@ jobs:
 
   build-docker-arm64:
     name: Build Docker Image ARM64
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -236,8 +258,10 @@ jobs:
 
   build-windows:
     name: Build Windows AMD64 Binary
-    needs: [validate-version]
-    if: always() && (github.event_name != 'workflow_dispatch' || success())
+    needs:
+      - validate-version
+      - run-tests
+    if: always()
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
