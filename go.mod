@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/Shopify/go-lua v0.0.0-20250718183320-1e37f32ad7d0
 	github.com/aws/aws-sdk-go-v2 v1.39.0
-	github.com/aws/aws-sdk-go-v2/config v1.31.7
+	github.com/aws/aws-sdk-go-v2/config v1.31.8
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.12
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.88.0
