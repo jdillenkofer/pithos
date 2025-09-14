@@ -95,11 +95,12 @@ const keyPath = "key"
 
 const prefixQuery = "prefix"
 const delimiterQuery = "delimiter"
-const startAfterQuery = "startAfter"
+const startAfterQuery = "start-after"
 const maxKeysQuery = "max-keys"
 const uploadIdQuery = "uploadId"
 const uploadsQuery = "uploads"
 const partNumberQuery = "partNumber"
+const markerQuery = "marker"
 const keyMarkerQuery = "key-marker"
 const uploadIdMarkerQuery = "upload-id-marker"
 const partNumberMarkerQuery = "part-number-marker"
@@ -175,6 +176,8 @@ type ListBucketResult struct {
 	CommonPrefixes []*CommonPrefixResult `xml:"CommonPrefixes"`
 	KeyCount       int32                 `xml:"KeyCount"`
 	StartAfter     string                `xml:"StartAfter"`
+	Marker         string                `xml:"Marker,omitempty"`
+	NextMarker     string                `xml:"NextMarker,omitempty"`
 }
 
 type ListBucketV2Result struct {
@@ -578,7 +581,14 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	prefix := query.Get(prefixQuery)
 	delimiter := query.Get(delimiterQuery)
+	marker := query.Get(markerQuery)
 	startAfter := query.Get(startAfterQuery)
+
+	// In ListObjects V1, use marker as startAfter if provided
+	if marker != "" {
+		startAfter = marker
+	}
+
 	maxKeys := query.Get(maxKeysQuery)
 	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
 	if err != nil || maxKeysI64 < 0 {
@@ -596,12 +606,19 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Name:           bucket,
 		Prefix:         prefix,
 		Delimiter:      delimiter,
-		StartAfter:     startAfter,
+		StartAfter:     query.Get(startAfterQuery), // Original start-after from request
+		Marker:         marker,
 		KeyCount:       int32(len(result.Objects)),
 		MaxKeys:        maxKeysI32,
 		CommonPrefixes: []*CommonPrefixResult{},
 		IsTruncated:    result.IsTruncated,
 		Contents:       []*ContentResult{},
+	}
+
+	// Set NextMarker if results are truncated and we have objects
+	if result.IsTruncated && len(result.Objects) > 0 {
+		// Use the last object's key as the next marker
+		listBucketResult.NextMarker = result.Objects[len(result.Objects)-1].Key
 	}
 
 	responseHeaders := w.Header()
