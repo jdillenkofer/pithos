@@ -105,6 +105,8 @@ const uploadIdMarkerQuery = "upload-id-marker"
 const partNumberMarkerQuery = "part-number-marker"
 const maxUploadsQuery = "max-uploads"
 const maxPartsQuery = "max-parts"
+const listTypeQuery = "list-type"
+const continuationTokenQuery = "continuation-token"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -173,6 +175,21 @@ type ListBucketResult struct {
 	CommonPrefixes []*CommonPrefixResult `xml:"CommonPrefixes"`
 	KeyCount       int32                 `xml:"KeyCount"`
 	StartAfter     string                `xml:"StartAfter"`
+}
+
+type ListBucketV2Result struct {
+	XMLName               xml.Name              `xml:"ListBucketResult"`
+	IsTruncated           bool                  `xml:"IsTruncated"`
+	Contents              []*ContentResult      `xml:"Contents"`
+	Name                  string                `xml:"Name"`
+	Prefix                string                `xml:"Prefix"`
+	Delimiter             string                `xml:"Delimiter"`
+	MaxKeys               int32                 `xml:"MaxKeys"`
+	CommonPrefixes        []*CommonPrefixResult `xml:"CommonPrefixes"`
+	KeyCount              int32                 `xml:"KeyCount"`
+	ContinuationToken     string                `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string                `xml:"NextContinuationToken,omitempty"`
+	StartAfter            string                `xml:"StartAfter,omitempty"`
 }
 
 type InitiateMultipartUploadResult struct {
@@ -479,6 +496,12 @@ func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter,
 		s.listMultipartUploadsHandler(w, r)
 		return
 	}
+
+	listType := query.Get(listTypeQuery)
+	if listType == "2" {
+		s.listObjectsV2Handler(w, r)
+		return
+	}
 	s.listObjectsHandler(w, r)
 }
 
@@ -597,6 +620,83 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		listBucketResult.CommonPrefixes = append(listBucketResult.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
 	}
 	out, _ := xmlMarshalWithDocType(listBucketResult)
+	w.Write(out)
+}
+
+func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
+	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsV2Handler()")
+	defer task.End()
+	bucket := r.PathValue(bucketPath)
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucket), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	query := r.URL.Query()
+	prefix := query.Get(prefixQuery)
+	delimiter := query.Get(delimiterQuery)
+	continuationToken := query.Get(continuationTokenQuery)
+	maxKeys := query.Get(maxKeysQuery)
+
+	startAfter := query.Get(startAfterQuery)
+	if continuationToken != "" {
+		startAfter = continuationToken
+	}
+
+	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
+	if err != nil || maxKeysI64 < 0 {
+		maxKeysI64 = 1000
+	}
+	maxKeysI32 := int32(maxKeysI64)
+
+	slog.Info("Listing objects V2", "bucket", bucket)
+	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysI32)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// Prepare the V2 response
+	listBucketV2Result := ListBucketV2Result{
+		Name:              bucket,
+		Prefix:            prefix,
+		Delimiter:         delimiter,
+		MaxKeys:           maxKeysI32,
+		KeyCount:          int32(len(result.Objects)),
+		IsTruncated:       result.IsTruncated,
+		ContinuationToken: continuationToken,
+		StartAfter:        query.Get(startAfterQuery), // Original start-after from request
+		CommonPrefixes:    []*CommonPrefixResult{},
+		Contents:          []*ContentResult{},
+	}
+
+	if result.IsTruncated && len(result.Objects) > 0 {
+		// Use the last object's key as the next continuation token
+		listBucketV2Result.NextContinuationToken = result.Objects[len(result.Objects)-1].Key
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+
+	for _, object := range result.Objects {
+		contentResult := &ContentResult{
+			Key:          object.Key,
+			LastModified: object.LastModified.Format(time.RFC3339),
+			ETag:         object.ETag,
+			Size:         object.Size,
+			StorageClass: storageClassStandard,
+		}
+
+		listBucketV2Result.Contents = append(listBucketV2Result.Contents, contentResult)
+	}
+
+	for _, commonPrefix := range result.CommonPrefixes {
+		listBucketV2Result.CommonPrefixes = append(listBucketV2Result.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
+	}
+
+	out, _ := xmlMarshalWithDocType(listBucketV2Result)
 	w.Write(out)
 }
 
