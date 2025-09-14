@@ -2352,7 +2352,8 @@ func TestListObjects(t *testing.T) {
 	t.Parallel()
 
 	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemBlobStore bool, encryptBlobStore bool, wrapBlobStoreWithOutbox bool) {
-		t.Run("it should list no objects"+testSuffix, func(t *testing.T) {
+		// Test ListObjectsV1 (deprecated but still supported)
+		t.Run("it should list no objects V1"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -2363,11 +2364,11 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, createBucketResult)
 
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+			listObjectResult, err := s3Client.ListObjects(context.Background(), &s3.ListObjectsInput{
 				Bucket: bucketName,
 			})
 			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
+				assert.Fail(t, "ListObjects V1 failed", "err %v", err)
 			}
 			assert.Equal(t, bucketName, listObjectResult.Name)
 			assert.Len(t, listObjectResult.CommonPrefixes, 0)
@@ -2375,7 +2376,7 @@ func TestListObjects(t *testing.T) {
 			assert.False(t, *listObjectResult.IsTruncated)
 		})
 
-		t.Run("it should list a single object"+testSuffix, func(t *testing.T) {
+		t.Run("it should list a single object V1"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -2396,11 +2397,11 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, putObjectResult)
 
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+			listObjectResult, err := s3Client.ListObjects(context.Background(), &s3.ListObjectsInput{
 				Bucket: bucketName,
 			})
 			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
+				assert.Fail(t, "ListObjects V1 failed", "err %v", err)
 			}
 
 			assert.Equal(t, bucketName, listObjectResult.Name)
@@ -2416,7 +2417,7 @@ func TestListObjects(t *testing.T) {
 			assert.False(t, *listObjectResult.IsTruncated)
 		})
 
-		t.Run("it should list two objects"+testSuffix, func(t *testing.T) {
+		t.Run("it should truncate when listing objects V1"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -2447,33 +2448,225 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, putObjectResult)
 
+			// Test pagination with MaxKeys=1
+			listObjectResult, err := s3Client.ListObjects(context.Background(), &s3.ListObjectsInput{
+				Bucket:  bucketName,
+				MaxKeys: aws.Int32(1),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V1 failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 1)
+			assert.True(t, *listObjectResult.IsTruncated)
+
+			// For ListObjects V1, NextMarker should be set when truncated
+			assert.NotNil(t, listObjectResult.NextMarker)
+			assert.NotEmpty(t, *listObjectResult.NextMarker)
+
+			// Get next page using Marker
+			listObjectResult2, err := s3Client.ListObjects(context.Background(), &s3.ListObjectsInput{
+				Bucket: bucketName,
+				Marker: listObjectResult.NextMarker,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V1 pagination failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult2.Name)
+			assert.Len(t, listObjectResult2.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult2.Contents, 1)
+			assert.False(t, *listObjectResult2.IsTruncated)
+
+			// Verify we got different objects
+			assert.NotEqual(t, *listObjectResult.Contents[0].Key, *listObjectResult2.Contents[0].Key)
+		})
+
+		t.Run("it should list a single object V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
 			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 				Bucket: bucketName,
 			})
 			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 1)
+			assert.Equal(t, int32(1), *listObjectResult.KeyCount)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, *key, *object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		t.Run("it should truncate and paginate with continuation token V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			// Create multiple objects for pagination testing
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, second object!")),
+				Key:    key2,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			// Create third object for pagination
+			key3 := aws.String(*keyPrefix + "/hello_world3.txt")
+			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, third object!")),
+				Key:    key3,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			// Test pagination with MaxKeys=2
+			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:  bucketName,
+				MaxKeys: aws.Int32(2),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
 			}
 
 			assert.Equal(t, bucketName, listObjectResult.Name)
 			assert.Len(t, listObjectResult.CommonPrefixes, 0)
 			assert.Len(t, listObjectResult.Contents, 2)
+			assert.Equal(t, int32(2), *listObjectResult.KeyCount)
+			assert.True(t, *listObjectResult.IsTruncated)
+			assert.NotEmpty(t, *listObjectResult.NextContinuationToken)
 
-			object := listObjectResult.Contents[0]
-			assert.Equal(t, *key, *object.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
-			assert.Equal(t, int64(20), *object.Size)
-			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+			// Get next page using ContinuationToken
+			listObjectResult2, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:            bucketName,
+				ContinuationToken: listObjectResult.NextContinuationToken,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 pagination failed", "err %v", err)
+			}
 
-			object2 := listObjectResult.Contents[1]
-			assert.Equal(t, key2, object2.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object2.StorageClass)
-			assert.Equal(t, int64(21), *object2.Size)
-			assert.Equal(t, "\"72b52198921c896c2e7f5b3ef0ad42be\"", *object2.ETag)
+			assert.Equal(t, bucketName, listObjectResult2.Name)
+			assert.Len(t, listObjectResult2.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult2.Contents, 1)
+			assert.Equal(t, int32(1), *listObjectResult2.KeyCount)
+			assert.False(t, *listObjectResult2.IsTruncated)
+			assert.Equal(t, *listObjectResult.NextContinuationToken, *listObjectResult2.ContinuationToken)
 
-			assert.False(t, *listObjectResult.IsTruncated)
+			// Verify all objects are unique
+			allKeys := make(map[string]bool)
+			for _, obj := range listObjectResult.Contents {
+				allKeys[*obj.Key] = true
+			}
+			for _, obj := range listObjectResult2.Contents {
+				if allKeys[*obj.Key] {
+					assert.Fail(t, "Duplicate key found in pagination", "key: %s", *obj.Key)
+				}
+				allKeys[*obj.Key] = true
+			}
+			assert.Len(t, allKeys, 3) // Should have 3 unique keys
 		})
 
-		t.Run("it should truncate when listing objects"+testSuffix, func(t *testing.T) {
+		t.Run("it should handle StartAfter parameter V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			// Create objects with predictable lexicographic order
+			keys := []string{
+				"my/test/key/a.txt",
+				"my/test/key/b.txt",
+				"my/test/key/c.txt",
+			}
+
+			for i, keyName := range keys {
+				putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+					Bucket: bucketName,
+					Body:   bytes.NewReader([]byte(fmt.Sprintf("Hello, object %d!", i+1))),
+					Key:    aws.String(keyName),
+				})
+				if err != nil {
+					assert.Fail(t, "PutObject failed", "err %v", err)
+				}
+				assert.NotNil(t, putObjectResult)
+			}
+
+			// Test StartAfter functionality
+			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:     bucketName,
+				StartAfter: aws.String("my/test/key/a.txt"), // Should skip a.txt
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 with StartAfter failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.Contents, 2) // Should get b.txt and c.txt
+			assert.Equal(t, int32(2), *listObjectResult.KeyCount)
+			assert.False(t, *listObjectResult.IsTruncated)
+
+			// Verify the returned objects are correct
+			assert.Equal(t, "my/test/key/b.txt", *listObjectResult.Contents[0].Key)
+			assert.Equal(t, "my/test/key/c.txt", *listObjectResult.Contents[1].Key)
+		})
+
+		// Continue with existing tests for prefixes and delimiters...
+		t.Run("it should list objects with prefix and delimiter V2"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -2497,6 +2690,122 @@ func TestListObjects(t *testing.T) {
 			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 				Bucket: bucketName,
 				Body:   bytes.NewReader([]byte("Hello, second object!")),
+				Key:    aws.String("my.txt"),
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:    bucketName,
+				Delimiter: aws.String("/"),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 1)
+			commonPrefix := *listObjectResult.CommonPrefixes[0].Prefix
+			assert.Equal(t, "my/", commonPrefix)
+			assert.Len(t, listObjectResult.Contents, 1)
+			assert.Equal(t, "my.txt", *listObjectResult.Contents[0].Key)
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		// Test ListObjectsV2 (recommended)
+		t.Run("it should list no objects V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
+			}
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 0)
+			assert.False(t, *listObjectResult.IsTruncated)
+			assert.Equal(t, int32(0), *listObjectResult.KeyCount)
+		})
+
+		t.Run("it should list a single object V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult.Name)
+			assert.Len(t, listObjectResult.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult.Contents, 1)
+			assert.Equal(t, int32(1), *listObjectResult.KeyCount)
+
+			object := listObjectResult.Contents[0]
+			assert.Equal(t, *key, *object.Key)
+			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
+			assert.Equal(t, int64(20), *object.Size)
+			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
+
+			assert.False(t, *listObjectResult.IsTruncated)
+		})
+
+		t.Run("it should truncate and paginate with continuation token V2"+testSuffix, func(t *testing.T) {
+			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			// Create multiple objects for pagination testing
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, second object!")),
 				Key:    key2,
 			})
 			if err != nil {
@@ -2504,28 +2813,65 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, putObjectResult)
 
+			// Create third object for pagination
+			key3 := aws.String(*keyPrefix + "/hello_world3.txt")
+			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader([]byte("Hello, third object!")),
+				Key:    key3,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			// Test pagination with MaxKeys=2
 			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 				Bucket:  bucketName,
-				MaxKeys: aws.Int32(1),
+				MaxKeys: aws.Int32(2),
 			})
 			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
+				assert.Fail(t, "ListObjects V2 failed", "err %v", err)
 			}
 
 			assert.Equal(t, bucketName, listObjectResult.Name)
 			assert.Len(t, listObjectResult.CommonPrefixes, 0)
-			assert.Len(t, listObjectResult.Contents, 1)
-
-			object := listObjectResult.Contents[0]
-			assert.Equal(t, *key, *object.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
-			assert.Equal(t, int64(20), *object.Size)
-			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
-
+			assert.Len(t, listObjectResult.Contents, 2)
+			assert.Equal(t, int32(2), *listObjectResult.KeyCount)
 			assert.True(t, *listObjectResult.IsTruncated)
+			assert.NotEmpty(t, *listObjectResult.NextContinuationToken)
+
+			// Get next page using ContinuationToken
+			listObjectResult2, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:            bucketName,
+				ContinuationToken: listObjectResult.NextContinuationToken,
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 pagination failed", "err %v", err)
+			}
+
+			assert.Equal(t, bucketName, listObjectResult2.Name)
+			assert.Len(t, listObjectResult2.CommonPrefixes, 0)
+			assert.Len(t, listObjectResult2.Contents, 1)
+			assert.Equal(t, int32(1), *listObjectResult2.KeyCount)
+			assert.False(t, *listObjectResult2.IsTruncated)
+			assert.Equal(t, *listObjectResult.NextContinuationToken, *listObjectResult2.ContinuationToken)
+
+			// Verify all objects are unique
+			allKeys := make(map[string]bool)
+			for _, obj := range listObjectResult.Contents {
+				allKeys[*obj.Key] = true
+			}
+			for _, obj := range listObjectResult2.Contents {
+				if allKeys[*obj.Key] {
+					assert.Fail(t, "Duplicate key found in pagination", "key: %s", *obj.Key)
+				}
+				allKeys[*obj.Key] = true
+			}
+			assert.Len(t, allKeys, 3) // Should have 3 unique keys
 		})
 
-		t.Run("it should list objects starting with prefix my/test/key"+testSuffix, func(t *testing.T) {
+		t.Run("it should handle StartAfter parameter V2"+testSuffix, func(t *testing.T) {
 			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -2536,313 +2882,42 @@ func TestListObjects(t *testing.T) {
 			}
 			assert.NotNil(t, createBucketResult)
 
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
+			// Create objects with predictable lexicographic order
+			keys := []string{
+				"my/test/key/a.txt",
+				"my/test/key/b.txt",
+				"my/test/key/c.txt",
 			}
-			assert.NotNil(t, putObjectResult)
 
+			for i, keyName := range keys {
+				putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+					Bucket: bucketName,
+					Body:   bytes.NewReader([]byte(fmt.Sprintf("Hello, object %d!", i+1))),
+					Key:    aws.String(keyName),
+				})
+				if err != nil {
+					assert.Fail(t, "PutObject failed", "err %v", err)
+				}
+				assert.NotNil(t, putObjectResult)
+			}
+
+			// Test StartAfter functionality
 			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket: bucketName,
-				Prefix: keyPrefix,
+				Bucket:     bucketName,
+				StartAfter: aws.String("my/test/key/a.txt"), // Should skip a.txt
 			})
 			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
+				assert.Fail(t, "ListObjects V2 with StartAfter failed", "err %v", err)
 			}
 
 			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 0)
-			assert.Len(t, listObjectResult.Contents, 1)
-
-			object := listObjectResult.Contents[0]
-			assert.Equal(t, *key, *object.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
-			assert.Equal(t, int64(20), *object.Size)
-			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
-
+			assert.Len(t, listObjectResult.Contents, 2) // Should get b.txt and c.txt
+			assert.Equal(t, int32(2), *listObjectResult.KeyCount)
 			assert.False(t, *listObjectResult.IsTruncated)
-		})
 
-		t.Run("it should list no objects when searching for prefix key"+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket: bucketName,
-				Prefix: aws.String("key"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 0)
-			assert.Len(t, listObjectResult.Contents, 0)
-			assert.False(t, *listObjectResult.IsTruncated)
-		})
-
-		t.Run("it should list objects with delimiter \"/\" one folder"+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket:    bucketName,
-				Delimiter: aws.String("/"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 1)
-			commonPrefix := *listObjectResult.CommonPrefixes[0].Prefix
-			assert.Equal(t, "my/", commonPrefix)
-			assert.Len(t, listObjectResult.Contents, 0)
-			assert.False(t, *listObjectResult.IsTruncated)
-		})
-
-		t.Run("it should list objects with delimiter \"/\" two folders"+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, second object!")),
-				Key:    key2,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket:    bucketName,
-				Delimiter: aws.String("/"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 1)
-			commonPrefix := *listObjectResult.CommonPrefixes[0].Prefix
-			assert.Equal(t, "my/", commonPrefix)
-			assert.Len(t, listObjectResult.Contents, 0)
-			assert.False(t, *listObjectResult.IsTruncated)
-		})
-
-		t.Run("it should list objects with delimiter \"/\""+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, second object!")),
-				Key:    aws.String("my.txt"),
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket:    bucketName,
-				Delimiter: aws.String("/"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 1)
-
-			commonPrefix := *listObjectResult.CommonPrefixes[0].Prefix
-			assert.Equal(t, "my/", commonPrefix)
-			assert.Len(t, listObjectResult.Contents, 1)
-
-			object := listObjectResult.Contents[0]
-			assert.Equal(t, "my.txt", *object.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
-			assert.Equal(t, int64(21), *object.Size)
-			assert.Equal(t, "\"72b52198921c896c2e7f5b3ef0ad42be\"", *object.ETag)
-
-			assert.False(t, *listObjectResult.IsTruncated)
-		})
-
-		t.Run("it should list objects with prefix \"my/\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, second object!")),
-				Key:    aws.String("my.txt"),
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket:    bucketName,
-				Delimiter: aws.String("/"),
-				Prefix:    aws.String("my/"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 1)
-
-			commonPrefix := *listObjectResult.CommonPrefixes[0].Prefix
-			assert.Equal(t, "my/test/", commonPrefix)
-			assert.Len(t, listObjectResult.Contents, 0)
-
-			assert.False(t, *listObjectResult.IsTruncated)
-		})
-
-		t.Run("it should list objects with prefix \"my/test/key\" and delimiter \"/\""+testSuffix, func(t *testing.T) {
-			s3Client, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemBlobStore, encryptBlobStore, wrapBlobStoreWithOutbox)
-			t.Cleanup(cleanup)
-			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-			assert.NotNil(t, createBucketResult)
-
-			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, first object!")),
-				Key:    key,
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			putObjectResult, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
-				Bucket: bucketName,
-				Body:   bytes.NewReader([]byte("Hello, second object!")),
-				Key:    aws.String("my.txt"),
-			})
-			if err != nil {
-				assert.Fail(t, "PutObject failed", "err %v", err)
-			}
-			assert.NotNil(t, putObjectResult)
-
-			listObjectResult, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
-				Bucket:    bucketName,
-				Delimiter: aws.String("/"),
-				Prefix:    aws.String("my/test/key/"),
-			})
-			if err != nil {
-				assert.Fail(t, "ListObjects failed", "err %v", err)
-			}
-
-			assert.Equal(t, bucketName, listObjectResult.Name)
-			assert.Len(t, listObjectResult.CommonPrefixes, 0)
-
-			assert.Len(t, listObjectResult.Contents, 1)
-
-			object := listObjectResult.Contents[0]
-			assert.Equal(t, "my/test/key/hello_world.txt", *object.Key)
-			assert.Equal(t, types.ObjectStorageClassStandard, object.StorageClass)
-			assert.Equal(t, int64(20), *object.Size)
-			assert.Equal(t, "\"8e614ccc40d41a959c87067c6e8092a9\"", *object.ETag)
-
-			assert.False(t, *listObjectResult.IsTruncated)
+			// Verify the returned objects are correct
+			assert.Equal(t, "my/test/key/b.txt", *listObjectResult.Contents[0].Key)
+			assert.Equal(t, "my/test/key/c.txt", *listObjectResult.Contents[1].Key)
 		})
 	})
 }
