@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"golang.org/x/crypto/scrypt"
@@ -17,33 +20,96 @@ import (
 	"github.com/google/tink/go/tink"
 )
 
+const (
+	// BlobHeaderVersion is the current version of the blob header format
+	BlobHeaderVersion = 1
+
+	// Key types for different KMS providers
+	KeyTypeAWS   = "aws"
+	KeyTypeVault = "vault"
+	KeyTypeLocal = "local"
+)
+
+// BlobHeader contains metadata about the encryption used for a blob
+type BlobHeader struct {
+	Version      int    `json:"version"`      // Format version for future compatibility
+	KeyType      string `json:"keyType"`      // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
+	KeyURI       string `json:"keyURI"`       // Key identifier (empty for local)
+	EncryptedDEK []byte `json:"encryptedDEK"` // The encrypted DEK
+}
+
 // TinkEncryptionBlobStoreMiddleware uses envelope encryption where each blob has its own DEK.
 type TinkEncryptionBlobStoreMiddleware struct {
 	masterAEAD     tink.AEAD // Master key for encrypting DEKs
 	innerBlobStore blobstore.BlobStore
+	// Metadata for key rotation support
+	keyType string // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
+	keyURI  string // Key identifier (empty for local)
+	// Vault-specific configuration for key rotation
+	vaultAddr  string // Vault address (for recreating client)
+	vaultToken string // Vault token (for recreating client)
+}
+
+// testKeyAvailability performs a small encrypt/decrypt test to verify the AEAD key is accessible and functional
+func testKeyAvailability(aead tink.AEAD, kmsType string) error {
+	testData := []byte("test")
+	encrypted, err := aead.Encrypt(testData, nil)
+	if err != nil {
+		return fmt.Errorf("%s KMS key test failed - key may not be available: %w", kmsType, err)
+	}
+	decrypted, err := aead.Decrypt(encrypted, nil)
+	if err != nil {
+		return fmt.Errorf("%s KMS key test failed - decrypt error: %w", kmsType, err)
+	}
+	if string(decrypted) != string(testData) {
+		return fmt.Errorf("%s KMS key test failed - data integrity check failed", kmsType)
+	}
+	return nil
 }
 
 // NewWithHCVault creates a new TinkEncryptionBlobStoreMiddleware using HashiCorp Vault KMS.
 // Uses envelope encryption where each blob has its own DEK encrypted with the Vault master key.
 // vaultAddr: e.g. "http://127.0.0.1:8200"
 // token: Vault token
-// keyURI: e.g. "hcvault://my-keyring/keys/my-key"
+// keyURI: relative path e.g. "transit/keys/my-key"
 func NewWithHCVault(vaultAddr, token, keyURI string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
+	// Convert vaultAddr to hcvault scheme for the uriPrefix
+	var uriPrefix string
+	if strings.HasPrefix(vaultAddr, "https://") {
+		uriPrefix = "hcvault://" + vaultAddr[len("https://"):]
+	} else if strings.HasPrefix(vaultAddr, "http://") {
+		uriPrefix = "hcvault://" + vaultAddr[len("http://"):]
+	} else {
+		uriPrefix = "hcvault://" + vaultAddr
+	}
+
+	// Construct the full keyURI by combining the hcvault prefix with the relative path
+	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(keyURI, "/")
+
 	// Register the Vault KMS client with Tink
-	kmsClient, err := hcvault.NewClient(vaultAddr, nil, token)
+	kmsClient, err := hcvault.NewClient(uriPrefix, nil, token)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get AEAD primitive from Vault
-	vaultAEAD, err := kmsClient.GetAEAD(keyURI)
+	// Get AEAD primitive from Vault using the full keyURI
+	vaultAEAD, err := kmsClient.GetAEAD(fullKeyURI)
 	if err != nil {
+		return nil, err
+	}
+
+	// Test key availability
+	if err := testKeyAvailability(vaultAEAD, KeyTypeVault); err != nil {
 		return nil, err
 	}
 
 	return &TinkEncryptionBlobStoreMiddleware{
 		masterAEAD:     vaultAEAD,
 		innerBlobStore: innerBlobStore,
+		keyType:        KeyTypeVault,
+		keyURI:         keyURI,
+		vaultAddr:      vaultAddr,
+		vaultToken:     token,
 	}, nil
 }
 
@@ -65,6 +131,8 @@ func NewWithLocalKMS(password string, innerBlobStore blobstore.BlobStore) (blobs
 	return &TinkEncryptionBlobStoreMiddleware{
 		masterAEAD:     kekAEAD,
 		innerBlobStore: innerBlobStore,
+		keyType:        KeyTypeLocal,
+		keyURI:         "", // No URI for local keys
 	}, nil
 }
 
@@ -85,9 +153,16 @@ func NewWithAWSKMS(keyURI, region string, innerBlobStore blobstore.BlobStore) (b
 		return nil, err
 	}
 
+	// Test key availability
+	if err := testKeyAvailability(awsAEAD, KeyTypeAWS); err != nil {
+		return nil, err
+	}
+
 	return &TinkEncryptionBlobStoreMiddleware{
 		masterAEAD:     awsAEAD,
 		innerBlobStore: innerBlobStore,
+		keyType:        KeyTypeAWS,
+		keyURI:         keyURI,
 	}, nil
 }
 
@@ -112,28 +187,42 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 		return err
 	}
 
-	// Encrypt the DEK with master AEAD
+	// Encrypt the DEK with the master AEAD
 	encryptedDEK, err := mw.masterAEAD.Encrypt(dek, blobId[:])
 	if err != nil {
 		return err
 	}
 
-	// Create a pipe for the combined data (encrypted DEK + encrypted blob)
+	// Create header with key metadata and encrypted DEK
+	header := BlobHeader{
+		Version:      BlobHeaderVersion,
+		KeyType:      mw.keyType,
+		KeyURI:       mw.keyURI,
+		EncryptedDEK: encryptedDEK,
+	}
+
+	// Serialize header to JSON
+	headerBytes, err := json.Marshal(header)
+	if err != nil {
+		return err
+	}
+
+	// Create a pipe for the combined data (header + encrypted blob)
 	encryptReader, encryptWriter := io.Pipe()
 	go func() {
 		defer encryptWriter.Close()
 
-		// First write the length of encrypted DEK (4 bytes big-endian)
-		dekLen := uint32(len(encryptedDEK))
+		// Write the header length (4 bytes big-endian)
+		headerLen := uint32(len(headerBytes))
 		lengthBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lengthBytes, dekLen)
+		binary.BigEndian.PutUint32(lengthBytes, headerLen)
 		if _, err := encryptWriter.Write(lengthBytes); err != nil {
 			encryptWriter.CloseWithError(err)
 			return
 		}
 
-		// Write the encrypted DEK
-		if _, err := encryptWriter.Write(encryptedDEK); err != nil {
+		// Write the header
+		if _, err := encryptWriter.Write(headerBytes); err != nil {
 			encryptWriter.CloseWithError(err)
 			return
 		}
@@ -167,21 +256,35 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		return nil, err
 	}
 
-	// Read the DEK length (4 bytes)
+	// Read the header length (4 bytes big-endian)
 	lengthBytes := make([]byte, 4)
 	if _, err := io.ReadFull(rc, lengthBytes); err != nil {
 		rc.Close()
 		return nil, err
 	}
 
-	dekLen := binary.BigEndian.Uint32(lengthBytes)
+	headerLen := binary.BigEndian.Uint32(lengthBytes)
 
-	// Read the encrypted DEK
-	encryptedDEK := make([]byte, dekLen)
-	if _, err := io.ReadFull(rc, encryptedDEK); err != nil {
+	// Read and parse the header
+	headerBytes := make([]byte, headerLen)
+	if _, err := io.ReadFull(rc, headerBytes); err != nil {
 		rc.Close()
 		return nil, err
 	}
+
+	var header BlobHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		rc.Close()
+		return nil, err
+	}
+
+	if header.Version != BlobHeaderVersion {
+		rc.Close()
+		return nil, io.ErrUnexpectedEOF
+	}
+
+	// Extract the encrypted DEK from the header
+	encryptedDEK := header.EncryptedDEK
 
 	// Decrypt the DEK with master AEAD
 	dek, err := mw.masterAEAD.Decrypt(encryptedDEK, blobId[:])
@@ -204,11 +307,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		return nil, err
 	}
 
-	// Return a composite ReadCloser that closes both the decrypting reader and the original reader
-	return &compositeReadCloser{
-		Reader: decryptingReader,
-		closer: rc,
-	}, nil
+	return &compositeReadCloser{decryptingReader, rc}, nil
 }
 
 // compositeReadCloser combines a Reader with a Closer
