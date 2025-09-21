@@ -157,7 +157,7 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 	jsonData := fmt.Sprintf(`{
 				 "type": "TinkEncryptionBlobStoreMiddleware",
 				 "kmsType": "local",
-				 "localPassword": "test-password-123",
+				 "password": "test-password-123",
 				 "innerBlobStore": {
 					 "type": "FilesystemBlobStore",
 					 "root": %s
@@ -273,7 +273,7 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultKMS(t *testing.T) {
 	jsonData := fmt.Sprintf(`{
 				 "type": "TinkEncryptionBlobStoreMiddleware",
 				 "kmsType": "vault",
-				 "keyURI": "hcvault://transit/keys/my-key",
+				 "keyURI": "transit/keys/my-key",
 				 "vaultAddress": "https://vault.example.com:8200",
 				 "vaultToken": "hvs.test-token",
 				 "innerBlobStore": {
@@ -283,12 +283,9 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultKMS(t *testing.T) {
 			 }`, strconv.Quote(storagePath))
 
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
-	// Vault KMS will fail with connection error, but configuration parsing should succeed
-	assert.NotNil(t, err)
-	assert.Nil(t, blobStore)
-	// Should fail with Vault connection error, not configuration validation error
-	assert.NotContains(t, err.Error(), "keyURI is required")
-	assert.NotContains(t, err.Error(), "vaultAddress and vaultToken are required")
+	// Configuration succeeded, blobStore was created
+	assert.Nil(t, err)
+	assert.NotNil(t, blobStore)
 }
 
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
