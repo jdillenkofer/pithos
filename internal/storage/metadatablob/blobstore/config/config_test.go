@@ -147,6 +147,150 @@ func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, blobStore)
 }
 
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "local",
+				 "localPassword": "test-password-123",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, blobStore)
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRequiresKeyURIForAWS(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "aws",
+				 "awsRegion": "us-east-1",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "keyURI is required for AWS KMS")
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRequiresKeyURIForVault(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "vaultAddress": "https://vault.example.com:8200",
+				 "vaultToken": "hvs.test-token",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "keyURI is required for Vault KMS")
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRequiresVaultCredentials(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "keyURI": "hcvault://transit/keys/my-key",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "vaultAddress and vaultToken are required for Vault KMS")
+}
+
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithAWSKMS(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "aws",
+				 "keyURI": "aws-kms://arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012",
+				 "awsRegion": "us-east-1",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	// AWS KMS configuration should succeed even without credentials in test environment
+	assert.Nil(t, err)
+	assert.NotNil(t, blobStore)
+}
+
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultKMS(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "keyURI": "hcvault://transit/keys/my-key",
+				 "vaultAddress": "https://vault.example.com:8200",
+				 "vaultToken": "hvs.test-token",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	// Vault KMS will fail with connection error, but configuration parsing should succeed
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	// Should fail with Vault connection error, not configuration validation error
+	assert.NotContains(t, err.Error(), "keyURI is required")
+	assert.NotContains(t, err.Error(), "vaultAddress and vaultToken are required")
+}
+
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
