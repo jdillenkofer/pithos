@@ -90,7 +90,7 @@ type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
 	VaultAddress internalConfig.StringProvider `json:"vaultAddress,omitempty"`
 	VaultToken   internalConfig.StringProvider `json:"vaultToken,omitempty"`
 	// Local KMS specific (password for key derivation)
-	LocalPassword              internalConfig.StringProvider `json:"localPassword,omitempty"`
+	Password                   internalConfig.StringProvider `json:"password,omitempty"`
 	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
 	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
@@ -146,11 +146,11 @@ func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider 
 		if address == "" || token == "" {
 			return nil, errors.New("vaultAddress and vaultToken are required for Vault KMS")
 		}
-		return tink.NewWithHCVault(keyURI, address, token, innerBlobStore)
+		return tink.NewWithHCVault(address, token, keyURI, innerBlobStore)
 	case "local":
-		password := t.LocalPassword.Value()
+		password := t.Password.Value()
 		if password == "" {
-			return nil, errors.New("localPassword is required for Local KMS")
+			return nil, errors.New("password is required for Local KMS")
 		}
 		return tink.NewWithLocalKMS(password, innerBlobStore)
 	default:
