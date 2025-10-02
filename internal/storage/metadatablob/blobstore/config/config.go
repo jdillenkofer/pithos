@@ -11,7 +11,7 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
+	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	filesystemBlobStoreType               = "FilesystemBlobStore"
+	filesystemBlobStoreType = "FilesystemBlobStore"
+	// @DEPRECATED: This will be removed in a future release.
 	encryptionBlobStoreMiddlewareType     = "EncryptionBlobStoreMiddleware"
 	tinkEncryptionBlobStoreMiddlewareType = "TinkEncryptionBlobStoreMiddleware"
 	tracingBlobStoreMiddlewareType        = "TracingBlobStoreMiddleware"
@@ -78,7 +79,7 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider depe
 	if err != nil {
 		return nil, err
 	}
-	return encryption.New(e.Password.Value(), innerBlobStore)
+	return legacyEncryptionBlobStoreMiddleware.New(e.Password.Value(), innerBlobStore)
 }
 
 type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
