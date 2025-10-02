@@ -83,15 +83,19 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider depe
 }
 
 type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
-	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local"
-	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local KMS
+	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local", "tpm"
+	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local/tpm KMS
 	// AWS KMS specific
 	AWSRegion internalConfig.StringProvider `json:"awsRegion,omitempty"`
 	// Vault specific
 	VaultAddress internalConfig.StringProvider `json:"vaultAddress,omitempty"`
 	VaultToken   internalConfig.StringProvider `json:"vaultToken,omitempty"`
 	// Local KMS specific (password for key derivation)
-	Password                   internalConfig.StringProvider `json:"password,omitempty"`
+	Password internalConfig.StringProvider `json:"password,omitempty"`
+	// TPM specific
+	TPMPath                    internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
+	TPMPersistentHandle        internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
+	TPMKeyFilePath             internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
 	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
 	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
@@ -154,6 +158,31 @@ func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, errors.New("password is required for Local KMS")
 		}
 		return tink.NewWithLocalKMS(password, innerBlobStore)
+	case "tpm":
+		tpmPath := t.TPMPath.Value()
+		if tpmPath == "" {
+			return nil, errors.New("tpmPath is required for TPM KMS")
+		}
+
+		// Parse persistent handle (default to 0x81000001 if not specified)
+		persistentHandleStr := t.TPMPersistentHandle.Value()
+		var persistentHandle uint32 = 0x81000001 // Default handle
+		if persistentHandleStr != "" {
+			var handle uint64
+			_, err := fmt.Sscanf(persistentHandleStr, "0x%x", &handle)
+			if err != nil {
+				return nil, fmt.Errorf("invalid tpmPersistentHandle format (expected hex like 0x81000001): %w", err)
+			}
+			if handle < 0x81000000 || handle > 0x81FFFFFF {
+				return nil, fmt.Errorf("tpmPersistentHandle must be in range 0x81000000-0x81FFFFFF, got 0x%08X", handle)
+			}
+			persistentHandle = uint32(handle)
+		}
+
+		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
+		keyFilePath := t.TPMKeyFilePath.Value()
+
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, innerBlobStore)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

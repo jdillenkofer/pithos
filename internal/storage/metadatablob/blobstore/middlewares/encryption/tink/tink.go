@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/scrypt"
 
 	aeadsubtle "github.com/google/tink/go/aead/subtle"
@@ -28,6 +29,7 @@ const (
 	KeyTypeAWS   = "aws"
 	KeyTypeVault = "vault"
 	KeyTypeLocal = "local"
+	KeyTypeTPM   = "tpm"
 )
 
 // BlobHeader contains metadata about the encryption used for a blob
@@ -166,11 +168,47 @@ func NewWithAWSKMS(keyURI, region string, innerBlobStore blobstore.BlobStore) (b
 	}, nil
 }
 
+// NewWithTPM creates a new TinkEncryptionBlobStoreMiddleware using TPM for key management.
+// Uses envelope encryption where each blob has its own DEK encrypted with the TPM master key.
+// The master key never leaves the TPM hardware.
+// tpmPath: path to TPM device (e.g. "/dev/tpmrm0" or "/dev/tpm0")
+// persistentHandle: persistent handle for the TPM key (0x81000000–0x81FFFFFF)
+// keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
+	// Create TPM AEAD
+	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Test key availability
+	if err := testKeyAvailability(tpmAEAD, KeyTypeTPM); err != nil {
+		tpmAEAD.Close()
+		return nil, err
+	}
+
+	return &TinkEncryptionBlobStoreMiddleware{
+		masterAEAD:     tpmAEAD,
+		innerBlobStore: innerBlobStore,
+		keyType:        KeyTypeTPM,
+		keyURI:         fmt.Sprintf("tpm://%s/0x%08X", tpmPath, persistentHandle),
+	}, nil
+}
+
 func (mw *TinkEncryptionBlobStoreMiddleware) Start(ctx context.Context) error {
 	return mw.innerBlobStore.Start(ctx)
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
+	// If using TPM, close the TPM device
+	if mw.keyType == KeyTypeTPM {
+		if tpmAEAD, ok := mw.masterAEAD.(*tpm.AEAD); ok {
+			if err := tpmAEAD.Close(); err != nil {
+				// Log error but continue with stopping inner blob store
+				fmt.Printf("Warning: failed to close TPM AEAD: %v\n", err)
+			}
+		}
+	}
 	return mw.innerBlobStore.Stop(ctx)
 }
 
