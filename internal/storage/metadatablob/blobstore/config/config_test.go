@@ -305,6 +305,88 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultKMS(t *testing.T) {
 	assert.Equal(t, "hvs.test-token", config.VaultToken.Value())
 }
 
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithTPM(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "tpm",
+				 "tpmPath": "/dev/tpmrm0",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	// Test that configuration parsing works
+	instantiator, err := CreateBlobStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	// Verify the configuration was parsed correctly
+	config, ok := instantiator.(*TinkEncryptionBlobStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "tpm", config.KMSType.Value())
+	assert.Equal(t, "/dev/tpmrm0", config.TPMPath.Value())
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRequiresTPMPath(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "tpm",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "tpmPath is required for TPM KMS")
+}
+
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithTPMAndPersistentHandle(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "tpm",
+				 "tpmPath": "/dev/tpmrm0",
+				 "tpmPersistentHandle": "0x81000002",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	// Test that configuration parsing works
+	instantiator, err := CreateBlobStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	// Verify the configuration was parsed correctly
+	config, ok := instantiator.(*TinkEncryptionBlobStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "tpm", config.KMSType.Value())
+	assert.Equal(t, "/dev/tpmrm0", config.TPMPath.Value())
+	assert.Equal(t, "0x81000002", config.TPMPersistentHandle.Value())
+}
+
 func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
