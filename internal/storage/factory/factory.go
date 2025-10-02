@@ -12,7 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	encryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
+	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	tinkEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	tracingBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
@@ -98,7 +98,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			slog.Error("Encryption password is required for legacy encryption")
 			os.Exit(1)
 		}
-		blobStore, err = encryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
+		blobStore, err = legacyEncryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewEncryptionBlobStoreMiddleware: ", err))
 			os.Exit(1)
