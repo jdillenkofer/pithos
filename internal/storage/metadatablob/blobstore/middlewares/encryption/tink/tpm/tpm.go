@@ -1,4 +1,4 @@
-package tink
+package tpm
 
 import (
 	"crypto/rand"
@@ -8,18 +8,18 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// TPMAEAD implements tink.AEAD interface using TPM for key operations
+// AEAD implements tink.AEAD interface using TPM for key operations
 // The master key never leaves the TPM
-type TPMAEAD struct {
+type AEAD struct {
 	tpmDevice transport.TPMCloser
 	keyHandle tpm2.TPMHandle
 }
 
-// NewTPMAEAD creates a new AEAD primitive that uses TPM for encryption/decryption
+// NewAEAD creates a new AEAD primitive that uses TPM for encryption/decryption
 // The key is created and sealed in the TPM and never exposed
 // On Linux: tpmPath should be "/dev/tpmrm0" or "/dev/tpm0"
 // On Windows: tpmPath can be empty or "default"
-func NewTPMAEAD(tpmPath string) (*TPMAEAD, tpm2.TPMHandle, error) {
+func NewAEAD(tpmPath string) (*AEAD, tpm2.TPMHandle, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
@@ -67,7 +67,7 @@ func NewTPMAEAD(tpmPath string) (*TPMAEAD, tpm2.TPMHandle, error) {
 		return nil, 0, fmt.Errorf("failed to create primary key: %w", err)
 	}
 
-	return &TPMAEAD{
+	return &AEAD{
 		tpmDevice: tpmDevice,
 		keyHandle: createPrimaryRsp.ObjectHandle,
 	}, createPrimaryRsp.ObjectHandle, nil
@@ -76,13 +76,13 @@ func NewTPMAEAD(tpmPath string) (*TPMAEAD, tpm2.TPMHandle, error) {
 // NewTPMAEADFromHandle creates a TPMAEAD from an existing TPM key handle
 // On Linux: tpmPath should be "/dev/tpmrm0" or "/dev/tpm0"
 // On Windows: tpmPath is ignored (uses TBS)
-func NewTPMAEADFromHandle(tpmPath string, keyHandle tpm2.TPMHandle) (*TPMAEAD, error) {
+func NewTPMAEADFromHandle(tpmPath string, keyHandle tpm2.TPMHandle) (*AEAD, error) {
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open TPM: %w", err)
 	}
 
-	return &TPMAEAD{
+	return &AEAD{
 		tpmDevice: tpmDevice,
 		keyHandle: keyHandle,
 	}, nil
@@ -90,7 +90,7 @@ func NewTPMAEADFromHandle(tpmPath string, keyHandle tpm2.TPMHandle) (*TPMAEAD, e
 
 // Encrypt encrypts plaintext with associatedData using TPM
 // This implements the tink.AEAD interface
-func (t *TPMAEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
+func (t *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 	// Generate a random IV for this encryption
 	iv := make([]byte, 16)
 	if _, err := rand.Read(iv); err != nil {
@@ -129,7 +129,7 @@ func (t *TPMAEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 
 // Decrypt decrypts ciphertext with associatedData using TPM
 // This implements the tink.AEAD interface
-func (t *TPMAEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
+func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	if len(ciphertext) < 16 {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
@@ -164,7 +164,7 @@ func (t *TPMAEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 }
 
 // Close closes the TPM device and flushes the key handle
-func (t *TPMAEAD) Close() error {
+func (t *AEAD) Close() error {
 	// Flush the key handle from TPM
 	flushCmd := tpm2.FlushContext{
 		FlushHandle: t.keyHandle,

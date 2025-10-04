@@ -1,6 +1,6 @@
 //go:build !linux && !windows
 
-package tink
+package tpm
 
 import (
 	"fmt"

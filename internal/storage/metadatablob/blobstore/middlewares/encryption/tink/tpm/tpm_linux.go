@@ -1,6 +1,6 @@
 //go:build linux
 
-package tink
+package tpm
 
 import (
 	"fmt"
@@ -15,11 +15,11 @@ func openTPMDevice(tpmPath string) (transport.TPMCloser, error) {
 	if tpmPath == "" {
 		tpmPath = "/dev/tpmrm0"
 	}
-	
+
 	device, err := linuxtpm.Open(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open Linux TPM device %s: %w", tpmPath, err)
 	}
-	
+
 	return device, nil
 }

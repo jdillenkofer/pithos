@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/scrypt"
 
 	aeadsubtle "github.com/google/tink/go/aead/subtle"
@@ -173,7 +174,7 @@ func NewWithAWSKMS(keyURI, region string, innerBlobStore blobstore.BlobStore) (b
 // tpmPath: path to TPM device (e.g. "/dev/tpmrm0" or "/dev/tpm0")
 func NewWithTPM(tpmPath string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
 	// Create TPM AEAD
-	tpmAEAD, keyHandle, err := NewTPMAEAD(tpmPath)
+	tpmAEAD, keyHandle, err := tpm.NewAEAD(tpmPath)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +200,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) Start(ctx context.Context) error {
 func (mw *TinkEncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 	// If using TPM, close the TPM device
 	if mw.keyType == KeyTypeTPM {
-		if tpmAEAD, ok := mw.masterAEAD.(*TPMAEAD); ok {
+		if tpmAEAD, ok := mw.masterAEAD.(*tpm.AEAD); ok {
 			if err := tpmAEAD.Close(); err != nil {
 				// Log error but continue with stopping inner blob store
 				fmt.Printf("Warning: failed to close TPM AEAD: %v\n", err)

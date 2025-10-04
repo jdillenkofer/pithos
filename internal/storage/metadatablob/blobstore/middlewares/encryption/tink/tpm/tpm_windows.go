@@ -1,6 +1,6 @@
 //go:build windows
 
-package tink
+package tpm
 
 import (
 	"fmt"
