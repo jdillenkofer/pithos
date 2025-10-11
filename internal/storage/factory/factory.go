@@ -12,7 +12,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	encryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
+	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
+	tinkEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	tracingBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
@@ -22,7 +23,16 @@ import (
 	tracingStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemBlobStore bool, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) storage.Storage {
+// EncryptionType represents the type of encryption to use for blob storage
+type EncryptionType string
+
+const (
+	EncryptionTypeNone   EncryptionType = "none"
+	EncryptionTypeLegacy EncryptionType = "legacy"
+	EncryptionTypeTink   EncryptionType = "tink"
+)
+
+func CreateStorage(storagePath string, db database.Database, useFilesystemBlobStore bool, encryptionType EncryptionType, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -80,8 +90,15 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			os.Exit(1)
 		}
 	}
-	if blobStoreEncryptionPassword != "" {
-		blobStore, err = encryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
+
+	// Apply encryption middleware based on encryption type
+	switch encryptionType {
+	case EncryptionTypeLegacy:
+		if blobStoreEncryptionPassword == "" {
+			slog.Error("Encryption password is required for legacy encryption")
+			os.Exit(1)
+		}
+		blobStore, err = legacyEncryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewEncryptionBlobStoreMiddleware: ", err))
 			os.Exit(1)
@@ -91,7 +108,28 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
 			os.Exit(1)
 		}
+	case EncryptionTypeTink:
+		if blobStoreEncryptionPassword == "" {
+			slog.Error("Encryption password is required for Tink encryption")
+			os.Exit(1)
+		}
+		blobStore, err = tinkEncryptionBlobStoreMiddleware.NewWithLocalKMS(blobStoreEncryptionPassword, blobStore)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error during NewTinkEncryptionBlobStoreMiddleware: ", err))
+			os.Exit(1)
+		}
+		blobStore, err = tracingBlobStoreMiddleware.New("TinkEncryptionBlobStoreMiddleware", blobStore)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
+			os.Exit(1)
+		}
+	case EncryptionTypeNone:
+		// No encryption
+	default:
+		slog.Error(fmt.Sprintf("Unknown encryption type: %s", encryptionType))
+		os.Exit(1)
 	}
+
 	if wrapBlobStoreWithOutbox {
 		blobOutboxEntryRepository, err := repositoryFactory.NewBlobOutboxEntryRepository(db)
 		if err != nil {
