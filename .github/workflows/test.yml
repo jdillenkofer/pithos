@@ -60,22 +60,22 @@ jobs:
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-sql-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-sql-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-sql-legacy-encrypted
           - os: ubuntu-latest
             db: sqlite
             path_style: host
@@ -99,22 +99,22 @@ jobs:
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-fs-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-fs-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-normal-fs-legacy-encrypted
           # --- SQLite - path - normal ---
           - os: ubuntu-latest
             db: sqlite
@@ -139,22 +139,22 @@ jobs:
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-sql-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-sql-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-normal-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-sql-legacy-encrypted
           - os: ubuntu-latest
             db: sqlite
             path_style: path
@@ -178,22 +178,22 @@ jobs:
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-fs-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-fs-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-normal-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-normal-fs-legacy-encrypted
           # --- SQLite - host - replicated ---
           - os: ubuntu-latest
             db: sqlite
@@ -218,22 +218,22 @@ jobs:
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-sql-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-sql-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-host-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-sql-legacy-encrypted
           - os: ubuntu-latest
             db: sqlite
             path_style: host
@@ -257,22 +257,22 @@ jobs:
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-fs-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-fs-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-host-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-host-replicated-fs-legacy-encrypted
           # --- SQLite - path - replicated ---
           - os: ubuntu-latest
             db: sqlite
@@ -297,22 +297,22 @@ jobs:
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-sql-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-sql-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: sqlite-path-replicated-sql-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-sql-legacy-encrypted
           - os: ubuntu-latest
             db: sqlite
             path_style: path
@@ -336,22 +336,22 @@ jobs:
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-fs-legacy-encrypted
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-fs-legacy-encrypted
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: sqlite-path-replicated-fs-encrypted
+            encryption: legacy
+            name: sqlite-path-replicated-fs-legacy-encrypted
           # --- Postgres - host - normal ---
           - os: ubuntu-latest
             db: postgres
@@ -376,22 +376,22 @@ jobs:
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-host-normal-sql-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-host-normal-sql-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-host-normal-sql-legacy-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: host
@@ -415,22 +415,22 @@ jobs:
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-host-normal-fs-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-host-normal-fs-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-host-normal-fs-legacy-encrypted
           # --- Postgres - path - normal ---
           - os: ubuntu-latest
             db: postgres
@@ -455,22 +455,22 @@ jobs:
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-path-normal-sql-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-path-normal-sql-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: none
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-normal-sql-encrypted
+            encryption: legacy
+            name: postgres-path-normal-sql-legacy-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: path
@@ -494,22 +494,22 @@ jobs:
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-path-normal-fs-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-path-normal-fs-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: none
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-normal-fs-encrypted
+            encryption: legacy
+            name: postgres-path-normal-fs-legacy-encrypted
           # --- Postgres - host - replicated ---
           - os: ubuntu-latest
             db: postgres
@@ -534,22 +534,22 @@ jobs:
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-sql-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-sql-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-host-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-sql-legacy-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: host
@@ -573,22 +573,22 @@ jobs:
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-fs-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-fs-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-host-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-host-replicated-fs-legacy-encrypted
           # --- Postgres - path - replicated ---
           - os: ubuntu-latest
             db: postgres
@@ -613,22 +613,22 @@ jobs:
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-sql-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-sql-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: replicated
             blob_store: sql
-            encrypt: "true"
-            name: postgres-path-replicated-sql-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-sql-legacy-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: path
@@ -652,22 +652,88 @@ jobs:
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-fs-legacy-encrypted
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-fs-legacy-encrypted
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: replicated
             blob_store: filesystem
-            encrypt: "true"
-            name: postgres-path-replicated-fs-encrypted
+            encryption: legacy
+            name: postgres-path-replicated-fs-legacy-encrypted
+          # --- Tink Encryption Tests ---
+          # SQLite with Tink encryption
+          - os: ubuntu-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encryption: tink
+            name: sqlite-host-normal-sql-tink-encrypted
+          - os: macos-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encryption: tink
+            name: sqlite-host-normal-sql-tink-encrypted
+          - os: windows-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encryption: tink
+            name: sqlite-host-normal-sql-tink-encrypted
+          - os: ubuntu-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encryption: tink
+            name: sqlite-host-normal-fs-tink-encrypted
+          - os: macos-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encryption: tink
+            name: sqlite-host-normal-fs-tink-encrypted
+          - os: windows-latest
+            db: sqlite
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encryption: tink
+            name: sqlite-host-normal-fs-tink-encrypted
+          # PostgreSQL with Tink encryption
+          - os: ubuntu-latest
+            db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: sql
+            encryption: tink
+            name: postgres-host-normal-sql-tink-encrypted
+          - os: ubuntu-latest
+            db: postgres
+            path_style: host
+            repl_mode: none
+            blob_store: filesystem
+            encryption: tink
+            name: postgres-host-normal-fs-tink-encrypted
+          - os: ubuntu-latest
+            db: postgres
+            path_style: path
+            repl_mode: replicated
+            blob_store: filesystem
+            encryption: tink
+            name: postgres-path-replicated-fs-tink-encrypted
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -682,6 +748,6 @@ jobs:
         shell: bash
         run: |
           args="-db ${{ matrix.db }} -path-style ${{ matrix.path_style }} -repl-mode ${{ matrix.repl_mode }} -blob-store ${{ matrix.blob_store }}"
-          if [ "${{ matrix.encrypt }}" = "true" ]; then args="$args -encrypt-blob-store"; fi
+          if [ -n "${{ matrix.encryption }}" ]; then args="$args -blob-store-encryption ${{ matrix.encryption }}"; fi
           echo "Running: $TEST_NAME"
           go test ./... -v -timeout 2h -integration $args
