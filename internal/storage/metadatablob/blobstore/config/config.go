@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -10,7 +11,8 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption"
+	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp"
@@ -19,12 +21,14 @@ import (
 )
 
 const (
-	filesystemBlobStoreType           = "FilesystemBlobStore"
-	encryptionBlobStoreMiddlewareType = "EncryptionBlobStoreMiddleware"
-	tracingBlobStoreMiddlewareType    = "TracingBlobStoreMiddleware"
-	outboxBlobStoreType               = "OutboxBlobStore"
-	sftpBlobStoreType                 = "SftpBlobStore"
-	sqlBlobStoreType                  = "SqlBlobStore"
+	filesystemBlobStoreType = "FilesystemBlobStore"
+	// @DEPRECATED: This will be removed in a future release.
+	encryptionBlobStoreMiddlewareType     = "EncryptionBlobStoreMiddleware"
+	tinkEncryptionBlobStoreMiddlewareType = "TinkEncryptionBlobStoreMiddleware"
+	tracingBlobStoreMiddlewareType        = "TracingBlobStoreMiddleware"
+	outboxBlobStoreType                   = "OutboxBlobStore"
+	sftpBlobStoreType                     = "SftpBlobStore"
+	sqlBlobStoreType                      = "SqlBlobStore"
 )
 
 type BlobStoreInstantiator = internalConfig.DynamicJsonInstantiator[blobstore.BlobStore]
@@ -75,7 +79,84 @@ func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider depe
 	if err != nil {
 		return nil, err
 	}
-	return encryption.New(e.Password.Value(), innerBlobStore)
+	return legacyEncryptionBlobStoreMiddleware.New(e.Password.Value(), innerBlobStore)
+}
+
+type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
+	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local"
+	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local KMS
+	// AWS KMS specific
+	AWSRegion internalConfig.StringProvider `json:"awsRegion,omitempty"`
+	// Vault specific
+	VaultAddress internalConfig.StringProvider `json:"vaultAddress,omitempty"`
+	VaultToken   internalConfig.StringProvider `json:"vaultToken,omitempty"`
+	// Local KMS specific (password for key derivation)
+	Password                   internalConfig.StringProvider `json:"password,omitempty"`
+	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
+	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
+	internalConfig.DynamicJsonType
+}
+
+func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type tinkEncryptionBlobStoreMiddlewareConfiguration TinkEncryptionBlobStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*tinkEncryptionBlobStoreMiddlewareConfiguration)(t))
+	if err != nil {
+		return err
+	}
+	t.InnerBlobStoreInstantiator, err = CreateBlobStoreInstantiatorFromJson(t.RawInnerBlobStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := t.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
+	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	kmsType := t.KMSType.Value()
+
+	switch kmsType {
+	case "aws":
+		keyURI := t.KeyURI.Value()
+		region := t.AWSRegion.Value()
+		if keyURI == "" {
+			return nil, errors.New("keyURI is required for AWS KMS")
+		}
+		if region == "" {
+			return nil, errors.New("awsRegion is required for AWS KMS")
+		}
+		return tink.NewWithAWSKMS(keyURI, region, innerBlobStore)
+	case "vault":
+		keyURI := t.KeyURI.Value()
+		address := t.VaultAddress.Value()
+		token := t.VaultToken.Value()
+		if keyURI == "" {
+			return nil, errors.New("keyURI is required for Vault KMS")
+		}
+		if address == "" || token == "" {
+			return nil, errors.New("vaultAddress and vaultToken are required for Vault KMS")
+		}
+		return tink.NewWithHCVault(address, token, keyURI, innerBlobStore)
+	case "local":
+		password := t.Password.Value()
+		if password == "" {
+			return nil, errors.New("password is required for Local KMS")
+		}
+		return tink.NewWithLocalKMS(password, innerBlobStore)
+	default:
+		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
+	}
 }
 
 type TracingBlobStoreMiddlewareConfiguration struct {
@@ -256,6 +337,8 @@ func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error
 		bi = &FilesystemBlobStoreConfiguration{}
 	case encryptionBlobStoreMiddlewareType:
 		bi = &EncryptionBlobStoreMiddlewareConfiguration{}
+	case tinkEncryptionBlobStoreMiddlewareType:
+		bi = &TinkEncryptionBlobStoreMiddlewareConfiguration{}
 	case tracingBlobStoreMiddlewareType:
 		bi = &TracingBlobStoreMiddlewareConfiguration{}
 	case outboxBlobStoreType:
