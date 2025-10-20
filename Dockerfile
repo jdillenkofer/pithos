@@ -29,6 +29,7 @@ WORKDIR /app
 # Copy binary and minimal passwd file for user mapping
 COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
 COPY --from=app-builder /etc/passwd /etc/passwd
+COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
 
 EXPOSE 9000
 
