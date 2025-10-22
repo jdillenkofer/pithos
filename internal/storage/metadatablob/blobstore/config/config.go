@@ -88,8 +88,10 @@ type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
 	// AWS KMS specific
 	AWSRegion internalConfig.StringProvider `json:"awsRegion,omitempty"`
 	// Vault specific
-	VaultAddress internalConfig.StringProvider `json:"vaultAddress,omitempty"`
-	VaultToken   internalConfig.StringProvider `json:"vaultToken,omitempty"`
+	VaultAddress  internalConfig.StringProvider `json:"vaultAddress,omitempty"`
+	VaultToken    internalConfig.StringProvider `json:"vaultToken,omitempty"`    // Token-based auth
+	VaultRoleID   internalConfig.StringProvider `json:"vaultRoleId,omitempty"`   // AppRole auth
+	VaultSecretID internalConfig.StringProvider `json:"vaultSecretId,omitempty"` // AppRole auth
 	// Local KMS specific (password for key derivation)
 	Password internalConfig.StringProvider `json:"password,omitempty"`
 	// TPM specific
@@ -145,13 +147,29 @@ func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider 
 		keyURI := t.KeyURI.Value()
 		address := t.VaultAddress.Value()
 		token := t.VaultToken.Value()
+		roleID := t.VaultRoleID.Value()
+		secretID := t.VaultSecretID.Value()
+
 		if keyURI == "" {
 			return nil, errors.New("keyURI is required for Vault KMS")
 		}
-		if address == "" || token == "" {
-			return nil, errors.New("vaultAddress and vaultToken are required for Vault KMS")
+		if address == "" {
+			return nil, errors.New("vaultAddress is required for Vault KMS")
 		}
-		return tink.NewWithHCVault(address, token, keyURI, innerBlobStore)
+
+		// Check that either token OR (roleID AND secretID) is provided
+		hasToken := token != ""
+		hasAppRole := roleID != "" && secretID != ""
+
+		if !hasToken && !hasAppRole {
+			return nil, errors.New("either vaultToken or (vaultRoleId and vaultSecretId) must be provided for Vault KMS")
+		}
+
+		if hasToken && hasAppRole {
+			return nil, errors.New("cannot use both vaultToken and AppRole authentication - choose one method")
+		}
+
+		return tink.NewWithHCVault(address, token, roleID, secretID, keyURI, innerBlobStore)
 	case "local":
 		password := t.Password.Value()
 		if password == "" {

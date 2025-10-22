@@ -227,6 +227,7 @@ func TestTinkEncryptionBlobStoreMiddlewareRequiresVaultCredentials(t *testing.T)
 				 "type": "TinkEncryptionBlobStoreMiddleware",
 				 "kmsType": "vault",
 				 "keyURI": "hcvault://transit/keys/my-key",
+				 "vaultAddress": "https://vault.example.com:8200",
 				 "innerBlobStore": {
 					 "type": "FilesystemBlobStore",
 					 "root": %s
@@ -236,7 +237,7 @@ func TestTinkEncryptionBlobStoreMiddlewareRequiresVaultCredentials(t *testing.T)
 	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
 	assert.NotNil(t, err)
 	assert.Nil(t, blobStore)
-	assert.Contains(t, err.Error(), "vaultAddress and vaultToken are required for Vault KMS")
+	assert.Contains(t, err.Error(), "either vaultToken or (vaultRoleId and vaultSecretId) must be provided")
 }
 
 func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithAWSKMS(t *testing.T) {
@@ -303,6 +304,94 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultKMS(t *testing.T) {
 	assert.Equal(t, "transit/keys/my-key", config.KeyURI.Value())
 	assert.Equal(t, "https://vault.example.com:8200", config.VaultAddress.Value())
 	assert.Equal(t, "hvs.test-token", config.VaultToken.Value())
+}
+
+func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithVaultAppRole(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "keyURI": "transit/keys/my-key",
+				 "vaultAddress": "https://vault.example.com:8200",
+				 "vaultRoleId": "test-role-id",
+				 "vaultSecretId": "test-secret-id",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	// Test that configuration parsing works
+	instantiator, err := CreateBlobStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	// Verify the configuration was parsed correctly
+	config, ok := instantiator.(*TinkEncryptionBlobStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "vault", config.KMSType.Value())
+	assert.Equal(t, "transit/keys/my-key", config.KeyURI.Value())
+	assert.Equal(t, "https://vault.example.com:8200", config.VaultAddress.Value())
+	assert.Equal(t, "test-role-id", config.VaultRoleID.Value())
+	assert.Equal(t, "test-secret-id", config.VaultSecretID.Value())
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRejectsBothTokenAndAppRole(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "keyURI": "transit/keys/my-key",
+				 "vaultAddress": "https://vault.example.com:8200",
+				 "vaultToken": "hvs.test-token",
+				 "vaultRoleId": "test-role-id",
+				 "vaultSecretId": "test-secret-id",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "cannot use both vaultToken and AppRole authentication")
+}
+
+func TestTinkEncryptionBlobStoreMiddlewareRequiresBothRoleIdAndSecretId(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	// Test with only roleId
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionBlobStoreMiddleware",
+				 "kmsType": "vault",
+				 "keyURI": "transit/keys/my-key",
+				 "vaultAddress": "https://vault.example.com:8200",
+				 "vaultRoleId": "test-role-id",
+				 "innerBlobStore": {
+					 "type": "FilesystemBlobStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, blobStore)
+	assert.Contains(t, err.Error(), "either vaultToken or (vaultRoleId and vaultSecretId) must be provided")
 }
 
 func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithTPM(t *testing.T) {

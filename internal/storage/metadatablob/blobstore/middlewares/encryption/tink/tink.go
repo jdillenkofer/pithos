@@ -1,6 +1,7 @@
 package tink
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -8,7 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink/tpm"
@@ -47,9 +51,16 @@ type TinkEncryptionBlobStoreMiddleware struct {
 	// Metadata for key rotation support
 	keyType string // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
 	keyURI  string // Key identifier (empty for local)
-	// Vault-specific configuration for key rotation
-	vaultAddr  string // Vault address (for recreating client)
-	vaultToken string // Vault token (for recreating client)
+	// Vault-specific configuration for key rotation and token refresh
+	vaultAddr     string // Vault address (for recreating client)
+	vaultToken    string // Vault token (for token-based auth)
+	vaultRoleID   string // Vault AppRole role ID (for AppRole auth)
+	vaultSecretID string // Vault AppRole secret ID (for AppRole auth)
+	// Token refresh mechanism
+	tokenMutex      sync.RWMutex  // Protects token refresh operations
+	tokenExpiry     time.Time     // When the current token expires
+	stopRefresh     chan struct{} // Signal to stop the refresh goroutine
+	refreshShutdown sync.WaitGroup
 }
 
 // testKeyAvailability performs a small encrypt/decrypt test to verify the AEAD key is accessible and functional
@@ -69,12 +80,184 @@ func testKeyAvailability(aead tink.AEAD, kmsType string) error {
 	return nil
 }
 
+// vaultAuthResponse represents the response from Vault authentication
+type vaultAuthResponse struct {
+	Auth struct {
+		ClientToken   string `json:"client_token"`
+		LeaseDuration int    `json:"lease_duration"`
+		Renewable     bool   `json:"renewable"`
+	} `json:"auth"`
+}
+
+// authenticateWithAppRole authenticates with Vault using AppRole and returns the client token and expiry
+func authenticateWithAppRole(vaultAddr, roleID, secretID string) (string, time.Time, error) {
+	// Convert vault address to proper HTTP URL
+	httpAddr := vaultAddr
+	if strings.HasPrefix(vaultAddr, "hcvault://") {
+		httpAddr = "https://" + vaultAddr[len("hcvault://"):]
+	} else if !strings.HasPrefix(vaultAddr, "http://") && !strings.HasPrefix(vaultAddr, "https://") {
+		httpAddr = "https://" + vaultAddr
+	}
+
+	// Prepare the AppRole login request
+	loginData := map[string]string{
+		"role_id":   roleID,
+		"secret_id": secretID,
+	}
+	loginJSON, err := json.Marshal(loginData)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to marshal AppRole login data: %w", err)
+	}
+
+	// Make the login request
+	loginURL := strings.TrimRight(httpAddr, "/") + "/v1/auth/approle/login"
+	resp, err := http.Post(loginURL, "application/json", bytes.NewReader(loginJSON))
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to authenticate with AppRole: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", time.Time{}, fmt.Errorf("AppRole authentication failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse the response
+	var authResp vaultAuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		return "", time.Time{}, fmt.Errorf("failed to decode AppRole response: %w", err)
+	}
+
+	if authResp.Auth.ClientToken == "" {
+		return "", time.Time{}, fmt.Errorf("AppRole authentication returned empty token")
+	}
+
+	// Calculate token expiry (refresh at 80% of lease duration to be safe)
+	leaseDuration := time.Duration(authResp.Auth.LeaseDuration) * time.Second
+	refreshBuffer := leaseDuration * 20 / 100 // 20% buffer
+	expiry := time.Now().Add(leaseDuration - refreshBuffer)
+
+	return authResp.Auth.ClientToken, expiry, nil
+}
+
+// refreshVaultToken refreshes the AEAD with a new token
+func (mw *TinkEncryptionBlobStoreMiddleware) refreshVaultToken() error {
+	mw.tokenMutex.Lock()
+	defer mw.tokenMutex.Unlock()
+
+	// Get new token using AppRole
+	newToken, newExpiry, err := authenticateWithAppRole(mw.vaultAddr, mw.vaultRoleID, mw.vaultSecretID)
+	if err != nil {
+		return fmt.Errorf("failed to refresh Vault token: %w", err)
+	}
+
+	// Create new Vault client with the new token
+	var uriPrefix string
+	if strings.HasPrefix(mw.vaultAddr, "https://") {
+		uriPrefix = "hcvault://" + mw.vaultAddr[len("https://"):]
+	} else if strings.HasPrefix(mw.vaultAddr, "http://") {
+		uriPrefix = "hcvault://" + mw.vaultAddr[len("http://"):]
+	} else {
+		uriPrefix = "hcvault://" + mw.vaultAddr
+	}
+
+	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(mw.keyURI, "/")
+
+	kmsClient, err := hcvault.NewClient(uriPrefix, nil, newToken)
+	if err != nil {
+		return fmt.Errorf("failed to create new Vault client: %w", err)
+	}
+
+	newAEAD, err := kmsClient.GetAEAD(fullKeyURI)
+	if err != nil {
+		return fmt.Errorf("failed to get AEAD with new token: %w", err)
+	}
+
+	// Test the new key
+	if err := testKeyAvailability(newAEAD, KeyTypeVault); err != nil {
+		return fmt.Errorf("new token validation failed: %w", err)
+	}
+
+	// Update the AEAD and token
+	mw.masterAEAD = newAEAD
+	mw.vaultToken = newToken
+	mw.tokenExpiry = newExpiry
+
+	return nil
+}
+
+// startTokenRefreshLoop starts a background goroutine that refreshes the Vault token before it expires
+func (mw *TinkEncryptionBlobStoreMiddleware) startTokenRefreshLoop() {
+	if mw.vaultRoleID == "" || mw.vaultSecretID == "" {
+		// Not using AppRole, no need to refresh
+		return
+	}
+
+	mw.refreshShutdown.Add(1)
+	go func() {
+		defer mw.refreshShutdown.Done()
+
+		ticker := time.NewTicker(1 * time.Minute) // Check every minute
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-mw.stopRefresh:
+				return
+			case <-ticker.C:
+				mw.tokenMutex.RLock()
+				needsRefresh := time.Now().After(mw.tokenExpiry)
+				mw.tokenMutex.RUnlock()
+
+				if needsRefresh {
+					if err := mw.refreshVaultToken(); err != nil {
+						fmt.Printf("Warning: failed to refresh Vault token: %v\n", err)
+					}
+				}
+			}
+		}
+	}()
+}
+
 // NewWithHCVault creates a new TinkEncryptionBlobStoreMiddleware using HashiCorp Vault KMS.
 // Uses envelope encryption where each blob has its own DEK encrypted with the Vault master key.
-// vaultAddr: e.g. "http://127.0.0.1:8200"
-// token: Vault token
+// Supports both token-based and AppRole authentication.
+//
+// vaultAddr: e.g. "https://vault.example.com:8200"
+// token: Vault token (use empty string "" if using AppRole)
+// roleID: Vault AppRole role ID (use empty string "" if using token)
+// secretID: Vault AppRole secret ID (use empty string "" if using token)
 // keyURI: relative path e.g. "transit/keys/my-key"
-func NewWithHCVault(vaultAddr, token, keyURI string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
+//
+// Either (token) OR (roleID AND secretID) must be provided.
+func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
+	// Validate authentication parameters
+	hasToken := token != ""
+	hasAppRole := roleID != "" && secretID != ""
+
+	if !hasToken && !hasAppRole {
+		return nil, fmt.Errorf("either vaultToken or (vaultRoleId and vaultSecretId) must be provided")
+	}
+
+	if hasToken && hasAppRole {
+		return nil, fmt.Errorf("cannot use both vaultToken and AppRole authentication - choose one method")
+	}
+
+	// If using AppRole, authenticate to get initial token
+	var actualToken string
+	var tokenExpiry time.Time
+	if hasAppRole {
+		var err error
+		actualToken, tokenExpiry, err = authenticateWithAppRole(vaultAddr, roleID, secretID)
+		if err != nil {
+			return nil, fmt.Errorf("AppRole authentication failed: %w", err)
+		}
+	} else {
+		actualToken = token
+		// For static tokens, we don't have an expiry (set far in future)
+		tokenExpiry = time.Now().Add(100 * 365 * 24 * time.Hour)
+	}
+
 	// Convert vaultAddr to hcvault scheme for the uriPrefix
 	var uriPrefix string
 	if strings.HasPrefix(vaultAddr, "https://") {
@@ -89,7 +272,7 @@ func NewWithHCVault(vaultAddr, token, keyURI string, innerBlobStore blobstore.Bl
 	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(keyURI, "/")
 
 	// Register the Vault KMS client with Tink
-	kmsClient, err := hcvault.NewClient(uriPrefix, nil, token)
+	kmsClient, err := hcvault.NewClient(uriPrefix, nil, actualToken)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +288,23 @@ func NewWithHCVault(vaultAddr, token, keyURI string, innerBlobStore blobstore.Bl
 		return nil, err
 	}
 
-	return &TinkEncryptionBlobStoreMiddleware{
+	mw := &TinkEncryptionBlobStoreMiddleware{
 		masterAEAD:     vaultAEAD,
 		innerBlobStore: innerBlobStore,
 		keyType:        KeyTypeVault,
 		keyURI:         keyURI,
 		vaultAddr:      vaultAddr,
-		vaultToken:     token,
-	}, nil
+		vaultToken:     actualToken,
+		vaultRoleID:    roleID,
+		vaultSecretID:  secretID,
+		tokenExpiry:    tokenExpiry,
+		stopRefresh:    make(chan struct{}),
+	}
+
+	// Start token refresh loop if using AppRole
+	mw.startTokenRefreshLoop()
+
+	return mw, nil
 }
 
 // NewWithLocalKMS creates a new TinkEncryptionBlobStoreMiddleware using a local master key (KEK).
@@ -200,6 +392,12 @@ func (mw *TinkEncryptionBlobStoreMiddleware) Start(ctx context.Context) error {
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
+	// Stop token refresh goroutine if running
+	if mw.stopRefresh != nil {
+		close(mw.stopRefresh)
+		mw.refreshShutdown.Wait()
+	}
+
 	// If using TPM, close the TPM device
 	if mw.keyType == KeyTypeTPM {
 		if tpmAEAD, ok := mw.masterAEAD.(*tpm.AEAD); ok {
