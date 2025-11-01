@@ -5,9 +5,9 @@ go 1.25.0
 require (
 	github.com/Shopify/go-lua v0.0.0-20250718183320-1e37f32ad7d0
 	github.com/aws/aws-sdk-go-v2 v1.39.5
-	github.com/aws/aws-sdk-go-v2/config v1.31.15
+	github.com/aws/aws-sdk-go-v2/config v1.31.16
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.20
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.1
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.20.2
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.89.1
 	github.com/aws/smithy-go v1.23.1
 	github.com/docker/go-connections v0.6.0
