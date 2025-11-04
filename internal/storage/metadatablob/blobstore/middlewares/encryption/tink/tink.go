@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/scrypt"
@@ -492,58 +493,60 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		return nil, err
 	}
 
-	// Read the header length (4 bytes big-endian)
-	lengthBytes := make([]byte, 4)
-	if _, err := io.ReadFull(rc, lengthBytes); err != nil {
-		rc.Close()
-		return nil, err
-	}
+	// Use lazy initialization to defer header parsing and DEK decryption until first read
+	// This allows streaming to start immediately without blocking on KMS/Vault operations
+	return ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+		// Read the header length (4 bytes big-endian)
+		lengthBytes := make([]byte, 4)
+		if _, err := io.ReadFull(rc, lengthBytes); err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	headerLen := binary.BigEndian.Uint32(lengthBytes)
+		headerLen := binary.BigEndian.Uint32(lengthBytes)
 
-	// Read and parse the header
-	headerBytes := make([]byte, headerLen)
-	if _, err := io.ReadFull(rc, headerBytes); err != nil {
-		rc.Close()
-		return nil, err
-	}
+		// Read and parse the header
+		headerBytes := make([]byte, headerLen)
+		if _, err := io.ReadFull(rc, headerBytes); err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	var header BlobHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		rc.Close()
-		return nil, err
-	}
+		var header BlobHeader
+		if err := json.Unmarshal(headerBytes, &header); err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	if header.Version != BlobHeaderVersion {
-		rc.Close()
-		return nil, io.ErrUnexpectedEOF
-	}
+		if header.Version != BlobHeaderVersion {
+			rc.Close()
+			return nil, io.ErrUnexpectedEOF
+		}
 
-	// Extract the encrypted DEK from the header
-	encryptedDEK := header.EncryptedDEK
+		// Decrypt the DEK with master AEAD
+		dek, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, blobId[:])
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	// Decrypt the DEK with master AEAD
-	dek, err := mw.masterAEAD.Decrypt(encryptedDEK, blobId[:])
-	if err != nil {
-		rc.Close()
-		return nil, err
-	}
+		// Create streaming AEAD with the DEK
+		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, 4096, 0)
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	// Create streaming AEAD with the DEK
-	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, 4096, 0)
-	if err != nil {
-		rc.Close()
-		return nil, err
-	}
+		// Create a decrypting reader for the remaining data
+		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, blobId[:])
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
 
-	// Create a decrypting reader for the remaining data
-	decryptingReader, err := dekStreamingAEAD.NewDecryptingReader(rc, blobId[:])
-	if err != nil {
-		rc.Close()
-		return nil, err
-	}
-
-	return &compositeReadCloser{decryptingReader, rc}, nil
+		// Return a composite reader that wraps the decrypt reader with the underlying closer
+		return &compositeReadCloser{decryptReader, rc}, nil
+	}), nil
 }
 
 // compositeReadCloser combines a Reader with a Closer
