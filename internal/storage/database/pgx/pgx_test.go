@@ -16,7 +16,7 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 	username := "postgres"
 	password := "postgres"
 	dbname := "postgres"
-	postgresContainer, err := postgres.Run(ctx, "postgres:17.5-alpine3.22",
+	postgresContainer, err := postgres.Run(ctx, "postgres:18.0-alpine3.22",
 		postgres.WithUsername(username),
 		postgres.WithPassword(password),
 		postgres.WithDatabase(dbname),
