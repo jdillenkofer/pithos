@@ -30,8 +30,8 @@ func New(cache Cache, innerStorage storage.Storage) (storage.Storage, error) {
 	}, nil
 }
 
-func getObjectCacheKeyForBucketAndKey(bucket string, key string) string {
-	return "OBJECT_BUCKET_" + bucket + "_KEY_" + key
+func getObjectCacheKeyForBucketAndKey(bucketName storage.BucketName, key string) string {
+	return "OBJECT_BUCKET_" + bucketName.String() + "_KEY_" + key
 }
 
 func (cs *CacheStorage) Start(ctx context.Context) error {
@@ -48,16 +48,16 @@ func (cs *CacheStorage) Stop(ctx context.Context) error {
 	return cs.innerStorage.Stop(ctx)
 }
 
-func (cs *CacheStorage) CreateBucket(ctx context.Context, bucket string) error {
-	err := cs.innerStorage.CreateBucket(ctx, bucket)
+func (cs *CacheStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	err := cs.innerStorage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cs *CacheStorage) DeleteBucket(ctx context.Context, bucket string) error {
-	err := cs.innerStorage.DeleteBucket(ctx, bucket)
+func (cs *CacheStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	err := cs.innerStorage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (cs *CacheStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, erro
 	return buckets, nil
 }
 
-func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName string) (*storage.Bucket, error) {
+func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
 	bucket, err := cs.innerStorage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -80,25 +80,25 @@ func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName string) (*sto
 	return bucket, nil
 }
 
-func (cs *CacheStorage) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
-	objects, err := cs.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
+func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+	objects, err := cs.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		return nil, err
 	}
 	return objects, nil
 }
 
-func (cs *CacheStorage) HeadObject(ctx context.Context, bucket string, key string) (*storage.Object, error) {
-	object, err := cs.innerStorage.HeadObject(ctx, bucket, key)
+func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
 	return object, nil
 }
 
-func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	var reader io.ReadCloser
-	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
+	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	data, err := cs.cache.Get(cacheKey)
 	if err != nil && err != ErrCacheMiss {
 		return nil, err
@@ -106,7 +106,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 
 	if err == ErrCacheMiss {
 		// @TODO: only cache byteRange that was requested
-		reader, err := cs.innerStorage.GetObject(ctx, bucket, key, nil, nil)
+		reader, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -138,19 +138,19 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucket string, key string
 	return reader, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	putObjectResult, err := cs.innerStorage.PutObject(ctx, bucket, key, contentType, byteReadSeekCloser, checksumInput)
+	putObjectResult, err := cs.innerStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput)
 	if err != nil {
 		return nil, err
 	}
 
-	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
+	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	err = cs.cache.Set(cacheKey, data)
 	if err != nil {
 		return nil, err
@@ -159,13 +159,13 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucket string, key string
 	return putObjectResult, nil
 }
 
-func (cs *CacheStorage) DeleteObject(ctx context.Context, bucket string, key string) error {
-	err := cs.innerStorage.DeleteObject(ctx, bucket, key)
+func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+	err := cs.innerStorage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		return err
 	}
 
-	cacheKey := getObjectCacheKeyForBucketAndKey(bucket, key)
+	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	err = cs.cache.Remove(cacheKey)
 	if err != nil {
 		return err
@@ -173,48 +173,48 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucket string, key str
 	return nil
 }
 
-func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
+func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		return nil, err
 	}
 	return initiateMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
+func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err
 	}
 	return uploadPartResult, nil
 }
 
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
+func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
 	}
 	return completeMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
-	err := cs.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
+func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+	err := cs.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 	if err != nil {
 		return nil, err
 	}
 	return listMultipartUploadsResult, nil
 }
 
-func (cs *CacheStorage) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
-	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 	if err != nil {
 		return nil, err
 	}

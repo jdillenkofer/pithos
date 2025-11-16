@@ -13,7 +13,7 @@ import (
 )
 
 type Bucket struct {
-	Name         string
+	Name         BucketName
 	CreationDate time.Time
 }
 
@@ -77,7 +77,7 @@ type Upload struct {
 }
 
 type ListMultipartUploadsResult struct {
-	Bucket             string
+	BucketName         BucketName
 	KeyMarker          string
 	UploadIdMarker     string
 	NextKeyMarker      string
@@ -103,7 +103,7 @@ type Part struct {
 }
 
 type ListPartsResult struct {
-	Bucket               string
+	BucketName           BucketName
 	Key                  string
 	UploadId             string
 	PartNumberMarker     string
@@ -115,6 +115,10 @@ type ListPartsResult struct {
 
 type ChecksumInput = metadatastore.ChecksumInput
 type ChecksumValues = metadatastore.ChecksumValues
+type BucketName = metadatastore.BucketName
+
+var NewBucketName = metadatastore.NewBucketName
+var MustNewBucketName = metadatastore.MustNewBucketName
 
 var ValidateChecksums = metadatastore.ValidateChecksums
 
@@ -125,34 +129,35 @@ var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
+var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
 // BucketManager manages bucket operations
 type BucketManager interface {
-	CreateBucket(ctx context.Context, bucket string) error
-	DeleteBucket(ctx context.Context, bucket string) error
+	CreateBucket(ctx context.Context, bucketName BucketName) error
+	DeleteBucket(ctx context.Context, bucketName BucketName) error
 	ListBuckets(ctx context.Context) ([]Bucket, error)
-	HeadBucket(ctx context.Context, bucket string) (*Bucket, error)
+	HeadBucket(ctx context.Context, bucketName BucketName) (*Bucket, error)
 }
 
 // ObjectManager manages object operations
 type ObjectManager interface {
-	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
-	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
-	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
-	PutObject(ctx context.Context, bucket string, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
-	DeleteObject(ctx context.Context, bucket string, key string) error
+	ListObjects(ctx context.Context, bucketName BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
+	HeadObject(ctx context.Context, bucketName BucketName, key string) (*Object, error)
+	GetObject(ctx context.Context, bucketName BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
+	PutObject(ctx context.Context, bucketName BucketName, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
+	DeleteObject(ctx context.Context, bucketName BucketName, key string) error
 }
 
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
-	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
-	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
-	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	UploadPart(ctx context.Context, bucketName BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key string, uploadId string) error
+	ListMultipartUploads(ctx context.Context, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
+	ListParts(ctx context.Context, bucketName BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 // Storage is a composite interface that combines all storage operations
@@ -163,7 +168,7 @@ type Storage interface {
 	MultipartUploadManager
 }
 
-func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName string) ([]Object, error) {
+func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName BucketName) ([]Object, error) {
 	allObjects := []Object{}
 	startAfter := ""
 	for {
@@ -180,7 +185,7 @@ func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName str
 	return allObjects, nil
 }
 
-func Tester(storage Storage, buckets []string, content []byte) error {
+func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 	ctx := context.Background()
 	err := storage.Start(ctx)
 	if err != nil {
@@ -188,7 +193,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 	}
 	defer storage.Stop(ctx)
 
-	for _, bucketName := range buckets {
+	for _, bucketName := range bucketNames {
 		key := "test"
 		data := ioutils.NewByteReadSeekCloser(content)
 
@@ -202,7 +207,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return err
 		}
 
-		if bucketName != bucket.Name {
+		if !bucketName.Equals(bucket.Name) {
 			return errors.New("invalid bucketName")
 		}
 
@@ -215,7 +220,7 @@ func Tester(storage Storage, buckets []string, content []byte) error {
 			return errors.New("expected 1 bucket got " + strconv.Itoa(len(buckets)))
 		}
 
-		if bucketName != buckets[0].Name {
+		if !bucketName.Equals(buckets[0].Name) {
 			return errors.New("invalid bucketName")
 		}
 

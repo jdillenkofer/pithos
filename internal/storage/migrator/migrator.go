@@ -50,12 +50,12 @@ func determineMissingBuckets(ctx context.Context, source, destination storage.St
 
 	existingDestinationBucketsByBucketName := map[string]storage.Bucket{}
 	for _, destinationBucket := range allDestinationBuckets {
-		existingDestinationBucketsByBucketName[destinationBucket.Name] = destinationBucket
+		existingDestinationBucketsByBucketName[destinationBucket.Name.String()] = destinationBucket
 	}
 
 	missingSourceBuckets := []storage.Bucket{}
 	for _, sourceBucket := range allSourceBuckets {
-		_, bucketAlreadyExists := existingDestinationBucketsByBucketName[sourceBucket.Name]
+		_, bucketAlreadyExists := existingDestinationBucketsByBucketName[sourceBucket.Name.String()]
 		if !bucketAlreadyExists {
 			missingSourceBuckets = append(missingSourceBuckets, sourceBucket)
 		}
@@ -73,7 +73,7 @@ func createMissingBuckets(ctx context.Context, missingBuckets []storage.Bucket, 
 	return nil
 }
 
-func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Context, source, destination storage.Storage, bucketName string) error {
+func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName) error {
 	destinationObjects, err := storage.ListAllObjectsOfBucket(ctx, destination, bucketName)
 	if err != nil {
 		return err
@@ -102,7 +102,7 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 	return nil
 }
 
-func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName string, sourceObject storage.Object) error {
+func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName, sourceObject storage.Object) error {
 	obj, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
 	if err != nil {
 		return err
@@ -131,8 +131,9 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 	uploader := manager.NewUploader(adapter, func(u *manager.Uploader) {
 		u.Concurrency = 1
 	})
+	bucketNameStr := bucketName.String()
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: &bucketName,
+		Bucket: &bucketNameStr,
 		Key:    &sourceObject.Key,
 		Body:   tempFile,
 	})
@@ -154,7 +155,7 @@ func NewStorageToS3UploadAPIClientAdapter(storage storage.Storage) *StorageToS3U
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Context, input *s3.CreateMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
-	result, err := a.storage.CreateMultipartUpload(ctx, *input.Bucket, *input.Key, input.ContentType, nil)
+	result, err := a.storage.CreateMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), *input.Key, input.ContentType, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +168,7 @@ func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Co
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, input *s3.UploadPartInput, opts ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
-	result, err := a.storage.UploadPart(ctx, *input.Bucket, *input.Key, *input.UploadId, *input.PartNumber, input.Body, nil)
+	result, err := a.storage.UploadPart(ctx, storage.MustNewBucketName(*input.Bucket), *input.Key, *input.UploadId, *input.PartNumber, input.Body, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +184,7 @@ func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, inpu
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
-	result, err := a.storage.CompleteMultipartUpload(ctx, *input.Bucket, *input.Key, *input.UploadId, nil)
+	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), *input.Key, *input.UploadId, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +202,7 @@ func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput, opts ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
-	err := a.storage.AbortMultipartUpload(ctx, *input.Bucket, *input.Key, *input.UploadId)
+	err := a.storage.AbortMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), *input.Key, *input.UploadId)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +211,7 @@ func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Con
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	result, err := a.storage.PutObject(ctx, *input.Bucket, *input.Key, input.ContentType, input.Body, nil)
+	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), *input.Key, input.ContentType, input.Body, nil)
 	if err != nil {
 		return nil, err
 	}

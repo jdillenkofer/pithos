@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/oklog/ulid/v2"
 )
@@ -53,7 +54,7 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	ulidId := ulid.MustParse(id)
 	objectEntity := object.Entity{
 		Id:                &ulidId,
-		BucketName:        bucketName,
+		BucketName:        storage.MustNewBucketName(bucketName),
 		Key:               key,
 		ContentType:       contentType,
 		ETag:              etag,
@@ -78,16 +79,16 @@ func (or *pgxRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *obj
 		object.Id = &id
 		object.CreatedAt = time.Now().UTC()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName, object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName, object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 
-func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
-	objectRows, err := tx.QueryContext(ctx, containsBucketObjectsByBucketNameStmt, bucketName)
+func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error) {
+	objectRows, err := tx.QueryContext(ctx, containsBucketObjectsByBucketNameStmt, bucketName.String())
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +97,8 @@ func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, 
 	return &containsObjects, nil
 }
 
-func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) ([]object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName, prefix, startAfter, object.UploadStatusCompleted)
+func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -113,8 +114,8 @@ func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKey
 	return objects, nil
 }
 
-func (or *pgxRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) ([]object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt, bucketName, prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
+func (or *pgxRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt, bucketName.String(), prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +131,8 @@ func (or *pgxRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadId
 	return objects, nil
 }
 
-func (or *pgxRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName, key, uploadId, object.UploadStatusPending)
+func (or *pgxRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string, uploadId string) (*object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName.String(), key, uploadId, object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +148,8 @@ func (or *pgxRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Con
 	return nil, nil
 }
 
-func (or *pgxRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyStmt, bucketName, key, object.UploadStatusCompleted)
+func (or *pgxRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyStmt, bucketName.String(), key, object.UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
@@ -164,8 +165,8 @@ func (or *pgxRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *s
 	return nil, nil
 }
 
-func (or *pgxRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, startAfter string) (*int, error) {
-	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName, prefix, startAfter, object.UploadStatusCompleted)
+func (or *pgxRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error) {
+	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndStartAfterStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {
@@ -174,8 +175,8 @@ func (or *pgxRepository) CountObjectsByBucketNameAndPrefixAndStartAfter(ctx cont
 	return &keyCount, nil
 }
 
-func (or *pgxRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, keyMarker string, uploadIdMarker string) (*int, error) {
-	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt, bucketName, prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
+func (or *pgxRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error) {
+	keyCountRow := tx.QueryRowContext(ctx, countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt, bucketName.String(), prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
 	var keyCount int
 	err := keyCountRow.Scan(&keyCount)
 	if err != nil {

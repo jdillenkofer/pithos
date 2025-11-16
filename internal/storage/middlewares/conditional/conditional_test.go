@@ -102,6 +102,6 @@ func TestConditionalStorage(t *testing.T) {
 	}
 
 	content := []byte("ConditionalStorage")
-	err = storage.Tester(conditionalStorage, []string{"bucket", "otherbucket"}, content)
+	err = storage.Tester(conditionalStorage, []storage.BucketName{storage.MustNewBucketName("bucket"), storage.MustNewBucketName("otherbucket")}, content)
 	assert.Nil(t, err)
 }

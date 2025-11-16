@@ -51,16 +51,16 @@ func (tsm *tracingStorageMiddleware) Stop(ctx context.Context) error {
 	return tsm.innerStorage.Stop(ctx)
 }
 
-func (tsm *tracingStorageMiddleware) CreateBucket(ctx context.Context, bucket string) error {
+func (tsm *tracingStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".CreateBucket()").End()
 
-	return tsm.innerStorage.CreateBucket(ctx, bucket)
+	return tsm.innerStorage.CreateBucket(ctx, bucketName)
 }
 
-func (tsm *tracingStorageMiddleware) DeleteBucket(ctx context.Context, bucket string) error {
+func (tsm *tracingStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".DeleteBucket()").End()
 
-	return tsm.innerStorage.DeleteBucket(ctx, bucket)
+	return tsm.innerStorage.DeleteBucket(ctx, bucketName)
 }
 
 func (tsm *tracingStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
@@ -69,74 +69,74 @@ func (tsm *tracingStorageMiddleware) ListBuckets(ctx context.Context) ([]storage
 	return tsm.innerStorage.ListBuckets(ctx)
 }
 
-func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucket string) (*storage.Bucket, error) {
+func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".HeadBucket()").End()
 
-	return tsm.innerStorage.HeadBucket(ctx, bucket)
+	return tsm.innerStorage.HeadBucket(ctx, bucketName)
 }
 
-func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListObjects()").End()
 
-	return tsm.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
+	return tsm.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucket string, key string) (*storage.Object, error) {
+func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".HeadObject()").End()
 
-	return tsm.innerStorage.HeadObject(ctx, bucket, key)
+	return tsm.innerStorage.HeadObject(ctx, bucketName, key)
 }
 
-func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".GetObject()").End()
 
-	return tsm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
+	return tsm.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
 }
 
-func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".PutObject()").End()
 
-	return tsm.innerStorage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
+	return tsm.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput)
 }
 
-func (tsm *tracingStorageMiddleware) DeleteObject(ctx context.Context, bucket string, key string) error {
+func (tsm *tracingStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".DeleteObject()").End()
 
-	return tsm.innerStorage.DeleteObject(ctx, bucket, key)
+	return tsm.innerStorage.DeleteObject(ctx, bucketName, key)
 }
 
-func (tsm *tracingStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (tsm *tracingStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".CreateMultipartUpload()").End()
 
-	return tsm.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
+	return tsm.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 }
 
-func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".UploadPart()").End()
 
-	return tsm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, reader, checksumInput)
+	return tsm.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
 }
 
-func (tsm *tracingStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (tsm *tracingStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".CompleteMultipartUpload()").End()
 
-	return tsm.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
+	return tsm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 }
 
-func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
+func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".AbortMultipartUpload()").End()
 
-	return tsm.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
+	return tsm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
 
-func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListMultipartUploads()").End()
 
-	return tsm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	return tsm.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListParts()").End()
 
-	return tsm.innerStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+	return tsm.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 }

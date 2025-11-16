@@ -107,7 +107,7 @@ func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) {
 		if err != nil {
 			return
 		}
-		psm.totalSizeByBucket.With(prometheus.Labels{"bucket": bucket.Name}).Set(float64(*totalSize))
+		psm.totalSizeByBucket.With(prometheus.Labels{"bucket": bucket.Name.String()}).Set(float64(*totalSize))
 	}
 }
 
@@ -186,8 +186,8 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 	return psm.innerStorage.Stop(ctx)
 }
 
-func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucket string) error {
-	err := psm.innerStorage.CreateBucket(ctx, bucket)
+func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	err := psm.innerStorage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateBucket"}).Inc()
 
@@ -199,8 +199,8 @@ func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucket
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteBucket(ctx context.Context, bucket string) error {
-	err := psm.innerStorage.DeleteBucket(ctx, bucket)
+func (psm *prometheusStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	err := psm.innerStorage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucket"}).Inc()
 		return err
@@ -223,8 +223,8 @@ func (psm *prometheusStorageMiddleware) ListBuckets(ctx context.Context) ([]stor
 	return mBuckets, nil
 }
 
-func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucket string) (*storage.Bucket, error) {
-	mBucket, err := psm.innerStorage.HeadBucket(ctx, bucket)
+func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	mBucket, err := psm.innerStorage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadBucket"}).Inc()
 		return nil, err
@@ -235,8 +235,8 @@ func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucket s
 	return mBucket, err
 }
 
-func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
-	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeys)
+func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
 		return nil, err
@@ -247,8 +247,8 @@ func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucket 
 	return mListBucketResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucket string, key string) (*storage.Object, error) {
-	mObject, err := psm.innerStorage.HeadObject(ctx, bucket, key)
+func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+	mObject, err := psm.innerStorage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadObject"}).Inc()
 		return nil, err
@@ -259,15 +259,15 @@ func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucket s
 	return mObject, nil
 }
 
-func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
-	reader, err := psm.innerStorage.GetObject(ctx, bucket, key, startByte, endByte)
+func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	reader, err := psm.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 		return nil, err
 	}
 
 	reader = ioutils.NewStatsReadCloser(reader, func(n int) {
-		psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
+		psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
@@ -275,12 +275,12 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucket st
 	return reader, nil
 }
 
-func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket string, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
-		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(n))
+		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
-	putObjectResult, err := psm.innerStorage.PutObject(ctx, bucket, key, contentType, reader, checksumInput)
+	putObjectResult, err := psm.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return nil, err
@@ -291,8 +291,8 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucket st
 	return putObjectResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket string, key string) error {
-	err := psm.innerStorage.DeleteObject(ctx, bucket, key)
+func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+	err := psm.innerStorage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
 		return err
@@ -303,8 +303,8 @@ func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
+func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateMultipartUpload"}).Inc()
 		return nil, err
@@ -315,26 +315,26 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 	return initiateMultipartUploadResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	bytesUploaded := 0
 	data = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(data), func(n int) {
 		bytesUploaded += n
 	})
 
-	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucket, key, uploadId, partNumber, data, checksumInput)
+	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
 		return nil, err
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
-	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucket}).Add(float64(bytesUploaded))
+	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(bytesUploaded))
 
 	return uploadPartResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
-	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
+func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CompleteMultipartUpload"}).Inc()
 		return nil, err
@@ -345,8 +345,8 @@ func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Cont
 	return completeMultipartUploadResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error {
-	err := psm.innerStorage.AbortMultipartUpload(ctx, bucket, key, uploadId)
+func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+	err := psm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AbortMultipartUpload"}).Inc()
 		return err
@@ -357,8 +357,8 @@ func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
 		return nil, err
@@ -368,8 +368,8 @@ func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context
 	return listMultipartUploadsResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
-	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxParts)
+func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListParts"}).Inc()
 		return nil, err

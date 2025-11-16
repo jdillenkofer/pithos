@@ -47,7 +47,7 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 func TestStorageMigrator(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	// Arrange
-	const bucketName = "test"
+	var bucketName = storage.MustNewBucketName("test")
 	const objectKey = "zzz"
 	var objectData = []byte("abc")
 	ctx := context.Background()

@@ -128,6 +128,6 @@ func TestCacheStorage(t *testing.T) {
 	}
 
 	content := []byte("CacheStorage")
-	err = storage.Tester(cacheStorage, []string{"bucket"}, content)
+	err = storage.Tester(cacheStorage, []storage.BucketName{storage.MustNewBucketName("bucket")}, content)
 	assert.Nil(t, err)
 }
