@@ -127,24 +127,45 @@ var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
-type Storage interface {
+// LifecycleManager manages the lifecycle of a storage system
+type LifecycleManager interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
+}
+
+// BucketManager manages bucket operations
+type BucketManager interface {
 	CreateBucket(ctx context.Context, bucket string) error
 	DeleteBucket(ctx context.Context, bucket string) error
 	ListBuckets(ctx context.Context) ([]Bucket, error)
 	HeadBucket(ctx context.Context, bucket string) (*Bucket, error)
+}
+
+// ObjectManager manages object operations
+type ObjectManager interface {
 	ListObjects(ctx context.Context, bucket string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucket string, key string) (*Object, error)
 	GetObject(ctx context.Context, bucket string, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucket string, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucket string, key string) error
+}
+
+// MultipartUploadManager manages multipart upload operations
+type MultipartUploadManager interface {
 	CreateMultipartUpload(ctx context.Context, bucket string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucket string, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucket string, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucket string, key string, uploadId string) error
 	ListMultipartUploads(ctx context.Context, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
 	ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+}
+
+// Storage is the main interface that composes all storage functionality
+type Storage interface {
+	LifecycleManager
+	BucketManager
+	ObjectManager
+	MultipartUploadManager
 }
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName string) ([]Object, error) {
