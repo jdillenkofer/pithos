@@ -15,6 +15,9 @@ type tracingStorageMiddleware struct {
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure tracingStorageMiddleware implements storage.Storage
+var _ storage.Storage = (*tracingStorageMiddleware)(nil)
+
 func NewStorageMiddleware(regionName string, innerStorage storage.Storage) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("TracingStorageMiddleware")
 	if err != nil {

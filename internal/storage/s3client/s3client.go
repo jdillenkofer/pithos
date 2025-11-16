@@ -21,6 +21,9 @@ type s3ClientStorage struct {
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure s3ClientStorage implements storage.Storage
+var _ storage.Storage = (*s3ClientStorage)(nil)
+
 func NewStorage(s3Client *s3.Client) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("S3ClientStorage")
 	if err != nil {

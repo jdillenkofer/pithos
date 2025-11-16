@@ -30,6 +30,9 @@ type outboxStorage struct {
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure outboxStorage implements storage.Storage
+var _ storage.Storage = (*outboxStorage)(nil)
+
 func NewStorage(db database.Database, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("OutboxStorage")
 	if err != nil {

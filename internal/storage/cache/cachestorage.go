@@ -15,6 +15,9 @@ type CacheStorage struct {
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure CacheStorage implements storage.Storage
+var _ storage.Storage = (*CacheStorage)(nil)
+
 func New(cache Cache, innerStorage storage.Storage) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("CacheStorage")
 	if err != nil {

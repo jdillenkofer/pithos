@@ -29,6 +29,9 @@ type metadataBlobStorage struct {
 	gcTaskHandle       *task.TaskHandle
 }
 
+// Compile-time check to ensure metadataBlobStorage implements storage.Storage
+var _ storage.Storage = (*metadataBlobStorage)(nil)
+
 func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
 	if err != nil {
