@@ -6,70 +6,58 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type conditionalStorageMiddleware struct {
+	*lifecycle.ValidatedLifecycle
 	bucketToStorageMap map[string]storage.Storage
 	defaultStorage     storage.Storage
-	startStopValidator *startstopvalidator.StartStopValidator
 }
 
 // Compile-time check to ensure conditionalStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*conditionalStorageMiddleware)(nil)
 
 func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, defaultStorage storage.Storage) (storage.Storage, error) {
-	startStopValidator, err := startstopvalidator.New("ConditionalStorageMiddleware")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("ConditionalStorageMiddleware")
 	if err != nil {
 		return nil, err
 	}
 
 	return &conditionalStorageMiddleware{
+		ValidatedLifecycle: lifecycle,
 		bucketToStorageMap: bucketToStorageMap,
 		defaultStorage:     defaultStorage,
-		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (csm *conditionalStorageMiddleware) Start(ctx context.Context) error {
-	err := csm.startStopValidator.Start()
-	if err != nil {
+	if err := csm.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
 
 	for _, bucketStorage := range csm.bucketToStorageMap {
-		err = bucketStorage.Start(ctx)
-		if err != nil {
+		if err := bucketStorage.Start(ctx); err != nil {
 			return err
 		}
 	}
 
-	err = csm.defaultStorage.Start(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return csm.defaultStorage.Start(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) Stop(ctx context.Context) error {
-	err := csm.startStopValidator.Stop()
-	if err != nil {
+	if err := csm.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
 
 	for _, bucketStorage := range csm.bucketToStorageMap {
-		err = bucketStorage.Stop(ctx)
-		if err != nil {
+		if err := bucketStorage.Stop(ctx); err != nil {
 			return err
 		}
 	}
 
-	err = csm.defaultStorage.Stop(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return csm.defaultStorage.Stop(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) lookupStorage(bucket string) storage.Storage {

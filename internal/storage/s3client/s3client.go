@@ -11,45 +11,37 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type s3ClientStorage struct {
-	s3Client           *s3.Client
-	startStopValidator *startstopvalidator.StartStopValidator
+	*lifecycle.ValidatedLifecycle
+	s3Client *s3.Client
 }
 
 // Compile-time check to ensure s3ClientStorage implements storage.Storage
 var _ storage.Storage = (*s3ClientStorage)(nil)
 
 func NewStorage(s3Client *s3.Client) (storage.Storage, error) {
-	startStopValidator, err := startstopvalidator.New("S3ClientStorage")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("S3ClientStorage")
 	if err != nil {
 		return nil, err
 	}
 
 	return &s3ClientStorage{
+		ValidatedLifecycle: lifecycle,
 		s3Client:           s3Client,
-		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (rs *s3ClientStorage) Start(ctx context.Context) error {
-	err := rs.startStopValidator.Start()
-	if err != nil {
-		return err
-	}
-	return nil
+	return rs.ValidatedLifecycle.Start(ctx)
 }
 
 func (rs *s3ClientStorage) Stop(ctx context.Context) error {
-	err := rs.startStopValidator.Stop()
-	if err != nil {
-		return err
-	}
-	return nil
+	return rs.ValidatedLifecycle.Stop(ctx)
 }
 
 func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucket string) error {

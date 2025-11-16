@@ -8,27 +8,28 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	blobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
 
 type sqlBlobStore struct {
+	*lifecycle.ValidatedLifecycle
 	blobContentRepository blobContent.Repository
 }
 
+var _ blobstore.BlobStore = (*sqlBlobStore)(nil)
+
 func New(db database.Database, blobContentRepository blobContent.Repository) (blobstore.BlobStore, error) {
+	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("sqlBlobStore")
+	if err != nil {
+		return nil, err
+	}
 	return &sqlBlobStore{
+		ValidatedLifecycle:    validatedLifecycle,
 		blobContentRepository: blobContentRepository,
 	}, nil
-}
-
-func (bs *sqlBlobStore) Start(ctx context.Context) error {
-	return nil
-}
-
-func (bs *sqlBlobStore) Stop(ctx context.Context) error {
-	return nil
 }
 
 func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {

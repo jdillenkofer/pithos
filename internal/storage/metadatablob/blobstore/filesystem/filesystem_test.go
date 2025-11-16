@@ -17,7 +17,7 @@ import (
 func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	filesystemBlobStore := filesystemBlobStore{"."}
+	filesystemBlobStore := filesystemBlobStore{root: "."}
 	blobId := ulid.Make()
 	filename := filesystemBlobStore.getFilename(blobId)
 	blobId2, ok := filesystemBlobStore.tryGetBlobIdFromFilename(filename)

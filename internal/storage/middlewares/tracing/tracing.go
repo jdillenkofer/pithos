@@ -5,60 +5,50 @@ import (
 	"io"
 	"runtime/trace"
 
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type tracingStorageMiddleware struct {
-	regionName         string
-	innerStorage       storage.Storage
-	startStopValidator *startstopvalidator.StartStopValidator
+	*lifecycle.ValidatedLifecycle
+	regionName   string
+	innerStorage storage.Storage
 }
 
 // Compile-time check to ensure tracingStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*tracingStorageMiddleware)(nil)
 
 func NewStorageMiddleware(regionName string, innerStorage storage.Storage) (storage.Storage, error) {
-	startStopValidator, err := startstopvalidator.New("TracingStorageMiddleware")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("TracingStorageMiddleware")
 	if err != nil {
 		return nil, err
 	}
 
 	return &tracingStorageMiddleware{
+		ValidatedLifecycle: lifecycle,
 		regionName:         regionName,
 		innerStorage:       innerStorage,
-		startStopValidator: startStopValidator,
 	}, nil
 }
 
 func (tsm *tracingStorageMiddleware) Start(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".Start()").End()
 
-	err := tsm.startStopValidator.Start()
-	if err != nil {
+	if err := tsm.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
 
-	err = tsm.innerStorage.Start(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return tsm.innerStorage.Start(ctx)
 }
 
 func (tsm *tracingStorageMiddleware) Stop(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tsm.regionName+".Stop()").End()
 
-	err := tsm.startStopValidator.Stop()
-	if err != nil {
+	if err := tsm.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
 
-	err = tsm.innerStorage.Stop(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return tsm.innerStorage.Stop(ctx)
 }
 
 func (tsm *tracingStorageMiddleware) CreateBucket(ctx context.Context, bucket string) error {

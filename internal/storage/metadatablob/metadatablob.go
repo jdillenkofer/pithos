@@ -9,6 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -16,24 +17,23 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
 type metadataBlobStorage struct {
-	db                 database.Database
-	startStopValidator *startstopvalidator.StartStopValidator
-	metadataStore      metadatastore.MetadataStore
-	blobStore          blobstore.BlobStore
-	blobGC             gc.BlobGarbageCollector
-	gcTaskHandle       *task.TaskHandle
+	*lifecycle.ValidatedLifecycle
+	db            database.Database
+	metadataStore metadatastore.MetadataStore
+	blobStore     blobstore.BlobStore
+	blobGC        gc.BlobGarbageCollector
+	gcTaskHandle  *task.TaskHandle
 }
 
 // Compile-time check to ensure metadataBlobStorage implements storage.Storage
 var _ storage.Storage = (*metadataBlobStorage)(nil)
 
 func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (storage.Storage, error) {
-	startStopValidator, err := startstopvalidator.New("MetadataBlobStorage")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("MetadataBlobStorage")
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +42,8 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 		return nil, err
 	}
 	return &metadataBlobStorage{
+		ValidatedLifecycle: lifecycle,
 		db:                 db,
-		startStopValidator: startStopValidator,
 		metadataStore:      metadataStore,
 		blobStore:          blobStore,
 		blobGC:             blobGC,
@@ -52,16 +52,13 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 }
 
 func (mbs *metadataBlobStorage) Start(ctx context.Context) error {
-	err := mbs.startStopValidator.Start()
-	if err != nil {
+	if err := mbs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	err = mbs.metadataStore.Start(ctx)
-	if err != nil {
+	if err := mbs.metadataStore.Start(ctx); err != nil {
 		return err
 	}
-	err = mbs.blobStore.Start(ctx)
-	if err != nil {
+	if err := mbs.blobStore.Start(ctx); err != nil {
 		return err
 	}
 
@@ -71,8 +68,7 @@ func (mbs *metadataBlobStorage) Start(ctx context.Context) error {
 }
 
 func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
-	err := mbs.startStopValidator.Stop()
-	if err != nil {
+	if err := mbs.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
 	slog.Debug("Stopping GCLoop task")
@@ -85,12 +81,10 @@ func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
 			slog.Debug("GCLoop joined without timeout")
 		}
 	}
-	err = mbs.metadataStore.Stop(ctx)
-	if err != nil {
+	if err := mbs.metadataStore.Stop(ctx); err != nil {
 		return err
 	}
-	err = mbs.blobStore.Stop(ctx)
-	if err != nil {
+	if err := mbs.blobStore.Stop(ctx); err != nil {
 		return err
 	}
 	return nil

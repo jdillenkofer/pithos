@@ -11,13 +11,17 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 )
 
 type filesystemBlobStore struct {
+	*lifecycle.ValidatedLifecycle
 	root string
 }
+
+var _ blobstore.BlobStore = (*filesystemBlobStore)(nil)
 
 func (bs *filesystemBlobStore) ensureRootDir() error {
 	err := os.MkdirAll(bs.root, os.ModePerm)
@@ -50,22 +54,19 @@ func New(root string) (blobstore.BlobStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("filesystemBlobStore")
+	if err != nil {
+		return nil, err
+	}
 	bs := &filesystemBlobStore{
-		root: root,
+		ValidatedLifecycle: validatedLifecycle,
+		root:               root,
 	}
 	return bs, nil
 }
 
 func (bs *filesystemBlobStore) Start(ctx context.Context) error {
-	err := bs.ensureRootDir()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (bs *filesystemBlobStore) Stop(ctx context.Context) error {
-	return nil
+	return bs.ensureRootDir()
 }
 
 func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {

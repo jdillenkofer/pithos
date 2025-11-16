@@ -32,6 +32,8 @@ type sftpBlobStore struct {
 	mu           sync.Mutex
 }
 
+var _ blobstore.BlobStore = (*sftpBlobStore)(nil)
+
 func (s *sftpBlobStore) ensureRootDir() error {
 	_, err := doRetriableOperation(func() (*struct{}, error) {
 		return nil, s.client.MkdirAll(s.root)
@@ -126,16 +128,10 @@ func New(addr string, clientConfig *ssh.ClientConfig, root string) (blobstore.Bl
 }
 
 func (s *sftpBlobStore) Start(ctx context.Context) error {
-	err := s.reconnectSftpClient()
-	if err != nil {
+	if err := s.reconnectSftpClient(); err != nil {
 		return err
 	}
-
-	err = s.ensureRootDir()
-	if err != nil {
-		return err
-	}
-	return nil
+	return s.ensureRootDir()
 }
 
 func (s *sftpBlobStore) Stop(ctx context.Context) error {

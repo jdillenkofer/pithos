@@ -6,31 +6,44 @@ import (
 	"io"
 	"runtime/trace"
 
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
 
 type tracingBlobStoreMiddleware struct {
+	*lifecycle.ValidatedLifecycle
 	regionName     string
 	innerBlobStore blobstore.BlobStore
 }
 
+var _ blobstore.BlobStore = (*tracingBlobStoreMiddleware)(nil)
+
 func New(regionName string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {
+	lifecycle, err := lifecycle.NewValidatedLifecycle("TracingBlobStoreMiddleware")
+	if err != nil {
+		return nil, err
+	}
 	tbsm := &tracingBlobStoreMiddleware{
-		regionName:     regionName,
-		innerBlobStore: innerBlobStore,
+		ValidatedLifecycle: lifecycle,
+		regionName:         regionName,
+		innerBlobStore:     innerBlobStore,
 	}
 	return tbsm, nil
 }
 
 func (tbsm *tracingBlobStoreMiddleware) Start(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tbsm.regionName+".Start()").End()
-
+	if err := tbsm.ValidatedLifecycle.Start(ctx); err != nil {
+		return err
+	}
 	return tbsm.innerBlobStore.Start(ctx)
 }
 
 func (tbsm *tracingBlobStoreMiddleware) Stop(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tbsm.regionName+".Stop()").End()
-
+	if err := tbsm.ValidatedLifecycle.Stop(ctx); err != nil {
+		return err
+	}
 	return tbsm.innerBlobStore.Stop(ctx)
 }
 
