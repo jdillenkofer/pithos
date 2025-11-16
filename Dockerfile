@@ -1,4 +1,4 @@
-FROM golang:1.25.0-alpine3.22 AS app-builder
+FROM golang:1.25.4-alpine3.22 AS app-builder
 
 ARG SKIP_TESTS=false
 
