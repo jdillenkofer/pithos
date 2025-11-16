@@ -14,7 +14,7 @@ import (
 )
 
 type Bucket struct {
-	Name         string
+	Name         BucketName
 	CreationDate time.Time
 }
 
@@ -77,7 +77,7 @@ type Upload struct {
 }
 
 type ListMultipartUploadsResult struct {
-	Bucket             string
+	Bucket             BucketName
 	KeyMarker          string
 	UploadIdMarker     string
 	NextKeyMarker      string
@@ -103,7 +103,7 @@ type Part struct {
 }
 
 type ListPartsResult struct {
-	Bucket               string
+	BucketName           BucketName
 	Key                  string
 	UploadId             string
 	PartNumberMarker     string
@@ -179,20 +179,20 @@ type MetadataStore interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error)
-	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
-	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error
+	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
-	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*Bucket, error)
-	ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
-	HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*Object, error)
-	PutObject(ctx context.Context, tx *sql.Tx, bucketName string, object *Object) error
-	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error
-	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blob Blob) error
-	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*AbortMultipartResult, error)
-	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
+	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
+	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string) (*Object, error)
+	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object) error
+	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string) error
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string, uploadId string, partNumber int32, blob Blob) error
+	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string, uploadId string) (*AbortMultipartResult, error)
+	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
+	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {
@@ -203,7 +203,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 	defer metadataStore.Stop(ctx)
 
-	bucketName := "bucket"
+	bucketName := MustNewBucketName("bucket")
 	key := "test"
 
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -228,7 +228,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 	tx.Commit()
 
-	if bucketName != bucket.Name {
+	if !bucketName.Equals(bucket.Name) {
 		return errors.New("invalid bucketName")
 	}
 
@@ -247,7 +247,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return errors.New("expected 1 bucket got " + strconv.Itoa(len(buckets)))
 	}
 
-	if bucketName != buckets[0].Name {
+	if !bucketName.Equals(buckets[0].Name) {
 		return errors.New("invalid bucketName")
 	}
 

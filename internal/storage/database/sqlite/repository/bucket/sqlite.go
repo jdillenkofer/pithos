@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/oklog/ulid/v2"
 )
@@ -37,7 +38,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	ulidId := ulid.MustParse(id)
 	bucketEntity := bucket.Entity{
 		Id:        &ulidId,
-		Name:      name,
+		Name:      storage.MustNewBucketName(name),
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}
@@ -61,8 +62,8 @@ func (br *sqliteRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]b
 	return buckets, nil
 }
 
-func (br *sqliteRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bucket.Entity, error) {
-	bucketRows, err := tx.QueryContext(ctx, findBucketByNameStmt, bucketName)
+func (br *sqliteRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bucket.Entity, error) {
+	bucketRows, err := tx.QueryContext(ctx, findBucketByNameStmt, bucketName.String())
 	if err != nil {
 		return nil, err
 	}
@@ -83,16 +84,16 @@ func (br *sqliteRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 
-func (br *sqliteRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) (*bool, error) {
-	bucketRows, err := tx.QueryContext(ctx, existsBucketByNameStmt, bucketName)
+func (br *sqliteRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error) {
+	bucketRows, err := tx.QueryContext(ctx, existsBucketByNameStmt, bucketName.String())
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +102,7 @@ func (br *sqliteRepository) ExistsBucketByName(ctx context.Context, tx *sql.Tx, 
 	return &exists, nil
 }
 
-func (br *sqliteRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName string) error {
-	_, err := tx.ExecContext(ctx, deleteBucketByNameStmt, bucketName)
+func (br *sqliteRepository) DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) error {
+	_, err := tx.ExecContext(ctx, deleteBucketByNameStmt, bucketName.String())
 	return err
 }

@@ -396,6 +396,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	errResponse.Message = err.Error()
 	errResponse.Resource = r.URL.Path
 	switch err {
+	case storage.ErrInvalidBucketName:
+		statusCode = 400
+	case storage.ErrBadDigest:
+		statusCode = 400
 	case storage.ErrNoSuchBucket:
 		statusCode = 404
 	case storage.ErrBucketAlreadyExists:
@@ -404,8 +408,6 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 409
 	case storage.ErrNoSuchKey:
 		statusCode = 404
-	case storage.ErrBadDigest:
-		statusCode = 400
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
 	default:
@@ -468,7 +470,7 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, bucket := range buckets {
 		listAllMyBucketsResult.Buckets = append(listAllMyBucketsResult.Buckets, &BucketResult{
-			Name:         bucket.Name,
+			Name:         bucket.Name.String(),
 			CreationDate: bucket.CreationDate.UTC().Format(time.RFC3339),
 		})
 	}
@@ -479,13 +481,17 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.headBucketHandler()")
 	defer task.End()
-	bucketName := r.PathValue(bucketPath)
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadBucket, ptrutils.ToPtr(bucketName), nil, w, r)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadBucket, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
 	slog.Info("Head bucket", "bucket", bucketName)
-	_, err := s.storage.HeadBucket(ctx, bucketName)
+	_, err = s.storage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -511,9 +517,13 @@ func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter,
 func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listMultipartUploadsHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListMultipartUploads, ptrutils.ToPtr(bucket), nil, w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListMultipartUploads, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
@@ -531,13 +541,13 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	maxUploadsI32 := int32(maxUploadsI64)
 
 	slog.Info("Listing MultipartUploads")
-	result, err := s.storage.ListMultipartUploads(ctx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsI32)
+	result, err := s.storage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 	listMultipartUploadsResult := ListMultipartUploadsResult{
-		Bucket:             result.Bucket,
+		Bucket:             result.BucketName.String(),
 		KeyMarker:          result.KeyMarker,
 		UploadIdMarker:     result.UploadIdMarker,
 		NextKeyMarker:      result.NextKeyMarker,
@@ -571,9 +581,13 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucket), nil, w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
@@ -596,14 +610,14 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxKeysI32 := int32(maxKeysI64)
 
-	slog.Info("Listing objects", "bucket", bucket)
-	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysI32)
+	slog.Info("Listing objects", "bucket", bucketName.String())
+	result, err := s.storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeysI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 	listBucketResult := ListBucketResult{
-		Name:           bucket,
+		Name:           bucketName.String(),
 		Prefix:         prefix,
 		Delimiter:      delimiter,
 		StartAfter:     query.Get(startAfterQuery), // Original start-after from request
@@ -643,9 +657,13 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsV2Handler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucket), nil, w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
@@ -667,8 +685,8 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxKeysI32 := int32(maxKeysI64)
 
-	slog.Info("Listing objects V2", "bucket", bucket)
-	result, err := s.storage.ListObjects(ctx, bucket, prefix, delimiter, startAfter, maxKeysI32)
+	slog.Info("Listing objects V2", "bucket", bucketName.String())
+	result, err := s.storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeysI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -676,7 +694,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare the V2 response
 	listBucketV2Result := ListBucketV2Result{
-		Name:              bucket,
+		Name:              bucketName.String(),
 		Prefix:            prefix,
 		Delimiter:         delimiter,
 		MaxKeys:           maxKeysI32,
@@ -720,36 +738,44 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.createBucketHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateBucket, ptrutils.ToPtr(bucket), nil, w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateBucket, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
 
-	slog.Info("Creating bucket", "bucket", bucket)
-	err := s.storage.CreateBucket(ctx, bucket)
+	slog.Info("Creating bucket", "bucket", bucketName.String())
+	err = s.storage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 	responseHeaders := w.Header()
-	responseHeaders.Set(locationHeader, bucket)
+	responseHeaders.Set(locationHeader, bucketName.String())
 	w.WriteHeader(200)
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.deleteBucketHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucket, ptrutils.ToPtr(bucket), nil, w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucket, ptrutils.ToPtr(bucketName.String()), nil, w, r)
 	if shouldReturn {
 		return
 	}
 
-	slog.Info("Deleting bucket", "bucket", bucket)
-	err := s.storage.DeleteBucket(ctx, bucket)
+	slog.Info("Deleting bucket", "bucket", bucketName.String())
+	err = s.storage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -760,16 +786,20 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.headObjectHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
 
-	slog.Info("Head object", "bucket", bucket, "key", key)
-	object, err := s.storage.HeadObject(ctx, bucket, key)
+	slog.Info("Head object", "bucket", bucketName.String(), "key", key)
+	object, err := s.storage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -873,10 +903,14 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query()
 
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListParts, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListParts, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
@@ -894,14 +928,14 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxPartsI32 := int32(maxPartsI64)
 
-	result, err := s.storage.ListParts(ctx, bucket, key, uploadId, partNumberMarker, maxPartsI32)
+	result, err := s.storage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxPartsI32)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 
 	listPartsResult := ListPartsResult{
-		Bucket:               result.Bucket,
+		Bucket:               result.BucketName.String(),
 		Key:                  result.Key,
 		UploadId:             result.UploadId,
 		PartNumberMarker:     result.PartNumberMarker,
@@ -932,18 +966,22 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.getObjectHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
 
 	rangeHeaderValue := r.Header.Get(rangeHeader)
-	slog.Info("Getting object", "bucket", bucket, "key", key)
+	slog.Info("Getting object", "bucket", bucketName.String(), "key", key)
 	// @Concurrency: headObject and getObject run in different transactions and possibly return inconsistent data
-	object, err := s.storage.HeadObject(ctx, bucket, key)
+	object, err := s.storage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -978,7 +1016,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 				sizes = append(sizes, size)
 				totalSize += size
 			}
-			rangeReader, err := s.storage.GetObject(ctx, bucket, key, byteRange.start, &end)
+			rangeReader, err := s.storage.GetObject(ctx, bucketName, key, byteRange.start, &end)
 			if err != nil {
 				for _, rangeReader := range readers {
 					rangeReader.Close()
@@ -991,7 +1029,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// we only include the headers for requests without range headers
 		setChecksumHeadersFromObject(responseHeaders, object)
-		reader, err := s.storage.GetObject(ctx, bucket, key, nil, nil)
+		reader, err := s.storage.GetObject(ctx, bucketName, key, nil, nil)
 		if err != nil {
 			handleError(err, w, r)
 			return
@@ -1057,25 +1095,29 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.createMultipartUploadHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCreateMultipartUpload, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
-	slog.Info("CreateMultipartUpload", "bucket", bucket, "key", key)
-	result, err := s.storage.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType)
+	slog.Info("CreateMultipartUpload", "bucket", bucketName.String(), "key", key)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		handleError(err, w, r)
 		return
 	}
 
 	initiateMultipartUploadResult := InitiateMultipartUploadResult{
-		Bucket:   bucket,
+		Bucket:   bucketName.String(),
 		Key:      key,
 		UploadId: result.UploadId,
 	}
@@ -1088,10 +1130,14 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.completeMultipartUploadHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCompleteMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationCompleteMultipartUpload, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
@@ -1119,8 +1165,8 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	slog.Info("CompleteMultipartUpload", "bucket", bucket, "key", key, "uploadId", uploadId)
-	result, err := s.storage.CompleteMultipartUpload(ctx, bucket, key, uploadId, checksumInput)
+	slog.Info("CompleteMultipartUpload", "bucket", bucketName.String(), "key", key, "uploadId", uploadId)
+	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1128,7 +1174,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 
 	completeMultipartUploadResult := CompleteMultipartUploadResult{
 		Location:          result.Location,
-		Bucket:            bucket,
+		Bucket:            bucketName.String(),
 		Key:               key,
 		ETag:              result.ETag,
 		ChecksumCRC32:     result.ChecksumCRC32,
@@ -1185,10 +1231,14 @@ func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
 func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.uploadPartHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationUploadPart, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationUploadPart, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
@@ -1207,7 +1257,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("UploadPart", "bucket", bucket, "key", key, "uploadId", uploadId, "partNumber", partNumber)
+	slog.Info("UploadPart", "bucket", bucketName.String(), "key", key, "uploadId", uploadId, "partNumber", partNumber)
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
 		return
@@ -1222,7 +1272,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-	uploadPartResult, err := s.storage.UploadPart(ctx, bucket, key, uploadId, partNumberI32, r.Body, checksumInput)
+	uploadPartResult, err := s.storage.UploadPart(ctx, bucketName, key, uploadId, partNumberI32, r.Body, checksumInput)
 	if err != nil {
 		if _, ok := err.(*http.MaxBytesError); ok {
 			err = storage.ErrEntityTooLarge
@@ -1245,10 +1295,14 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.putObjectHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
@@ -1266,11 +1320,11 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Putting object", "bucket", bucket, "key", key)
+	slog.Info("Putting object", "bucket", bucketName.String(), "key", key)
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	putObjectResult, err := s.storage.PutObject(ctx, bucket, key, contentType, r.Body, checksumInput)
+	putObjectResult, err := s.storage.PutObject(ctx, bucketName, key, contentType, r.Body, checksumInput)
 	if err != nil {
 		if _, ok := err.(*http.MaxBytesError); ok {
 			err = storage.ErrEntityTooLarge
@@ -1308,18 +1362,22 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.abortMultipartUploadHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationAbortMultipartUpload, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationAbortMultipartUpload, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
 
 	query := r.URL.Query()
 	uploadId := query.Get(uploadIdQuery)
-	slog.Info("AbortMultipartUpload", "bucket", bucket, "key", key, "uploadId", uploadId)
-	err := s.storage.AbortMultipartUpload(ctx, bucket, key, uploadId)
+	slog.Info("AbortMultipartUpload", "bucket", bucketName.String(), "key", key, "uploadId", uploadId)
+	err = s.storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1330,16 +1388,20 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, task := trace.NewTask(r.Context(), "Server.deleteObjectHandler()")
 	defer task.End()
-	bucket := r.PathValue(bucketPath)
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	key := r.PathValue(keyPath)
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObject, ptrutils.ToPtr(bucket), ptrutils.ToPtr(key), w, r)
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key), w, r)
 	if shouldReturn {
 		return
 	}
 
-	slog.Info("Deleting object", "bucket", bucket, "key", key)
-	err := s.storage.DeleteObject(ctx, bucket, key)
+	slog.Info("Deleting object", "bucket", bucketName.String(), "key", key)
+	err = s.storage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		handleError(err, w, r)
 		return

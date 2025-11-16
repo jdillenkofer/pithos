@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/oklog/ulid/v2"
 )
@@ -46,7 +47,7 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	return &storageoutboxentry.Entity{
 		Id:          &ulidId,
 		Operation:   operation,
-		Bucket:      bucket,
+		Bucket:      storage.MustNewBucketName(bucket),
 		Key:         key,
 		Data:        data,
 		ContentType: contentType,
@@ -77,8 +78,8 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx 
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, bucket)
+func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -86,8 +87,8 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Co
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucket)
+func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -101,12 +102,12 @@ func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql
 		storageOutboxEntry.Id = &id
 		storageOutboxEntry.CreatedAt = time.Now().UTC()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	storageOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket, storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.Data, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
 	return err
 }
 

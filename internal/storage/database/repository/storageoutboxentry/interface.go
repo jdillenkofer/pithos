@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -12,8 +13,8 @@ type Repository interface {
 	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
-	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
-	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucket string) (*Entity, error)
+	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
+	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
 	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *Entity) error
 	DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error
 }
@@ -21,7 +22,7 @@ type Repository interface {
 type Entity struct {
 	Id          *ulid.ULID
 	Operation   string
-	Bucket      string
+	Bucket      storage.BucketName
 	Key         string
 	ContentType *string
 	Data        []byte

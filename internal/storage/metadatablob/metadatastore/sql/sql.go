@@ -16,7 +16,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
-	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
@@ -52,7 +51,7 @@ func (sms *sqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([
 	return sms.blobRepository.FindInUseBlobIds(ctx, tx)
 }
 
-func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -71,7 +70,7 @@ func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName string) error {
+func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -111,7 +110,7 @@ func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]met
 	return buckets, nil
 }
 
-func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName string) (*metadatastore.Bucket, error) {
+func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.Bucket, error) {
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -141,7 +140,7 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
 	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -206,7 +205,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	return &listBucketResult, nil
 }
 
-func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -218,7 +217,7 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) (*metadatastore.Object, error) {
+func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string) (*metadatastore.Object, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -267,7 +266,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, nil
 }
 
-func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName string, obj *metadatastore.Object) error {
+func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object) error {
 	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -334,7 +333,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName string, key string) error {
+func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -363,7 +362,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -396,7 +395,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}, nil
 }
 
-func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumber int32, blb metadatastore.Blob) error {
+func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string, uploadId string, partNumber int32, blb metadatastore.Blob) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -438,7 +437,7 @@ func convertQuotedEtagHexDigestToBytes(etag string) ([]byte, error) {
 	return hex.DecodeString(etagWithoutTrailingQuote)
 }
 
-func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string, uploadId string, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -607,7 +606,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
-	calculatedChecksums := storage.ChecksumValues{
+	calculatedChecksums := metadatastore.ChecksumValues{
 		ETag: ptrutils.ToPtr("\"" + hex.EncodeToString(etagMd5Hash.Sum([]byte{})) + "-" + strconv.Itoa(len(blobEntities)) + "\""),
 	}
 	switch checksumType {
@@ -705,7 +704,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}, nil
 }
 
-func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string) (*metadatastore.AbortMultipartResult, error) {
+func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string, uploadId string) (*metadatastore.AbortMultipartResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -755,7 +754,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	}, nil
 }
 
-func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName string, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*metadatastore.ListMultipartUploadsResult, error) {
+func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*metadatastore.ListMultipartUploadsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -815,7 +814,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	return &listMultipartUploadsResult, nil
 }
 
-func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName string, key string, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -876,7 +875,7 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 
 	return &metadatastore.ListPartsResult{
-		Bucket:               bucketName,
+		BucketName:           bucketName,
 		Key:                  key,
 		UploadId:             uploadId,
 		PartNumberMarker:     partNumberMarker,

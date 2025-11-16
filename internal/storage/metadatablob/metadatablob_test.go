@@ -81,7 +81,7 @@ func TestMetadataBlobStorageWithSql(t *testing.T) {
 		os.Exit(1)
 	}
 	content := []byte("MetadataBlobStorage")
-	err = storage.Tester(metadataBlobStorage, []string{"bucket"}, content)
+	err = storage.Tester(metadataBlobStorage, []storage.BucketName{storage.MustNewBucketName("bucket")}, content)
 	assert.Nil(t, err)
 }
 
@@ -144,6 +144,6 @@ func TestMetadataBlobStorageWithFilesystem(t *testing.T) {
 		os.Exit(1)
 	}
 	content := []byte("MetadataBlobStorage")
-	err = storage.Tester(metadataBlobStorage, []string{"bucket"}, content)
+	err = storage.Tester(metadataBlobStorage, []storage.BucketName{storage.MustNewBucketName("bucket")}, content)
 	assert.Nil(t, err)
 }
