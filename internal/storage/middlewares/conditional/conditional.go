@@ -16,6 +16,9 @@ type conditionalStorageMiddleware struct {
 	startStopValidator *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure conditionalStorageMiddleware implements storage.Storage
+var _ storage.Storage = (*conditionalStorageMiddleware)(nil)
+
 func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, defaultStorage storage.Storage) (storage.Storage, error) {
 	startStopValidator, err := startstopvalidator.New("ConditionalStorageMiddleware")
 	if err != nil {

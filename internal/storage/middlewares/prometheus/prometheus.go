@@ -26,6 +26,9 @@ type prometheusStorageMiddleware struct {
 	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
+var _ storage.Storage = (*prometheusStorageMiddleware)(nil)
+
 func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Registerer) (storage.Storage, error) {
 	failedApiOpsCounter := prometheus.NewCounterVec(
 		prometheus.CounterOpts{

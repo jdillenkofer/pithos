@@ -18,6 +18,9 @@ type replicationStorage struct {
 	startStopValidator                  *startstopvalidator.StartStopValidator
 }
 
+// Compile-time check to ensure replicationStorage implements storage.Storage
+var _ storage.Storage = (*replicationStorage)(nil)
+
 func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
 	primaryUploadIdToSecondaryUploadIds := make(map[string][]string)
 
