@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 )
 
@@ -127,12 +128,6 @@ var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
-// LifecycleManager manages the lifecycle of a storage system
-type LifecycleManager interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-}
-
 // BucketManager manages bucket operations
 type BucketManager interface {
 	CreateBucket(ctx context.Context, bucket string) error
@@ -160,9 +155,9 @@ type MultipartUploadManager interface {
 	ListParts(ctx context.Context, bucket string, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
-// Storage is the main interface that composes all storage functionality
+// Storage is a composite interface that combines all storage operations
 type Storage interface {
-	LifecycleManager
+	lifecycle.Manager
 	BucketManager
 	ObjectManager
 	MultipartUploadManager

@@ -12,39 +12,39 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
 type outboxStorage struct {
+	*lifecycle.ValidatedLifecycle
 	db                           database.Database
 	triggerChannel               chan struct{}
 	triggerChannelClosed         bool
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
-	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
 var _ storage.Storage = (*outboxStorage)(nil)
 
 func NewStorage(db database.Database, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository) (storage.Storage, error) {
-	startStopValidator, err := startstopvalidator.New("OutboxStorage")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
 	}
 	os := &outboxStorage{
+		ValidatedLifecycle:           lifecycle,
 		db:                           db,
 		triggerChannel:               make(chan struct{}, 16),
 		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
-		startStopValidator:           startStopValidator,
 	}
 	return os, nil
 }
@@ -140,23 +140,17 @@ out:
 }
 
 func (os *outboxStorage) Start(ctx context.Context) error {
-	err := os.startStopValidator.Start()
-	if err != nil {
+	if err := os.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
 	os.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
 		os.processOutboxLoop()
 	})
-	err = os.innerStorage.Start(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return os.innerStorage.Start(ctx)
 }
 
 func (os *outboxStorage) Stop(ctx context.Context) error {
-	err := os.startStopValidator.Stop()
-	if err != nil {
+	if err := os.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
 	if !os.triggerChannelClosed {
@@ -171,11 +165,7 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 		}
 		os.triggerChannelClosed = true
 	}
-	err = os.innerStorage.Stop(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return os.innerStorage.Stop(ctx)
 }
 
 func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucket string, key string, data []byte) error {

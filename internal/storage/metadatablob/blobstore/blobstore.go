@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/oklog/ulid/v2"
 )
@@ -17,9 +18,8 @@ type BlobId = ulid.ULID
 
 var ErrBlobNotFound error = errors.New("blob not found")
 
-type BlobStore interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
+// Core blob operations
+type BlobManager interface {
 	PutBlob(ctx context.Context, tx *sql.Tx, blobId BlobId, reader io.Reader) error
 	// GetBlob returns a ReadCloser for the blob with the given blobId.
 	// If the blob does not exist, ErrBlobNotFound is returned
@@ -28,6 +28,12 @@ type BlobStore interface {
 	GetBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) (io.ReadCloser, error)
 	GetBlobIds(ctx context.Context, tx *sql.Tx) ([]BlobId, error)
 	DeleteBlob(ctx context.Context, tx *sql.Tx, blobId BlobId) error
+}
+
+// Composite interface
+type BlobStore interface {
+	lifecycle.Manager
+	BlobManager
 }
 
 func GenerateBlobId() (*BlobId, error) {

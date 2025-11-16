@@ -64,6 +64,8 @@ type TinkEncryptionBlobStoreMiddleware struct {
 	refreshShutdown sync.WaitGroup
 }
 
+var _ blobstore.BlobStore = (*TinkEncryptionBlobStoreMiddleware)(nil)
+
 // testKeyAvailability performs a small encrypt/decrypt test to verify the AEAD key is accessible and functional
 func testKeyAvailability(aead tink.AEAD, kmsType string) error {
 	testData := []byte("test")

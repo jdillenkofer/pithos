@@ -12,15 +12,19 @@ import (
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/pkcs7padding"
 	"golang.org/x/crypto/scrypt"
 )
 
 type legacyEncryptionBlobStoreMiddleware struct {
+	*lifecycle.ValidatedLifecycle
 	key            []byte
 	innerBlobStore blobstore.BlobStore
 }
+
+var _ blobstore.BlobStore = (*legacyEncryptionBlobStoreMiddleware)(nil)
 
 const hmacSize = 32
 
@@ -37,18 +41,29 @@ func New(password string, innerBlobStore blobstore.BlobStore) (blobstore.BlobSto
 	if err != nil {
 		return nil, err
 	}
+	lifecycle, err := lifecycle.NewValidatedLifecycle("LegacyEncryptionBlobStoreMiddleware")
+	if err != nil {
+		return nil, err
+	}
 	ebsm := &legacyEncryptionBlobStoreMiddleware{
-		key:            key,
-		innerBlobStore: innerBlobStore,
+		ValidatedLifecycle: lifecycle,
+		key:                key,
+		innerBlobStore:     innerBlobStore,
 	}
 	return ebsm, nil
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) Start(ctx context.Context) error {
+	if err := ebsm.ValidatedLifecycle.Start(ctx); err != nil {
+		return err
+	}
 	return ebsm.innerBlobStore.Start(ctx)
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
+	if err := ebsm.ValidatedLifecycle.Stop(ctx); err != nil {
+		return err
+	}
 	return ebsm.innerBlobStore.Stop(ctx)
 }
 

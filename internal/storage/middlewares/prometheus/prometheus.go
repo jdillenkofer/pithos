@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type prometheusStorageMiddleware struct {
+	*lifecycle.ValidatedLifecycle
 	registerer                   prometheus.Registerer
 	failedApiOpsCounter          *prometheus.CounterVec
 	successfulApiOpsCounter      *prometheus.CounterVec
@@ -23,7 +24,6 @@ type prometheusStorageMiddleware struct {
 	totalBytesDownloadedByBucket *prometheus.CounterVec
 	metricsMeasuringTaskHandle   *task.TaskHandle
 	innerStorage                 storage.Storage
-	startStopValidator           *startstopvalidator.StartStopValidator
 }
 
 // Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
@@ -80,12 +80,13 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 		[]string{"bucket"},
 	)
 
-	startStopValidator, err := startstopvalidator.New("PrometheusStorageMiddleware")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("PrometheusStorageMiddleware")
 	if err != nil {
 		return nil, err
 	}
 
 	return &prometheusStorageMiddleware{
+		ValidatedLifecycle:           lifecycle,
 		registerer:                   registerer,
 		failedApiOpsCounter:          failedApiOpsCounter,
 		successfulApiOpsCounter:      successfulApiOpsCounter,
@@ -93,7 +94,6 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
 		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
 		innerStorage:                 innerStorage,
-		startStopValidator:           startStopValidator,
 	}, nil
 }
 
@@ -146,8 +146,7 @@ func (psm *prometheusStorageMiddleware) measureMetricsLoop(cancelMetricsMeasurin
 }
 
 func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
-	err := psm.startStopValidator.Start()
-	if err != nil {
+	if err := psm.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
 	psm.registerer.MustRegister(psm.failedApiOpsCounter)
@@ -160,16 +159,11 @@ func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
 		psm.measureMetricsLoop(cancelTask)
 	})
 
-	err = psm.innerStorage.Start(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return psm.innerStorage.Start(ctx)
 }
 
 func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
-	err := psm.startStopValidator.Stop()
-	if err != nil {
+	if err := psm.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
 
@@ -189,11 +183,7 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 		}
 	}
 
-	err = psm.innerStorage.Stop(ctx)
-	if err != nil {
-		return err
-	}
-	return nil
+	return psm.innerStorage.Stop(ctx)
 }
 
 func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucket string) error {

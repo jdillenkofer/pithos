@@ -28,6 +28,8 @@ type outboxBlobStore struct {
 	blobOutboxEntryRepository  blobOutboxEntry.Repository
 }
 
+var _ blobstore.BlobStore = (*outboxBlobStore)(nil)
+
 func New(db database.Database, innerBlobStore blobstore.BlobStore, blobOutboxEntryRepository blobOutboxEntry.Repository) (blobstore.BlobStore, error) {
 	return &outboxBlobStore{
 		db:                        db,

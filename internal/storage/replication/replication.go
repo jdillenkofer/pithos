@@ -6,16 +6,16 @@ import (
 	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/startstopvalidator"
 )
 
 type replicationStorage struct {
+	*lifecycle.ValidatedLifecycle
 	primaryStorage                      storage.Storage
 	secondaryStorages                   []storage.Storage
 	primaryUploadIdToSecondaryUploadIds map[string][]string
 	mapMutex                            sync.Mutex
-	startStopValidator                  *startstopvalidator.StartStopValidator
 }
 
 // Compile-time check to ensure replicationStorage implements storage.Storage
@@ -24,32 +24,29 @@ var _ storage.Storage = (*replicationStorage)(nil)
 func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
 	primaryUploadIdToSecondaryUploadIds := make(map[string][]string)
 
-	startStopValidator, err := startstopvalidator.New("ReplicationStorage")
+	lifecycle, err := lifecycle.NewValidatedLifecycle("ReplicationStorage")
 	if err != nil {
 		return nil, err
 	}
 
 	return &replicationStorage{
+		ValidatedLifecycle:                  lifecycle,
 		primaryStorage:                      primaryStorage,
 		secondaryStorages:                   secondaryStorages,
 		primaryUploadIdToSecondaryUploadIds: primaryUploadIdToSecondaryUploadIds,
 		mapMutex:                            sync.Mutex{},
-		startStopValidator:                  startStopValidator,
 	}, nil
 }
 
 func (rs *replicationStorage) Start(ctx context.Context) error {
-	err := rs.startStopValidator.Start()
-	if err != nil {
+	if err := rs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	err = rs.primaryStorage.Start(ctx)
-	if err != nil {
+	if err := rs.primaryStorage.Start(ctx); err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.Start(ctx)
-		if err != nil {
+		if err := secondaryStorage.Start(ctx); err != nil {
 			return err
 		}
 	}
@@ -57,17 +54,14 @@ func (rs *replicationStorage) Start(ctx context.Context) error {
 }
 
 func (rs *replicationStorage) Stop(ctx context.Context) error {
-	err := rs.startStopValidator.Stop()
-	if err != nil {
+	if err := rs.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
-	err = rs.primaryStorage.Stop(ctx)
-	if err != nil {
+	if err := rs.primaryStorage.Stop(ctx); err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.Stop(ctx)
-		if err != nil {
+		if err := secondaryStorage.Stop(ctx); err != nil {
 			return err
 		}
 	}
