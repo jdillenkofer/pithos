@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,12 +28,14 @@ type sftpBlobStore struct {
 	clientConfig *ssh.ClientConfig
 	root         string
 	client       *sftp.Client
+	sshClient    *ssh.Client
+	mu           sync.Mutex
 }
 
 func (s *sftpBlobStore) ensureRootDir() error {
 	_, err := doRetriableOperation(func() (*struct{}, error) {
 		return nil, s.client.MkdirAll(s.root)
-	}, maxStpRetries, s.reconnectSftpClient)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
 	return err
 }
 
@@ -58,32 +61,46 @@ func (s *sftpBlobStore) tryGetBlobIdFromFilename(filename string) (blobId *blobs
 }
 
 func (s *sftpBlobStore) reconnectSftpClient() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.client != nil {
 		// If we have a retry wait a couple of seconds before continuing
 		time.Sleep(waitDurationBeforeRetry)
 		s.client.Close()
 	}
 
+	// Close the SSH connection properly
+	if s.sshClient != nil {
+		s.sshClient.Close()
+	}
+
 	client, err := ssh.Dial("tcp", s.addr, s.clientConfig)
 	if err != nil {
 		return err
 	}
+	s.sshClient = client // Store SSH client reference
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
 		client.Close()
+		s.sshClient = nil
 		return err
 	}
 	s.client = sftpClient
 	return nil
 }
 
-func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry func() error) (T, error) {
+func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry func() error, shouldIgnoreError func(error) bool) (T, error) {
 	retries := 0
 	var empty T
 	for {
 		t, err := op()
 		if err != nil {
+			if shouldIgnoreError != nil && shouldIgnoreError(err) {
+				return empty, err
+			}
+
 			retries += 1
 			if retries < maxRetries {
 				err = preRetry()
@@ -122,9 +139,14 @@ func (s *sftpBlobStore) Start(ctx context.Context) error {
 }
 
 func (s *sftpBlobStore) Stop(ctx context.Context) error {
-	err := s.client.Close()
-	if err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.client != nil {
+		s.client.Close()
+	}
+	if s.sshClient != nil {
+		return s.sshClient.Close()
 	}
 	return nil
 }
@@ -133,7 +155,7 @@ func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	filename := s.getFilename(blobId)
 	f, err := doRetriableOperation(func() (*sftp.File, error) {
 		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-	}, maxStpRetries, s.reconnectSftpClient)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
 		return err
 	}
@@ -151,16 +173,16 @@ func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	// This means that if the file doesn't exist, we will only find out when we try
 	// to read from it.
 	/*
-		_, err := doRetriableOperation(func() (*struct{}, error) {
-			_, err := s.client.Stat(filename)
-			return nil, err
-		}, maxStpRetries, s.reconnectSftpClient)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil, blobstore.ErrBlobNotFound
-			}
-			return nil, err
-		}
+	   _, err := doRetriableOperation(func() (*struct{}, error) {
+	       _, err := s.client.Stat(filename)
+	       return nil, err
+	   }, maxStpRetries, s.reconnectSftpClient, func(err error) bool { return errors.Is(err, fs.ErrNotExist) })
+	   if err != nil {
+	       if errors.Is(err, fs.ErrNotExist) {
+	           return nil, blobstore.ErrBlobNotFound
+	       }
+	       return nil, err
+	   }
 	*/
 
 	f := ioutils.NewLazyReadSeekCloser(func() (io.ReadSeekCloser, error) {
@@ -173,7 +195,9 @@ func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 				return nil, err
 			}
 			return f, nil
-		}, maxStpRetries, s.reconnectSftpClient)
+		}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
+			return errors.Is(err, blobstore.ErrBlobNotFound)
+		})
 	})
 	return f, nil
 }
@@ -181,7 +205,7 @@ func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 func (s *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	dirEntries, err := doRetriableOperation(func() ([]os.FileInfo, error) {
 		return s.client.ReadDir(s.root)
-	}, maxStpRetries, s.reconnectSftpClient)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -201,14 +225,16 @@ func (s *sftpBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobs
 	filename := s.getFilename(blobId)
 	_, err := doRetriableOperation(func() (*struct{}, error) {
 		return nil, s.client.Remove(filename)
-	}, maxStpRetries, s.reconnectSftpClient)
+	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
+		// Check for both ENOENT and fs.ErrNotExist to be safe
+		return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
+	})
 	if err != nil {
-		e, ok := err.(*os.PathError)
-		if ok && e.Err == syscall.ENOENT {
-			// The file didn't exist
-		} else {
-			return err
+		// If the error is "file not found", we consider it a success (idempotent delete)
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
+		return err
 	}
 	return nil
 }
