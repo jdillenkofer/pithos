@@ -162,8 +162,7 @@ func TestSftpBlobStore(t *testing.T) {
 				}
 			}()
 
-			tmpPath := filepath.Join(os.TempDir(), "pithos")
-			sftpBlobStore, err := New(sshAddr, clientConfig, tmpPath)
+			sftpBlobStore, err := New(sshAddr, clientConfig, "/tmp/pithos")
 			if err != nil {
 				slog.Error(fmt.Sprintf("Could not create SftpBlobStore: %s", err))
 				os.Exit(1)
