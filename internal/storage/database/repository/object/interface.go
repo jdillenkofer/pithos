@@ -14,8 +14,8 @@ type Repository interface {
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
-	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string, uploadId string) (*Entity, error)
-	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*Entity, error)
+	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) (*Entity, error)
+	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*Entity, error)
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error)
 	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
@@ -24,7 +24,7 @@ type Repository interface {
 type Entity struct {
 	Id                *ulid.ULID
 	BucketName        storage.BucketName
-	Key               string
+	Key               storage.ObjectKey
 	ContentType       *string
 	ETag              string
 	ChecksumCRC32     *string

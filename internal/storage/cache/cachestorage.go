@@ -30,8 +30,8 @@ func New(cache Cache, innerStorage storage.Storage) (storage.Storage, error) {
 	}, nil
 }
 
-func getObjectCacheKeyForBucketAndKey(bucketName storage.BucketName, key string) string {
-	return "OBJECT_BUCKET_" + bucketName.String() + "_KEY_" + key
+func getObjectCacheKeyForBucketAndKey(bucketName storage.BucketName, key storage.ObjectKey) string {
+	return "OBJECT_BUCKET_" + bucketName.String() + "_KEY_" + key.String()
 }
 
 func (cs *CacheStorage) Start(ctx context.Context) error {
@@ -88,7 +88,7 @@ func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.Buck
 	return objects, nil
 }
 
-func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
 	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
@@ -96,7 +96,7 @@ func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.Bucke
 	return object, nil
 }
 
-func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	var reader io.ReadCloser
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	data, err := cs.cache.Get(cacheKey)
@@ -138,7 +138,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 	return reader, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err
@@ -159,7 +159,7 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.Bucket
 	return putObjectResult, nil
 }
 
-func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
 	err := cs.innerStorage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		return err
@@ -173,7 +173,7 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.Buc
 	return nil
 }
 
-func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		return nil, err
@@ -181,7 +181,7 @@ func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName st
 	return initiateMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.Bucke
 	return uploadPartResult, nil
 }
 
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName 
 	return completeMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
 	err := cs.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName sto
 	return listMultipartUploadsResult, nil
 }
 
-func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 	if err != nil {
 		return nil, err

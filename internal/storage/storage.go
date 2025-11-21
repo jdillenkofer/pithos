@@ -18,7 +18,7 @@ type Bucket struct {
 }
 
 type Object struct {
-	Key               string
+	Key               ObjectKey
 	ContentType       *string
 	LastModified      time.Time
 	ETag              string
@@ -71,7 +71,7 @@ type CompleteMultipartUploadResult struct {
 }
 
 type Upload struct {
-	Key       string
+	Key       ObjectKey
 	UploadId  string
 	Initiated time.Time
 }
@@ -104,7 +104,7 @@ type Part struct {
 
 type ListPartsResult struct {
 	BucketName           BucketName
-	Key                  string
+	Key                  ObjectKey
 	UploadId             string
 	PartNumberMarker     string
 	NextPartNumberMarker *string
@@ -116,9 +116,13 @@ type ListPartsResult struct {
 type ChecksumInput = metadatastore.ChecksumInput
 type ChecksumValues = metadatastore.ChecksumValues
 type BucketName = metadatastore.BucketName
+type ObjectKey = metadatastore.ObjectKey
 
 var NewBucketName = metadatastore.NewBucketName
 var MustNewBucketName = metadatastore.MustNewBucketName
+
+var NewObjectKey = metadatastore.NewObjectKey
+var MustNewObjectKey = metadatastore.MustNewObjectKey
 
 var ValidateChecksums = metadatastore.ValidateChecksums
 
@@ -130,6 +134,7 @@ var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
+var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
@@ -144,20 +149,20 @@ type BucketManager interface {
 // ObjectManager manages object operations
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
-	HeadObject(ctx context.Context, bucketName BucketName, key string) (*Object, error)
-	GetObject(ctx context.Context, bucketName BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error)
-	PutObject(ctx context.Context, bucketName BucketName, key string, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
-	DeleteObject(ctx context.Context, bucketName BucketName, key string) error
+	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey) (*Object, error)
+	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error)
+	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
+	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey) error
 }
 
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
-	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key string, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, bucketName BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
-	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key string, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key string, uploadId string) error
+	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string) error
 	ListMultipartUploads(ctx context.Context, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, bucketName BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	ListParts(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 // Storage is a composite interface that combines all storage operations
@@ -180,7 +185,7 @@ func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName Buc
 		if !listBucketResult.IsTruncated {
 			break
 		}
-		startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key
+		startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String()
 	}
 	return allObjects, nil
 }
@@ -194,7 +199,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 	defer storage.Stop(ctx)
 
 	for _, bucketName := range bucketNames {
-		key := "test"
+		key := MustNewObjectKey("test")
 		data := ioutils.NewByteReadSeekCloser(content)
 
 		err = storage.CreateBucket(ctx, bucketName)
@@ -247,7 +252,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return errors.New("invalid objects length")
 		}
 
-		if key != listBucketResult.Objects[0].Key {
+		if !key.Equals(listBucketResult.Objects[0].Key) {
 			return errors.New("invalid object key")
 		}
 

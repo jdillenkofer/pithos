@@ -227,7 +227,7 @@ func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucketName stor
 	return &listBucketResult, nil
 }
 
-func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -248,7 +248,7 @@ func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName stora
 	return &o, err
 }
 
-func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -310,7 +310,7 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storag
 	return reader, nil
 }
 
-func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -402,7 +402,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storag
 	}, nil
 }
 
-func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -444,7 +444,7 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 	}
 }
 
-func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -465,7 +465,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 	return &initiateMultipartUploadResult, nil
 }
 
-func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -534,7 +534,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 	}
 }
 
-func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -563,7 +563,7 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 	return &completeMultipartUploadResult, nil
 }
 
-func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
 	unblockGC := mbs.blobGC.PreventGCFromRunning()
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -659,7 +659,7 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 	}
 }
 
-func (mbs *metadataBlobStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (mbs *metadataBlobStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err

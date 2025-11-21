@@ -123,7 +123,7 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 	}
 	objects := sliceutils.Map(func(object types.Object) storage.Object {
 		return storage.Object{
-			Key:          *object.Key,
+			Key:          storage.MustNewObjectKey(*object.Key),
 			LastModified: *object.LastModified,
 			ETag:         *object.ETag,
 			// @TODO: checksums
@@ -140,10 +140,10 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 	}, nil
 }
 
-func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
 	headObjectResult, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucketName.String()),
-		Key:    aws.String(key),
+		Key:    aws.String(key.String()),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -166,7 +166,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
-func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	var byteRange *string = nil
 	if startByte != nil && endByte != nil {
 		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
@@ -180,7 +180,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	}
 	getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName.String()),
-		Key:    aws.String(key),
+		Key:    aws.String(key.String()),
 		Range:  byteRange,
 	})
 	var notFoundError *types.NotFound
@@ -194,10 +194,10 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	return getObjectResult.Body, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	putObjectResult, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucketName.String()),
-		Key:         aws.String(key),
+		Key:         aws.String(key.String()),
 		ContentType: contentType,
 		Body:        reader,
 		// @TODO: Use checksumInput
@@ -220,10 +220,10 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 	}, nil
 }
 
-func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
 	_, err := rs.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucketName.String()),
-		Key:    aws.String(key),
+		Key:    aws.String(key.String()),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -235,14 +235,14 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 	return nil
 }
 
-func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	checksumTypeStr := types.ChecksumTypeFullObject
 	if checksumType != nil {
 		checksumTypeStr = types.ChecksumType(*checksumType)
 	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:       aws.String(bucketName.String()),
-		Key:          aws.String(key),
+		Key:          aws.String(key.String()),
 		ContentType:  contentType,
 		ChecksumType: checksumTypeStr,
 	})
@@ -258,10 +258,10 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 	}, nil
 }
 
-func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucketName.String()),
-		Key:        aws.String(key),
+		Key:        aws.String(key.String()),
 		UploadId:   aws.String(uploadId),
 		PartNumber: aws.Int32(partNumber),
 		Body:       data,
@@ -284,10 +284,10 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
-func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
-		Key:      aws.String(key),
+		Key:      aws.String(key.String()),
 		UploadId: aws.String(uploadId),
 		// @TODO: Use checksumInput
 	})
@@ -310,10 +310,10 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 	}, nil
 }
 
-func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
 	_, err := rs.s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
-		Key:      aws.String(key),
+		Key:      aws.String(key.String()),
 		UploadId: aws.String(uploadId),
 	})
 	var notFoundError *types.NotFound
@@ -345,7 +345,7 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 
 	uploads := sliceutils.Map(func(upload types.MultipartUpload) storage.Upload {
 		return storage.Upload{
-			Key:       *upload.Key,
+			Key:       storage.MustNewObjectKey(*upload.Key),
 			UploadId:  *upload.UploadId,
 			Initiated: *upload.Initiated,
 		}
@@ -368,10 +368,10 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 	}, nil
 }
 
-func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	listPartsResult, err := rs.s3Client.ListParts(ctx, &s3.ListPartsInput{
 		Bucket:           aws.String(bucketName.String()),
-		Key:              aws.String(key),
+		Key:              aws.String(key.String()),
 		UploadId:         aws.String(uploadId),
 		PartNumberMarker: aws.String(partNumberMarker),
 		MaxParts:         aws.Int32(maxParts),
@@ -385,7 +385,7 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 	}
 	return &storage.ListPartsResult{
 		BucketName:           storage.MustNewBucketName(*listPartsResult.Bucket),
-		Key:                  *listPartsResult.Key,
+		Key:                  storage.MustNewObjectKey(*listPartsResult.Key),
 		UploadId:             *listPartsResult.UploadId,
 		PartNumberMarker:     *listPartsResult.PartNumberMarker,
 		NextPartNumberMarker: listPartsResult.NextPartNumberMarker,

@@ -85,14 +85,14 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
 			// @TODO: Use checksumInput
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, entry.Key, entry.ContentType, bytes.NewReader(entry.Data), nil)
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, bytes.NewReader(entry.Data), nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, entry.Key)
+			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -338,7 +338,7 @@ func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.Buc
 	return os.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -347,7 +347,7 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.Buck
 	return os.innerStorage.HeadObject(ctx, bucketName, key)
 }
 
-func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -356,7 +356,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 	return os.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
 }
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, err
@@ -366,7 +366,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 		if err != nil {
 			return err
 		}
-		return os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key, data)
+		return os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), data)
 	})
 	if err != nil {
 		tx.Rollback()
@@ -393,12 +393,12 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	}, nil
 }
 
-func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key, []byte{})
+	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), []byte{})
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -410,7 +410,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	return nil
 }
 
-func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -418,7 +418,7 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName s
 	return os.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 }
 
-func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -427,7 +427,7 @@ func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.Buck
 	return os.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 }
 
-func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -436,7 +436,7 @@ func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName
 	return os.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 }
 
-func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
@@ -454,7 +454,7 @@ func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName st
 	return os.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
