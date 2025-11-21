@@ -3,9 +3,13 @@ package metadatastore
 import (
 	"errors"
 	"testing"
+
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 )
 
 func TestNewBucketName(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	tests := []struct {
 		name        string
 		bucketName  string
@@ -222,6 +226,7 @@ func TestNewBucketName(t *testing.T) {
 }
 
 func TestMustNewBucketName(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	t.Run("valid name does not panic", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -245,6 +250,7 @@ func TestMustNewBucketName(t *testing.T) {
 }
 
 func TestBucketName_String(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	bn := MustNewBucketName("testbucket")
 	if bn.String() != "testbucket" {
 		t.Errorf("expected 'testbucket' but got %q", bn.String())
@@ -252,6 +258,7 @@ func TestBucketName_String(t *testing.T) {
 }
 
 func TestBucketName_Equals(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	bn1 := MustNewBucketName("mybucket")
 	bn2 := MustNewBucketName("mybucket")
 	bn3 := MustNewBucketName("otherbucket")
@@ -266,6 +273,7 @@ func TestBucketName_Equals(t *testing.T) {
 }
 
 func TestBucketName_IsEmpty(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	var bn BucketName
 	if !bn.IsEmpty() {
 		t.Error("expected zero value BucketName to be empty")

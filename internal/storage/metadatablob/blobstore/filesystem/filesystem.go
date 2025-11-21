@@ -66,6 +66,9 @@ func New(root string) (blobstore.BlobStore, error) {
 }
 
 func (bs *filesystemBlobStore) Start(ctx context.Context) error {
+	if err := bs.ValidatedLifecycle.Start(ctx); err != nil {
+		return err
+	}
 	return bs.ensureRootDir()
 }
 
