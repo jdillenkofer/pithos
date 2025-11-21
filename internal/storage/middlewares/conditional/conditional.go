@@ -101,42 +101,42 @@ func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucket
 	return storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
 }
 
-func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key string) (*storage.Object, error) {
+func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.HeadObject(ctx, bucketName, key)
 }
 
-func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key string, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.GetObject(ctx, bucketName, key, startByte, endByte)
 }
 
-func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key string) error {
+func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
 	storage := csm.lookupStorage(bucketName)
 	return storage.DeleteObject(ctx, bucketName, key)
 }
 
-func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 }
 
-func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key string, uploadId string) error {
+func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
 	storage := csm.lookupStorage(bucketName)
 	return storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
@@ -146,7 +146,7 @@ func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Contex
 	return storage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key string, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 }

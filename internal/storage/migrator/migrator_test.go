@@ -48,7 +48,7 @@ func TestStorageMigrator(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	// Arrange
 	var bucketName = storage.MustNewBucketName("test")
-	const objectKey = "zzz"
+	var objectKey = storage.MustNewObjectKey("zzz")
 	var objectData = []byte("abc")
 	ctx := context.Background()
 

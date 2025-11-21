@@ -55,7 +55,7 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	objectEntity := object.Entity{
 		Id:                &ulidId,
 		BucketName:        storage.MustNewBucketName(bucketName),
-		Key:               key,
+		Key:               storage.MustNewObjectKey(key),
 		ContentType:       contentType,
 		ETag:              etag,
 		ChecksumCRC32:     checksumCRC32,
@@ -79,11 +79,11 @@ func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *
 		object.Id = &id
 		object.CreatedAt = time.Now().UTC()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key, object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
 	return err
 }
 
@@ -131,8 +131,8 @@ func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploa
 	return objects, nil
 }
 
-func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string, uploadId string) (*object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName.String(), key, uploadId, object.UploadStatusPending)
+func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) (*object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName.String(), key.String(), uploadId, object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +148,8 @@ func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.
 	return nil, nil
 }
 
-func (or *sqliteRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyStmt, bucketName.String(), key, object.UploadStatusCompleted)
+func (or *sqliteRepository) FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyStmt, bucketName.String(), key.String(), object.UploadStatusCompleted)
 	if err != nil {
 		return nil, err
 	}
