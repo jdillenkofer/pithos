@@ -207,7 +207,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	return &listBucketResult, nil
 }
 
-func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectsOptions) (*metadatastore.ListBucketResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return sms.listObjects(ctx, tx, bucketName, opts.Prefix, opts.Delimiter, opts.StartAfter, opts.MaxKeys)
 }
 
 func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
@@ -757,7 +757,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	}, nil
 }
 
-func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*metadatastore.ListMultipartUploadsResult, error) {
+func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListMultipartUploadsOptions) (*metadatastore.ListMultipartUploadsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -766,13 +766,13 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, opts.Prefix, opts.KeyMarker, opts.UploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
 	commonPrefixes := []string{}
 	uploads := []metadatastore.Upload{}
-	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, opts.Prefix, opts.KeyMarker, opts.UploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
@@ -781,15 +781,15 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	nextUploadIdMarker := ""
 
 	for _, objectEntity := range objectEntities {
-		if delimiter != "" {
-			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
+		if opts.Delimiter != "" {
+			commonPrefix := determineCommonPrefix(opts.Prefix, objectEntity.Key.String(), opts.Delimiter)
 			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
 				commonPrefixes = append(commonPrefixes, *commonPrefix)
 			}
 		}
-		if int32(len(uploads)) < maxUploads {
-			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
-			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
+		if int32(len(uploads)) < opts.MaxUploads {
+			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), opts.Prefix)
+			if opts.Delimiter == "" || !strings.Contains(keyWithoutPrefix, opts.Delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
 					Key:       objectEntity.Key,
 					UploadId:  *objectEntity.UploadId,
@@ -803,21 +803,21 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 
 	listMultipartUploadsResult := metadatastore.ListMultipartUploadsResult{
 		Bucket:             bucketName,
-		KeyMarker:          keyMarker,
-		UploadIdMarker:     uploadIdMarker,
-		Prefix:             prefix,
-		Delimiter:          delimiter,
+		KeyMarker:          opts.KeyMarker,
+		UploadIdMarker:     opts.UploadIdMarker,
+		Prefix:             opts.Prefix,
+		Delimiter:          opts.Delimiter,
 		NextKeyMarker:      nextKeyMarker,
 		NextUploadIdMarker: nextUploadIdMarker,
-		MaxUploads:         maxUploads,
+		MaxUploads:         opts.MaxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
-		IsTruncated:        int32(*keyCount) > maxUploads,
+		IsTruncated:        int32(*keyCount) > opts.MaxUploads,
 	}
 	return &listMultipartUploadsResult, nil
 }
 
-func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, opts metadatastore.ListPartsOptions) (*metadatastore.ListPartsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -840,8 +840,8 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 
 	var partNumberMarkerI32 int32 = 0
-	if partNumberMarker != "" {
-		partNumberMarkerI64, err := strconv.ParseInt(partNumberMarker, 10, 32)
+	if opts.PartNumberMarker != "" {
+		partNumberMarkerI64, err := strconv.ParseInt(opts.PartNumberMarker, 10, 32)
 		if err != nil {
 			return nil, err
 		}
@@ -869,8 +869,8 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 			PartNumber:        sequenceNumberI32,
 			Size:              blob.Size,
 		})
-		if len(parts) >= int(maxParts) {
-			isTruncated = len(blobs)-(startOffset+1) > int(maxParts)
+		if len(parts) >= int(opts.MaxParts) {
+			isTruncated = len(blobs)-(startOffset+1) > int(opts.MaxParts)
 			lastPartNumberMarker := strconv.Itoa(blob.SequenceNumber)
 			nextPartNumberMarker = &lastPartNumberMarker
 			break
@@ -881,9 +881,9 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		BucketName:           bucketName,
 		Key:                  key,
 		UploadId:             uploadId,
-		PartNumberMarker:     partNumberMarker,
+		PartNumberMarker:     opts.PartNumberMarker,
 		NextPartNumberMarker: nextPartNumberMarker,
-		MaxParts:             maxParts,
+		MaxParts:             opts.MaxParts,
 		IsTruncated:          isTruncated,
 		Parts:                parts,
 	}, nil
