@@ -9,6 +9,9 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+
+	"github.com/XSAM/otelsql"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 //go:embed migrations/*.sql
@@ -52,7 +55,9 @@ func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {
 }
 
 func OpenDatabase(dbUrl string) (*pgxDatabase, error) {
-	db, err := sql.Open("pgx", dbUrl)
+	db, err := otelsql.Open("pgx", dbUrl,
+		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
+	)
 	if err != nil {
 		return nil, err
 	}

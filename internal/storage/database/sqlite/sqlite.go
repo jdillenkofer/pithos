@@ -12,6 +12,9 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+
+	"github.com/XSAM/otelsql"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 //go:embed migrations/*.sql
@@ -127,7 +130,9 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 	if err != nil {
 		return nil, err
 	}
-	writeableDb, err := sql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate")
+	writeableDb, err := otelsql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate",
+		otelsql.WithAttributes(semconv.DBSystemSqlite),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +142,9 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 		return nil, err
 	}
 
-	readOnlyDb, err := sql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred")
+	readOnlyDb, err := otelsql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred",
+		otelsql.WithAttributes(semconv.DBSystemSqlite),
+	)
 	if err != nil {
 		writeableDb.Close()
 		return nil, err
