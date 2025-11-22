@@ -13,7 +13,6 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
-	"github.com/oklog/ulid/v2"
 )
 
 type filesystemBlobStore struct {
@@ -29,7 +28,7 @@ func (bs *filesystemBlobStore) ensureRootDir() error {
 }
 
 func (bs *filesystemBlobStore) getFilename(blobId blobstore.BlobId) string {
-	blobFilename := hex.EncodeToString(blobId[:])
+	blobFilename := hex.EncodeToString(blobId.Bytes())
 	return filepath.Join(bs.root, blobFilename)
 }
 
@@ -41,12 +40,11 @@ func (bs *filesystemBlobStore) tryGetBlobIdFromFilename(filename string) (blobId
 	if err != nil {
 		return nil, false
 	}
-	return &ulid.ULID{
-		blobIdBytes[0], blobIdBytes[1], blobIdBytes[2], blobIdBytes[3],
-		blobIdBytes[4], blobIdBytes[5], blobIdBytes[6], blobIdBytes[7],
-		blobIdBytes[8], blobIdBytes[9], blobIdBytes[10], blobIdBytes[11],
-		blobIdBytes[12], blobIdBytes[13], blobIdBytes[14], blobIdBytes[15],
-	}, true
+	blobId, err = blobstore.NewBlobIdFromBytes(blobIdBytes)
+	if err != nil {
+		return nil, false
+	}
+	return blobId, true
 }
 
 func New(root string) (blobstore.BlobStore, error) {

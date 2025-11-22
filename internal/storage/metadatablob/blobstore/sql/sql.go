@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"io"
 
-	"github.com/oklog/ulid/v2"
-
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	blobContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
@@ -38,7 +37,7 @@ func (bs *sqlBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 		return err
 	}
 	blobContentEntity := blobContent.Entity{
-		Id:      (*ulid.ULID)(&blobId),
+		Id:      ptrutils.ToPtr(blobId),
 		Content: content,
 	}
 	err = bs.blobContentRepository.PutBlobContent(ctx, tx, &blobContentEntity)

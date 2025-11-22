@@ -3,7 +3,6 @@ package blobstore
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"errors"
 	"io"
@@ -11,10 +10,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/oklog/ulid/v2"
 )
-
-type BlobId = ulid.ULID
 
 var ErrBlobNotFound error = errors.New("blob not found")
 
@@ -36,16 +32,6 @@ type BlobStore interface {
 	BlobManager
 }
 
-func GenerateBlobId() (*BlobId, error) {
-	blobIdBytes := make([]byte, 8)
-	_, err := rand.Read(blobIdBytes)
-	if err != nil {
-		return nil, err
-	}
-	blobId := BlobId(ulid.Make())
-	return &blobId, nil
-}
-
 func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	ctx := context.Background()
 	err := blobStore.Start(ctx)
@@ -54,14 +40,17 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	}
 	defer blobStore.Stop(ctx)
 
-	blobId := BlobId(ulid.Make())
+	blobId, err := NewRandomBlobId()
+	if err != nil {
+		return err
+	}
 	blob := ioutils.NewByteReadSeekCloser(content)
 
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	err = blobStore.PutBlob(ctx, tx, blobId, blob)
+	err = blobStore.PutBlob(ctx, tx, *blobId, blob)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -77,7 +66,7 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	if err != nil {
 		return err
 	}
-	err = blobStore.PutBlob(ctx, tx, blobId, blob)
+	err = blobStore.PutBlob(ctx, tx, *blobId, blob)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -88,7 +77,7 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	if err != nil {
 		return err
 	}
-	blobReader, err := blobStore.GetBlob(ctx, tx, blobId)
+	blobReader, err := blobStore.GetBlob(ctx, tx, *blobId)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -108,7 +97,7 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	if err != nil {
 		return err
 	}
-	err = blobStore.DeleteBlob(ctx, tx, blobId)
+	err = blobStore.DeleteBlob(ctx, tx, *blobId)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -119,7 +108,7 @@ func Tester(blobStore BlobStore, db database.Database, content []byte) error {
 	if err != nil {
 		return err
 	}
-	blobReader, err = blobStore.GetBlob(ctx, tx, blobId)
+	blobReader, err = blobStore.GetBlob(ctx, tx, *blobId)
 	if err != ErrBlobNotFound {
 		// Maybe we are dealing with a blob store that returns a non-nil reader even if the blob is not found.
 		_, err = io.ReadAll(blobReader)

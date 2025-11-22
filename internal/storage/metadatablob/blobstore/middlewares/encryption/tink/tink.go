@@ -427,7 +427,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 	}
 
 	// Encrypt the DEK with the master AEAD
-	encryptedDEK, err := mw.masterAEAD.Encrypt(dek, blobId[:])
+	encryptedDEK, err := mw.masterAEAD.Encrypt(dek, blobId.Bytes())
 	if err != nil {
 		return err
 	}
@@ -467,7 +467,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 		}
 
 		// Now stream encrypt the blob data with the DEK
-		streamWriter, err := dekStreamingAEAD.NewEncryptingWriter(encryptWriter, blobId[:])
+		streamWriter, err := dekStreamingAEAD.NewEncryptingWriter(encryptWriter, blobId.Bytes())
 		if err != nil {
 			encryptWriter.CloseWithError(err)
 			return
@@ -526,7 +526,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		}
 
 		// Decrypt the DEK with master AEAD
-		dek, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, blobId[:])
+		dek, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, blobId.Bytes())
 		if err != nil {
 			rc.Close()
 			return nil, err
@@ -540,7 +540,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		}
 
 		// Create a decrypting reader for the remaining data
-		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, blobId[:])
+		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, blobId.Bytes())
 		if err != nil {
 			rc.Close()
 			return nil, err

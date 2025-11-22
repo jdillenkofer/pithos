@@ -335,7 +335,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storag
 		}
 	}
 
-	blobId, err := blobstore.GenerateBlobId()
+	blobId, err := blobstore.NewRandomBlobId()
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -473,7 +473,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName stora
 		return nil, err
 	}
 
-	blobId, err := blobstore.GenerateBlobId()
+	blobId, err := blobstore.NewRandomBlobId()
 	if err != nil {
 		tx.Rollback()
 		return nil, err

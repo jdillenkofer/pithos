@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -29,11 +30,11 @@ func NewRepository() (bloboutboxentry.Repository, error) {
 func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry.Entity, error) {
 	var id string
 	var operation string
-	var blobId string
+	var blobIdStr string
 	var content []byte
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobOutboxRow.Scan(&id, &operation, &blobId, &content, &createdAt, &updatedAt)
+	err := blobOutboxRow.Scan(&id, &operation, &blobIdStr, &content, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -41,11 +42,14 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	ulidBlobId := ulid.MustParse(blobId)
+	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
+	if err != nil {
+		return nil, err
+	}
 	return &bloboutboxentry.Entity{
 		Id:        &ulidId,
 		Operation: operation,
-		BlobId:    ulidBlobId,
+		BlobId:    *blobId,
 		Content:   content,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
@@ -56,11 +60,11 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry
 func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxentry.Entity, error) {
 	var id string
 	var operation string
-	var blobId string
+	var blobIdStr string
 	var content []byte
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobOutboxRows.Scan(&id, &operation, &blobId, &content, &createdAt, &updatedAt)
+	err := blobOutboxRows.Scan(&id, &operation, &blobIdStr, &content, &createdAt, &updatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -68,18 +72,21 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxen
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	ulidBlobId := ulid.MustParse(blobId)
+	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
+	if err != nil {
+		return nil, err
+	}
 	return &bloboutboxentry.Entity{
 		Id:        &ulidId,
 		Operation: operation,
-		BlobId:    ulidBlobId,
+		BlobId:    *blobId,
 		Content:   content,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}, nil
 }
 
-func (bor *pgxRepository) FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId ulid.ULID) (*bloboutboxentry.Entity, error) {
+func (bor *pgxRepository) FindLastBlobOutboxEntryByBlobId(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (*bloboutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findLastBlobOutboxEntryByBlobIdStmt, blobId.String())
 	blobOutboxEntryEntity, err := convertRowToBlobOutboxEntryEntity(row)
 	if err != nil {
