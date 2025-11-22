@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/http/httputils"
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -170,14 +171,14 @@ type ListBucketResult struct {
 	IsTruncated    bool                  `xml:"IsTruncated"`
 	Contents       []*ContentResult      `xml:"Contents"`
 	Name           string                `xml:"Name"`
-	Prefix         string                `xml:"Prefix"`
-	Delimiter      string                `xml:"Delimiter"`
+	Prefix         *string               `xml:"Prefix"`
+	Delimiter      *string               `xml:"Delimiter"`
 	MaxKeys        int32                 `xml:"MaxKeys"`
 	CommonPrefixes []*CommonPrefixResult `xml:"CommonPrefixes"`
 	KeyCount       int32                 `xml:"KeyCount"`
-	StartAfter     string                `xml:"StartAfter"`
-	Marker         string                `xml:"Marker,omitempty"`
-	NextMarker     string                `xml:"NextMarker,omitempty"`
+	StartAfter     *string               `xml:"StartAfter"`
+	Marker         *string               `xml:"Marker"`
+	NextMarker     *string               `xml:"NextMarker"`
 }
 
 type ListBucketV2Result struct {
@@ -185,14 +186,14 @@ type ListBucketV2Result struct {
 	IsTruncated           bool                  `xml:"IsTruncated"`
 	Contents              []*ContentResult      `xml:"Contents"`
 	Name                  string                `xml:"Name"`
-	Prefix                string                `xml:"Prefix"`
-	Delimiter             string                `xml:"Delimiter"`
+	Prefix                *string               `xml:"Prefix"`
+	Delimiter             *string               `xml:"Delimiter"`
 	MaxKeys               int32                 `xml:"MaxKeys"`
 	CommonPrefixes        []*CommonPrefixResult `xml:"CommonPrefixes"`
 	KeyCount              int32                 `xml:"KeyCount"`
-	ContinuationToken     string                `xml:"ContinuationToken,omitempty"`
-	NextContinuationToken string                `xml:"NextContinuationToken,omitempty"`
-	StartAfter            string                `xml:"StartAfter,omitempty"`
+	ContinuationToken     *string               `xml:"ContinuationToken"`
+	NextContinuationToken *string               `xml:"NextContinuationToken"`
+	StartAfter            *string               `xml:"StartAfter"`
 }
 
 type InitiateMultipartUploadResult struct {
@@ -241,14 +242,14 @@ type UploadResult struct {
 type ListMultipartUploadsResult struct {
 	XMLName            xml.Name              `xml:"ListMultipartUploadsResult"`
 	Bucket             string                `xml:"Bucket"`
-	KeyMarker          string                `xml:"KeyMarker"`
-	UploadIdMarker     string                `xml:"UploadIdMarker"`
-	NextKeyMarker      string                `xml:"NextKeyMarker"`
-	NextUploadIdMarker string                `xml:"NextUploadIdMarker"`
+	KeyMarker          *string               `xml:"KeyMarker"`
+	UploadIdMarker     *string               `xml:"UploadIdMarker"`
+	NextKeyMarker      *string               `xml:"NextKeyMarker"`
+	NextUploadIdMarker *string               `xml:"NextUploadIdMarker"`
 	MaxUploads         int32                 `xml:"MaxUploads"`
 	IsTruncated        bool                  `xml:"IsTruncated"`
-	Delimiter          string                `xml:"Delimiter"`
-	Prefix             string                `xml:"Prefix"`
+	Delimiter          *string               `xml:"Delimiter"`
+	Prefix             *string               `xml:"Prefix"`
 	Uploads            []*UploadResult       `xml:"Upload"`
 	CommonPrefixes     []*CommonPrefixResult `xml:"CommonPrefixes"`
 }
@@ -270,7 +271,7 @@ type ListPartsResult struct {
 	Bucket               string        `xml:"Bucket"`
 	Key                  string        `xml:"Key"`
 	UploadId             string        `xml:"UploadId"`
-	PartNumberMarker     string        `xml:"PartNumberMarker"`
+	PartNumberMarker     *string       `xml:"PartNumberMarker"`
 	NextPartNumberMarker *string       `xml:"NextPartNumberMarker"`
 	MaxParts             int32         `xml:"MaxParts"`
 	IsTruncated          bool          `xml:"IsTruncated"`
@@ -529,10 +530,11 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	query := r.URL.Query()
-	prefix := query.Get(prefixQuery)
-	delimiter := query.Get(delimiterQuery)
-	keyMarker := query.Get(keyMarkerQuery)
-	uploadIdMarker := query.Get(uploadIdMarkerQuery)
+
+	prefix := httputils.GetQueryParam(query, prefixQuery)
+	delimiter := httputils.GetQueryParam(query, delimiterQuery)
+	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
+	uploadIdMarker := httputils.GetQueryParam(query, uploadIdMarkerQuery)
 	maxUploads := query.Get(maxUploadsQuery)
 	maxUploadsI64, err := strconv.ParseInt(maxUploads, 10, 32)
 	if err != nil || maxUploadsI64 < 0 {
@@ -554,14 +556,14 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	listMultipartUploadsResult := ListMultipartUploadsResult{
 		Bucket:             result.BucketName.String(),
-		KeyMarker:          result.KeyMarker,
-		UploadIdMarker:     result.UploadIdMarker,
-		NextKeyMarker:      result.NextKeyMarker,
-		NextUploadIdMarker: result.NextUploadIdMarker,
+		KeyMarker:          ptrutils.ToPtr(result.KeyMarker),
+		UploadIdMarker:     ptrutils.ToPtr(result.UploadIdMarker),
+		NextKeyMarker:      ptrutils.ToPtr(result.NextKeyMarker),
+		NextUploadIdMarker: ptrutils.ToPtr(result.NextUploadIdMarker),
 		MaxUploads:         maxUploadsI32,
 		IsTruncated:        result.IsTruncated,
-		Delimiter:          result.Delimiter,
-		Prefix:             result.Prefix,
+		Delimiter:          ptrutils.ToPtr(result.Delimiter),
+		Prefix:             ptrutils.ToPtr(result.Prefix),
 		Uploads:            []*UploadResult{},
 		CommonPrefixes:     []*CommonPrefixResult{},
 	}
@@ -599,13 +601,14 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	prefix := query.Get(prefixQuery)
-	delimiter := query.Get(delimiterQuery)
-	marker := query.Get(markerQuery)
-	startAfter := query.Get(startAfterQuery)
+
+	prefix := httputils.GetQueryParam(query, prefixQuery)
+	delimiter := httputils.GetQueryParam(query, delimiterQuery)
+	marker := httputils.GetQueryParam(query, markerQuery)
+	startAfter := httputils.GetQueryParam(query, startAfterQuery)
 
 	// In ListObjects V1, use marker as startAfter if provided
-	if marker != "" {
+	if marker != nil {
 		startAfter = marker
 	}
 
@@ -631,7 +634,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Name:           bucketName.String(),
 		Prefix:         prefix,
 		Delimiter:      delimiter,
-		StartAfter:     query.Get(startAfterQuery), // Original start-after from request
+		StartAfter:     httputils.GetQueryParam(query, startAfterQuery), // Original start-after from request
 		Marker:         marker,
 		KeyCount:       int32(len(result.Objects)),
 		MaxKeys:        maxKeysI32,
@@ -643,7 +646,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	// Set NextMarker if results are truncated and we have objects
 	if result.IsTruncated && len(result.Objects) > 0 {
 		// Use the last object's key as the next marker
-		listBucketResult.NextMarker = result.Objects[len(result.Objects)-1].Key.String()
+		listBucketResult.NextMarker = ptrutils.ToPtr(result.Objects[len(result.Objects)-1].Key.String())
 	}
 
 	responseHeaders := w.Header()
@@ -680,13 +683,14 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	prefix := query.Get(prefixQuery)
-	delimiter := query.Get(delimiterQuery)
-	continuationToken := query.Get(continuationTokenQuery)
+
+	prefix := httputils.GetQueryParam(query, prefixQuery)
+	delimiter := httputils.GetQueryParam(query, delimiterQuery)
+	continuationToken := httputils.GetQueryParam(query, continuationTokenQuery)
 	maxKeys := query.Get(maxKeysQuery)
 
-	startAfter := query.Get(startAfterQuery)
-	if continuationToken != "" {
+	startAfter := httputils.GetQueryParam(query, startAfterQuery)
+	if continuationToken != nil {
 		startAfter = continuationToken
 	}
 
@@ -717,14 +721,14 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 		KeyCount:          int32(len(result.Objects)),
 		IsTruncated:       result.IsTruncated,
 		ContinuationToken: continuationToken,
-		StartAfter:        query.Get(startAfterQuery), // Original start-after from request
+		StartAfter:        httputils.GetQueryParam(query, startAfterQuery), // Original start-after from request
 		CommonPrefixes:    []*CommonPrefixResult{},
 		Contents:          []*ContentResult{},
 	}
 
 	if result.IsTruncated && len(result.Objects) > 0 {
 		// Use the last object's key as the next continuation token
-		listBucketV2Result.NextContinuationToken = result.Objects[len(result.Objects)-1].Key.String()
+		listBucketV2Result.NextContinuationToken = ptrutils.ToPtr(result.Objects[len(result.Objects)-1].Key.String())
 	}
 
 	responseHeaders := w.Header()
@@ -944,7 +948,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	partNumberMarker := query.Get(partNumberMarkerQuery)
+	partNumberMarker := httputils.GetQueryParam(query, partNumberMarkerQuery)
 	maxParts := query.Get(maxPartsQuery)
 	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
 	if err != nil {
@@ -969,7 +973,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		Bucket:               result.BucketName.String(),
 		Key:                  result.Key.String(),
 		UploadId:             result.UploadId.String(),
-		PartNumberMarker:     result.PartNumberMarker,
+		PartNumberMarker:     ptrutils.ToPtr(result.PartNumberMarker),
 		NextPartNumberMarker: result.NextPartNumberMarker,
 		MaxParts:             result.MaxParts,
 		IsTruncated:          result.IsTruncated,

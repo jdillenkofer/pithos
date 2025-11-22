@@ -177,22 +177,22 @@ var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 
 type ListObjectsOptions struct {
-	Prefix     string
-	Delimiter  string
-	StartAfter string
+	Prefix     *string
+	Delimiter  *string
+	StartAfter *string
 	MaxKeys    int32
 }
 
 type ListMultipartUploadsOptions struct {
-	Prefix         string
-	Delimiter      string
-	KeyMarker      string
-	UploadIdMarker string
+	Prefix         *string
+	Delimiter      *string
+	KeyMarker      *string
+	UploadIdMarker *string
 	MaxUploads     int32
 }
 
 type ListPartsOptions struct {
-	PartNumberMarker string
+	PartNumberMarker *string
 	MaxParts         int32
 }
 

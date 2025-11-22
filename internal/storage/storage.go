@@ -9,6 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 )
 
@@ -146,11 +147,11 @@ var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 // ListObjectsOptions defines options for listing objects
 type ListObjectsOptions struct {
 	// Prefix limits the response to keys that begin with the specified prefix.
-	Prefix string
+	Prefix *string
 	// Delimiter is a character you use to group keys.
-	Delimiter string
+	Delimiter *string
 	// StartAfter is where you want Amazon S3 to start the listing from. Amazon S3 starts listing after this specified key.
-	StartAfter string
+	StartAfter *string
 	// MaxKeys sets the maximum number of keys returned in the response.
 	MaxKeys int32
 }
@@ -158,13 +159,13 @@ type ListObjectsOptions struct {
 // ListMultipartUploadsOptions defines options for listing multipart uploads
 type ListMultipartUploadsOptions struct {
 	// Prefix limits the response to keys that begin with the specified prefix.
-	Prefix string
+	Prefix *string
 	// Delimiter is a character you use to group keys.
-	Delimiter string
+	Delimiter *string
 	// KeyMarker specifies the key-marker query parameter in the request.
-	KeyMarker string
+	KeyMarker *string
 	// UploadIdMarker specifies the upload-id-marker query parameter in the request.
-	UploadIdMarker string
+	UploadIdMarker *string
 	// MaxUploads sets the maximum number of multipart uploads returned in the response.
 	MaxUploads int32
 }
@@ -172,7 +173,7 @@ type ListMultipartUploadsOptions struct {
 // ListPartsOptions defines options for listing parts
 type ListPartsOptions struct {
 	// PartNumberMarker specifies the part-number-marker query parameter in the request.
-	PartNumberMarker string
+	PartNumberMarker *string
 	// MaxParts sets the maximum number of parts returned in the response.
 	MaxParts int32
 }
@@ -214,7 +215,7 @@ type Storage interface {
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName BucketName) ([]Object, error) {
 	allObjects := []Object{}
-	startAfter := ""
+	var startAfter *string
 	for {
 		listBucketResult, err := storage.ListObjects(ctx, bucketName, ListObjectsOptions{
 			StartAfter: startAfter,
@@ -227,7 +228,7 @@ func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName Buc
 		if !listBucketResult.IsTruncated {
 			break
 		}
-		startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String()
+		startAfter = ptrutils.ToPtr(listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String())
 	}
 	return allObjects, nil
 }
