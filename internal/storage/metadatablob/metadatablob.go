@@ -99,7 +99,7 @@ func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CreateBucket")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -124,7 +124,7 @@ func (mbs *metadataBlobStorage) DeleteBucket(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.DeleteBucket")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -345,7 +345,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.PutObject")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -440,7 +440,7 @@ func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.DeleteObject")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -485,7 +485,7 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CreateMultipartUpload")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -509,7 +509,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName stora
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.UploadPart")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -581,7 +581,7 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CompleteMultipartUpload")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -613,7 +613,7 @@ func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucket
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.AbortMultipartUpload")
 	defer span.End()
 
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
