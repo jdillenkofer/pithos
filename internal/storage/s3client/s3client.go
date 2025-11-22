@@ -254,15 +254,15 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		return nil, err
 	}
 	return &storage.InitiateMultipartUploadResult{
-		UploadId: *initiateMultipartUploadResult.UploadId,
+		UploadId: storage.MustNewUploadId(*initiateMultipartUploadResult.UploadId),
 	}, nil
 }
 
-func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucketName.String()),
 		Key:        aws.String(key.String()),
-		UploadId:   aws.String(uploadId),
+		UploadId:   aws.String(uploadId.String()),
 		PartNumber: aws.Int32(partNumber),
 		Body:       data,
 		// @TODO: Use checksumInput
@@ -284,11 +284,11 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
-func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
-		UploadId: aws.String(uploadId),
+		UploadId: aws.String(uploadId.String()),
 		// @TODO: Use checksumInput
 	})
 	var notFoundError *types.NotFound
@@ -310,11 +310,11 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 	}, nil
 }
 
-func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
+func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	_, err := rs.s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
-		UploadId: aws.String(uploadId),
+		UploadId: aws.String(uploadId.String()),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -346,7 +346,7 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 	uploads := sliceutils.Map(func(upload types.MultipartUpload) storage.Upload {
 		return storage.Upload{
 			Key:       storage.MustNewObjectKey(*upload.Key),
-			UploadId:  *upload.UploadId,
+			UploadId:  storage.MustNewUploadId(*upload.UploadId),
 			Initiated: *upload.Initiated,
 		}
 	}, listMultipartUploadsResult.Uploads)
@@ -368,11 +368,11 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 	}, nil
 }
 
-func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	listPartsResult, err := rs.s3Client.ListParts(ctx, &s3.ListPartsInput{
 		Bucket:           aws.String(bucketName.String()),
 		Key:              aws.String(key.String()),
-		UploadId:         aws.String(uploadId),
+		UploadId:         aws.String(uploadId.String()),
 		PartNumberMarker: aws.String(partNumberMarker),
 		MaxParts:         aws.Int32(maxParts),
 	})
@@ -386,7 +386,7 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 	return &storage.ListPartsResult{
 		BucketName:           storage.MustNewBucketName(*listPartsResult.Bucket),
 		Key:                  storage.MustNewObjectKey(*listPartsResult.Key),
-		UploadId:             *listPartsResult.UploadId,
+		UploadId:             storage.MustNewUploadId(*listPartsResult.UploadId),
 		PartNumberMarker:     *listPartsResult.PartNumberMarker,
 		NextPartNumberMarker: listPartsResult.NextPartNumberMarker,
 		MaxParts:             *listPartsResult.MaxParts,

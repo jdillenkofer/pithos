@@ -22,7 +22,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	"github.com/oklog/ulid/v2"
 )
 
 type sqlMetadataStore struct {
@@ -382,7 +381,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		ETag:         "",
 		ChecksumType: checksumType,
 		Size:         -1,
-		UploadId:     ptrutils.ToPtr(ulid.Make().String()),
+		UploadId:     ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
 		UploadStatus: object.UploadStatusPending,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
@@ -395,7 +394,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}, nil
 }
 
-func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID string, partNumber int32, blb metadatastore.Blob) error {
+func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Blob) error {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -438,7 +437,7 @@ func convertQuotedEtagHexDigestToBytes(etag string) ([]byte, error) {
 	return hex.DecodeString(etagWithoutTrailingQuote)
 }
 
-func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -705,7 +704,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}, nil
 }
 
-func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string) (*metadatastore.AbortMultipartResult, error) {
+func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.AbortMultipartResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -795,7 +794,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 				})
 			}
 			nextKeyMarker = objectEntity.Key.String()
-			nextUploadIdMarker = *objectEntity.UploadId
+			nextUploadIdMarker = objectEntity.UploadId.String()
 		}
 	}
 
@@ -815,7 +814,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	return &listMultipartUploadsResult, nil
 }
 
-func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err

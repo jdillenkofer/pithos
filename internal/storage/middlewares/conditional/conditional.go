@@ -126,17 +126,17 @@ func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Conte
 	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 }
 
-func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
+func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	storage := csm.lookupStorage(bucketName)
 	return storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
@@ -146,7 +146,7 @@ func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Contex
 	return storage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	storage := csm.lookupStorage(bucketName)
 	return storage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 }

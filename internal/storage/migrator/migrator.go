@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
@@ -163,12 +164,12 @@ func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Co
 	return &s3.CreateMultipartUploadOutput{
 		Bucket:   input.Bucket,
 		Key:      input.Key,
-		UploadId: &result.UploadId,
+		UploadId: aws.String(result.UploadId.String()),
 	}, nil
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, input *s3.UploadPartInput, opts ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
-	result, err := a.storage.UploadPart(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), *input.UploadId, *input.PartNumber, input.Body, nil)
+	result, err := a.storage.UploadPart(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), *input.PartNumber, input.Body, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +185,7 @@ func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, inpu
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
-	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), *input.UploadId, nil)
+	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +203,7 @@ func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput, opts ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
-	err := a.storage.AbortMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), *input.UploadId)
+	err := a.storage.AbortMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId))
 	if err != nil {
 		return nil, err
 	}

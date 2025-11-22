@@ -14,7 +14,7 @@ type replicationStorage struct {
 	*lifecycle.ValidatedLifecycle
 	primaryStorage                      storage.Storage
 	secondaryStorages                   []storage.Storage
-	primaryUploadIdToSecondaryUploadIds map[string][]string
+	primaryUploadIdToSecondaryUploadIds map[storage.UploadId][]storage.UploadId
 	mapMutex                            sync.Mutex
 }
 
@@ -22,7 +22,7 @@ type replicationStorage struct {
 var _ storage.Storage = (*replicationStorage)(nil)
 
 func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
-	primaryUploadIdToSecondaryUploadIds := make(map[string][]string)
+	primaryUploadIdToSecondaryUploadIds := make(map[storage.UploadId][]storage.UploadId)
 
 	lifecycle, err := lifecycle.NewValidatedLifecycle("ReplicationStorage")
 	if err != nil {
@@ -160,7 +160,7 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketN
 	if err != nil {
 		return nil, err
 	}
-	var secondaryUploadIds []string = []string{}
+	var secondaryUploadIds []storage.UploadId = []storage.UploadId{}
 	for _, secondaryStorage := range rs.secondaryStorages {
 		initiateMultipartUploadResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 		if err != nil {
@@ -176,7 +176,7 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketN
 	return initiateMultipartUploadResult, nil
 }
 
-func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -206,7 +206,7 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 	return uploadPartResult, nil
 }
 
-func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
@@ -224,7 +224,7 @@ func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucke
 	return completeMultipartUploadResult, nil
 }
 
-func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
+func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	err := rs.primaryStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		return err
@@ -246,6 +246,6 @@ func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucketNa
 	return rs.primaryStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	return rs.primaryStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 }

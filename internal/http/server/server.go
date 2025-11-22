@@ -566,7 +566,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	for _, upload := range result.Uploads {
 		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
 			Key:          upload.Key.String(),
-			UploadId:     upload.UploadId,
+			UploadId:     upload.UploadId.String(),
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
 			StorageClass: storageClassStandard,
 		})
@@ -925,7 +925,12 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadId := query.Get(uploadIdQuery)
+	uploadIdStr := query.Get(uploadIdQuery)
+	uploadId, err := storage.NewUploadId(uploadIdStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	partNumberMarker := query.Get(partNumberMarkerQuery)
 	maxParts := query.Get(maxPartsQuery)
 	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
@@ -947,7 +952,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	listPartsResult := ListPartsResult{
 		Bucket:               result.BucketName.String(),
 		Key:                  result.Key.String(),
-		UploadId:             result.UploadId,
+		UploadId:             result.UploadId.String(),
 		PartNumberMarker:     result.PartNumberMarker,
 		NextPartNumberMarker: result.NextPartNumberMarker,
 		MaxParts:             result.MaxParts,
@@ -1139,7 +1144,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 	initiateMultipartUploadResult := InitiateMultipartUploadResult{
 		Bucket:   bucketName.String(),
 		Key:      key.String(),
-		UploadId: result.UploadId,
+		UploadId: result.UploadId.String(),
 	}
 
 	w.WriteHeader(200)
@@ -1168,7 +1173,12 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 	}
 
 	query := r.URL.Query()
-	uploadId := query.Get(uploadIdQuery)
+	uploadIdStr := query.Get(uploadIdQuery)
+	uploadId, err := storage.NewUploadId(uploadIdStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	checksumInput, err := extractChecksumInput(r)
 	if err != nil {
 		handleError(err, w, r)
@@ -1190,7 +1200,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	slog.Info("CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId)
+	slog.Info("CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		handleError(err, w, r)
@@ -1274,7 +1284,12 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	uploadId := query.Get(uploadIdQuery)
+	uploadIdStr := query.Get(uploadIdQuery)
+	uploadId, err := storage.NewUploadId(uploadIdStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	partNumber := query.Get(partNumberQuery)
 	checksumInput, err := extractChecksumInput(r)
 	if err != nil {
@@ -1287,7 +1302,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("UploadPart", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId, "partNumber", partNumber)
+	slog.Info("UploadPart", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String(), "partNumber", partNumber)
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
 		return
@@ -1415,8 +1430,13 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	query := r.URL.Query()
-	uploadId := query.Get(uploadIdQuery)
-	slog.Info("AbortMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId)
+	uploadIdStr := query.Get(uploadIdQuery)
+	uploadId, err := storage.NewUploadId(uploadIdStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	slog.Info("AbortMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	err = s.storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)

@@ -51,7 +51,7 @@ type Blob struct {
 }
 
 type InitiateMultipartUploadResult struct {
-	UploadId string
+	UploadId UploadId
 }
 
 type CompleteMultipartUploadResult struct {
@@ -72,7 +72,7 @@ type AbortMultipartResult struct {
 
 type Upload struct {
 	Key       ObjectKey
-	UploadId  string
+	UploadId  UploadId
 	Initiated time.Time
 }
 
@@ -105,7 +105,7 @@ type Part struct {
 type ListPartsResult struct {
 	BucketName           BucketName
 	Key                  ObjectKey
-	UploadId             string
+	UploadId             UploadId
 	PartNumberMarker     string
 	NextPartNumberMarker *string
 	MaxParts             int32
@@ -189,11 +189,11 @@ type MetadataStore interface {
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
 	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId string, partNumber int32, blob Blob) error
-	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId string) (*AbortMultipartResult, error)
+	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, blob Blob) error
+	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
 	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {
