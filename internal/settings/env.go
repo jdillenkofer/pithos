@@ -20,6 +20,9 @@ const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
+const otelEnabledEnvKey = envKeyPrefix + "_OTEL_ENABLED"
+const otelExporterEnvKey = envKeyPrefix + "_OTEL_EXPORTER"
+const otelEndpointEnvKey = envKeyPrefix + "_OTEL_ENDPOINT"
 
 func getCredentialsFromEnv() []Credentials {
 	// Check for legacy environment variables first
@@ -101,6 +104,10 @@ func loadSettingsFromEnv() (*Settings, error) {
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
+	otelEnabled := getBoolFromEnv(otelEnabledEnvKey)
+	otelExporter := getStringFromEnv(otelExporterEnvKey)
+	otelEndpoint := getStringFromEnv(otelEndpointEnvKey)
+
 	return &Settings{
 		authenticationEnabled: authenticationEnabled,
 		credentials:           credentials,
@@ -113,5 +120,8 @@ func loadSettingsFromEnv() (*Settings, error) {
 		storageJsonPath:       storageJsonPath,
 		authorizerPath:        authorizerPath,
 		logLevel:              logLevel,
+		otelEnabled:           otelEnabled,
+		otelExporter:          otelExporter,
+		otelEndpoint:          otelEndpoint,
 	}, nil
 }

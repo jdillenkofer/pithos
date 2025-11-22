@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"runtime/trace"
 
+	"go.opentelemetry.io/otel"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 )
@@ -12,6 +15,7 @@ import (
 type tracingMetadataStoreMiddleware struct {
 	regionName         string
 	innerMetadataStore metadatastore.MetadataStore
+	tracer             oteltrace.Tracer
 }
 
 // Compile-time check to ensure tracingMetadataStoreMiddleware implements metadatastore.MetadataStore
@@ -21,80 +25,107 @@ func New(regionName string, innerMetadataStore metadatastore.MetadataStore) (met
 	return &tracingMetadataStoreMiddleware{
 		regionName:         regionName,
 		innerMetadataStore: innerMetadataStore,
+		tracer:             otel.Tracer("github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/middlewares/tracing"),
 	}, nil
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) Start(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".Start()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".Start")
+	defer span.End()
 	return tmsm.innerMetadataStore.Start(ctx)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) Stop(ctx context.Context) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".Stop()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".Stop")
+	defer span.End()
 	return tmsm.innerMetadataStore.Stop(ctx)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".GetInUseBlobIds()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".GetInUseBlobIds")
+	defer span.End()
 	return tmsm.innerMetadataStore.GetInUseBlobIds(ctx, tx)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".CreateBucket()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".CreateBucket")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.CreateBucket(ctx, tx, bucketName)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".DeleteBucket()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".DeleteBucket")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.DeleteBucket(ctx, tx, bucketName)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListBuckets()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".ListBuckets")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.ListBuckets(ctx, tx)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.Bucket, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".HeadBucket()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".HeadBucket")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.HeadBucket(ctx, tx, bucketName)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectsOptions) (*metadatastore.ListBucketResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListObjects()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".ListObjects")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.ListObjects(ctx, tx, bucketName, opts)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".HeadObject()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".HeadObject")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.HeadObject(ctx, tx, bucketName, key)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, object *metadatastore.Object) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".PutObject()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".PutObject")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.PutObject(ctx, tx, bucketName, object)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".DeleteObject()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".DeleteObject")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.DeleteObject(ctx, tx, bucketName, key)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".CreateMultipartUpload()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".CreateMultipartUpload")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, contentType, checksumType)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumber int32, blob metadatastore.Blob) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".UploadPart()").End()
+	ctx, span := tmsm.tracer.Start(ctx, tmsm.regionName+".UploadPart")
+	defer span.End()
 
 	return tmsm.innerMetadataStore.UploadPart(ctx, tx, bucketName, key, uploadId, partNumber, blob)
 }

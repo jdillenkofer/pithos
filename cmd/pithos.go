@@ -17,6 +17,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
+	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -94,6 +95,21 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while loading settings: ", err))
 		os.Exit(1)
+	}
+
+	// Set up OpenTelemetry.
+	if settings.OtelEnabled() {
+		otelShutdown, err := telemetry.SetupOTelSDK(ctx, settings)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error setting up OpenTelemetry: ", err))
+			os.Exit(1)
+		}
+		// Handle shutdown properly so nothing leaks.
+		defer func() {
+			if err := otelShutdown(context.Background()); err != nil {
+				slog.Error(fmt.Sprint("Error shutting down OpenTelemetry: ", err))
+			}
+		}()
 	}
 
 	logLevel := settings.LogLevel()
