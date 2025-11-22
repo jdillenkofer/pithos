@@ -14,6 +14,9 @@ type tracingMetadataStoreMiddleware struct {
 	innerMetadataStore metadatastore.MetadataStore
 }
 
+// Compile-time check to ensure tracingMetadataStoreMiddleware implements metadatastore.MetadataStore
+var _ metadatastore.MetadataStore = (*tracingMetadataStoreMiddleware)(nil)
+
 func New(regionName string, innerMetadataStore metadatastore.MetadataStore) (metadatastore.MetadataStore, error) {
 	return &tracingMetadataStoreMiddleware{
 		regionName:         regionName,

@@ -24,6 +24,7 @@ type legacyEncryptionBlobStoreMiddleware struct {
 	innerBlobStore blobstore.BlobStore
 }
 
+// Compile-time check to ensure legacyEncryptionBlobStoreMiddleware implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*legacyEncryptionBlobStoreMiddleware)(nil)
 
 const hmacSize = 32

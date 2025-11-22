@@ -16,6 +16,7 @@ type tracingBlobStoreMiddleware struct {
 	innerBlobStore blobstore.BlobStore
 }
 
+// Compile-time check to ensure tracingBlobStoreMiddleware implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*tracingBlobStoreMiddleware)(nil)
 
 func New(regionName string, innerBlobStore blobstore.BlobStore) (blobstore.BlobStore, error) {

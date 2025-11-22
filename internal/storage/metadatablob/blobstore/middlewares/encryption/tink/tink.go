@@ -64,6 +64,7 @@ type TinkEncryptionBlobStoreMiddleware struct {
 	refreshShutdown sync.WaitGroup
 }
 
+// Compile-time check to ensure TinkEncryptionBlobStoreMiddleware implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*TinkEncryptionBlobStoreMiddleware)(nil)
 
 // testKeyAvailability performs a small encrypt/decrypt test to verify the AEAD key is accessible and functional

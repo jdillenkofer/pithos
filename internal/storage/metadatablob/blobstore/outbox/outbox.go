@@ -27,6 +27,7 @@ type outboxBlobStore struct {
 	blobOutboxEntryRepository  blobOutboxEntry.Repository
 }
 
+// Compile-time check to ensure outboxBlobStore implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*outboxBlobStore)(nil)
 
 func New(db database.Database, innerBlobStore blobstore.BlobStore, blobOutboxEntryRepository blobOutboxEntry.Repository) (blobstore.BlobStore, error) {

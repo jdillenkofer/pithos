@@ -30,6 +30,9 @@ type sqlMetadataStore struct {
 	blobRepository   blob.Repository
 }
 
+// Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
+var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
+
 func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (metadatastore.MetadataStore, error) {
 	return &sqlMetadataStore{
 		bucketRepository: bucketRepository,
