@@ -233,10 +233,11 @@ func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucketName stor
 	}
 
 	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx, bucketName, metadatastore.ListObjectsOptions{
-		Prefix:     opts.Prefix,
-		Delimiter:  opts.Delimiter,
-		StartAfter: opts.StartAfter,
-		MaxKeys:    opts.MaxKeys,
+		Prefix:        opts.Prefix,
+		Delimiter:     opts.Delimiter,
+		StartAfter:    opts.StartAfter,
+		MaxKeys:       opts.MaxKeys,
+		SkipBlobFetch: true,
 	})
 	if err != nil {
 		tx.Rollback()

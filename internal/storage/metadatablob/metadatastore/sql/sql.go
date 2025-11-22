@@ -160,7 +160,21 @@ func determineCommonPrefix(prefix, key, delimiter string) *string {
 	return &commonPrefix
 }
 
-func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
+func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectsOptions) (*metadatastore.ListBucketResult, error) {
+	prefix := ""
+	if opts.Prefix != nil {
+		prefix = *opts.Prefix
+	}
+	delimiter := ""
+	if opts.Delimiter != nil {
+		delimiter = *opts.Delimiter
+	}
+	startAfter := ""
+	if opts.StartAfter != nil {
+		startAfter = *opts.StartAfter
+	}
+	maxKeys := opts.MaxKeys
+
 	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -180,23 +194,26 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			}
 		}
 		if int32(len(objects)) < maxKeys {
-			blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
-			if err != nil {
-				return nil, err
-			}
-			blobs := []metadatastore.Blob{}
-			for _, blobEntity := range blobEntities {
-				blobStruc := metadatastore.Blob{
-					Id:                blobEntity.BlobId,
-					ETag:              blobEntity.ETag,
-					ChecksumCRC32:     blobEntity.ChecksumCRC32,
-					ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
-					ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
-					ChecksumSHA1:      blobEntity.ChecksumSHA1,
-					ChecksumSHA256:    blobEntity.ChecksumSHA256,
-					Size:              blobEntity.Size,
+			var blobs []metadatastore.Blob = nil
+			if !opts.SkipBlobFetch {
+				// @Perf: Consider optimizing blob fetch to reduce database calls
+				blobEntities, err := sms.blobRepository.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
+				if err != nil {
+					return nil, err
 				}
-				blobs = append(blobs, blobStruc)
+				for _, blobEntity := range blobEntities {
+					blobStruc := metadatastore.Blob{
+						Id:                blobEntity.BlobId,
+						ETag:              blobEntity.ETag,
+						ChecksumCRC32:     blobEntity.ChecksumCRC32,
+						ChecksumCRC32C:    blobEntity.ChecksumCRC32C,
+						ChecksumCRC64NVME: blobEntity.ChecksumCRC64NVME,
+						ChecksumSHA1:      blobEntity.ChecksumSHA1,
+						ChecksumSHA256:    blobEntity.ChecksumSHA256,
+						Size:              blobEntity.Size,
+					}
+					blobs = append(blobs, blobStruc)
+				}
 			}
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
@@ -237,20 +254,7 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	prefix := ""
-	if opts.Prefix != nil {
-		prefix = *opts.Prefix
-	}
-	delimiter := ""
-	if opts.Delimiter != nil {
-		delimiter = *opts.Delimiter
-	}
-	startAfter := ""
-	if opts.StartAfter != nil {
-		startAfter = *opts.StartAfter
-	}
-
-	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, opts.MaxKeys)
+	return sms.listObjects(ctx, tx, bucketName, opts)
 }
 
 func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {

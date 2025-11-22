@@ -177,10 +177,11 @@ var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 
 type ListObjectsOptions struct {
-	Prefix     *string
-	Delimiter  *string
-	StartAfter *string
-	MaxKeys    int32
+	Prefix        *string
+	Delimiter     *string
+	StartAfter    *string
+	MaxKeys       int32
+	SkipBlobFetch bool
 }
 
 type ListMultipartUploadsOptions struct {
@@ -324,7 +325,8 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return err
 	}
 	listBucketResult, err := metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
-		MaxKeys: 1000,
+		MaxKeys:       1000,
+		SkipBlobFetch: true,
 	})
 	if err != nil {
 		tx.Rollback()
