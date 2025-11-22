@@ -36,10 +36,7 @@ func convertRowToBlobContentEntity(blobContentRow *sql.Row) (*blobcontent.Entity
 		}
 		return nil, err
 	}
-	id, err := blobstore.NewBlobIdFromString(idStr)
-	if err != nil {
-		return nil, err
-	}
+	id := blobstore.MustNewBlobIdFromString(idStr)
 	return &blobcontent.Entity{
 		Id:        id,
 		Content:   content,
@@ -70,10 +67,7 @@ func (bcr *pgxRepository) FindBlobContentIds(ctx context.Context, tx *sql.Tx) ([
 		if err != nil {
 			return nil, err
 		}
-		blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
-		if err != nil {
-			return nil, err
-		}
+		blobId := blobstore.MustNewBlobIdFromString(blobIdStr)
 		blobIds = append(blobIds, *blobId)
 	}
 	return blobIds, nil
