@@ -31,6 +31,7 @@ type sftpBlobStore struct {
 	mu           sync.Mutex
 }
 
+// Compile-time check to ensure sftpBlobStore implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*sftpBlobStore)(nil)
 
 func (s *sftpBlobStore) ensureRootDir() error {

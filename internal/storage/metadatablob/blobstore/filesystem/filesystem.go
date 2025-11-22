@@ -20,6 +20,7 @@ type filesystemBlobStore struct {
 	root string
 }
 
+// Compile-time check to ensure filesystemBlobStore implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*filesystemBlobStore)(nil)
 
 func (bs *filesystemBlobStore) ensureRootDir() error {

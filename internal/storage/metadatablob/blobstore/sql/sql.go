@@ -18,6 +18,7 @@ type sqlBlobStore struct {
 	blobContentRepository blobContent.Repository
 }
 
+// Compile-time check to ensure sqlBlobStore implements blobstore.BlobStore
 var _ blobstore.BlobStore = (*sqlBlobStore)(nil)
 
 func New(db database.Database, blobContentRepository blobContent.Repository) (blobstore.BlobStore, error) {
