@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/Shopify/go-lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const authorizationFunctionName = "authorizeRequest"
@@ -16,11 +19,12 @@ const authorizationFunctionName = "authorizeRequest"
 var errAuthorizationFunctionNotFound = errors.New("authorization function " + authorizationFunctionName + " not found in Lua code")
 
 type LuaAuthorizer struct {
-	code string
+	code   string
+	tracer trace.Tracer
 }
 
 func (authorizer *LuaAuthorizer) dryRun() error {
-	_, err := authorizer.AuthorizeRequest(&authorization.Request{
+	_, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
 			AccessKeyId: "AKIAIOSFODNN7EXAMPLE",
@@ -33,7 +37,8 @@ func (authorizer *LuaAuthorizer) dryRun() error {
 
 func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
 	luaAuthorizer := &LuaAuthorizer{
-		code: code,
+		code:   code,
+		tracer: otel.Tracer("internal/http/server/authorization/lua"),
 	}
 	err := luaAuthorizer.dryRun()
 	if err != nil {
@@ -144,7 +149,10 @@ func pushGoType(L *lua.State, obj interface{}) {
 	}
 }
 
-func (authorizer *LuaAuthorizer) AuthorizeRequest(request *authorization.Request) (bool, error) {
+func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
+	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
+	defer span.End()
+
 	L := lua.NewState()
 	lua.OpenLibraries(L)
 	err := lua.DoString(L, authorizer.code)

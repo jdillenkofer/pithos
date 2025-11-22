@@ -436,7 +436,7 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		Bucket: bucket,
 		Key:    key,
 	}
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(request)
+	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Authorization error: %v", err))
 		handleError(err, w, r)
