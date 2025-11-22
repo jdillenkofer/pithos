@@ -9,6 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,7 +114,7 @@ func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) {
 
 func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context, bucket storage.Bucket) (*int64, error) {
 	var totalSize int64 = 0
-	var startAfter string = ""
+	var startAfter *string
 	truncated := true
 
 	for truncated {
@@ -129,7 +130,7 @@ func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 		}
 		truncated = listBucketResult.IsTruncated
 		if len(listBucketResult.Objects) > 0 {
-			startAfter = listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String()
+			startAfter = ptrutils.ToPtr(listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String())
 		}
 	}
 	return &totalSize, nil

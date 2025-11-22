@@ -216,7 +216,20 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	return sms.listObjects(ctx, tx, bucketName, opts.Prefix, opts.Delimiter, opts.StartAfter, opts.MaxKeys)
+	prefix := ""
+	if opts.Prefix != nil {
+		prefix = *opts.Prefix
+	}
+	delimiter := ""
+	if opts.Delimiter != nil {
+		delimiter = *opts.Delimiter
+	}
+	startAfter := ""
+	if opts.StartAfter != nil {
+		startAfter = *opts.StartAfter
+	}
+
+	return sms.listObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, opts.MaxKeys)
 }
 
 func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
@@ -766,13 +779,30 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, opts.Prefix, opts.KeyMarker, opts.UploadIdMarker)
+	prefix := ""
+	if opts.Prefix != nil {
+		prefix = *opts.Prefix
+	}
+	keyMarker := ""
+	if opts.KeyMarker != nil {
+		keyMarker = *opts.KeyMarker
+	}
+	uploadIdMarker := ""
+	if opts.UploadIdMarker != nil {
+		uploadIdMarker = *opts.UploadIdMarker
+	}
+	delimiter := ""
+	if opts.Delimiter != nil {
+		delimiter = *opts.Delimiter
+	}
+
+	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
 	commonPrefixes := []string{}
 	uploads := []metadatastore.Upload{}
-	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, opts.Prefix, opts.KeyMarker, opts.UploadIdMarker)
+	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
 	if err != nil {
 		return nil, err
 	}
@@ -781,15 +811,15 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	nextUploadIdMarker := ""
 
 	for _, objectEntity := range objectEntities {
-		if opts.Delimiter != "" {
-			commonPrefix := determineCommonPrefix(opts.Prefix, objectEntity.Key.String(), opts.Delimiter)
+		if delimiter != "" {
+			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
 			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
 				commonPrefixes = append(commonPrefixes, *commonPrefix)
 			}
 		}
 		if int32(len(uploads)) < opts.MaxUploads {
-			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), opts.Prefix)
-			if opts.Delimiter == "" || !strings.Contains(keyWithoutPrefix, opts.Delimiter) {
+			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
+			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
 					Key:       objectEntity.Key,
 					UploadId:  *objectEntity.UploadId,
@@ -803,10 +833,10 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 
 	listMultipartUploadsResult := metadatastore.ListMultipartUploadsResult{
 		Bucket:             bucketName,
-		KeyMarker:          opts.KeyMarker,
-		UploadIdMarker:     opts.UploadIdMarker,
-		Prefix:             opts.Prefix,
-		Delimiter:          opts.Delimiter,
+		KeyMarker:          keyMarker,
+		UploadIdMarker:     uploadIdMarker,
+		Prefix:             prefix,
+		Delimiter:          delimiter,
 		NextKeyMarker:      nextKeyMarker,
 		NextUploadIdMarker: nextUploadIdMarker,
 		MaxUploads:         opts.MaxUploads,
@@ -840,8 +870,12 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 
 	var partNumberMarkerI32 int32 = 0
-	if opts.PartNumberMarker != "" {
-		partNumberMarkerI64, err := strconv.ParseInt(opts.PartNumberMarker, 10, 32)
+	partNumberMarker := ""
+	if opts.PartNumberMarker != nil {
+		partNumberMarker = *opts.PartNumberMarker
+	}
+	if partNumberMarker != "" {
+		partNumberMarkerI64, err := strconv.ParseInt(partNumberMarker, 10, 32)
 		if err != nil {
 			return nil, err
 		}
@@ -881,7 +915,7 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		BucketName:           bucketName,
 		Key:                  key,
 		UploadId:             uploadId,
-		PartNumberMarker:     opts.PartNumberMarker,
+		PartNumberMarker:     partNumberMarker,
 		NextPartNumberMarker: nextPartNumberMarker,
 		MaxParts:             opts.MaxParts,
 		IsTruncated:          isTruncated,
