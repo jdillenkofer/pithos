@@ -143,6 +143,40 @@ var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
+// ListObjectsOptions defines options for listing objects
+type ListObjectsOptions struct {
+	// Prefix limits the response to keys that begin with the specified prefix.
+	Prefix string
+	// Delimiter is a character you use to group keys.
+	Delimiter string
+	// StartAfter is where you want Amazon S3 to start the listing from. Amazon S3 starts listing after this specified key.
+	StartAfter string
+	// MaxKeys sets the maximum number of keys returned in the response.
+	MaxKeys int32
+}
+
+// ListMultipartUploadsOptions defines options for listing multipart uploads
+type ListMultipartUploadsOptions struct {
+	// Prefix limits the response to keys that begin with the specified prefix.
+	Prefix string
+	// Delimiter is a character you use to group keys.
+	Delimiter string
+	// KeyMarker specifies the key-marker query parameter in the request.
+	KeyMarker string
+	// UploadIdMarker specifies the upload-id-marker query parameter in the request.
+	UploadIdMarker string
+	// MaxUploads sets the maximum number of multipart uploads returned in the response.
+	MaxUploads int32
+}
+
+// ListPartsOptions defines options for listing parts
+type ListPartsOptions struct {
+	// PartNumberMarker specifies the part-number-marker query parameter in the request.
+	PartNumberMarker string
+	// MaxParts sets the maximum number of parts returned in the response.
+	MaxParts int32
+}
+
 // BucketManager manages bucket operations
 type BucketManager interface {
 	CreateBucket(ctx context.Context, bucketName BucketName) error
@@ -153,7 +187,7 @@ type BucketManager interface {
 
 // ObjectManager manages object operations
 type ObjectManager interface {
-	ListObjects(ctx context.Context, bucketName BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
+	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey) (*Object, error)
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
@@ -166,8 +200,8 @@ type MultipartUploadManager interface {
 	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId) error
-	ListMultipartUploads(ctx context.Context, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	ListMultipartUploads(ctx context.Context, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
+	ListParts(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, opts ListPartsOptions) (*ListPartsResult, error)
 }
 
 // Storage is a composite interface that combines all storage operations
@@ -182,7 +216,10 @@ func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName Buc
 	allObjects := []Object{}
 	startAfter := ""
 	for {
-		listBucketResult, err := storage.ListObjects(ctx, bucketName, "", "", startAfter, 1000)
+		listBucketResult, err := storage.ListObjects(ctx, bucketName, ListObjectsOptions{
+			StartAfter: startAfter,
+			MaxKeys:    1000,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -248,7 +285,9 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return errors.New("invalid blob length")
 		}
 
-		listBucketResult, err := storage.ListObjects(ctx, bucketName, "", "", "", 1000)
+		listBucketResult, err := storage.ListObjects(ctx, bucketName, ListObjectsOptions{
+			MaxKeys: 1000,
+		})
 		if err != nil {
 			return err
 		}

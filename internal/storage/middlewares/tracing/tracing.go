@@ -75,10 +75,10 @@ func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucketName 
 	return tsm.innerStorage.HeadBucket(ctx, bucketName)
 }
 
-func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListObjects()").End()
 
-	return tsm.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return tsm.innerStorage.ListObjects(ctx, bucketName, opts)
 }
 
 func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
@@ -129,14 +129,14 @@ func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, b
 	return tsm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
 
-func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListMultipartUploads()").End()
 
-	return tsm.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	return tsm.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
-func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
 	defer trace.StartRegion(ctx, tsm.regionName+".ListParts()").End()
 
-	return tsm.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+	return tsm.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }

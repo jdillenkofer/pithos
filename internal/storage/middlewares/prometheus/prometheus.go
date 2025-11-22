@@ -117,7 +117,10 @@ func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 	truncated := true
 
 	for truncated {
-		listBucketResult, err := psm.innerStorage.ListObjects(ctx, bucket.Name, "", "", startAfter, 1000)
+		listBucketResult, err := psm.innerStorage.ListObjects(ctx, bucket.Name, storage.ListObjectsOptions{
+			StartAfter: startAfter,
+			MaxKeys:    1000,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -235,8 +238,8 @@ func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketNa
 	return mBucket, err
 }
 
-func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
-	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucketName, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
 		return nil, err
@@ -357,8 +360,8 @@ func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
 		return nil, err
@@ -368,8 +371,8 @@ func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context
 	return listMultipartUploadsResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
-	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListParts"}).Inc()
 		return nil, err

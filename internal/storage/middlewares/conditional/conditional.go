@@ -96,9 +96,9 @@ func (csm *conditionalStorageMiddleware) HeadBucket(ctx context.Context, bucketN
 	return storage.HeadBucket(ctx, bucketName)
 }
 
-func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	storage := csm.lookupStorage(bucketName)
-	return storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return storage.ListObjects(ctx, bucketName, opts)
 }
 
 func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
@@ -141,12 +141,12 @@ func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Contex
 	return storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
 
-func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+func (csm *conditionalStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
 	storage := csm.lookupStorage(bucketName)
-	return storage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	return storage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
-func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
 	storage := csm.lookupStorage(bucketName)
-	return storage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+	return storage.ListParts(ctx, bucketName, key, uploadId, opts)
 }

@@ -329,13 +329,13 @@ func (os *outboxStorage) HeadBucket(ctx context.Context, bucketName storage.Buck
 	return os.innerStorage.HeadBucket(ctx, bucketName)
 }
 
-func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
+func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return os.innerStorage.ListObjects(ctx, bucketName, opts)
 }
 
 func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
@@ -445,20 +445,20 @@ func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName st
 	return os.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
 
-func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
+func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	return os.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
-func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 
-	return os.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+	return os.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }
