@@ -90,19 +90,19 @@ func (tmsm *tracingMetadataStoreMiddleware) CreateMultipartUpload(ctx context.Co
 	return tmsm.innerMetadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, contentType, checksumType)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string, partNumber int32, blob metadatastore.Blob) error {
+func (tmsm *tracingMetadataStoreMiddleware) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumber int32, blob metadatastore.Blob) error {
 	defer trace.StartRegion(ctx, tmsm.regionName+".UploadPart()").End()
 
 	return tmsm.innerMetadataStore.UploadPart(ctx, tx, bucketName, key, uploadId, partNumber, blob)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".CompleteMultipartUpload()").End()
 
 	return tmsm.innerMetadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, uploadId, checksumInput)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string) (*metadatastore.AbortMultipartResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.AbortMultipartResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".AbortMultipartUpload()").End()
 
 	return tmsm.innerMetadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, uploadId)
@@ -114,7 +114,7 @@ func (tmsm *tracingMetadataStoreMiddleware) ListMultipartUploads(ctx context.Con
 	return tmsm.innerMetadataStore.ListMultipartUploads(ctx, tx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) ListParts(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, key metadatastore.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) ListParts(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListParts()").End()
 
 	return tmsm.innerMetadataStore.ListParts(ctx, tx, bucket, key, uploadId, partNumberMarker, maxParts)

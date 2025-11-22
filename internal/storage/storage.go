@@ -47,7 +47,7 @@ type PutObjectResult struct {
 }
 
 type InitiateMultipartUploadResult struct {
-	UploadId string
+	UploadId UploadId
 }
 
 type UploadPartResult struct {
@@ -72,7 +72,7 @@ type CompleteMultipartUploadResult struct {
 
 type Upload struct {
 	Key       ObjectKey
-	UploadId  string
+	UploadId  UploadId
 	Initiated time.Time
 }
 
@@ -105,7 +105,7 @@ type Part struct {
 type ListPartsResult struct {
 	BucketName           BucketName
 	Key                  ObjectKey
-	UploadId             string
+	UploadId             UploadId
 	PartNumberMarker     string
 	NextPartNumberMarker *string
 	MaxParts             int32
@@ -117,12 +117,16 @@ type ChecksumInput = metadatastore.ChecksumInput
 type ChecksumValues = metadatastore.ChecksumValues
 type BucketName = metadatastore.BucketName
 type ObjectKey = metadatastore.ObjectKey
+type UploadId = metadatastore.UploadId
 
 var NewBucketName = metadatastore.NewBucketName
 var MustNewBucketName = metadatastore.MustNewBucketName
 
 var NewObjectKey = metadatastore.NewObjectKey
 var MustNewObjectKey = metadatastore.MustNewObjectKey
+
+var NewUploadId = metadatastore.NewUploadId
+var MustNewUploadId = metadatastore.MustNewUploadId
 
 var ValidateChecksums = metadatastore.ValidateChecksums
 
@@ -135,6 +139,7 @@ var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
 var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
+var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
@@ -158,11 +163,11 @@ type ObjectManager interface {
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
 	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
-	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
-	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string) error
+	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId) error
 	ListMultipartUploads(ctx context.Context, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	ListParts(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
 }
 
 // Storage is a composite interface that combines all storage operations

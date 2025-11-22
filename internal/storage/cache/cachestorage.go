@@ -181,7 +181,7 @@ func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName st
 	return initiateMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.Bucke
 	return uploadPartResult, nil
 }
 
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
 	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName 
 	return completeMultipartUploadResult, nil
 }
 
-func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) error {
+func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	err := cs.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName sto
 	return listMultipartUploadsResult, nil
 }
 
-func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId string, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
+func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
 	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
 	if err != nil {
 		return nil, err

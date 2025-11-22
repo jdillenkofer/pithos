@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/oklog/ulid/v2"
@@ -66,7 +67,7 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 		ChecksumType:      checksumType,
 		Size:              size,
 		UploadStatus:      uploadStatus,
-		UploadId:          uploadId,
+		UploadId:          ptrutils.MapPtr(uploadId, storage.MustNewUploadId),
 		CreatedAt:         createdAt,
 		UpdatedAt:         updatedAt,
 	}
@@ -74,16 +75,19 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 }
 
 func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *object.Entity) error {
+	mapUploadIdToString := func(uploadId storage.UploadId) string {
+		return uploadId.String()
+	}
 	if object.Id == nil {
 		id := ulid.Make()
 		object.Id = &id
 		object.CreatedAt = time.Now().UTC()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.CreatedAt, object.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, object.UploadId, object.UpdatedAt, object.Id.String())
+	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.UpdatedAt, object.Id.String())
 	return err
 }
 
@@ -131,8 +135,8 @@ func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploa
 	return objects, nil
 }
 
-func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId string) (*object.Entity, error) {
-	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName.String(), key.String(), uploadId, object.UploadStatusPending)
+func (or *sqliteRepository) FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) (*object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectByBucketNameAndKeyAndUploadIdStmt, bucketName.String(), key.String(), uploadId.String(), object.UploadStatusPending)
 	if err != nil {
 		return nil, err
 	}
