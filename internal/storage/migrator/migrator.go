@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
 
@@ -131,11 +132,9 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 	uploader := manager.NewUploader(adapter, func(u *manager.Uploader) {
 		u.Concurrency = 1
 	})
-	bucketNameStr := bucketName.String()
-	keyStr := sourceObject.Key.String()
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: &bucketNameStr,
-		Key:    &keyStr,
+		Bucket: ptrutils.ToPtr(bucketName.String()),
+		Key:    ptrutils.ToPtr(sourceObject.Key.String()),
 		Body:   tempFile,
 	})
 	if err != nil {
