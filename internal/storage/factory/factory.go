@@ -12,7 +12,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	tinkEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
@@ -24,9 +23,8 @@ import (
 type EncryptionType string
 
 const (
-	EncryptionTypeNone   EncryptionType = "none"
-	EncryptionTypeLegacy EncryptionType = "legacy"
-	EncryptionTypeTink   EncryptionType = "tink"
+	EncryptionTypeNone EncryptionType = "none"
+	EncryptionTypeTink EncryptionType = "tink"
 )
 
 func CreateStorage(storagePath string, db database.Database, useFilesystemBlobStore bool, encryptionType EncryptionType, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) storage.Storage {
@@ -74,16 +72,6 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 
 	// Apply encryption middleware based on encryption type
 	switch encryptionType {
-	case EncryptionTypeLegacy:
-		if blobStoreEncryptionPassword == "" {
-			slog.Error("Encryption password is required for legacy encryption")
-			os.Exit(1)
-		}
-		blobStore, err = legacyEncryptionBlobStoreMiddleware.New(blobStoreEncryptionPassword, blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewEncryptionBlobStoreMiddleware: ", err))
-			os.Exit(1)
-		}
 	case EncryptionTypeTink:
 		if blobStoreEncryptionPassword == "" {
 			slog.Error("Encryption password is required for Tink encryption")

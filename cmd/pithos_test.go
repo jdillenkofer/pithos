@@ -507,9 +507,6 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 	var encryptionType storageFactory.EncryptionType
 	encryptSuffix := ""
 	switch *testutils.BlobStoreEncryption {
-	case "legacy":
-		encryptionType = storageFactory.EncryptionTypeLegacy
-		encryptSuffix = " (legacy encryption)"
 	case "tink":
 		encryptionType = storageFactory.EncryptionTypeTink
 		encryptSuffix = " (tink encryption)"

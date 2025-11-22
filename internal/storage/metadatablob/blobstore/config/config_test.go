@@ -127,26 +127,6 @@ func TestCanCreateSftpBlobStoreFromJson(t *testing.T) {
 	assert.NotNil(t, blobStore)
 }
 
-func TestCanCreateEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	jsonData := fmt.Sprintf(`{
-				 "type": "EncryptionBlobStoreMiddleware",
-				 "innerBlobStore": {
-					 "type": "FilesystemBlobStore",
-					 "root": %s
-				 }
-			 }`, strconv.Quote(storagePath))
-
-	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, blobStore)
-}
-
 func TestCanCreateTinkEncryptionBlobStoreMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()

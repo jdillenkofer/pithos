@@ -163,7 +163,6 @@ The following storage backends and middlewares are available:
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 
 ###### Blob Store Middleware
-- **EncryptionBlobStoreMiddleware**: Provides basic encryption for blob data
 - **TinkEncryptionBlobStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
 - **OutboxBlobStore**: Implements outbox pattern for reliable blob operations
 
