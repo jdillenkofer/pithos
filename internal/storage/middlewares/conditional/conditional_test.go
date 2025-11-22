@@ -31,10 +31,21 @@ func TestConditionalStorage(t *testing.T) {
 		slog.Error("Couldn't open database")
 		os.Exit(1)
 	}
+	dbPath2 := filepath.Join(storagePath, "pithos2.db")
+	db2, err := sqlite.OpenDatabase(dbPath2)
+	if err != nil {
+		slog.Error("Couldn't open database 2")
+		os.Exit(1)
+	}
 	defer func() {
 		err = db.Close()
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not close database %s", err))
+			os.Exit(1)
+		}
+		err = db2.Close()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Could not close database 2 %s", err))
 			os.Exit(1)
 		}
 		err = os.RemoveAll(storagePath)
@@ -88,7 +99,28 @@ func TestConditionalStorage(t *testing.T) {
 		os.Exit(1)
 	}
 
-	metadataBlobStorage2, err := metadatablob.NewStorage(db, metadataStore, fsBlobStore)
+	bucketRepository2, err := repositoryFactory.NewBucketRepository(db2)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create BucketRepository 2: %s", err))
+		os.Exit(1)
+	}
+	objectRepository2, err := repositoryFactory.NewObjectRepository(db2)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create ObjectRepository 2: %s", err))
+		os.Exit(1)
+	}
+	blobRepository2, err := repositoryFactory.NewBlobRepository(db2)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create BlobRepository 2: %s", err))
+		os.Exit(1)
+	}
+	metadataStore2, err := sqlMetadataStore.New(db2, bucketRepository2, objectRepository2, blobRepository2)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore 2: %s", err))
+		os.Exit(1)
+	}
+
+	metadataBlobStorage2, err := metadatablob.NewStorage(db2, metadataStore2, fsBlobStore)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create MetadataBlobStorage: %s", err))
 		os.Exit(1)
