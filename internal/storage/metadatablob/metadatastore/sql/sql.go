@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -22,38 +23,46 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type sqlMetadataStore struct {
+	*lifecycle.ValidatedLifecycle
 	bucketRepository bucket.Repository
 	objectRepository object.Repository
 	blobRepository   blob.Repository
+	tracer           trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
 var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
 func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, blobRepository blob.Repository) (metadatastore.MetadataStore, error) {
+	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
+	if err != nil {
+		return nil, err
+	}
 	return &sqlMetadataStore{
-		bucketRepository: bucketRepository,
-		objectRepository: objectRepository,
-		blobRepository:   blobRepository,
+		ValidatedLifecycle: lifecycle,
+		bucketRepository:   bucketRepository,
+		objectRepository:   objectRepository,
+		blobRepository:     blobRepository,
+		tracer:             otel.Tracer("internal/storage/metadatablob/metadatastore/sql"),
 	}, nil
 }
 
-func (sms *sqlMetadataStore) Start(ctx context.Context) error {
-	return nil
-}
-
-func (sms *sqlMetadataStore) Stop(ctx context.Context) error {
-	return nil
-}
-
 func (sms *sqlMetadataStore) GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetInUseBlobIds")
+	defer span.End()
+
 	return sms.blobRepository.FindInUseBlobIds(ctx, tx)
 }
 
 func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateBucket")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -73,6 +82,9 @@ func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 }
 
 func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucket")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -98,6 +110,9 @@ func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucke
 }
 
 func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListBuckets")
+	defer span.End()
+
 	bucketEntities, err := sms.bucketRepository.FindAllBuckets(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -113,6 +128,9 @@ func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]met
 }
 
 func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.Bucket, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.HeadBucket")
+	defer span.End()
+
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -208,6 +226,9 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 }
 
 func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectsOptions) (*metadatastore.ListBucketResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListObjects")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -233,6 +254,9 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 }
 
 func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.HeadObject")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -282,6 +306,9 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 }
 
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObject")
+	defer span.End()
+
 	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -349,6 +376,9 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 }
 
 func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -378,6 +408,9 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 }
 
 func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -411,6 +444,9 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 }
 
 func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Blob) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.UploadPart")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -454,6 +490,9 @@ func convertQuotedEtagHexDigestToBytes(etag string) ([]byte, error) {
 }
 
 func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CompleteMultipartUpload")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -721,6 +760,9 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 }
 
 func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.AbortMultipartResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AbortMultipartUpload")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -771,6 +813,9 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 }
 
 func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListMultipartUploadsOptions) (*metadatastore.ListMultipartUploadsResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListMultipartUploads")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -848,6 +893,9 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 }
 
 func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, opts metadatastore.ListPartsOptions) (*metadatastore.ListPartsResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListParts")
+	defer span.End()
+
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err

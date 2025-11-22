@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink/tpm"
@@ -62,6 +65,7 @@ type TinkEncryptionBlobStoreMiddleware struct {
 	tokenExpiry     time.Time     // When the current token expires
 	stopRefresh     chan struct{} // Signal to stop the refresh goroutine
 	refreshShutdown sync.WaitGroup
+	tracer          trace.Tracer
 }
 
 // Compile-time check to ensure TinkEncryptionBlobStoreMiddleware implements blobstore.BlobStore
@@ -303,6 +307,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerBlob
 		vaultSecretID:  secretID,
 		tokenExpiry:    tokenExpiry,
 		stopRefresh:    make(chan struct{}),
+		tracer:         otel.Tracer("internal/storage/metadatablob/blobstore/middlewares/encryption/tink"),
 	}
 
 	// Start token refresh loop if using AppRole
@@ -331,6 +336,7 @@ func NewWithLocalKMS(password string, innerBlobStore blobstore.BlobStore) (blobs
 		innerBlobStore: innerBlobStore,
 		keyType:        KeyTypeLocal,
 		keyURI:         "", // No URI for local keys
+		tracer:         otel.Tracer("internal/storage/metadatablob/blobstore/middlewares/encryption/tink"),
 	}, nil
 }
 
@@ -361,6 +367,7 @@ func NewWithAWSKMS(keyURI, region string, innerBlobStore blobstore.BlobStore) (b
 		innerBlobStore: innerBlobStore,
 		keyType:        KeyTypeAWS,
 		keyURI:         keyURI,
+		tracer:         otel.Tracer("internal/storage/metadatablob/blobstore/middlewares/encryption/tink"),
 	}, nil
 }
 
@@ -388,6 +395,7 @@ func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, inn
 		innerBlobStore: innerBlobStore,
 		keyType:        KeyTypeTPM,
 		keyURI:         fmt.Sprintf("tpm://%s/0x%08X", tpmPath, persistentHandle),
+		tracer:         otel.Tracer("internal/storage/metadatablob/blobstore/middlewares/encryption/tink"),
 	}, nil
 }
 
@@ -415,6 +423,9 @@ func (mw *TinkEncryptionBlobStoreMiddleware) Stop(ctx context.Context) error {
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionBlobStoreMiddleware.PutBlob")
+	defer span.End()
+
 	// Generate a new 32-byte DEK for this blob
 	dek := make([]byte, 32)
 	if _, err := rand.Read(dek); err != nil {
@@ -491,6 +502,9 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionBlobStoreMiddleware.GetBlob")
+	defer span.End()
+
 	rc, err := mw.innerBlobStore.GetBlob(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
@@ -563,9 +577,15 @@ func (c *compositeReadCloser) Close() error {
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionBlobStoreMiddleware.GetBlobIds")
+	defer span.End()
+
 	return mw.innerBlobStore.GetBlobIds(ctx, tx)
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionBlobStoreMiddleware.DeleteBlob")
+	defer span.End()
+
 	return mw.innerBlobStore.DeleteBlob(ctx, tx, blobId)
 }

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime/trace"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -25,6 +27,7 @@ type outboxBlobStore struct {
 	outboxProcessingTaskHandle *task.TaskHandle
 	innerBlobStore             blobstore.BlobStore
 	blobOutboxEntryRepository  blobOutboxEntry.Repository
+	tracer                     trace.Tracer
 }
 
 // Compile-time check to ensure outboxBlobStore implements blobstore.BlobStore
@@ -37,11 +40,14 @@ func New(db database.Database, innerBlobStore blobstore.BlobStore, blobOutboxEnt
 		triggerChannelClosed:      false,
 		innerBlobStore:            innerBlobStore,
 		blobOutboxEntryRepository: blobOutboxEntryRepository,
+		tracer:                    otel.Tracer("internal/storage/metadatablob/blobstore/outbox"),
 	}, nil
 }
 
 func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
-	defer trace.StartRegion(ctx, "OutboxBlobStore.maybeProcessOutboxEntries()").End()
+	ctx, span := obs.tracer.Start(ctx, "outboxBlobStore.maybeProcessOutboxEntries")
+	defer span.End()
+
 	processedOutboxEntryCount := 0
 	for {
 		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -100,8 +106,6 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 func (obs *outboxBlobStore) processOutboxLoop() {
 	ctx := context.Background()
-	ctx, task := trace.NewTask(ctx, "OutboxBlobStore.processOutboxLoop()")
-	defer task.End()
 out:
 	for {
 		select {
@@ -160,6 +164,9 @@ func (obs *outboxBlobStore) storeBlobOutboxEntry(ctx context.Context, tx *sql.Tx
 }
 
 func (obs *outboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	ctx, span := obs.tracer.Start(ctx, "outboxBlobStore.PutBlob")
+	defer span.End()
+
 	content, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -174,6 +181,9 @@ func (obs *outboxBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blob
 }
 
 func (obs *outboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	ctx, span := obs.tracer.Start(ctx, "outboxBlobStore.GetBlob")
+	defer span.End()
+
 	lastBlobOutboxEntry, err := obs.blobOutboxEntryRepository.FindLastBlobOutboxEntryByBlobId(ctx, tx, blobId)
 	if err != nil {
 		return nil, err
@@ -190,6 +200,9 @@ func (obs *outboxBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blob
 }
 
 func (obs *outboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	ctx, span := obs.tracer.Start(ctx, "outboxBlobStore.GetBlobIds")
+	defer span.End()
+
 	// We get the lastOutboxEntry for each blobId
 	lastOutboxEntryGroupedByBlobId, err := obs.blobOutboxEntryRepository.FindLastBlobOutboxEntryGroupedByBlobId(ctx, tx)
 	if err != nil {
@@ -228,6 +241,9 @@ func (obs *outboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobs
 }
 
 func (obs *outboxBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	ctx, span := obs.tracer.Start(ctx, "outboxBlobStore.DeleteBlob")
+	defer span.End()
+
 	err := obs.storeBlobOutboxEntry(ctx, tx, blobOutboxEntry.DeleteBlobOperation, blobId, []byte{})
 	if err != nil {
 		return err

@@ -14,13 +14,10 @@ import (
 	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	tinkEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
-	tracingBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	tracingMetadataStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/middlewares/tracing"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
-	tracingStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 )
 
 // EncryptionType represents the type of encryption to use for blob storage
@@ -55,22 +52,11 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		os.Exit(1)
 	}
 
-	metadataStore, err = tracingMetadataStoreMiddleware.New("SqlMetadataStore", metadataStore)
-	if err != nil {
-		slog.Error(fmt.Sprint("Error during NewTracingMetadataStoreMiddleware: ", err))
-		os.Exit(1)
-	}
-
 	var blobStore blobstore.BlobStore
 	if useFilesystemBlobStore {
 		blobStore, err = filesystemBlobStore.New(filepath.Join(storagePath, "blobs"))
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewFilesystemBlobStore: ", err))
-			os.Exit(1)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("FilesystemBlobStore", blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	} else {
@@ -82,11 +68,6 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		blobStore, err = sqlBlobStore.New(db, blobContentRepository)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewSqlBlobStore: ", err))
-			os.Exit(1)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("SqlBlobStore", blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	}
@@ -103,11 +84,6 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			slog.Error(fmt.Sprint("Error during NewEncryptionBlobStoreMiddleware: ", err))
 			os.Exit(1)
 		}
-		blobStore, err = tracingBlobStoreMiddleware.New("EncryptionBlobStoreMiddleware", blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
-			os.Exit(1)
-		}
 	case EncryptionTypeTink:
 		if blobStoreEncryptionPassword == "" {
 			slog.Error("Encryption password is required for Tink encryption")
@@ -116,11 +92,6 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		blobStore, err = tinkEncryptionBlobStoreMiddleware.NewWithLocalKMS(blobStoreEncryptionPassword, blobStore)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewTinkEncryptionBlobStoreMiddleware: ", err))
-			os.Exit(1)
-		}
-		blobStore, err = tracingBlobStoreMiddleware.New("TinkEncryptionBlobStoreMiddleware", blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	case EncryptionTypeNone:
@@ -141,22 +112,11 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 			slog.Error(fmt.Sprint("Error during NewOutboxBlobStore: ", err))
 			os.Exit(1)
 		}
-		blobStore, err = tracingBlobStoreMiddleware.New("OutboxBlobStore", blobStore)
-		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTracingBlobStoreMiddleware: ", err))
-			os.Exit(1)
-		}
 	}
 	var store storage.Storage
 	store, err = metadatablob.NewStorage(db, metadataStore, blobStore)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error during NewMetadataBlobStorage: ", err))
-		os.Exit(1)
-	}
-
-	store, err = tracingStorageMiddleware.NewStorageMiddleware("MetadataBlobStorage", store)
-	if err != nil {
-		slog.Error(fmt.Sprint("Error during NewTracingStorageMiddleware: ", err))
 		os.Exit(1)
 	}
 

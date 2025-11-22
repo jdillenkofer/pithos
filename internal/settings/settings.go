@@ -16,6 +16,9 @@ const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
+const defaultOtelEnabled = false
+const defaultOtelExporter = "otlp"
+const defaultOtelEndpoint = "localhost:4318"
 
 const mergableTagKey = "mergable"
 
@@ -36,6 +39,9 @@ type Settings struct {
 	storageJsonPath       *string       `mergable:""`
 	authorizerPath        *string       `mergable:""`
 	logLevel              *string       `mergable:""`
+	otelEnabled           *bool         `mergable:""`
+	otelExporter          *string       `mergable:""`
+	otelEndpoint          *string       `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -103,9 +109,20 @@ func (s *Settings) LogLevel() slog.Level {
 	case slog.LevelError.String():
 		return slog.LevelError
 	default:
-		slog.Warn("Unknown log level, defaulting to Info", "logLevel", logLevel)
 		return slog.LevelInfo
 	}
+}
+
+func (s *Settings) OtelEnabled() bool {
+	return valueOrDefault(s.otelEnabled, defaultOtelEnabled)
+}
+
+func (s *Settings) OtelExporter() string {
+	return valueOrDefault(s.otelExporter, defaultOtelExporter)
+}
+
+func (s *Settings) OtelEndpoint() string {
+	return valueOrDefault(s.otelEndpoint, defaultOtelEndpoint)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {

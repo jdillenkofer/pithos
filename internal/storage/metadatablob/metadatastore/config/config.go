@@ -9,52 +9,14 @@ import (
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/middlewares/tracing"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
 )
 
 const (
-	tracingMetadataStoreMiddlewareType = "TracingMetadataStoreMiddleware"
-	sqlMetadataStoreType               = "SqlMetadataStore"
+	sqlMetadataStoreType = "SqlMetadataStore"
 )
 
 type MetadataStoreInstantiator = internalConfig.DynamicJsonInstantiator[metadatastore.MetadataStore]
-
-type TracingMetadataStoreMiddlewareConfiguration struct {
-	RegionName                     internalConfig.StringProvider `json:"regionName"`
-	InnerMetadataStoreInstantiator MetadataStoreInstantiator     `json:"-"`
-	RawInnerMetadataStore          json.RawMessage               `json:"innerMetadataStore"`
-	internalConfig.DynamicJsonType
-}
-
-func (t *TracingMetadataStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type tracingMetadataStoreMiddlewareConfiguration TracingMetadataStoreMiddlewareConfiguration
-	err := json.Unmarshal(b, (*tracingMetadataStoreMiddlewareConfiguration)(t))
-	if err != nil {
-		return err
-	}
-	t.InnerMetadataStoreInstantiator, err = CreateMetadataStoreInstantiatorFromJson(t.RawInnerMetadataStore)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingMetadataStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := t.InnerMetadataStoreInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingMetadataStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (metadatastore.MetadataStore, error) {
-	innerMetadataStore, err := t.InnerMetadataStoreInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	return tracing.New(t.RegionName.Value(), innerMetadataStore)
-}
 
 type SqlMetadataStoreConfiguration struct {
 	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
@@ -112,8 +74,6 @@ func CreateMetadataStoreInstantiatorFromJson(b []byte) (MetadataStoreInstantiato
 
 	var mi MetadataStoreInstantiator
 	switch mc.Type {
-	case tracingMetadataStoreMiddlewareType:
-		mi = &TracingMetadataStoreMiddlewareConfiguration{}
 	case sqlMetadataStoreType:
 		mi = &SqlMetadataStoreConfiguration{}
 	default:

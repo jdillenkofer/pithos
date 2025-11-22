@@ -7,6 +7,9 @@ import (
 	"io"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -19,6 +22,7 @@ import (
 type s3ClientStorage struct {
 	*lifecycle.ValidatedLifecycle
 	s3Client *s3.Client
+	tracer   trace.Tracer
 }
 
 // Compile-time check to ensure s3ClientStorage implements storage.Storage
@@ -33,6 +37,7 @@ func NewStorage(s3Client *s3.Client) (storage.Storage, error) {
 	return &s3ClientStorage{
 		ValidatedLifecycle: lifecycle,
 		s3Client:           s3Client,
+		tracer:             otel.Tracer("internal/storage/s3client"),
 	}, nil
 }
 
@@ -45,6 +50,9 @@ func (rs *s3ClientStorage) Stop(ctx context.Context) error {
 }
 
 func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateBucket")
+	defer span.End()
+
 	_, err := rs.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucketName.String()),
 	})
@@ -59,6 +67,9 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 }
 
 func (rs *s3ClientStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteBucket")
+	defer span.End()
+
 	_, err := rs.s3Client.DeleteBucket(ctx, &s3.DeleteBucketInput{
 		Bucket: aws.String(bucketName.String()),
 	})
@@ -76,6 +87,9 @@ func (rs *s3ClientStorage) DeleteBucket(ctx context.Context, bucketName storage.
 }
 
 func (rs *s3ClientStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListBuckets")
+	defer span.End()
+
 	listBucketsResult, err := rs.s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
 		return nil, err
@@ -90,6 +104,9 @@ func (rs *s3ClientStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, e
 }
 
 func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.HeadBucket")
+	defer span.End()
+
 	_, err := rs.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucketName.String()),
 	})
@@ -107,6 +124,9 @@ func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucketName storage.Bu
 }
 
 func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListObjects")
+	defer span.End()
+
 	listObjectsResult, err := rs.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:     aws.String(bucketName.String()),
 		Prefix:     opts.Prefix,
@@ -141,6 +161,9 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 }
 
 func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.HeadObject")
+	defer span.End()
+
 	headObjectResult, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
@@ -167,6 +190,9 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 }
 
 func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObject")
+	defer span.End()
+
 	var byteRange *string = nil
 	if startByte != nil && endByte != nil {
 		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
@@ -195,6 +221,9 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 }
 
 func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutObject")
+	defer span.End()
+
 	putObjectResult, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(bucketName.String()),
 		Key:         aws.String(key.String()),
@@ -221,6 +250,9 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 }
 
 func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObject")
+	defer span.End()
+
 	_, err := rs.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
@@ -236,6 +268,9 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 }
 
 func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateMultipartUpload")
+	defer span.End()
+
 	checksumTypeStr := types.ChecksumTypeFullObject
 	if checksumType != nil {
 		checksumTypeStr = types.ChecksumType(*checksumType)
@@ -259,6 +294,9 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 }
 
 func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.UploadPart")
+	defer span.End()
+
 	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(bucketName.String()),
 		Key:        aws.String(key.String()),
@@ -285,6 +323,9 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.Bu
 }
 
 func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CompleteMultipartUpload")
+	defer span.End()
+
 	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
@@ -311,6 +352,9 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 }
 
 func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.AbortMultipartUpload")
+	defer span.End()
+
 	_, err := rs.s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
@@ -327,6 +371,9 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName 
 }
 
 func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListMultipartUploads")
+	defer span.End()
+
 	listMultipartUploadsResult, err := rs.s3Client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
 		Bucket:         aws.String(bucketName.String()),
 		Prefix:         opts.Prefix,
@@ -369,6 +416,9 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 }
 
 func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.BucketName, objectName storage.ObjectKey, uploadID storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListParts")
+	defer span.End()
+
 	listPartsResult, err := rs.s3Client.ListParts(ctx, &s3.ListPartsInput{
 		Bucket:           aws.String(bucketName.String()),
 		Key:              aws.String(objectName.String()),

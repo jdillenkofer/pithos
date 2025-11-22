@@ -161,12 +161,10 @@ The following storage backends and middlewares are available:
 ###### Storage Middleware
 - **ConditionalStorage**: Implements conditional forwarding to different storage backends based on the bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
-- **TracingStorage**: Provides tracing capabilities for debugging purposes
 
 ###### Blob Store Middleware
 - **EncryptionBlobStoreMiddleware**: Provides basic encryption for blob data
 - **TinkEncryptionBlobStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
-- **TracingBlobStoreMiddleware**: Adds tracing to blob store operations
 - **OutboxBlobStore**: Implements outbox pattern for reliable blob operations
 
 The default configuration (using SQLite) looks like this:

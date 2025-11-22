@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Manager defines the lifecycle management interface
@@ -17,6 +20,7 @@ type Manager interface {
 // but delegate actual lifecycle work to wrapped components.
 type ValidatedLifecycle struct {
 	validator *StateValidator
+	tracer    trace.Tracer
 }
 
 func NewValidatedLifecycle(name string) (*ValidatedLifecycle, error) {
@@ -24,7 +28,10 @@ func NewValidatedLifecycle(name string) (*ValidatedLifecycle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ValidatedLifecycle{validator: validator}, nil
+	return &ValidatedLifecycle{
+		validator: validator,
+		tracer:    otel.Tracer("internal/lifecycle"),
+	}, nil
 }
 
 func (vl *ValidatedLifecycle) Start(ctx context.Context) error {

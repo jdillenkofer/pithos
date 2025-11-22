@@ -55,27 +55,3 @@ func TestCanCreateSqlMetadataStoreFromJson(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, metadataStore)
 }
-
-func TestCanCreateTracingMetadataStoreFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	dbPath := filepath.Join(storagePath, "pithos.db")
-	jsonData := fmt.Sprintf(`{
-	  "type": "TracingMetadataStoreMiddleware",
-	  "innerMetadataStore": {
-	    "type": "SqlMetadataStore",
-	    "db": {
-	      "type": "SqliteDatabase",
-		  "dbPath": %s
-	    }
-	  }
-	}`, strconv.Quote(dbPath))
-
-	metadataStore, err := createMetadataStoreFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, metadataStore)
-}

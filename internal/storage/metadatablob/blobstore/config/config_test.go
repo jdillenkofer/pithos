@@ -476,27 +476,6 @@ func TestCanCreateTinkEncryptionBlobStoreMiddlewareWithTPMAndPersistentHandle(t 
 	assert.Equal(t, "0x81000002", config.TPMPersistentHandle.Value())
 }
 
-func TestCanCreateTracingBlobStoreMiddlewareFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	jsonData := fmt.Sprintf(`{
-				 "type": "TracingBlobStoreMiddleware",
-				 "regionName": "FilesystemBlobStore",
-				 "innerBlobStore": {
-					 "type": "FilesystemBlobStore",
-					 "root": %s
-				 }
-			 }`, strconv.Quote(storagePath))
-
-	blobStore, err := createBlobStoreFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, blobStore)
-}
-
 func TestCanCreateOutboxBlobStoreFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()

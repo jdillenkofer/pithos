@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"context"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -26,7 +27,7 @@ func TestAuthorizationAlwaysDenied(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err := authorizer.AuthorizeRequest(&request)
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 	assert.False(t, authorized)
 	assert.Nil(t, err)
 }
@@ -49,7 +50,7 @@ func TestAuthorizationAlwaysAllowed(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err := authorizer.AuthorizeRequest(&request)
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 	assert.True(t, authorized)
 	assert.Nil(t, err)
 }
@@ -72,7 +73,7 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err := authorizer.AuthorizeRequest(&allowedRequest)
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &allowedRequest)
 	assert.True(t, authorized)
 	assert.Nil(t, err)
 
@@ -84,7 +85,7 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err = authorizer.AuthorizeRequest(&deniedRequest)
+	authorized, err = authorizer.AuthorizeRequest(context.Background(), &deniedRequest)
 	assert.False(t, authorized)
 	assert.Nil(t, err)
 }
@@ -108,7 +109,7 @@ func TestNestedStructWorks(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err := authorizer.AuthorizeRequest(&allowedRequest)
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &allowedRequest)
 	assert.True(t, authorized)
 	assert.Nil(t, err)
 
@@ -120,7 +121,7 @@ func TestNestedStructWorks(t *testing.T) {
 		Bucket: nil,
 		Key:    nil,
 	}
-	authorized, err = authorizer.AuthorizeRequest(&deniedRequest)
+	authorized, err = authorizer.AuthorizeRequest(context.Background(), &deniedRequest)
 	assert.False(t, authorized)
 	assert.Nil(t, err)
 }

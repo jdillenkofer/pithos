@@ -24,7 +24,6 @@ import (
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
-	"github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
@@ -36,7 +35,6 @@ const (
 	metadataBlobStorageType          = "MetadataBlobStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
-	tracingStorageMiddlewareType     = "TracingStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
@@ -256,42 +254,6 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider depend
 	return prometheusMiddleware.NewStorageMiddleware(innerStorage, prometheusRegisterer.(prometheus.Registerer))
 }
 
-type TracingStorageMiddlewareConfiguration struct {
-	RegionName               internalConfig.StringProvider `json:"regionName"`
-	InnerStorageInstantiator StorageInstantiator           `json:"-"`
-	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
-	internalConfig.DynamicJsonType
-}
-
-func (t *TracingStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type tracingStorageMiddlewareConfiguration TracingStorageMiddlewareConfiguration
-	err := json.Unmarshal(b, (*tracingStorageMiddlewareConfiguration)(t))
-	if err != nil {
-		return err
-	}
-	t.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(t.RawInnerStorage)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := t.InnerStorageInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	innerStorage, err := t.InnerStorageInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	return tracing.NewStorageMiddleware(t.RegionName.Value(), innerStorage)
-}
-
 type OutboxStorageConfiguration struct {
 	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase              json.RawMessage                     `json:"db"`
@@ -449,8 +411,6 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:
 		si = &PrometheusStorageMiddlewareConfiguration{}
-	case tracingStorageMiddlewareType:
-		si = &TracingStorageMiddlewareConfiguration{}
 	case outboxStorageType:
 		si = &OutboxStorageConfiguration{}
 	case replicationStorageType:

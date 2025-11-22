@@ -11,6 +11,9 @@ import (
 	"errors"
 	"io"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
@@ -22,6 +25,7 @@ type legacyEncryptionBlobStoreMiddleware struct {
 	*lifecycle.ValidatedLifecycle
 	key            []byte
 	innerBlobStore blobstore.BlobStore
+	tracer         trace.Tracer
 }
 
 // Compile-time check to ensure legacyEncryptionBlobStoreMiddleware implements blobstore.BlobStore
@@ -50,6 +54,7 @@ func New(password string, innerBlobStore blobstore.BlobStore) (blobstore.BlobSto
 		ValidatedLifecycle: lifecycle,
 		key:                key,
 		innerBlobStore:     innerBlobStore,
+		tracer:             otel.Tracer("internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"),
 	}
 	return ebsm, nil
 }
@@ -175,6 +180,9 @@ func (dr *cbcEncrypterReader) Close() error {
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	ctx, span := ebsm.tracer.Start(ctx, "legacyEncryptionBlobStoreMiddleware.PutBlob")
+	defer span.End()
+
 	// Generate a random initialization vector
 	iv := make([]byte, aes.BlockSize)
 	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
@@ -350,6 +358,9 @@ func (dr *cbcDecrypterReader) Close() error {
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	ctx, span := ebsm.tracer.Start(ctx, "legacyEncryptionBlobStoreMiddleware.GetBlob")
+	defer span.End()
+
 	var readCloser io.ReadCloser
 	readCloser, err := ebsm.innerBlobStore.GetBlob(ctx, tx, blobId)
 	if err != nil {
@@ -501,9 +512,15 @@ func (ebsm *legacyEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	ctx, span := ebsm.tracer.Start(ctx, "legacyEncryptionBlobStoreMiddleware.GetBlobIds")
+	defer span.End()
+
 	return ebsm.innerBlobStore.GetBlobIds(ctx, tx)
 }
 
 func (ebsm *legacyEncryptionBlobStoreMiddleware) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	ctx, span := ebsm.tracer.Start(ctx, "legacyEncryptionBlobStoreMiddleware.DeleteBlob")
+	defer span.End()
+
 	return ebsm.innerBlobStore.DeleteBlob(ctx, tx, blobId)
 }

@@ -12,10 +12,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type BlobGarbageCollector interface {
-	PreventGCFromRunning() (unblockGC func())
+	PreventGCFromRunning(ctx context.Context) (unblockGC func())
 	RunGCLoop(stopRunning *atomic.Bool)
 }
 
@@ -25,6 +27,7 @@ type blobGC struct {
 	metadataStore   metadatastore.MetadataStore
 	blobStore       blobstore.BlobStore
 	writeOperations atomic.Int64
+	tracer          trace.Tracer
 }
 
 func New(db database.Database, metadataStore metadatastore.MetadataStore, blobStore blobstore.BlobStore) (BlobGarbageCollector, error) {
@@ -34,10 +37,13 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, blobSt
 		writeOperations: atomic.Int64{},
 		metadataStore:   metadataStore,
 		blobStore:       blobStore,
+		tracer:          otel.Tracer("internal/storage/metadatablob/gc"),
 	}, nil
 }
 
-func (blobGC *blobGC) PreventGCFromRunning() (unblockGC func()) {
+func (blobGC *blobGC) PreventGCFromRunning(ctx context.Context) (unblockGC func()) {
+	_, span := blobGC.tracer.Start(ctx, "BlobGarbageCollector.PreventGCFromRunning")
+	defer span.End()
 	blobGC.writeOperations.Add(1)
 	blobGC.collectionMutex.RLock()
 	unblockGC = blobGC.collectionMutex.RUnlock
@@ -68,10 +74,12 @@ func (blobGC *blobGC) RunGCLoop(stopRunning *atomic.Bool) {
 }
 
 func (blobGC *blobGC) runGC() error {
+	ctx := context.Background()
+	ctx, span := blobGC.tracer.Start(ctx, "BlobGarbageCollector.runGC")
+	defer span.End()
+
 	blobGC.collectionMutex.Lock()
 	defer blobGC.collectionMutex.Unlock()
-
-	ctx := context.Background()
 
 	tx, err := blobGC.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {

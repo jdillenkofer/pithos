@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
@@ -27,6 +30,7 @@ type metadataBlobStorage struct {
 	blobStore     blobstore.BlobStore
 	blobGC        gc.BlobGarbageCollector
 	gcTaskHandle  *task.TaskHandle
+	tracer        trace.Tracer
 }
 
 // Compile-time check to ensure metadataBlobStorage implements storage.Storage
@@ -48,6 +52,7 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 		blobStore:          blobStore,
 		blobGC:             blobGC,
 		gcTaskHandle:       nil,
+		tracer:             otel.Tracer("internal/storage/metadatablob"),
 	}, nil
 }
 
@@ -91,7 +96,10 @@ func (mbs *metadataBlobStorage) Stop(ctx context.Context) error {
 }
 
 func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CreateBucket")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -113,7 +121,10 @@ func (mbs *metadataBlobStorage) CreateBucket(ctx context.Context, bucketName sto
 }
 
 func (mbs *metadataBlobStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.DeleteBucket")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -142,6 +153,9 @@ func convertBucket(mBucket metadatastore.Bucket) storage.Bucket {
 }
 
 func (mbs *metadataBlobStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.ListBuckets")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -162,6 +176,9 @@ func (mbs *metadataBlobStorage) ListBuckets(ctx context.Context) ([]storage.Buck
 }
 
 func (mbs *metadataBlobStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.HeadBucket")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -207,6 +224,9 @@ func convertListBucketResult(mListBucketResult metadatastore.ListBucketResult) s
 }
 
 func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.ListObjects")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -233,6 +253,9 @@ func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucketName stor
 }
 
 func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.HeadObject")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -254,6 +277,9 @@ func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName stora
 }
 
 func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.GetObject")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -316,7 +342,10 @@ func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storag
 }
 
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.PutObject")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -408,7 +437,10 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storag
 }
 
 func (mbs *metadataBlobStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.DeleteObject")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -450,7 +482,10 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 }
 
 func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CreateMultipartUpload")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -471,7 +506,10 @@ func (mbs *metadataBlobStorage) CreateMultipartUpload(ctx context.Context, bucke
 }
 
 func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.UploadPart")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -540,7 +578,10 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 }
 
 func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.CompleteMultipartUpload")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -569,7 +610,10 @@ func (mbs *metadataBlobStorage) CompleteMultipartUpload(ctx context.Context, buc
 }
 
 func (mbs *metadataBlobStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	unblockGC := mbs.blobGC.PreventGCFromRunning()
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.AbortMultipartUpload")
+	defer span.End()
+
+	unblockGC := mbs.blobGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -619,6 +663,9 @@ func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore
 }
 
 func (mbs *metadataBlobStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.ListMultipartUploads")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -671,6 +718,9 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 }
 
 func (mbs *metadataBlobStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.ListParts")
+	defer span.End()
+
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err

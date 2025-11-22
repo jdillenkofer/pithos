@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
 )
 
 const contentSHA256Header = "x-amz-content-sha256"
@@ -579,7 +581,12 @@ type Credentials struct {
 }
 
 func MakeSignatureMiddleware(validCredentials []Credentials, region string, next http.Handler) http.Handler {
+	tracer := otel.Tracer("internal/http/server/authentication")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, span := tracer.Start(r.Context(), "authentication.MakeSignatureMiddleware")
+		defer span.End()
+		r = r.WithContext(ctx)
+
 		usedAccessKeyId, isAuthenticated := checkAuthentication(validCredentials, region, r)
 		if isAuthenticated {
 			r = r.Clone(context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId))

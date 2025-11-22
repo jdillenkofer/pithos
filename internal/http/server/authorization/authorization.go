@@ -1,5 +1,7 @@
 package authorization
 
+import "context"
+
 type Authorization struct {
 	AccessKeyId string
 }
@@ -30,5 +32,5 @@ type Request struct {
 }
 
 type RequestAuthorizer interface {
-	AuthorizeRequest(request *Request) (bool, error)
+	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
 }

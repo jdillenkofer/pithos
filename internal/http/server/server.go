@@ -436,7 +436,7 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		Bucket: bucket,
 		Key:    key,
 	}
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(request)
+	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Authorization error: %v", err))
 		handleError(err, w, r)
@@ -451,8 +451,7 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 }
 
 func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listBucketsHandler()")
-	defer task.End()
+	ctx := r.Context()
 	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListBuckets, nil, nil, w, r)
 	if shouldReturn {
 		return
@@ -480,8 +479,7 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.headBucketHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -516,8 +514,7 @@ func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter,
 }
 
 func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listMultipartUploadsHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -587,8 +584,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -669,8 +665,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listObjectsV2Handler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -756,8 +751,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.createBucketHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -781,8 +775,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.deleteBucketHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -804,8 +797,7 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.headObjectHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -922,9 +914,7 @@ func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.listPartsHandler()")
-	defer task.End()
-
+	ctx := r.Context()
 	query := r.URL.Query()
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
@@ -999,8 +989,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.getObjectHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1132,8 +1121,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.createMultipartUploadHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1171,8 +1159,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.completeMultipartUploadHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1280,8 +1267,7 @@ func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
 }
 
 func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.uploadPartHandler()")
-	defer task.End()
+	ctx := r.Context()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)

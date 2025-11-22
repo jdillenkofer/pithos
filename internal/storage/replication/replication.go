@@ -8,6 +8,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type replicationStorage struct {
@@ -16,6 +18,7 @@ type replicationStorage struct {
 	secondaryStorages                   []storage.Storage
 	primaryUploadIdToSecondaryUploadIds map[storage.UploadId][]storage.UploadId
 	mapMutex                            sync.Mutex
+	tracer                              trace.Tracer
 }
 
 // Compile-time check to ensure replicationStorage implements storage.Storage
@@ -35,6 +38,7 @@ func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Sto
 		secondaryStorages:                   secondaryStorages,
 		primaryUploadIdToSecondaryUploadIds: primaryUploadIdToSecondaryUploadIds,
 		mapMutex:                            sync.Mutex{},
+		tracer:                              otel.Tracer("internal/storage/replication"),
 	}, nil
 }
 
@@ -69,6 +73,9 @@ func (rs *replicationStorage) Stop(ctx context.Context) error {
 }
 
 func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateBucket")
+	defer span.End()
+
 	err := rs.primaryStorage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		return err
@@ -83,6 +90,9 @@ func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName stora
 }
 
 func (rs *replicationStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucket")
+	defer span.End()
+
 	err := rs.primaryStorage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		return err
@@ -97,26 +107,44 @@ func (rs *replicationStorage) DeleteBucket(ctx context.Context, bucketName stora
 }
 
 func (rs *replicationStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListBuckets")
+	defer span.End()
+
 	return rs.primaryStorage.ListBuckets(ctx)
 }
 
 func (rs *replicationStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.HeadBucket")
+	defer span.End()
+
 	return rs.primaryStorage.HeadBucket(ctx, bucketName)
 }
 
 func (rs *replicationStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListObjects")
+	defer span.End()
+
 	return rs.primaryStorage.ListObjects(ctx, bucketName, opts)
 }
 
 func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.HeadObject")
+	defer span.End()
+
 	return rs.primaryStorage.HeadObject(ctx, bucketName, key)
 }
 
 func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetObject")
+	defer span.End()
+
 	return rs.primaryStorage.GetObject(ctx, bucketName, key, startByte, endByte)
 }
 
 func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
+	defer span.End()
+
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -142,6 +170,9 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 }
 
 func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
+	defer span.End()
+
 	err := rs.primaryStorage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		return err
@@ -156,6 +187,9 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName stora
 }
 
 func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateMultipartUpload")
+	defer span.End()
+
 	initiateMultipartUploadResult, err := rs.primaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		return nil, err
@@ -177,6 +211,9 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketN
 }
 
 func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPart")
+	defer span.End()
+
 	// @TODO: cache reader on disk
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -207,6 +244,9 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 }
 
 func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CompleteMultipartUpload")
+	defer span.End()
+
 	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		return nil, err
@@ -225,6 +265,9 @@ func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucke
 }
 
 func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.AbortMultipartUpload")
+	defer span.End()
+
 	err := rs.primaryStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		return err
@@ -243,9 +286,15 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketNa
 }
 
 func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListMultipartUploads")
+	defer span.End()
+
 	return rs.primaryStorage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
 func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListParts")
+	defer span.End()
+
 	return rs.primaryStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }
