@@ -10,7 +10,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
-	"github.com/oklog/ulid/v2"
 )
 
 type Bucket struct {
@@ -329,8 +328,13 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
+	blobId, err := blobstore.NewRandomBlobId()
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
 	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Blob{
-		Id:   blobstore.BlobId(ulid.Make()),
+		Id:   *blobId,
 		Size: 0,
 		ETag: "",
 	})
@@ -377,8 +381,13 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
+	blobId, err = blobstore.NewRandomBlobId()
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
 	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Blob{
-		Id:   blobstore.BlobId(ulid.Make()),
+		Id:   *blobId,
 		Size: 0,
 		ETag: "",
 	})

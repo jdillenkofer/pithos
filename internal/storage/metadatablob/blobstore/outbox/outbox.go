@@ -16,7 +16,6 @@ import (
 	blobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/task"
-	"github.com/oklog/ulid/v2"
 )
 
 type outboxBlobStore struct {
@@ -202,7 +201,7 @@ func (obs *outboxBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobs
 		return nil, err
 	}
 
-	allBlobIds := make(map[ulid.ULID]struct{})
+	allBlobIds := make(map[blobstore.BlobId]struct{})
 	// write them all into the set
 	for _, blobId := range innerBlobIds {
 		allBlobIds[blobId] = struct{}{}

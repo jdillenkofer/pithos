@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -26,7 +27,7 @@ func NewRepository() (blob.Repository, error) {
 
 func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 	var id string
-	var blobId string
+	var blobIdStr string
 	var objectId string
 	var etag string
 	var checksumCRC32 *string
@@ -38,14 +39,18 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 	var sequenceNumber int
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := blobRows.Scan(&id, &blobId, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &createdAt, &updatedAt)
+	err := blobRows.Scan(&id, &blobIdStr, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
+	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
+	if err != nil {
+		return nil, err
+	}
 	blobEntity := blob.Entity{
 		Id:                &ulidId,
-		BlobId:            ulid.MustParse(blobId),
+		BlobId:            *blobId,
 		ObjectId:          ulid.MustParse(objectId),
 		ETag:              etag,
 		ChecksumCRC32:     checksumCRC32,
@@ -61,21 +66,24 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 	return &blobEntity, nil
 }
 
-func (br *pgxRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]ulid.ULID, error) {
+func (br *pgxRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
 	blobIdRows, err := tx.QueryContext(ctx, findInUseBlobIdsStmt)
 	if err != nil {
 		return nil, err
 	}
 	defer blobIdRows.Close()
-	blobIds := []ulid.ULID{}
+	blobIds := []blobstore.BlobId{}
 	for blobIdRows.Next() {
 		var blobIdStr string
 		err := blobIdRows.Scan(&blobIdStr)
 		if err != nil {
 			return nil, err
 		}
-		blobId := ulid.MustParse(blobIdStr)
-		blobIds = append(blobIds, blobId)
+		blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
+		if err != nil {
+			return nil, err
+		}
+		blobIds = append(blobIds, *blobId)
 	}
 	return blobIds, nil
 }

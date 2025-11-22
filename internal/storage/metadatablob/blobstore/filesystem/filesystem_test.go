@@ -10,7 +10,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,11 +17,14 @@ func TestFilesystemBlobStoreCanConvertFilenameAndBlobId(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	filesystemBlobStore := filesystemBlobStore{root: "."}
-	blobId := ulid.Make()
-	filename := filesystemBlobStore.getFilename(blobId)
+	blobId, err := blobstore.NewRandomBlobId()
+	if err != nil {
+		t.Fatalf("Failed to generate BlobId: %v", err)
+	}
+	filename := filesystemBlobStore.getFilename(*blobId)
 	blobId2, ok := filesystemBlobStore.tryGetBlobIdFromFilename(filename)
 	assert.True(t, ok)
-	assert.Equal(t, blobId, *blobId2)
+	assert.Equal(t, *blobId, *blobId2)
 }
 
 func TestFilesystemBlobStore(t *testing.T) {
