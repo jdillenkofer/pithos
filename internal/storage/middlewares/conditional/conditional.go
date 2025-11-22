@@ -80,6 +80,8 @@ func (csm *conditionalStorageMiddleware) DeleteBucket(ctx context.Context, bucke
 
 func (csm *conditionalStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
 	allBuckets := []storage.Bucket{}
+
+	// Include buckets from all specific storages
 	for _, bucketStorage := range csm.bucketToStorageMap {
 		buckets, err := bucketStorage.ListBuckets(ctx)
 		if err != nil {
@@ -87,6 +89,14 @@ func (csm *conditionalStorageMiddleware) ListBuckets(ctx context.Context) ([]sto
 		}
 		allBuckets = append(allBuckets, buckets...)
 	}
+
+	// Include buckets from default storage
+	buckets, err := csm.defaultStorage.ListBuckets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	allBuckets = append(allBuckets, buckets...)
+
 	slices.SortFunc(allBuckets, func(a storage.Bucket, b storage.Bucket) int { return strings.Compare(a.Name.String(), b.Name.String()) })
 	return allBuckets, nil
 }
