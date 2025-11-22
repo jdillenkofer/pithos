@@ -44,10 +44,7 @@ func convertRowToBlobEntity(blobRows *sql.Rows) (*blob.Entity, error) {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
-	if err != nil {
-		return nil, err
-	}
+	blobId := blobstore.MustNewBlobIdFromString(blobIdStr)
 	blobEntity := blob.Entity{
 		Id:                &ulidId,
 		BlobId:            *blobId,
@@ -79,10 +76,7 @@ func (br *pgxRepository) FindInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]bl
 		if err != nil {
 			return nil, err
 		}
-		blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
-		if err != nil {
-			return nil, err
-		}
+		blobId := blobstore.MustNewBlobIdFromString(blobIdStr)
 		blobIds = append(blobIds, *blobId)
 	}
 	return blobIds, nil

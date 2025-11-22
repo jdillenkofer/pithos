@@ -41,10 +41,7 @@ func convertRowToBlobOutboxEntryEntity(blobOutboxRow *sql.Row) (*bloboutboxentry
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
-	if err != nil {
-		return nil, err
-	}
+	blobId := blobstore.MustNewBlobIdFromString(blobIdStr)
 	return &bloboutboxentry.Entity{
 		Id:        &ulidId,
 		Operation: operation,
@@ -71,10 +68,7 @@ func convertRowsToBlobOutboxEntryEntity(blobOutboxRows *sql.Rows) (*bloboutboxen
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	blobId, err := blobstore.NewBlobIdFromString(blobIdStr)
-	if err != nil {
-		return nil, err
-	}
+	blobId := blobstore.MustNewBlobIdFromString(blobIdStr)
 	return &bloboutboxentry.Entity{
 		Id:        &ulidId,
 		Operation: operation,

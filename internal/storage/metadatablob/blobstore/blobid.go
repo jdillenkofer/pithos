@@ -21,12 +21,9 @@ func NewRandomBlobId() (*BlobId, error) {
 	return &blobId, nil
 }
 
-func NewBlobIdFromString(s string) (*BlobId, error) {
-	ulidValue, err := ulid.Parse(s)
-	if err != nil {
-		return nil, err
-	}
-	return &BlobId{value: ulidValue}, nil
+func MustNewBlobIdFromString(s string) *BlobId {
+	ulidValue := ulid.MustParse(s)
+	return &BlobId{value: ulidValue}
 }
 
 func NewBlobIdFromBytes(b []byte) (*BlobId, error) {
