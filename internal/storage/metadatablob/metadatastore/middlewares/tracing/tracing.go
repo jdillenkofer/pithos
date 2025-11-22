@@ -63,10 +63,10 @@ func (tmsm *tracingMetadataStoreMiddleware) HeadBucket(ctx context.Context, tx *
 	return tmsm.innerMetadataStore.HeadBucket(ctx, tx, bucketName)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*metadatastore.ListBucketResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) ListObjects(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectsOptions) (*metadatastore.ListBucketResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListObjects()").End()
 
-	return tmsm.innerMetadataStore.ListObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	return tmsm.innerMetadataStore.ListObjects(ctx, tx, bucketName, opts)
 }
 
 func (tmsm *tracingMetadataStoreMiddleware) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
@@ -111,14 +111,14 @@ func (tmsm *tracingMetadataStoreMiddleware) AbortMultipartUpload(ctx context.Con
 	return tmsm.innerMetadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, uploadId)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*metadatastore.ListMultipartUploadsResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, opts metadatastore.ListMultipartUploadsOptions) (*metadatastore.ListMultipartUploadsResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListMultipartUploads()").End()
 
-	return tmsm.innerMetadataStore.ListMultipartUploads(ctx, tx, bucket, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	return tmsm.innerMetadataStore.ListMultipartUploads(ctx, tx, bucket, opts)
 }
 
-func (tmsm *tracingMetadataStoreMiddleware) ListParts(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, partNumberMarker string, maxParts int32) (*metadatastore.ListPartsResult, error) {
+func (tmsm *tracingMetadataStoreMiddleware) ListParts(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, opts metadatastore.ListPartsOptions) (*metadatastore.ListPartsResult, error) {
 	defer trace.StartRegion(ctx, tmsm.regionName+".ListParts()").End()
 
-	return tmsm.innerMetadataStore.ListParts(ctx, tx, bucket, key, uploadId, partNumberMarker, maxParts)
+	return tmsm.innerMetadataStore.ListParts(ctx, tx, bucket, key, uploadId, opts)
 }

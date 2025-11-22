@@ -212,7 +212,12 @@ func (mbs *metadataBlobStorage) ListObjects(ctx context.Context, bucketName stor
 		return nil, err
 	}
 
-	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx, bucketName, prefix, delimiter, startAfter, maxKeys)
+	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx, bucketName, metadatastore.ListObjectsOptions{
+		Prefix:     prefix,
+		Delimiter:  delimiter,
+		StartAfter: startAfter,
+		MaxKeys:    maxKeys,
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -619,7 +624,13 @@ func (mbs *metadataBlobStorage) ListMultipartUploads(ctx context.Context, bucket
 		return nil, err
 	}
 
-	mListMultipartUploadsResult, err := mbs.metadataStore.ListMultipartUploads(ctx, tx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+	mListMultipartUploadsResult, err := mbs.metadataStore.ListMultipartUploads(ctx, tx, bucketName, metadatastore.ListMultipartUploadsOptions{
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		KeyMarker:      keyMarker,
+		UploadIdMarker: uploadIdMarker,
+		MaxUploads:     maxUploads,
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -665,7 +676,10 @@ func (mbs *metadataBlobStorage) ListParts(ctx context.Context, bucketName storag
 		return nil, err
 	}
 
-	mListPartsResult, err := mbs.metadataStore.ListParts(ctx, tx, bucketName, key, uploadId, partNumberMarker, maxParts)
+	mListPartsResult, err := mbs.metadataStore.ListParts(ctx, tx, bucketName, key, uploadId, metadatastore.ListPartsOptions{
+		PartNumberMarker: partNumberMarker,
+		MaxParts:         maxParts,
+	})
 	if err != nil {
 		tx.Rollback()
 		return nil, err

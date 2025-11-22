@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
@@ -175,24 +176,59 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 
-type MetadataStore interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
+type ListObjectsOptions struct {
+	Prefix     string
+	Delimiter  string
+	StartAfter string
+	MaxKeys    int32
+}
+
+type ListMultipartUploadsOptions struct {
+	Prefix         string
+	Delimiter      string
+	KeyMarker      string
+	UploadIdMarker string
+	MaxUploads     int32
+}
+
+type ListPartsOptions struct {
+	PartNumberMarker string
+	MaxParts         int32
+}
+
+type MaintenanceStore interface {
 	GetInUseBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error)
+}
+
+type BucketStore interface {
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
-	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*ListBucketResult, error)
+}
+
+type ObjectStore interface {
+	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
+}
+
+type MultipartStore interface {
 	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, blob Blob) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
-	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*ListMultipartUploadsResult, error)
-	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumberMarker string, maxParts int32) (*ListPartsResult, error)
+	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
+	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, opts ListPartsOptions) (*ListPartsResult, error)
+}
+
+type MetadataStore interface {
+	lifecycle.Manager
+	MaintenanceStore
+	BucketStore
+	ObjectStore
+	MultipartStore
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {
@@ -287,7 +323,9 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	listBucketResult, err := metadataStore.ListObjects(ctx, tx, bucketName, "", "", "", 1000)
+	listBucketResult, err := metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
+		MaxKeys: 1000,
+	})
 	if err != nil {
 		tx.Rollback()
 		return err
