@@ -104,8 +104,8 @@ func (rs *replicationStorage) HeadBucket(ctx context.Context, bucketName storage
 	return rs.primaryStorage.HeadBucket(ctx, bucketName)
 }
 
-func (rs *replicationStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
-	return rs.primaryStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+func (rs *replicationStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	return rs.primaryStorage.ListObjects(ctx, bucketName, opts)
 }
 
 func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
@@ -242,10 +242,10 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketNa
 	return nil
 }
 
-func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	return rs.primaryStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+func (rs *replicationStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	return rs.primaryStorage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
-func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
-	return rs.primaryStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	return rs.primaryStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }

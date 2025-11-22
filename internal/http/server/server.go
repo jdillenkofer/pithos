@@ -541,7 +541,13 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	maxUploadsI32 := int32(maxUploadsI64)
 
 	slog.Info("Listing MultipartUploads")
-	result, err := s.storage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploadsI32)
+	result, err := s.storage.ListMultipartUploads(ctx, bucketName, storage.ListMultipartUploadsOptions{
+		Prefix:         prefix,
+		Delimiter:      delimiter,
+		KeyMarker:      keyMarker,
+		UploadIdMarker: uploadIdMarker,
+		MaxUploads:     maxUploadsI32,
+	})
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -611,7 +617,12 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	maxKeysI32 := int32(maxKeysI64)
 
 	slog.Info("Listing objects", "bucket", bucketName.String())
-	result, err := s.storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeysI32)
+	result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
+		Prefix:     prefix,
+		Delimiter:  delimiter,
+		StartAfter: startAfter,
+		MaxKeys:    maxKeysI32,
+	})
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -686,7 +697,12 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	maxKeysI32 := int32(maxKeysI64)
 
 	slog.Info("Listing objects V2", "bucket", bucketName.String())
-	result, err := s.storage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeysI32)
+	result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
+		Prefix:     prefix,
+		Delimiter:  delimiter,
+		StartAfter: startAfter,
+		MaxKeys:    maxKeysI32,
+	})
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -940,7 +956,10 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxPartsI32 := int32(maxPartsI64)
 
-	result, err := s.storage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxPartsI32)
+	result, err := s.storage.ListParts(ctx, bucketName, key, uploadId, storage.ListPartsOptions{
+		PartNumberMarker: partNumberMarker,
+		MaxParts:         maxPartsI32,
+	})
 	if err != nil {
 		handleError(err, w, r)
 		return

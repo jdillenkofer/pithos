@@ -80,8 +80,8 @@ func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName storage.Bucke
 	return bucket, nil
 }
 
-func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, startAfter string, maxKeys int32) (*storage.ListBucketResult, error) {
-	objects, err := cs.innerStorage.ListObjects(ctx, bucketName, prefix, delimiter, startAfter, maxKeys)
+func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	objects, err := cs.innerStorage.ListObjects(ctx, bucketName, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -205,16 +205,16 @@ func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName sto
 	return nil
 }
 
-func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, prefix string, delimiter string, keyMarker string, uploadIdMarker string, maxUploads int32) (*storage.ListMultipartUploadsResult, error) {
-	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucketName, prefix, delimiter, keyMarker, uploadIdMarker, maxUploads)
+func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 	if err != nil {
 		return nil, err
 	}
 	return listMultipartUploadsResult, nil
 }
 
-func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumberMarker string, maxParts int32) (*storage.ListPartsResult, error) {
-	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, partNumberMarker, maxParts)
+func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 	if err != nil {
 		return nil, err
 	}
