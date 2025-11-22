@@ -791,8 +791,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -913,8 +912,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -925,8 +923,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadIdStr := query.Get(uploadIdQuery)
-	uploadId, err := storage.NewUploadId(uploadIdStr)
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -986,8 +983,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1120,8 +1116,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1160,8 +1155,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1173,8 +1167,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 	}
 
 	query := r.URL.Query()
-	uploadIdStr := query.Get(uploadIdQuery)
-	uploadId, err := storage.NewUploadId(uploadIdStr)
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1271,8 +1264,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1284,8 +1276,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	uploadIdStr := query.Get(uploadIdQuery)
-	uploadId, err := storage.NewUploadId(uploadIdStr)
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1345,8 +1336,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1417,8 +1407,7 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1430,8 +1419,7 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	query := r.URL.Query()
-	uploadIdStr := query.Get(uploadIdQuery)
-	uploadId, err := storage.NewUploadId(uploadIdStr)
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1453,8 +1441,7 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	keyStr := r.PathValue(keyPath)
-	key, err := storage.NewObjectKey(keyStr)
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
 	if err != nil {
 		handleError(err, w, r)
 		return
