@@ -17,6 +17,8 @@ import (
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/task"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type outboxStorage struct {
@@ -27,6 +29,7 @@ type outboxStorage struct {
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
+	tracer                       trace.Tracer
 }
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
@@ -44,6 +47,7 @@ func NewStorage(db database.Database, innerStorage storage.Storage, storageOutbo
 		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
+		tracer:                       otel.Tracer("internal/storage/outbox"),
 	}
 	return os, nil
 }
@@ -186,6 +190,9 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 }
 
 func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateBucket")
+	defer span.End()
+
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
@@ -203,6 +210,9 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 }
 
 func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucket")
+	defer span.End()
+
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
@@ -308,6 +318,9 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 }
 
 func (os *outboxStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListBuckets")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntries(ctx)
 	if err != nil {
 		return nil, err
@@ -317,6 +330,9 @@ func (os *outboxStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, err
 }
 
 func (os *outboxStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadBucket")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -326,6 +342,9 @@ func (os *outboxStorage) HeadBucket(ctx context.Context, bucketName storage.Buck
 }
 
 func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListObjects")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -335,6 +354,9 @@ func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.Buc
 }
 
 func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadObject")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -344,6 +366,9 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.Buck
 }
 
 func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObject")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -353,6 +378,9 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 }
 
 func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
+	defer span.End()
+
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return nil, err
@@ -390,6 +418,9 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 }
 
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
+	defer span.End()
+
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
@@ -407,6 +438,9 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 }
 
 func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateMultipartUpload")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -415,6 +449,9 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName s
 }
 
 func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.UploadPart")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -424,6 +461,9 @@ func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.Buck
 }
 
 func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CompleteMultipartUpload")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -433,6 +473,9 @@ func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName
 }
 
 func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.AbortMultipartUpload")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
@@ -442,6 +485,9 @@ func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName st
 }
 
 func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListMultipartUploads")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
@@ -451,6 +497,9 @@ func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName st
 }
 
 func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListParts")
+	defer span.End()
+
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err

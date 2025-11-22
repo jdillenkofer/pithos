@@ -13,6 +13,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type prometheusStorageMiddleware struct {
@@ -25,6 +27,7 @@ type prometheusStorageMiddleware struct {
 	totalBytesDownloadedByBucket *prometheus.CounterVec
 	metricsMeasuringTaskHandle   *task.TaskHandle
 	innerStorage                 storage.Storage
+	tracer                       trace.Tracer
 }
 
 // Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
@@ -95,6 +98,7 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
 		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
 		innerStorage:                 innerStorage,
+		tracer:                       otel.Tracer("internal/storage/middlewares/prometheus"),
 	}, nil
 }
 
@@ -191,6 +195,9 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 }
 
 func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CreateBucket")
+	defer span.End()
+
 	err := psm.innerStorage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateBucket"}).Inc()
@@ -204,6 +211,9 @@ func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucket
 }
 
 func (psm *prometheusStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucket")
+	defer span.End()
+
 	err := psm.innerStorage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucket"}).Inc()
@@ -216,6 +226,9 @@ func (psm *prometheusStorageMiddleware) DeleteBucket(ctx context.Context, bucket
 }
 
 func (psm *prometheusStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListBuckets")
+	defer span.End()
+
 	mBuckets, err := psm.innerStorage.ListBuckets(ctx)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListBuckets"}).Inc()
@@ -228,6 +241,9 @@ func (psm *prometheusStorageMiddleware) ListBuckets(ctx context.Context) ([]stor
 }
 
 func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.HeadBucket")
+	defer span.End()
+
 	mBucket, err := psm.innerStorage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadBucket"}).Inc()
@@ -240,6 +256,9 @@ func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketNa
 }
 
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjects")
+	defer span.End()
+
 	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucketName, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
@@ -252,6 +271,9 @@ func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketN
 }
 
 func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.HeadObject")
+	defer span.End()
+
 	mObject, err := psm.innerStorage.HeadObject(ctx, bucketName, key)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadObject"}).Inc()
@@ -264,6 +286,9 @@ func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketNa
 }
 
 func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetObject")
+	defer span.End()
+
 	reader, err := psm.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
@@ -280,6 +305,9 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 }
 
 func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutObject")
+	defer span.End()
+
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
@@ -296,6 +324,9 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 }
 
 func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObject")
+	defer span.End()
+
 	err := psm.innerStorage.DeleteObject(ctx, bucketName, key)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
@@ -308,6 +339,9 @@ func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket
 }
 
 func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CreateMultipartUpload")
+	defer span.End()
+
 	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateMultipartUpload"}).Inc()
@@ -320,6 +354,9 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 }
 
 func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.UploadPart")
+	defer span.End()
+
 	bytesUploaded := 0
 	data = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(data), func(n int) {
 		bytesUploaded += n
@@ -338,6 +375,9 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 }
 
 func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CompleteMultipartUpload")
+	defer span.End()
+
 	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CompleteMultipartUpload"}).Inc()
@@ -350,6 +390,9 @@ func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Cont
 }
 
 func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.AbortMultipartUpload")
+	defer span.End()
+
 	err := psm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AbortMultipartUpload"}).Inc()
@@ -362,6 +405,9 @@ func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context
 }
 
 func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListMultipartUploads")
+	defer span.End()
+
 	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
@@ -373,6 +419,9 @@ func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context
 }
 
 func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListParts")
+	defer span.End()
+
 	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListParts"}).Inc()
