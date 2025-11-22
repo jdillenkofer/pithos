@@ -294,47 +294,6 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
-func TestCanCreateTracingStorageMiddlewareFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	dbPath := filepath.Join(storagePath, "pithos.db")
-	jsonData := fmt.Sprintf(`{
-			"type": "TracingStorageMiddleware",
-			"regionName": "metadataBlobStorage",
-			"innerStorage": {
-				"type": "MetadataBlobStorage",
-				"db": {
-					"type": "RegisterDatabaseReference",
-					"refName": "db",
-					"db": {
-						"type": "SqliteDatabase",
-						"dbPath": %s
-					}
-				},
-				"metadataStore": {
-					"type": "SqlMetadataStore",
-					"db": {
-						"type": "DatabaseReference",
-						"refName": "db"
-					}
-				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
-					"root": %s
-				}
-			}
-		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
-
-	storage, err := createStorageFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, storage)
-}
-
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

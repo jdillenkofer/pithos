@@ -13,7 +13,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
 	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp/config"
@@ -25,7 +24,6 @@ const (
 	// @DEPRECATED: This will be removed in a future release.
 	encryptionBlobStoreMiddlewareType     = "EncryptionBlobStoreMiddleware"
 	tinkEncryptionBlobStoreMiddlewareType = "TinkEncryptionBlobStoreMiddleware"
-	tracingBlobStoreMiddlewareType        = "TracingBlobStoreMiddleware"
 	outboxBlobStoreType                   = "OutboxBlobStore"
 	sftpBlobStoreType                     = "SftpBlobStore"
 	sqlBlobStoreType                      = "SqlBlobStore"
@@ -206,42 +204,6 @@ func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider 
 	}
 }
 
-type TracingBlobStoreMiddlewareConfiguration struct {
-	RegionName                 internalConfig.StringProvider `json:"regionName"`
-	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
-	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
-	internalConfig.DynamicJsonType
-}
-
-func (t *TracingBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type tracingBlobStoreMiddlewareConfiguration TracingBlobStoreMiddlewareConfiguration
-	err := json.Unmarshal(b, (*tracingBlobStoreMiddlewareConfiguration)(t))
-	if err != nil {
-		return err
-	}
-	t.InnerBlobStoreInstantiator, err = CreateBlobStoreInstantiatorFromJson(t.RawInnerBlobStore)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingBlobStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := t.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *TracingBlobStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
-	innerBlobStore, err := t.InnerBlobStoreInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	return tracing.New(t.RegionName.Value(), innerBlobStore)
-}
-
 type OutboxBlobStoreConfiguration struct {
 	DatabaseInstantiator       databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase                json.RawMessage                     `json:"db"`
@@ -386,8 +348,6 @@ func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error
 		bi = &EncryptionBlobStoreMiddlewareConfiguration{}
 	case tinkEncryptionBlobStoreMiddlewareType:
 		bi = &TinkEncryptionBlobStoreMiddlewareConfiguration{}
-	case tracingBlobStoreMiddlewareType:
-		bi = &TracingBlobStoreMiddlewareConfiguration{}
 	case outboxBlobStoreType:
 		bi = &OutboxBlobStoreConfiguration{}
 	case sftpBlobStoreType:

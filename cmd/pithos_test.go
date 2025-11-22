@@ -41,7 +41,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
-	tracingStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/tracing"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
@@ -383,11 +382,6 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			slog.Error(fmt.Sprintf("Could not create s3ClientStorage: %s", err))
 			os.Exit(1)
 		}
-		s3ClientStorage, err = tracingStorageMiddleware.NewStorageMiddleware("S3ClientStorage", s3ClientStorage)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
-			os.Exit(1)
-		}
 
 		var outboxStorage storage.Storage
 
@@ -403,22 +397,10 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			os.Exit(1)
 		}
 
-		outboxStorage, err = tracingStorageMiddleware.NewStorageMiddleware("OutboxStorage", outboxStorage)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
-			os.Exit(1)
-		}
-
 		var store2 storage.Storage
 		store2, err = replication.NewStorage(localStore, outboxStorage)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Could not create replicationStorage: %s", err))
-			os.Exit(1)
-		}
-
-		store2, err = tracingStorageMiddleware.NewStorageMiddleware("ReplicationStorage", store2)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Error during TracingStorageMiddleware: %s", err))
 			os.Exit(1)
 		}
 
