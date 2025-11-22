@@ -3,7 +3,6 @@ package tracing
 import (
 	"context"
 	"io"
-	"runtime/trace"
 
 	"go.opentelemetry.io/otel"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -37,7 +36,6 @@ func NewStorageMiddleware(regionName string, innerStorage storage.Storage) (stor
 }
 
 func (tsm *tracingStorageMiddleware) Start(ctx context.Context) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".Start()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".Start")
 	defer span.End()
 
@@ -49,7 +47,6 @@ func (tsm *tracingStorageMiddleware) Start(ctx context.Context) error {
 }
 
 func (tsm *tracingStorageMiddleware) Stop(ctx context.Context) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".Stop()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".Stop")
 	defer span.End()
 
@@ -61,7 +58,6 @@ func (tsm *tracingStorageMiddleware) Stop(ctx context.Context) error {
 }
 
 func (tsm *tracingStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".CreateBucket()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".CreateBucket")
 	defer span.End()
 
@@ -69,7 +65,6 @@ func (tsm *tracingStorageMiddleware) CreateBucket(ctx context.Context, bucketNam
 }
 
 func (tsm *tracingStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".DeleteBucket()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".DeleteBucket")
 	defer span.End()
 
@@ -77,7 +72,6 @@ func (tsm *tracingStorageMiddleware) DeleteBucket(ctx context.Context, bucketNam
 }
 
 func (tsm *tracingStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".ListBuckets()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".ListBuckets")
 	defer span.End()
 
@@ -85,7 +79,6 @@ func (tsm *tracingStorageMiddleware) ListBuckets(ctx context.Context) ([]storage
 }
 
 func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".HeadBucket()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".HeadBucket")
 	defer span.End()
 
@@ -93,7 +86,6 @@ func (tsm *tracingStorageMiddleware) HeadBucket(ctx context.Context, bucketName 
 }
 
 func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".ListObjects()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".ListObjects")
 	defer span.End()
 
@@ -101,7 +93,6 @@ func (tsm *tracingStorageMiddleware) ListObjects(ctx context.Context, bucketName
 }
 
 func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".HeadObject()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".HeadObject")
 	defer span.End()
 
@@ -109,7 +100,6 @@ func (tsm *tracingStorageMiddleware) HeadObject(ctx context.Context, bucketName 
 }
 
 func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".GetObject()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".GetObject")
 	defer span.End()
 
@@ -117,7 +107,6 @@ func (tsm *tracingStorageMiddleware) GetObject(ctx context.Context, bucketName s
 }
 
 func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".PutObject()").End()
 	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".PutObject")
 	defer span.End()
 
@@ -125,43 +114,50 @@ func (tsm *tracingStorageMiddleware) PutObject(ctx context.Context, bucketName s
 }
 
 func (tsm *tracingStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".DeleteObject()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".DeleteObject")
+	defer span.End()
 
 	return tsm.innerStorage.DeleteObject(ctx, bucketName, key)
 }
 
 func (tsm *tracingStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".CreateMultipartUpload()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".CreateMultipartUpload")
+	defer span.End()
 
 	return tsm.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 }
 
 func (tsm *tracingStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".UploadPart()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".UploadPart")
+	defer span.End()
 
 	return tsm.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
 }
 
 func (tsm *tracingStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".CompleteMultipartUpload()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".CompleteMultipartUpload")
+	defer span.End()
 
 	return tsm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
 }
 
 func (tsm *tracingStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	defer trace.StartRegion(ctx, tsm.regionName+".AbortMultipartUpload()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".AbortMultipartUpload")
+	defer span.End()
 
 	return tsm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 }
 
 func (tsm *tracingStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".ListMultipartUploads()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".ListMultipartUploads")
+	defer span.End()
 
 	return tsm.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
 }
 
 func (tsm *tracingStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
-	defer trace.StartRegion(ctx, tsm.regionName+".ListParts()").End()
+	ctx, span := tsm.tracer.Start(ctx, tsm.regionName+".ListParts")
+	defer span.End()
 
 	return tsm.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime/trace"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +49,6 @@ func NewStorage(db database.Database, innerStorage storage.Storage, storageOutbo
 }
 
 func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
-	defer trace.StartRegion(ctx, "OutboxStorage.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	for {
 		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -123,8 +121,6 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 
 func (os *outboxStorage) processOutboxLoop() {
 	ctx := context.Background()
-	ctx, task := trace.NewTask(ctx, "OutboxStorage.processOutboxLoop()")
-	defer task.End()
 out:
 	for {
 		select {

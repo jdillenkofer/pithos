@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"runtime/trace"
 	"sync/atomic"
 	"time"
 
@@ -41,7 +40,6 @@ func New(db database.Database, innerBlobStore blobstore.BlobStore, blobOutboxEnt
 }
 
 func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
-	defer trace.StartRegion(ctx, "OutboxBlobStore.maybeProcessOutboxEntries()").End()
 	processedOutboxEntryCount := 0
 	for {
 		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
@@ -100,8 +98,6 @@ func (obs *outboxBlobStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 func (obs *outboxBlobStore) processOutboxLoop() {
 	ctx := context.Background()
-	ctx, task := trace.NewTask(ctx, "OutboxBlobStore.processOutboxLoop()")
-	defer task.End()
 out:
 	for {
 		select {
