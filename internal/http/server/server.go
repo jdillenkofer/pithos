@@ -19,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
@@ -1076,6 +1077,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 				handleError(err, w, r)
 				return
 			}
+			rangeReader = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObjectRange", rangeReader)
 			readers = append(readers, rangeReader)
 		}
 	} else {
@@ -1086,6 +1088,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			handleError(err, w, r)
 			return
 		}
+		reader = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObject", reader)
 		readers = append(readers, reader)
 		size := object.Size
 		sizes = append(sizes, size)
