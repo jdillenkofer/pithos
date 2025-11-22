@@ -11,7 +11,6 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	legacyEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/legacy"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sftp"
@@ -20,9 +19,7 @@ import (
 )
 
 const (
-	filesystemBlobStoreType = "FilesystemBlobStore"
-	// @DEPRECATED: This will be removed in a future release.
-	encryptionBlobStoreMiddlewareType     = "EncryptionBlobStoreMiddleware"
+	filesystemBlobStoreType               = "FilesystemBlobStore"
 	tinkEncryptionBlobStoreMiddlewareType = "TinkEncryptionBlobStoreMiddleware"
 	outboxBlobStoreType                   = "OutboxBlobStore"
 	sftpBlobStoreType                     = "SftpBlobStore"
@@ -42,42 +39,6 @@ func (f *FilesystemBlobStoreConfiguration) RegisterReferences(diCollection depen
 
 func (f *FilesystemBlobStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
 	return filesystem.New(f.Root.Value())
-}
-
-type EncryptionBlobStoreMiddlewareConfiguration struct {
-	Password                   internalConfig.StringProvider `json:"password"`
-	InnerBlobStoreInstantiator BlobStoreInstantiator         `json:"-"`
-	RawInnerBlobStore          json.RawMessage               `json:"innerBlobStore"`
-	internalConfig.DynamicJsonType
-}
-
-func (e *EncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type encryptionBlobStoreMiddlewareConfiguration EncryptionBlobStoreMiddlewareConfiguration
-	err := json.Unmarshal(b, (*encryptionBlobStoreMiddlewareConfiguration)(e))
-	if err != nil {
-		return err
-	}
-	e.InnerBlobStoreInstantiator, err = CreateBlobStoreInstantiatorFromJson(e.RawInnerBlobStore)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (e *EncryptionBlobStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := e.InnerBlobStoreInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (e *EncryptionBlobStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (blobstore.BlobStore, error) {
-	innerBlobStore, err := e.InnerBlobStoreInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	return legacyEncryptionBlobStoreMiddleware.New(e.Password.Value(), innerBlobStore)
 }
 
 type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
@@ -344,8 +305,6 @@ func CreateBlobStoreInstantiatorFromJson(b []byte) (BlobStoreInstantiator, error
 	switch bc.Type {
 	case filesystemBlobStoreType:
 		bi = &FilesystemBlobStoreConfiguration{}
-	case encryptionBlobStoreMiddlewareType:
-		bi = &EncryptionBlobStoreMiddlewareConfiguration{}
 	case tinkEncryptionBlobStoreMiddlewareType:
 		bi = &TinkEncryptionBlobStoreMiddlewareConfiguration{}
 	case outboxBlobStoreType:

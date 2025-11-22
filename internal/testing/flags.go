@@ -13,7 +13,7 @@ var (
 	PathStyle           = flag.String("path-style", "host", "addressing style to use (host or path)")
 	ReplMode            = flag.String("repl-mode", "none", "replication mode to use (none or replicated)")
 	BlobStore           = flag.String("blob-store", "sql", "blob store to use (sql or filesystem)")
-	BlobStoreEncryption = flag.String("blob-store-encryption", "none", "blob store encryption to use (none, legacy, or tink)")
+	BlobStoreEncryption = flag.String("blob-store-encryption", "none", "blob store encryption to use (none or tink)")
 )
 
 // SkipIfIntegration skips the test if -integration flag is set (for unit tests)
