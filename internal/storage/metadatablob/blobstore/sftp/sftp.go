@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 	"github.com/pkg/sftp"
@@ -29,6 +32,7 @@ type sftpBlobStore struct {
 	client       *sftp.Client
 	sshClient    *ssh.Client
 	mu           sync.Mutex
+	tracer       trace.Tracer
 }
 
 // Compile-time check to ensure sftpBlobStore implements blobstore.BlobStore
@@ -122,6 +126,7 @@ func New(addr string, clientConfig *ssh.ClientConfig, root string) (blobstore.Bl
 		clientConfig: clientConfig,
 		root:         root,
 		client:       nil,
+		tracer:       otel.Tracer("internal/storage/metadatablob/blobstore/sftp"),
 	}
 	return bs, nil
 }
@@ -147,6 +152,9 @@ func (s *sftpBlobStore) Stop(ctx context.Context) error {
 }
 
 func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	_, span := s.tracer.Start(ctx, "sftpBlobStore.PutBlob")
+	defer span.End()
+
 	filename := s.getFilename(blobId)
 	f, err := doRetriableOperation(func() (*sftp.File, error) {
 		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
@@ -163,6 +171,9 @@ func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 }
 
 func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	_, span := s.tracer.Start(ctx, "sftpBlobStore.GetBlob")
+	defer span.End()
+
 	filename := s.getFilename(blobId)
 	// @Perf: We skip the stat call here to reduce the number of roundtrips.
 	// This means that if the file doesn't exist, we will only find out when we try
@@ -198,6 +209,9 @@ func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 }
 
 func (s *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	_, span := s.tracer.Start(ctx, "sftpBlobStore.GetBlobIds")
+	defer span.End()
+
 	dirEntries, err := doRetriableOperation(func() ([]os.FileInfo, error) {
 		return s.client.ReadDir(s.root)
 	}, maxStpRetries, s.reconnectSftpClient, nil)
@@ -217,6 +231,9 @@ func (s *sftpBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore
 }
 
 func (s *sftpBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	_, span := s.tracer.Start(ctx, "sftpBlobStore.DeleteBlob")
+	defer span.End()
+
 	filename := s.getFilename(blobId)
 	_, err := doRetriableOperation(func() (*struct{}, error) {
 		return nil, s.client.Remove(filename)

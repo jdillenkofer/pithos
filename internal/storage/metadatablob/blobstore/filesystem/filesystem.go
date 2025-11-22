@@ -11,13 +11,17 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
 
 type filesystemBlobStore struct {
 	*lifecycle.ValidatedLifecycle
-	root string
+	root   string
+	tracer trace.Tracer
 }
 
 // Compile-time check to ensure filesystemBlobStore implements blobstore.BlobStore
@@ -60,6 +64,7 @@ func New(root string) (blobstore.BlobStore, error) {
 	bs := &filesystemBlobStore{
 		ValidatedLifecycle: validatedLifecycle,
 		root:               root,
+		tracer:             otel.Tracer("internal/storage/metadatablob/blobstore/filesystem"),
 	}
 	return bs, nil
 }
@@ -72,6 +77,9 @@ func (bs *filesystemBlobStore) Start(ctx context.Context) error {
 }
 
 func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId, reader io.Reader) error {
+	_, span := bs.tracer.Start(ctx, "filesystemBlobStore.PutBlob")
+	defer span.End()
+
 	filename := bs.getFilename(blobId)
 
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -88,6 +96,9 @@ func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId b
 }
 
 func (bs *filesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
+	_, span := bs.tracer.Start(ctx, "filesystemBlobStore.GetBlob")
+	defer span.End()
+
 	filename := bs.getFilename(blobId)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	if err != nil {
@@ -100,6 +111,9 @@ func (bs *filesystemBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId b
 }
 
 func (bs *filesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]blobstore.BlobId, error) {
+	_, span := bs.tracer.Start(ctx, "filesystemBlobStore.GetBlobIds")
+	defer span.End()
+
 	dirEntries, err := os.ReadDir(bs.root)
 	if err != nil {
 		return nil, err
@@ -117,6 +131,9 @@ func (bs *filesystemBlobStore) GetBlobIds(ctx context.Context, tx *sql.Tx) ([]bl
 }
 
 func (bs *filesystemBlobStore) DeleteBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) error {
+	_, span := bs.tracer.Start(ctx, "filesystemBlobStore.DeleteBlob")
+	defer span.End()
+
 	filename := bs.getFilename(blobId)
 	err := os.Remove(filename)
 	if err != nil {
