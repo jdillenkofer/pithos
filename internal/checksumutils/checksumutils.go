@@ -13,6 +13,8 @@ import (
 	"io"
 	"math"
 
+	"go.opentelemetry.io/otel"
+
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
@@ -151,7 +153,11 @@ func CombineCrc64Nvme(a []byte, b []byte, bLen int64) []byte {
 	return createCombineFunction(0xAD93D23594C93659, 64, 0xFFFFFFFFFFFFFFFF)(a, b, bLen)
 }
 
-func calculateETag(reader io.Reader) (*string, error) {
+func calculateETag(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateETag")
+	defer span.End()
+
 	hash := md5.New()
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -163,7 +169,11 @@ func calculateETag(reader io.Reader) (*string, error) {
 	return &etag, nil
 }
 
-func calculateCrc32(reader io.Reader) (*string, error) {
+func calculateCrc32(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateCrc32")
+	defer span.End()
+
 	hash := crc32.NewIEEE()
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -174,7 +184,11 @@ func calculateCrc32(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func calculateCrc32c(reader io.Reader) (*string, error) {
+func calculateCrc32c(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateCrc32c")
+	defer span.End()
+
 	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -185,7 +199,11 @@ func calculateCrc32c(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func calculateCrc64Nvme(reader io.Reader) (*string, error) {
+func calculateCrc64Nvme(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateCrc64Nvme")
+	defer span.End()
+
 	hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -196,7 +214,11 @@ func calculateCrc64Nvme(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func calculateSha1(reader io.Reader) (*string, error) {
+func calculateSha1(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateSha1")
+	defer span.End()
+
 	hash := sha1.New()
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -207,7 +229,11 @@ func calculateSha1(reader io.Reader) (*string, error) {
 	return &base64Sum, nil
 }
 
-func calculateSha256(reader io.Reader) (*string, error) {
+func calculateSha256(ctx context.Context, reader io.Reader) (*string, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	_, span := tracer.Start(ctx, "calculateSha256")
+	defer span.End()
+
 	hash := sha256.New()
 	_, err := io.Copy(hash, reader)
 	if err != nil {
@@ -228,6 +254,10 @@ type ChecksumValues struct {
 }
 
 func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	ctx, span := tracer.Start(ctx, "CalculateChecksumsStreaming")
+	defer span.End()
+
 	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
 
 	doneChan := make(chan struct{}, 1)
@@ -244,7 +274,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	etagChan := make(chan string, 1)
 	errChan2 := make(chan error, 1)
 	go func() {
-		etag, err := calculateETag(readers[1])
+		etag, err := calculateETag(ctx, readers[1])
 		if err != nil {
 			errChan2 <- err
 			return
@@ -255,7 +285,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	crc32Chan := make(chan string, 1)
 	errChan3 := make(chan error, 1)
 	go func() {
-		crc32, err := calculateCrc32(readers[2])
+		crc32, err := calculateCrc32(ctx, readers[2])
 		if err != nil {
 			errChan3 <- err
 			return
@@ -266,7 +296,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	crc32cChan := make(chan string, 1)
 	errChan4 := make(chan error, 1)
 	go func() {
-		crc32c, err := calculateCrc32c(readers[3])
+		crc32c, err := calculateCrc32c(ctx, readers[3])
 		if err != nil {
 			errChan4 <- err
 			return
@@ -277,7 +307,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	crc64nvmeChan := make(chan string, 1)
 	errChan5 := make(chan error, 1)
 	go func() {
-		crc64nvme, err := calculateCrc64Nvme(readers[4])
+		crc64nvme, err := calculateCrc64Nvme(ctx, readers[4])
 		if err != nil {
 			errChan5 <- err
 			return
@@ -288,7 +318,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	sha1Chan := make(chan string, 1)
 	errChan6 := make(chan error, 1)
 	go func() {
-		sha1, err := calculateSha1(readers[5])
+		sha1, err := calculateSha1(ctx, readers[5])
 		if err != nil {
 			errChan6 <- err
 			return
@@ -299,7 +329,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	sha256Chan := make(chan string, 1)
 	errChan7 := make(chan error, 1)
 	go func() {
-		sha256, err := calculateSha256(readers[6])
+		sha256, err := calculateSha256(ctx, readers[6])
 		if err != nil {
 			errChan7 <- err
 			return
