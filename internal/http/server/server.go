@@ -1131,7 +1131,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 			io.WriteString(writer, rangeHeaders[idx])
 
-			io.CopyN(writer, readers[idx], sizes[idx])
+			ioutils.CopyN(writer, readers[idx], sizes[idx])
 		}
 		io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator))
 	} else if len(byteRanges) == 1 {
@@ -1141,12 +1141,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		io.CopyN(writer, readers[0], totalSize)
+		ioutils.CopyN(writer, readers[0], totalSize)
 	} else {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		io.CopyN(writer, readers[0], totalSize)
+		ioutils.CopyN(writer, readers[0], totalSize)
 	}
 }
 
