@@ -117,3 +117,35 @@ func convertWhenceToStr(whence int) string {
 func (t *tracingReadSeekCloser) Close() error {
 	return t.inner.Close()
 }
+
+type tracingWriter struct {
+	ctx      context.Context
+	tracer   trace.Tracer
+	spanName string
+	inner    io.Writer
+}
+
+func NewTracingWriter(ctx context.Context, tracer trace.Tracer, spanName string, inner io.Writer) io.Writer {
+	return &tracingWriter{
+		ctx:      ctx,
+		tracer:   tracer,
+		spanName: spanName,
+		inner:    inner,
+	}
+}
+
+func (t *tracingWriter) Write(p []byte) (int, error) {
+	if err := t.ctx.Err(); err != nil {
+		return 0, err
+	}
+	_, span := t.tracer.Start(t.ctx, t.spanName+".Write")
+	defer span.End()
+	n, err := t.inner.Write(p)
+	span.SetAttributes(attribute.Int("bytes.written", n))
+
+	if err != nil {
+		span.SetStatus(codes.Error, "Write failed")
+		span.RecordError(err)
+	}
+	return n, err
+}

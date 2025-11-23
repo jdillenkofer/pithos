@@ -1122,28 +1122,31 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		responseHeaders.Set(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
 		w.WriteHeader(206)
+		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
 		for idx := range readers {
 			if idx > 0 {
-				io.WriteString(w, "\r\n")
+				io.WriteString(writer, "\r\n")
 			}
-			io.WriteString(w, fmt.Sprintf("--%s\r\n", separator))
+			io.WriteString(writer, fmt.Sprintf("--%s\r\n", separator))
 
-			io.WriteString(w, rangeHeaders[idx])
+			io.WriteString(writer, rangeHeaders[idx])
 
-			io.CopyN(w, readers[idx], sizes[idx])
+			io.CopyN(writer, readers[idx], sizes[idx])
 		}
-		io.WriteString(w, fmt.Sprintf("\r\n--%s--\r\n", separator))
+		io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator))
 	} else if len(byteRanges) == 1 {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		firstRangeEntry := byteRanges[0]
 		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
 		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
-		io.CopyN(w, readers[0], totalSize)
+		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
+		io.CopyN(writer, readers[0], totalSize)
 	} else {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
-		io.CopyN(w, readers[0], totalSize)
+		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
+		io.CopyN(writer, readers[0], totalSize)
 	}
 }
 
