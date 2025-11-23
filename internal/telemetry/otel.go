@@ -3,7 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
-	"time"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -80,18 +80,24 @@ func newTracerProvider(ctx context.Context, s *settings.Settings) (*trace.Tracer
 	}
 
 	res, err := resource.New(ctx,
+		resource.WithHost(),
+		resource.WithOS(),
+		resource.WithContainer(),
+		resource.WithProcess(),
+		resource.WithTelemetrySDK(),
 		resource.WithAttributes(
 			semconv.ServiceName("pithos"),
 		),
+		resource.WithFromEnv(),
 	)
-	if err != nil {
+	if errors.Is(err, resource.ErrPartialResource) || errors.Is(err, resource.ErrSchemaURLConflict) {
+		slog.Warn("could not create complete resource for OpenTelemetry", "error", err)
+	} else if err != nil {
 		return nil, err
 	}
 
 	tracerProvider := trace.NewTracerProvider(
-		trace.WithBatcher(traceExporter,
-			// Default is 5s. Set to 1s for demonstrative purposes.
-			trace.WithBatchTimeout(time.Second)),
+		trace.WithBatcher(traceExporter),
 		trace.WithResource(res),
 	)
 	return tracerProvider, nil
