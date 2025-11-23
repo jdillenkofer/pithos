@@ -145,23 +145,23 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
 	defer span.End()
 
-	// @TODO: cache reader on disk
-	data, err := io.ReadAll(reader)
+	// Use disk cache instead of memory
+	readSeekCloser, err := ioutils.NewDiskCachedReadSeekCloser(reader)
 	if err != nil {
 		return nil, err
 	}
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
+	defer readSeekCloser.Close()
 
-	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput)
+	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput)
 	if err != nil {
 		return nil, err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+		_, err = readSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput)
+		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput)
 		if err != nil {
 			return nil, err
 		}
@@ -214,14 +214,14 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPart")
 	defer span.End()
 
-	// @TODO: cache reader on disk
-	data, err := io.ReadAll(reader)
+	// Use disk cache instead of memory
+	readSeekCloser, err := ioutils.NewDiskCachedReadSeekCloser(reader)
 	if err != nil {
 		return nil, err
 	}
-	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
+	defer readSeekCloser.Close()
 
-	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, byteReadSeekCloser, checksumInput)
+	uploadPartResult, err := rs.primaryStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, readSeekCloser, checksumInput)
 	if err != nil {
 		return nil, err
 	}
@@ -231,11 +231,11 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 	rs.mapMutex.Unlock()
 
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = byteReadSeekCloser.Seek(0, io.SeekStart)
+		_, err = readSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.UploadPart(ctx, bucketName, key, secondaryUploadIds[i], partNumber, byteReadSeekCloser, checksumInput)
+		_, err = secondaryStorage.UploadPart(ctx, bucketName, key, secondaryUploadIds[i], partNumber, readSeekCloser, checksumInput)
 		if err != nil {
 			return nil, err
 		}
