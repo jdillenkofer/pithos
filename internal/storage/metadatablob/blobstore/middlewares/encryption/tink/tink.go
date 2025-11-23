@@ -31,21 +31,27 @@ import (
 
 const (
 	// BlobHeaderVersion is the current version of the blob header format
-	BlobHeaderVersion = 1
+	BlobHeaderVersion = 2
 
 	// Key types for different KMS providers
 	KeyTypeAWS   = "aws"
 	KeyTypeVault = "vault"
 	KeyTypeLocal = "local"
 	KeyTypeTPM   = "tpm"
+
+	// DefaultSegmentSize is the ciphertext segment size for new blobs (128KB)
+	DefaultSegmentSize = 128 * 1024
+	// LegacySegmentSize is the ciphertext segment size for old blobs (4KB)
+	LegacySegmentSize = 4096
 )
 
 // BlobHeader contains metadata about the encryption used for a blob
 type BlobHeader struct {
-	Version      int    `json:"version"`      // Format version for future compatibility
-	KeyType      string `json:"keyType"`      // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
-	KeyURI       string `json:"keyURI"`       // Key identifier (empty for local)
-	EncryptedDEK []byte `json:"encryptedDEK"` // The encrypted DEK
+	Version      int    `json:"version"`               // Format version for future compatibility
+	KeyType      string `json:"keyType"`               // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
+	KeyURI       string `json:"keyURI"`                // Key identifier (empty for local)
+	EncryptedDEK []byte `json:"encryptedDEK"`          // The encrypted DEK
+	SegmentSize  int    `json:"segmentSize,omitempty"` // Size of ciphertext segments (defaults to 4096 if 0)
 }
 
 // TinkEncryptionBlobStoreMiddleware uses envelope encryption where each blob has its own DEK.
@@ -432,8 +438,10 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 		return err
 	}
 
+	segmentSize := DefaultSegmentSize
+
 	// Create streaming AEAD with the DEK
-	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, 4096, 0)
+	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, segmentSize, 0)
 	if err != nil {
 		return err
 	}
@@ -450,6 +458,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 		KeyType:      mw.keyType,
 		KeyURI:       mw.keyURI,
 		EncryptedDEK: encryptedDEK,
+		SegmentSize:  segmentSize,
 	}
 
 	// Serialize header to JSON
@@ -535,9 +544,9 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 			return nil, err
 		}
 
-		if header.Version != BlobHeaderVersion {
+		if header.Version > BlobHeaderVersion || header.Version < 1 {
 			rc.Close()
-			return nil, io.ErrUnexpectedEOF
+			return nil, fmt.Errorf("unsupported blob header version: %d", header.Version)
 		}
 
 		// Decrypt the DEK with master AEAD
@@ -547,8 +556,13 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 			return nil, err
 		}
 
+		segmentSize := header.SegmentSize
+		if segmentSize == 0 {
+			segmentSize = LegacySegmentSize
+		}
+
 		// Create streaming AEAD with the DEK
-		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, 4096, 0)
+		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, segmentSize, 0)
 		if err != nil {
 			rc.Close()
 			return nil, err
