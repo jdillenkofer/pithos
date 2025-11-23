@@ -8,10 +8,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"runtime/trace"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
 	"github.com/jdillenkofer/pithos/internal/http/middlewares"
@@ -31,12 +33,14 @@ import (
 type Server struct {
 	requestAuthorizer authorization.RequestAuthorizer
 	storage           storage.Storage
+	tracer            trace.Tracer
 }
 
 func SetupServer(credentials []settings.Credentials, region string, baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
 		storage:           storage,
+		tracer:            otel.Tracer("internal/http/server"),
 	}
 	mux := http.NewServeMux()
 	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
@@ -451,7 +455,9 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 }
 
 func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.listBucketsHandler")
+	defer span.End()
+
 	shouldReturn := s.authorizeRequest(ctx, authorization.OperationListBuckets, nil, nil, w, r)
 	if shouldReturn {
 		return
@@ -479,7 +485,9 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.headBucketHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -514,7 +522,9 @@ func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter,
 }
 
 func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.listMultipartUploadsHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -584,7 +594,9 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.listObjectsHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -665,7 +677,9 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.listObjectsV2Handler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -751,7 +765,9 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.createBucketHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -775,7 +791,9 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -797,7 +815,9 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.headObjectHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -914,7 +934,9 @@ func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.listPartsHandler")
+	defer span.End()
+
 	query := r.URL.Query()
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
@@ -989,7 +1011,9 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.getObjectHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1121,7 +1145,9 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.createMultipartUploadHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1159,7 +1185,9 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.completeMultipartUploadHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1267,7 +1295,9 @@ func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
 }
 
 func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	ctx, span := s.tracer.Start(r.Context(), "Server.uploadPartHandler")
+	defer span.End()
+
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1338,8 +1368,8 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.putObjectHandler()")
-	defer task.End()
+	ctx, span := s.tracer.Start(r.Context(), "Server.putObjectHandler")
+	defer span.End()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1409,8 +1439,8 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.abortMultipartUploadHandler()")
-	defer task.End()
+	ctx, span := s.tracer.Start(r.Context(), "Server.abortMultipartUploadHandler")
+	defer span.End()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -1443,8 +1473,8 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, task := trace.NewTask(r.Context(), "Server.deleteObjectHandler()")
-	defer task.End()
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectHandler")
+	defer span.End()
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
