@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
@@ -120,7 +121,7 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 		os.Remove(tempFile.Name())
 	}()
 
-	_, err = io.Copy(tempFile, obj)
+	_, err = ioutils.Copy(tempFile, obj)
 	if err != nil {
 		return err
 	}

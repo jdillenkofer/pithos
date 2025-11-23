@@ -495,7 +495,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 		}
 
 		// Stream copy from reader to encrypting writer
-		if _, err := io.Copy(streamWriter, reader); err != nil {
+		if _, err := ioutils.Copy(streamWriter, reader); err != nil {
 			encryptWriter.CloseWithError(err)
 			return
 		}
