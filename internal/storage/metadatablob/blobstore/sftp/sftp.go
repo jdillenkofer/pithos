@@ -192,9 +192,6 @@ func (s *sftpBlobStore) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 	*/
 
 	f := ioutils.NewLazyReadSeekCloser(func() (io.ReadSeekCloser, error) {
-		_, span := s.tracer.Start(ctx, "sftpBlobStore.GetBlob.LazyInit")
-		defer span.End()
-
 		return doRetriableOperation(func() (*sftp.File, error) {
 			f, err := s.client.OpenFile(filename, os.O_RDONLY)
 			if err != nil {

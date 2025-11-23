@@ -513,9 +513,6 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 	// Use lazy initialization to defer header parsing and DEK decryption until first read
 	// This allows streaming to start immediately without blocking on KMS/Vault operations
 	return ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
-		_, span := mw.tracer.Start(ctx, "TinkEncryptionBlobStoreMiddleware.GetBlob.LazyInit")
-		defer span.End()
-
 		// Read the header length (4 bytes big-endian)
 		lengthBytes := make([]byte, 4)
 		if _, err := io.ReadFull(rc, lengthBytes); err != nil {

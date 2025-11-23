@@ -45,8 +45,13 @@ func (blobGC *blobGC) PreventGCFromRunning(ctx context.Context) (unblockGC func(
 	_, span := blobGC.tracer.Start(ctx, "BlobGarbageCollector.PreventGCFromRunning")
 	defer span.End()
 	blobGC.writeOperations.Add(1)
+	span.AddEvent("Acquiring lock")
 	blobGC.collectionMutex.RLock()
-	unblockGC = blobGC.collectionMutex.RUnlock
+	span.AddEvent("Acquired lock")
+	unblockGC = func() {
+		blobGC.collectionMutex.RUnlock()
+		span.AddEvent("Released lock")
+	}
 	return
 }
 
@@ -78,8 +83,13 @@ func (blobGC *blobGC) runGC() error {
 	ctx, span := blobGC.tracer.Start(ctx, "BlobGarbageCollector.runGC")
 	defer span.End()
 
+	span.AddEvent("Acquiring lock")
 	blobGC.collectionMutex.Lock()
-	defer blobGC.collectionMutex.Unlock()
+	span.AddEvent("Acquired lock")
+	defer func() {
+		blobGC.collectionMutex.Unlock()
+		span.AddEvent("Released lock")
+	}()
 
 	tx, err := blobGC.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
