@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
 )
@@ -87,7 +88,7 @@ func (bs *filesystemBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId b
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, reader)
+	_, err = ioutils.Copy(f, reader)
 	if err != nil {
 		return err
 	}

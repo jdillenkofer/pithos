@@ -18,3 +18,10 @@ func CopyN(dst io.Writer, src io.Reader, n int64) (written int64, err error) {
 	}
 	return
 }
+
+// Copy copies from src to dst until either EOF is reached on src or an error occurs.
+// It uses io.CopyBuffer with a 128KB buffer.
+func Copy(dst io.Writer, src io.Reader) (written int64, err error) {
+	buf := make([]byte, 128*1024)
+	return io.CopyBuffer(dst, src, buf)
+}

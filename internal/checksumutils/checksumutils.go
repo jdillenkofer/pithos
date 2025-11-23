@@ -159,7 +159,7 @@ func calculateETag(ctx context.Context, reader io.Reader) (*string, error) {
 	defer span.End()
 
 	hash := md5.New()
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func calculateCrc32(ctx context.Context, reader io.Reader) (*string, error) {
 	defer span.End()
 
 	hash := crc32.NewIEEE()
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func calculateCrc32c(ctx context.Context, reader io.Reader) (*string, error) {
 	defer span.End()
 
 	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func calculateCrc64Nvme(ctx context.Context, reader io.Reader) (*string, error) 
 	defer span.End()
 
 	hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +220,7 @@ func calculateSha1(ctx context.Context, reader io.Reader) (*string, error) {
 	defer span.End()
 
 	hash := sha1.New()
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func calculateSha256(ctx context.Context, reader io.Reader) (*string, error) {
 	defer span.End()
 
 	hash := sha256.New()
-	_, err := io.Copy(hash, reader)
+	_, err := ioutils.Copy(hash, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	// we deadlock the program
 	originalSize, err := func() (*int64, error) {
 		defer closer.Close()
-		originalSize, err := io.Copy(writer, reader)
+		originalSize, err := ioutils.Copy(writer, reader)
 		if err != nil {
 			return nil, err
 		}

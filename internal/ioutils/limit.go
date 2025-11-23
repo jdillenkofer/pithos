@@ -10,7 +10,7 @@ func SkipNBytes(r io.Reader, n int64) (int64, error) {
 	case io.Seeker:
 		_, err = r.Seek(n, io.SeekCurrent)
 	default:
-		_, err = io.CopyN(io.Discard, r, n)
+		_, err = CopyN(io.Discard, r, n)
 	}
 	return n, err
 }
@@ -20,7 +20,7 @@ func SkipAllBytes(r io.Reader) (n int64, err error) {
 	case io.Seeker:
 		n, err = r.Seek(0, io.SeekEnd)
 	default:
-		n, err = io.Copy(io.Discard, r)
+		n, err = Copy(io.Discard, r)
 	}
 	return n, err
 }
