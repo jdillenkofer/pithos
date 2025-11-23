@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -29,7 +31,14 @@ func (t *tracingReadCloser) Read(p []byte) (int, error) {
 	}
 	_, span := t.tracer.Start(t.ctx, t.spanName+".Read")
 	defer span.End()
-	return t.inner.Read(p)
+	n, err := t.inner.Read(p)
+	span.SetAttributes(attribute.Int("bytes.read", n))
+
+	if err != nil {
+		span.SetStatus(codes.Error, "Read failed")
+		span.RecordError(err)
+	}
+	return n, err
 }
 
 func (t *tracingReadCloser) Close() error {
@@ -58,7 +67,14 @@ func (t *tracingReadSeekCloser) Read(p []byte) (int, error) {
 	}
 	_, span := t.tracer.Start(t.ctx, t.spanName+".Read")
 	defer span.End()
-	return t.inner.Read(p)
+	n, err := t.inner.Read(p)
+	span.SetAttributes(attribute.Int("bytes.read", n))
+
+	if err != nil {
+		span.SetStatus(codes.Error, "Read failed")
+		span.RecordError(err)
+	}
+	return n, err
 }
 
 func (t *tracingReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
@@ -67,7 +83,35 @@ func (t *tracingReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
 	}
 	_, span := t.tracer.Start(t.ctx, t.spanName+".Seek")
 	defer span.End()
-	return t.inner.Seek(offset, whence)
+	n, err := t.inner.Seek(offset, whence)
+
+	if span.IsRecording() {
+		span.SetAttributes(
+			attribute.Int64("offset", offset),
+			attribute.String("whence", convertWhenceToStr(whence)),
+			attribute.Int64("result", n))
+	}
+
+	if err != nil {
+		span.SetStatus(codes.Error, "Seek failed")
+		span.RecordError(err)
+	}
+	return n, err
+}
+
+func convertWhenceToStr(whence int) string {
+	var whenceStr string
+	switch whence {
+	case io.SeekStart:
+		whenceStr = "io.SeekStart"
+	case io.SeekCurrent:
+		whenceStr = "io.SeekCurrent"
+	case io.SeekEnd:
+		whenceStr = "io.SeekEnd"
+	default:
+		whenceStr = "unknown"
+	}
+	return whenceStr
 }
 
 func (t *tracingReadSeekCloser) Close() error {
