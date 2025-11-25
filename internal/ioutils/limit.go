@@ -15,16 +15,6 @@ func SkipNBytes(r io.Reader, n int64) (int64, error) {
 	return n, err
 }
 
-func SkipAllBytes(r io.Reader) (n int64, err error) {
-	switch r := r.(type) {
-	case io.Seeker:
-		n, err = r.Seek(0, io.SeekEnd)
-	default:
-		n, err = Copy(io.Discard, r)
-	}
-	return n, err
-}
-
 type limitedEndReadCloser struct {
 	io.Reader
 	innerReadCloser io.ReadCloser
