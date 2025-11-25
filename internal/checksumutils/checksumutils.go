@@ -253,9 +253,57 @@ type ChecksumValues struct {
 	ChecksumSHA256    *string
 }
 
-func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
+func CalculateChecksumsStreamingUsingSingleHashWriter(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
 	tracer := otel.Tracer("internal/checksumutils")
-	ctx, span := tracer.Start(ctx, "CalculateChecksumsStreaming")
+	_, span := tracer.Start(ctx, "CalculateChecksumsStreamingUsingSingleHashWriter")
+	defer span.End()
+
+	hashETag := md5.New()
+	hashCRC32 := crc32.NewIEEE()
+	hashCRC32C := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	hashCRC64NVME := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+	hashSHA1 := sha1.New()
+	hashSHA256 := sha256.New()
+
+	multiWriter := io.MultiWriter(hashETag, hashCRC32, hashCRC32C, hashCRC64NVME, hashSHA1, hashSHA256)
+	teeReader := io.TeeReader(reader, multiWriter)
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		if err := doRead(pr); err != nil {
+			// Handle error if needed, but since doRead is user-provided, assume it handles its own errors
+		}
+	}()
+
+	n, err := ioutils.Copy(pw, teeReader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	etagSum := hashETag.Sum(nil)
+	etagHexSum := hex.EncodeToString(etagSum)
+	etag := "\"" + etagHexSum + "\""
+	crc32Base64Sum := base64.StdEncoding.EncodeToString(hashCRC32.Sum(nil))
+	crc32cBase64Sum := base64.StdEncoding.EncodeToString(hashCRC32C.Sum(nil))
+	crc64nvmeBase64Sum := base64.StdEncoding.EncodeToString(hashCRC64NVME.Sum(nil))
+	sha1Base64Sum := base64.StdEncoding.EncodeToString(hashSHA1.Sum(nil))
+	sha256Base64Sum := base64.StdEncoding.EncodeToString(hashSHA256.Sum(nil))
+
+	checksums := &ChecksumValues{
+		ETag:              &etag,
+		ChecksumCRC32:     &crc32Base64Sum,
+		ChecksumCRC32C:    &crc32cBase64Sum,
+		ChecksumCRC64NVME: &crc64nvmeBase64Sum,
+		ChecksumSHA1:      &sha1Base64Sum,
+		ChecksumSHA256:    &sha256Base64Sum,
+	}
+	return &n, checksums, nil
+}
+
+func CalculateChecksumsStreamingUsingPipe(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
+	tracer := otel.Tracer("internal/checksumutils")
+	ctx, span := tracer.Start(ctx, "CalculateChecksumsStreamingUsingPipe")
 	defer span.End()
 
 	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)

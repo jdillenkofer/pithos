@@ -385,7 +385,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	if err != nil {
 		return nil, err
 	}
-	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreamingUsingPipe(ctx, reader, func(reader io.Reader) error {
 		data, err := io.ReadAll(reader)
 		if err != nil {
 			return err

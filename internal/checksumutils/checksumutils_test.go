@@ -3,10 +3,13 @@ package checksumutils
 import (
 	"hash/crc32"
 	"hash/crc64"
+	"io"
 	"math/rand"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
@@ -110,4 +113,63 @@ func TestCrc64NvmeCombine(t *testing.T) {
 			assert.Equal(t, fullDigest, combinedFullDigest)
 		})
 	}
+}
+
+// DelayedReader wraps an io.Reader and sleeps after each Read.
+type DelayedReader struct {
+	R     io.Reader
+	Delay time.Duration
+}
+
+func (d *DelayedReader) Read(p []byte) (int, error) {
+	n, err := d.R.Read(p)
+	time.Sleep(d.Delay)
+	return n, err
+}
+
+// DelayedWriter wraps an io.Writer and sleeps after each Write.
+type DelayedWriter struct {
+	W     io.Writer
+	Delay time.Duration
+}
+
+func (d *DelayedWriter) Write(p []byte) (int, error) {
+	n, err := d.W.Write(p)
+	time.Sleep(d.Delay)
+	return n, err
+}
+
+func SetupBenchmark(dataSize int64, readerDelay time.Duration, writerDelay time.Duration) (io.Reader, func(io.Reader) error, int64) {
+	baseReader := io.LimitReader(rand.New(rand.NewSource(1337)), dataSize)
+	inputReader := &DelayedReader{R: baseReader, Delay: readerDelay}
+	discardReadCallback := func(reader io.Reader) error {
+		writer := &DelayedWriter{W: io.Discard, Delay: writerDelay}
+		ioutils.Copy(writer, reader)
+		return nil
+	}
+	return inputReader, discardReadCallback, dataSize
+}
+
+func BenchmarkCalculateChecksumsStreaming(b *testing.B) {
+	const dataSize = int64(100 * 1024 * 1024)
+	const readerDelay = 5 * time.Millisecond
+	const writerDelay = 2 * time.Millisecond
+
+	b.Run("CalculateChecksumsStreamingUsingSingleHashWriter", func(b *testing.B) {
+		ctx := b.Context()
+		inputReader, discardReadCallback, dataSize := SetupBenchmark(dataSize, readerDelay, writerDelay)
+		b.SetBytes(dataSize)
+		for b.Loop() {
+			CalculateChecksumsStreamingUsingSingleHashWriter(ctx, inputReader, discardReadCallback)
+		}
+	})
+
+	b.Run("CalculateChecksumsStreamingUsingPipe", func(b *testing.B) {
+		ctx := b.Context()
+		inputReader, discardReadCallback, dataSize := SetupBenchmark(dataSize, readerDelay, writerDelay)
+		b.SetBytes(dataSize)
+		for b.Loop() {
+			CalculateChecksumsStreamingUsingPipe(ctx, inputReader, discardReadCallback)
+		}
+	})
 }

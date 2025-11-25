@@ -376,7 +376,7 @@ func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storag
 		return nil, err
 	}
 
-	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreamingUsingPipe(ctx, reader, func(reader io.Reader) error {
 		return mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
 	})
 	if err != nil {
@@ -523,7 +523,7 @@ func (mbs *metadataBlobStorage) UploadPart(ctx context.Context, bucketName stora
 		return nil, err
 	}
 
-	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+	originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreamingUsingPipe(ctx, reader, func(reader io.Reader) error {
 		return mbs.blobStore.PutBlob(ctx, tx, *blobId, reader)
 	})
 	if err != nil {
