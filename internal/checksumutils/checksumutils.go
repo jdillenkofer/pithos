@@ -13,9 +13,8 @@ import (
 	"io"
 	"math"
 
-	"go.opentelemetry.io/otel"
-
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"go.opentelemetry.io/otel"
 )
 
 // This was ported over from localstack and allows you to efficiently combine crc checksums
@@ -153,97 +152,6 @@ func CombineCrc64Nvme(a []byte, b []byte, bLen int64) []byte {
 	return createCombineFunction(0xAD93D23594C93659, 64, 0xFFFFFFFFFFFFFFFF)(a, b, bLen)
 }
 
-func calculateETag(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateETag")
-	defer span.End()
-
-	hash := md5.New()
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	hexSum := hex.EncodeToString(sum)
-	etag := "\"" + hexSum + "\""
-	return &etag, nil
-}
-
-func calculateCrc32(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateCrc32")
-	defer span.End()
-
-	hash := crc32.NewIEEE()
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateCrc32c(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateCrc32c")
-	defer span.End()
-
-	hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateCrc64Nvme(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateCrc64Nvme")
-	defer span.End()
-
-	hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateSha1(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateSha1")
-	defer span.End()
-
-	hash := sha1.New()
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
-func calculateSha256(ctx context.Context, reader io.Reader) (*string, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "calculateSha256")
-	defer span.End()
-
-	hash := sha256.New()
-	_, err := ioutils.Copy(hash, reader)
-	if err != nil {
-		return nil, err
-	}
-	sum := hash.Sum([]byte{})
-	base64Sum := base64.StdEncoding.EncodeToString(sum)
-	return &base64Sum, nil
-}
-
 type ChecksumValues struct {
 	ETag              *string
 	ChecksumCRC32     *string
@@ -253,216 +161,172 @@ type ChecksumValues struct {
 	ChecksumSHA256    *string
 }
 
-func CalculateChecksumsStreamingUsingSingleHashWriter(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
+type channelReader struct {
+	ch  <-chan []byte
+	buf []byte
+	pos int
+}
+
+func (r *channelReader) Read(p []byte) (n int, err error) {
+	if r.pos >= len(r.buf) {
+		var ok bool
+		r.buf, ok = <-r.ch
+		if !ok {
+			return 0, io.EOF
+		}
+		r.pos = 0
+	}
+	n = copy(p, r.buf[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
 	tracer := otel.Tracer("internal/checksumutils")
-	_, span := tracer.Start(ctx, "CalculateChecksumsStreamingUsingSingleHashWriter")
+	_, span := tracer.Start(ctx, "CalculateChecksumsStreaming")
 	defer span.End()
 
-	hashETag := md5.New()
-	hashCRC32 := crc32.NewIEEE()
-	hashCRC32C := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	hashCRC64NVME := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-	hashSHA1 := sha1.New()
-	hashSHA256 := sha256.New()
+	const chunkSize = 5 * 1024 * 1024 // 5MB
+	dataChan := make(chan []byte, 3)
+	var consumerChans [7]chan []byte
+	for i := range consumerChans {
+		consumerChans[i] = make(chan []byte, 3)
+	}
 
-	multiWriter := io.MultiWriter(hashETag, hashCRC32, hashCRC32C, hashCRC64NVME, hashSHA1, hashSHA256)
-	teeReader := io.TeeReader(reader, multiWriter)
-
-	pr, pw := io.Pipe()
+	// Broadcaster goroutine
 	go func() {
-		defer pw.Close()
-		if err := doRead(pr); err != nil {
-			// Handle error if needed, but since doRead is user-provided, assume it handles its own errors
+		for chunk := range dataChan {
+			for _, ch := range consumerChans {
+				ch <- chunk
+			}
+		}
+		for _, ch := range consumerChans {
+			close(ch)
 		}
 	}()
 
-	n, err := ioutils.Copy(pw, teeReader)
-	if err != nil {
-		return nil, nil, err
-	}
+	sizeChan := make(chan int64, 1)
+	errChan := make(chan error, 8) // Buffer for all possible error sources
 
-	etagSum := hashETag.Sum(nil)
-	etagHexSum := hex.EncodeToString(etagSum)
-	etag := "\"" + etagHexSum + "\""
-	crc32Base64Sum := base64.StdEncoding.EncodeToString(hashCRC32.Sum(nil))
-	crc32cBase64Sum := base64.StdEncoding.EncodeToString(hashCRC32C.Sum(nil))
-	crc64nvmeBase64Sum := base64.StdEncoding.EncodeToString(hashCRC64NVME.Sum(nil))
-	sha1Base64Sum := base64.StdEncoding.EncodeToString(hashSHA1.Sum(nil))
-	sha256Base64Sum := base64.StdEncoding.EncodeToString(hashSHA256.Sum(nil))
-
-	checksums := &ChecksumValues{
-		ETag:              &etag,
-		ChecksumCRC32:     &crc32Base64Sum,
-		ChecksumCRC32C:    &crc32cBase64Sum,
-		ChecksumCRC64NVME: &crc64nvmeBase64Sum,
-		ChecksumSHA1:      &sha1Base64Sum,
-		ChecksumSHA256:    &sha256Base64Sum,
-	}
-	return &n, checksums, nil
-}
-
-func CalculateChecksumsStreamingUsingPipe(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
-	tracer := otel.Tracer("internal/checksumutils")
-	ctx, span := tracer.Start(ctx, "CalculateChecksumsStreamingUsingPipe")
-	defer span.End()
-
-	readers, writer, closer := ioutils.PipeWriterIntoMultipleReaders(7)
-
-	doneChan := make(chan struct{}, 1)
-	errChan := make(chan error, 1)
+	// Reader goroutine
 	go func() {
-		err := doRead(readers[0])
-		if err != nil {
+		defer close(dataChan)
+		buf := make([]byte, chunkSize)
+		var total int64
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				dataChan <- chunk
+				total += int64(n)
+			}
+			if err != nil {
+				if err == io.EOF {
+					sizeChan <- total
+					return
+				}
+				errChan <- err
+				return
+			}
+		}
+	}()
+
+	// doRead goroutine
+	go func() {
+		r := &channelReader{ch: consumerChans[0]}
+		if err := doRead(r); err != nil {
 			errChan <- err
 			return
 		}
-		doneChan <- struct{}{}
+		errChan <- nil // Signal success
 	}()
 
+	// Checksum goroutines
 	etagChan := make(chan string, 1)
-	errChan2 := make(chan error, 1)
 	go func() {
-		etag, err := calculateETag(ctx, readers[1])
-		if err != nil {
-			errChan2 <- err
-			return
-		}
-		etagChan <- *etag
+		hash := md5.New()
+		r := &channelReader{ch: consumerChans[1]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		hexSum := hex.EncodeToString(sum)
+		etag := "\"" + hexSum + "\""
+		etagChan <- etag
 	}()
 
 	crc32Chan := make(chan string, 1)
-	errChan3 := make(chan error, 1)
 	go func() {
-		crc32, err := calculateCrc32(ctx, readers[2])
-		if err != nil {
-			errChan3 <- err
-			return
-		}
-		crc32Chan <- *crc32
+		hash := crc32.NewIEEE()
+		r := &channelReader{ch: consumerChans[2]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		base64Sum := base64.StdEncoding.EncodeToString(sum)
+		crc32Chan <- base64Sum
 	}()
 
 	crc32cChan := make(chan string, 1)
-	errChan4 := make(chan error, 1)
 	go func() {
-		crc32c, err := calculateCrc32c(ctx, readers[3])
-		if err != nil {
-			errChan4 <- err
-			return
-		}
-		crc32cChan <- *crc32c
+		hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+		r := &channelReader{ch: consumerChans[3]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		base64Sum := base64.StdEncoding.EncodeToString(sum)
+		crc32cChan <- base64Sum
 	}()
 
 	crc64nvmeChan := make(chan string, 1)
-	errChan5 := make(chan error, 1)
 	go func() {
-		crc64nvme, err := calculateCrc64Nvme(ctx, readers[4])
-		if err != nil {
-			errChan5 <- err
-			return
-		}
-		crc64nvmeChan <- *crc64nvme
+		hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+		r := &channelReader{ch: consumerChans[4]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		base64Sum := base64.StdEncoding.EncodeToString(sum)
+		crc64nvmeChan <- base64Sum
 	}()
 
 	sha1Chan := make(chan string, 1)
-	errChan6 := make(chan error, 1)
 	go func() {
-		sha1, err := calculateSha1(ctx, readers[5])
-		if err != nil {
-			errChan6 <- err
-			return
-		}
-		sha1Chan <- *sha1
+		hash := sha1.New()
+		r := &channelReader{ch: consumerChans[5]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		base64Sum := base64.StdEncoding.EncodeToString(sum)
+		sha1Chan <- base64Sum
 	}()
 
 	sha256Chan := make(chan string, 1)
-	errChan7 := make(chan error, 1)
 	go func() {
-		sha256, err := calculateSha256(ctx, readers[6])
-		if err != nil {
-			errChan7 <- err
-			return
-		}
-		sha256Chan <- *sha256
+		hash := sha256.New()
+		r := &channelReader{ch: consumerChans[6]}
+		ioutils.Copy(hash, r)
+		sum := hash.Sum(nil)
+		base64Sum := base64.StdEncoding.EncodeToString(sum)
+		sha256Chan <- base64Sum
 	}()
 
-	// @Note: We need a anonymous function here,
-	// because defers are always scoped to the function.
-	// But if we don't directly defer close after the copy,
-	// we deadlock the program
-	originalSize, err := func() (*int64, error) {
-		defer closer.Close()
-		originalSize, err := ioutils.Copy(writer, reader)
-		if err != nil {
-			return nil, err
-		}
-		return &originalSize, nil
-	}()
-	if err != nil {
+	// Collect results
+	// First, wait for either size or error from reader
+	var n int64
+	select {
+	case n = <-sizeChan:
+		// Reader completed successfully, continue
+	case err := <-errChan:
+		// Reader failed
 		return nil, nil, err
 	}
 
-	select {
-	case <-doneChan:
-	case err := <-errChan:
-		if err != nil {
-			return nil, nil, err
-		}
+	// Now wait for doRead to complete
+	if err := <-errChan; err != nil {
+		return nil, nil, err
 	}
 
-	var etag string
-	select {
-	case etag = <-etagChan:
-	case err := <-errChan2:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC32 string
-	select {
-	case checksumCRC32 = <-crc32Chan:
-	case err := <-errChan3:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC32C string
-	select {
-	case checksumCRC32C = <-crc32cChan:
-	case err := <-errChan4:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumCRC64NVME string
-	select {
-	case checksumCRC64NVME = <-crc64nvmeChan:
-	case err := <-errChan5:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumSHA1 string
-	select {
-	case checksumSHA1 = <-sha1Chan:
-	case err := <-errChan6:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	var checksumSHA256 string
-	select {
-	case checksumSHA256 = <-sha256Chan:
-	case err := <-errChan7:
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
+	// All goroutines succeeded, collect checksums
+	etag := <-etagChan
+	checksumCRC32 := <-crc32Chan
+	checksumCRC32C := <-crc32cChan
+	checksumCRC64NVME := <-crc64nvmeChan
+	checksumSHA1 := <-sha1Chan
+	checksumSHA256 := <-sha256Chan
 	checksums := &ChecksumValues{
 		ETag:              &etag,
 		ChecksumCRC32:     &checksumCRC32,
@@ -471,5 +335,5 @@ func CalculateChecksumsStreamingUsingPipe(ctx context.Context, reader io.Reader,
 		ChecksumSHA1:      &checksumSHA1,
 		ChecksumSHA256:    &checksumSHA256,
 	}
-	return originalSize, checksums, nil
+	return &n, checksums, nil
 }
