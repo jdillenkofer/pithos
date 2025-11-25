@@ -1,6 +1,7 @@
 package tink
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -518,9 +519,12 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 	// Use lazy initialization to defer header parsing and DEK decryption until first read
 	// This allows streaming to start immediately without blocking on KMS/Vault operations
 	return ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+		// Wrap in buffered reader to reduce network round trips
+		bufferedRC := io.NopCloser(bufio.NewReaderSize(rc, 64*1024)) // 64KB buffer
+
 		// Read the header length (4 bytes big-endian)
 		lengthBytes := make([]byte, 4)
-		if _, err := io.ReadFull(rc, lengthBytes); err != nil {
+		if _, err := io.ReadFull(bufferedRC, lengthBytes); err != nil {
 			rc.Close()
 			return nil, err
 		}
@@ -529,7 +533,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 
 		// Read and parse the header
 		headerBytes := make([]byte, headerLen)
-		if _, err := io.ReadFull(rc, headerBytes); err != nil {
+		if _, err := io.ReadFull(bufferedRC, headerBytes); err != nil {
 			rc.Close()
 			return nil, err
 		}
@@ -565,7 +569,7 @@ func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sq
 		}
 
 		// Create a decrypting reader for the remaining data
-		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, blobId.Bytes())
+		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(bufferedRC, blobId.Bytes())
 		if err != nil {
 			rc.Close()
 			return nil, err
