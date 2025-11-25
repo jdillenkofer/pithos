@@ -472,17 +472,13 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 	go func() {
 		defer encryptWriter.Close()
 
-		// Write the header length (4 bytes big-endian)
+		// Combine header length and header into a single write
 		headerLen := uint32(len(headerBytes))
-		lengthBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lengthBytes, headerLen)
-		if _, err := encryptWriter.Write(lengthBytes); err != nil {
-			encryptWriter.CloseWithError(err)
-			return
-		}
+		combinedHeader := make([]byte, 4+len(headerBytes))
+		binary.BigEndian.PutUint32(combinedHeader, headerLen)
+		copy(combinedHeader[4:], headerBytes)
 
-		// Write the header
-		if _, err := encryptWriter.Write(headerBytes); err != nil {
+		if _, err := encryptWriter.Write(combinedHeader); err != nil {
 			encryptWriter.CloseWithError(err)
 			return
 		}
