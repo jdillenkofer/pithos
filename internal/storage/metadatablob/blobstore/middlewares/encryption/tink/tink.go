@@ -468,46 +468,46 @@ func (mw *TinkEncryptionBlobStoreMiddleware) PutBlob(ctx context.Context, tx *sq
 	}
 
 	// Create a pipe for the combined data (header + encrypted blob)
-	encryptReader, encryptWriter := io.Pipe()
+	pipeReader, pipeWriter := io.Pipe()
 	go func() {
-		defer encryptWriter.Close()
+		// Make sure we always close writer
+		defer pipeWriter.Close()
 
-		// Write the header length (4 bytes big-endian)
-		headerLen := uint32(len(headerBytes))
-		lengthBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(lengthBytes, headerLen)
-		if _, err := encryptWriter.Write(lengthBytes); err != nil {
-			encryptWriter.CloseWithError(err)
+		// --- 1. Write header (plaintext) into the same pipe ---
+		// Write the header length + header bytes (4 bytes big-endian length + header)
+		buf := make([]byte, 4+len(headerBytes))
+		binary.BigEndian.PutUint32(buf[:4], uint32(len(headerBytes)))
+		copy(buf[4:], headerBytes)
+		if _, err := pipeWriter.Write(buf); err != nil {
+			pipeWriter.CloseWithError(err)
 			return
 		}
 
-		// Write the header
-		if _, err := encryptWriter.Write(headerBytes); err != nil {
-			encryptWriter.CloseWithError(err)
-			return
-		}
-
-		// Now stream encrypt the blob data with the DEK
-		streamWriter, err := dekStreamingAEAD.NewEncryptingWriter(encryptWriter, blobId.Bytes())
+		// --- 2. Wrap SAME PipeWriter in encryption writer ---
+		streamWriter, err := dekStreamingAEAD.NewEncryptingWriter(
+			pipeWriter,
+			blobId.Bytes(),
+		)
 		if err != nil {
-			encryptWriter.CloseWithError(err)
+			pipeWriter.CloseWithError(err)
 			return
 		}
 
-		// Stream copy from reader to encrypting writer
+		// --- 3. Stream body → EncryptingWriter → PipeWriter ---
 		if _, err := ioutils.Copy(streamWriter, reader); err != nil {
-			encryptWriter.CloseWithError(err)
+			pipeWriter.CloseWithError(err)
 			return
 		}
 
-		// Close the stream writer to finalize encryption
+		// --- 4. Finalize encryption ---
 		if err := streamWriter.Close(); err != nil {
-			encryptWriter.CloseWithError(err)
+			pipeWriter.CloseWithError(err)
 			return
 		}
+
 	}()
 
-	return mw.innerBlobStore.PutBlob(ctx, tx, blobId, encryptReader)
+	return mw.innerBlobStore.PutBlob(ctx, tx, blobId, pipeReader)
 }
 
 func (mw *TinkEncryptionBlobStoreMiddleware) GetBlob(ctx context.Context, tx *sql.Tx, blobId blobstore.BlobId) (io.ReadCloser, error) {
