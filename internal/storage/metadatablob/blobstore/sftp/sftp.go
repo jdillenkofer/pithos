@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,6 +72,7 @@ func (s *sftpBlobStore) reconnectSftpClient() error {
 	defer s.mu.Unlock()
 
 	if s.client != nil {
+		slog.Info(fmt.Sprintf("SFTP reconnecting to %s after waiting %v", s.addr, waitDurationBeforeRetry))
 		// If we have a retry wait a couple of seconds before continuing
 		time.Sleep(waitDurationBeforeRetry)
 		s.client.Close()
@@ -82,17 +85,20 @@ func (s *sftpBlobStore) reconnectSftpClient() error {
 
 	client, err := ssh.Dial("tcp", s.addr, s.clientConfig)
 	if err != nil {
+		slog.Error(fmt.Sprintf("SFTP failed to establish SSH connection to %s: %v", s.addr, err))
 		return err
 	}
 	s.sshClient = client // Store SSH client reference
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
+		slog.Error(fmt.Sprintf("SFTP failed to create SFTP client for %s: %v", s.addr, err))
 		client.Close()
 		s.sshClient = nil
 		return err
 	}
 	s.client = sftpClient
+	slog.Info(fmt.Sprintf("SFTP successfully reconnected to %s", s.addr))
 	return nil
 }
 
@@ -108,12 +114,15 @@ func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry 
 
 			retries += 1
 			if retries < maxRetries {
+				slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, attempting reconnect", retries, maxRetries, err))
 				err = preRetry()
 				if err != nil {
+					slog.Error(fmt.Sprintf("SFTP reconnect failed: %v", err))
 					return empty, err
 				}
 				continue
 			}
+			slog.Error(fmt.Sprintf("SFTP operation failed after %d retries: %v", retries, err))
 			return empty, err
 		}
 		return t, nil
