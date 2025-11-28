@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
 const contentSHA256Header = "x-amz-content-sha256"
@@ -188,16 +190,23 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 }
 
 func generateHashedPayload(r *http.Request) (*string, error) {
-	// @TODO: maybe cache request body to disk
-	bodyBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	reader, err := ioutils.NewDiskCachedReadSeekCloser(r.Body)
+	if err != nil {
+		return nil, err
+	}
 	sha256Hash := sha256.New()
-	_, err := sha256Hash.Write(bodyBytes)
+	_, err = ioutils.Copy(sha256Hash, reader)
 	if err != nil {
 		return nil, err
 	}
 	dataSha256 := sha256Hash.Sum(nil)
 	hexSha256 := hex.EncodeToString(dataSha256)
+
+	_, err = reader.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+	r.Body = reader
 	return &hexSha256, nil
 }
 
