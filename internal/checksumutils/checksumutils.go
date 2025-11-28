@@ -161,172 +161,39 @@ type ChecksumValues struct {
 	ChecksumSHA256    *string
 }
 
-type channelReader struct {
-	ch  <-chan []byte
-	buf []byte
-	pos int
-}
-
-func (r *channelReader) Read(p []byte) (n int, err error) {
-	if r.pos >= len(r.buf) {
-		var ok bool
-		r.buf, ok = <-r.ch
-		if !ok {
-			return 0, io.EOF
-		}
-		r.pos = 0
-	}
-	n = copy(p, r.buf[r.pos:])
-	r.pos += n
-	return n, nil
-}
-
 func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
 	tracer := otel.Tracer("internal/checksumutils")
 	_, span := tracer.Start(ctx, "CalculateChecksumsStreaming")
 	defer span.End()
 
-	const chunkSize = 5 * 1024 * 1024 // 5MB
-	dataChan := make(chan []byte, 3)
-	var consumerChans [7]chan []byte
-	for i := range consumerChans {
-		consumerChans[i] = make(chan []byte, 3)
-	}
+	// Create a TeeReader that writes to all hash functions simultaneously
+	etagHash := md5.New()
+	crc32Hash := crc32.NewIEEE()
+	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	crc64nvmeHash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+	sha1Hash := sha1.New()
+	sha256Hash := sha256.New()
 
-	// Broadcaster goroutine
-	go func() {
-		for chunk := range dataChan {
-			for _, ch := range consumerChans {
-				ch <- chunk
-			}
-		}
-		for _, ch := range consumerChans {
-			close(ch)
-		}
-	}()
+	multiWriter := io.MultiWriter(etagHash, crc32Hash, crc32cHash, crc64nvmeHash, sha1Hash, sha256Hash)
+	teeReader := io.TeeReader(reader, multiWriter)
 
-	sizeChan := make(chan int64, 1)
-	errChan := make(chan error, 8) // Buffer for all possible error sources
+	// Track bytes read
+	var bytesRead int64
+	countingReader := ioutils.NewCountingReader(teeReader, &bytesRead)
 
-	// Reader goroutine
-	go func() {
-		defer close(dataChan)
-		buf := make([]byte, chunkSize)
-		var total int64
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
-				dataChan <- chunk
-				total += int64(n)
-			}
-			if err != nil {
-				if err == io.EOF {
-					sizeChan <- total
-					return
-				}
-				errChan <- err
-				return
-			}
-		}
-	}()
-
-	// doRead goroutine
-	go func() {
-		r := &channelReader{ch: consumerChans[0]}
-		if err := doRead(r); err != nil {
-			errChan <- err
-			return
-		}
-		errChan <- nil // Signal success
-	}()
-
-	// Checksum goroutines
-	etagChan := make(chan string, 1)
-	go func() {
-		hash := md5.New()
-		r := &channelReader{ch: consumerChans[1]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		hexSum := hex.EncodeToString(sum)
-		etag := "\"" + hexSum + "\""
-		etagChan <- etag
-	}()
-
-	crc32Chan := make(chan string, 1)
-	go func() {
-		hash := crc32.NewIEEE()
-		r := &channelReader{ch: consumerChans[2]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		base64Sum := base64.StdEncoding.EncodeToString(sum)
-		crc32Chan <- base64Sum
-	}()
-
-	crc32cChan := make(chan string, 1)
-	go func() {
-		hash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-		r := &channelReader{ch: consumerChans[3]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		base64Sum := base64.StdEncoding.EncodeToString(sum)
-		crc32cChan <- base64Sum
-	}()
-
-	crc64nvmeChan := make(chan string, 1)
-	go func() {
-		hash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
-		r := &channelReader{ch: consumerChans[4]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		base64Sum := base64.StdEncoding.EncodeToString(sum)
-		crc64nvmeChan <- base64Sum
-	}()
-
-	sha1Chan := make(chan string, 1)
-	go func() {
-		hash := sha1.New()
-		r := &channelReader{ch: consumerChans[5]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		base64Sum := base64.StdEncoding.EncodeToString(sum)
-		sha1Chan <- base64Sum
-	}()
-
-	sha256Chan := make(chan string, 1)
-	go func() {
-		hash := sha256.New()
-		r := &channelReader{ch: consumerChans[6]}
-		ioutils.Copy(hash, r)
-		sum := hash.Sum(nil)
-		base64Sum := base64.StdEncoding.EncodeToString(sum)
-		sha256Chan <- base64Sum
-	}()
-
-	// Collect results
-	// First, wait for either size or error from reader
-	var n int64
-	select {
-	case n = <-sizeChan:
-		// Reader completed successfully, continue
-	case err := <-errChan:
-		// Reader failed
+	// Execute doRead with the counting reader
+	if err := doRead(countingReader); err != nil {
 		return nil, nil, err
 	}
 
-	// Now wait for doRead to complete
-	if err := <-errChan; err != nil {
-		return nil, nil, err
-	}
+	// Compute checksums
+	etag := "\"" + hex.EncodeToString(etagHash.Sum(nil)) + "\""
+	checksumCRC32 := base64.StdEncoding.EncodeToString(crc32Hash.Sum(nil))
+	checksumCRC32C := base64.StdEncoding.EncodeToString(crc32cHash.Sum(nil))
+	checksumCRC64NVME := base64.StdEncoding.EncodeToString(crc64nvmeHash.Sum(nil))
+	checksumSHA1 := base64.StdEncoding.EncodeToString(sha1Hash.Sum(nil))
+	checksumSHA256 := base64.StdEncoding.EncodeToString(sha256Hash.Sum(nil))
 
-	// All goroutines succeeded, collect checksums
-	etag := <-etagChan
-	checksumCRC32 := <-crc32Chan
-	checksumCRC32C := <-crc32cChan
-	checksumCRC64NVME := <-crc64nvmeChan
-	checksumSHA1 := <-sha1Chan
-	checksumSHA256 := <-sha256Chan
 	checksums := &ChecksumValues{
 		ETag:              &etag,
 		ChecksumCRC32:     &checksumCRC32,
@@ -335,5 +202,6 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 		ChecksumSHA1:      &checksumSHA1,
 		ChecksumSHA256:    &checksumSHA256,
 	}
-	return &n, checksums, nil
+
+	return &bytesRead, checksums, nil
 }

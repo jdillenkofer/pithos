@@ -27,3 +27,21 @@ func (s *statsReadCloser) Read(p []byte) (int, error) {
 func (s *statsReadCloser) Close() error {
 	return s.innerReadCloser.Close()
 }
+
+type CountingReader struct {
+	Reader io.Reader
+	Count  *int64
+}
+
+func NewCountingReader(reader io.Reader, count *int64) *CountingReader {
+	return &CountingReader{
+		Reader: reader,
+		Count:  count,
+	}
+}
+
+func (r *CountingReader) Read(p []byte) (n int, err error) {
+	n, err = r.Reader.Read(p)
+	*r.Count += int64(n)
+	return n, err
+}
