@@ -163,7 +163,7 @@ func (s *sftpBlobStore) PutBlob(ctx context.Context, tx *sql.Tx, blobId blobstor
 		return err
 	}
 	defer f.Close()
-	_, err = ioutils.Copy(f, reader)
+	_, err = f.ReadFrom(reader)
 	if err != nil {
 		return err
 	}
