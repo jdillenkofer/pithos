@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
@@ -58,11 +59,12 @@ end
 
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
+const subcommandBenchmarkStorage = "benchmark-storage"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage))
 		os.Exit(1)
 	}
 
@@ -74,8 +76,10 @@ func main() {
 		serve(ctx, logLevelVar)
 	case subcommandMigrateStorage:
 		migrateStorage(ctx)
+	case subcommandBenchmarkStorage:
+		benchmarkStorage(ctx)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage))
 		os.Exit(1)
 	}
 }
@@ -294,4 +298,78 @@ func migrateStorage(ctx context.Context) {
 		os.Exit(1)
 	}
 	slog.Info("Storage migration successfully completed!")
+}
+
+func benchmarkStorage(ctx context.Context) {
+	if len(os.Args) < 3 {
+		slog.Info(fmt.Sprintf("Usage: %s %s [config.json]", os.Args[0], subcommandBenchmarkStorage))
+		os.Exit(1)
+	}
+	storageConfig := os.Args[2]
+
+	dbContainer, storage := loadStorageConfiguration(storageConfig, prometheus.NewRegistry())
+
+	dbs := dbContainer.Dbs()
+
+	err := storage.Start(ctx)
+	if err != nil {
+		slog.Error(fmt.Sprint("Couldn't start storage: ", err))
+		os.Exit(1)
+	}
+
+	defer func() {
+		err := storage.Stop(ctx)
+		if err != nil {
+			slog.Error(fmt.Sprint("Couldn't stop storage: ", err))
+			os.Exit(1)
+		}
+		for _, db := range dbs {
+			err = db.Close()
+			if err != nil {
+				slog.Error(fmt.Sprint("Couldn't close database:", err))
+				os.Exit(1)
+			}
+		}
+	}()
+
+	slog.Info("Storage benchmark started!")
+	benchmarkResult, err := benchmark.BenchmarkStorage(ctx, storage)
+	if err != nil {
+		slog.Error(fmt.Sprint("Could not benchmark storage: ", err))
+		os.Exit(1)
+	}
+	slog.Info("Storage benchmark successfully completed!")
+	for _, sb := range benchmarkResult.SizeBenchmarks {
+		sizeStr := formatSize(sb.SizeBytes)
+		slog.Info(fmt.Sprintf("%s objects - Upload: %s, Download: %s",
+			sizeStr,
+			formatSpeed(sb.UploadSpeedBytesPerSecond),
+			formatSpeed(sb.DownloadSpeedBytesPerSecond)))
+	}
+}
+
+func formatSpeed(bytesPerSecond float64) string {
+	units := []string{"B/s", "KB/s", "MB/s", "GB/s", "TB/s"}
+	size := bytesPerSecond
+	unitIndex := 0
+
+	for size >= 1000 && unitIndex < len(units)-1 {
+		size /= 1000
+		unitIndex++
+	}
+
+	return fmt.Sprintf("%.2f %s", size, units[unitIndex])
+}
+
+func formatSize(bytes int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	size := float64(bytes)
+	unitIndex := 0
+
+	for size >= 1000 && unitIndex < len(units)-1 {
+		size /= 1000
+		unitIndex++
+	}
+
+	return fmt.Sprintf("%.0f %s", size, units[unitIndex])
 }
