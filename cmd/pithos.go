@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
+	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
@@ -60,11 +63,12 @@ end
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
+const subcommandValidateStorage = "validate-storage"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
 		os.Exit(1)
 	}
 
@@ -78,8 +82,10 @@ func main() {
 		migrateStorage(ctx)
 	case subcommandBenchmarkStorage:
 		benchmarkStorage(ctx)
+	case subcommandValidateStorage:
+		validateStorage(ctx)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
 		os.Exit(1)
 	}
 }
@@ -372,4 +378,95 @@ func formatSize(bytes int64) string {
 	}
 
 	return fmt.Sprintf("%.0f %s", size, units[unitIndex])
+}
+
+func validateStorage(ctx context.Context) {
+	// Define flags
+	fs := flag.NewFlagSet(subcommandValidateStorage, flag.ExitOnError)
+	deleteCorrupted := fs.Bool("delete-corrupted", false, "Delete corrupted objects")
+	force := fs.Bool("force", false, "Force deletion without confirmation")
+	jsonOutput := fs.Bool("json", false, "Output results in JSON format")
+	outputPath := fs.String("output", "", "Path to write validation report (optional)")
+
+	// Parse flags
+	// os.Args[0] is program name, os.Args[1] is subcommand
+	// We need to parse starting from os.Args[2]
+	if len(os.Args) < 3 {
+		slog.Info(fmt.Sprintf("Usage: %s %s [config.json] [options]", os.Args[0], subcommandValidateStorage))
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// The config file is the first argument after subcommand
+	storageConfigPath := os.Args[2]
+
+	// Parse remaining flags
+	if len(os.Args) > 3 {
+		fs.Parse(os.Args[3:])
+	}
+
+	// Load storage
+	dbContainer, storage := loadStorageConfiguration(storageConfigPath, prometheus.NewRegistry())
+
+	dbs := dbContainer.Dbs()
+
+	err := storage.Start(ctx)
+	if err != nil {
+		slog.Error(fmt.Sprint("Couldn't start storage: ", err))
+		os.Exit(1)
+	}
+
+	defer func() {
+		err := storage.Stop(ctx)
+		if err != nil {
+			slog.Error(fmt.Sprint("Couldn't stop storage: ", err))
+			os.Exit(1)
+		}
+		for _, db := range dbs {
+			err = db.Close()
+			if err != nil {
+				slog.Error(fmt.Sprint("Couldn't close database:", err))
+				os.Exit(1)
+			}
+		}
+	}()
+
+	slog.Info("Storage integrity validation started!")
+
+	validator := integrity.NewValidator(storage, dbContainer, *deleteCorrupted, *force)
+	report, err := validator.ValidateAll(ctx)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Validation failed: %v", err))
+		os.Exit(1)
+	}
+
+	// Output results
+	var outputWriter io.Writer = os.Stdout
+	if *outputPath != "" {
+		f, err := os.Create(*outputPath)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Failed to create output file: %v", err))
+			os.Exit(1)
+		}
+		defer f.Close()
+		outputWriter = f
+	}
+
+	if *jsonOutput {
+		err = integrity.OutputJSON(report, outputWriter)
+	} else {
+		err = integrity.OutputHumanReadable(report, outputWriter)
+	}
+
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to write report: %v", err))
+		os.Exit(1)
+	}
+
+	if report.HasFailures() {
+		slog.Error("Integrity validation found failures.")
+		os.Exit(1)
+	}
+
+	slog.Info("Storage integrity validation successfully completed!")
 }
