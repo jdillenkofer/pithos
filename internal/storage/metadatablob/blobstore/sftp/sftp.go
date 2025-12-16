@@ -24,8 +24,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const maxStpRetries = 3
-const waitDurationBeforeRetry = 3 * time.Second
+const maxStpRetries = 5
 
 type sftpBlobStore struct {
 	addr         string
@@ -72,9 +71,7 @@ func (s *sftpBlobStore) reconnectSftpClient() error {
 	defer s.mu.Unlock()
 
 	if s.client != nil {
-		slog.Info(fmt.Sprintf("SFTP reconnecting to %s after waiting %v", s.addr, waitDurationBeforeRetry))
-		// If we have a retry wait a couple of seconds before continuing
-		time.Sleep(waitDurationBeforeRetry)
+		slog.Info(fmt.Sprintf("SFTP reconnecting to %s", s.addr))
 		s.client.Close()
 	}
 
@@ -102,6 +99,24 @@ func (s *sftpBlobStore) reconnectSftpClient() error {
 	return nil
 }
 
+// getBackoffDuration returns the backoff duration for a given retry attempt.
+// First retry is immediate, subsequent retries use exponential backoff:
+// attempt 1: 0ms, attempt 2: 100ms, attempt 3: 1s, attempt 4: 5s, attempt 5: 10s
+func getBackoffDuration(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 0 // First retry is immediate
+	case 2:
+		return 100 * time.Millisecond
+	case 3:
+		return 1 * time.Second
+	case 4:
+		return 5 * time.Second
+	default:
+		return 10 * time.Second
+	}
+}
+
 func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry func() error, shouldIgnoreError func(error) bool) (T, error) {
 	retries := 0
 	var empty T
@@ -114,7 +129,13 @@ func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry 
 
 			retries += 1
 			if retries < maxRetries {
-				slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, attempting reconnect", retries, maxRetries, err))
+				backoff := getBackoffDuration(retries)
+				if backoff > 0 {
+					slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, waiting %v before reconnect", retries, maxRetries, err, backoff))
+					time.Sleep(backoff)
+				} else {
+					slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, attempting immediate reconnect", retries, maxRetries, err))
+				}
 				err = preRetry()
 				if err != nil {
 					slog.Error(fmt.Sprintf("SFTP reconnect failed: %v", err))
