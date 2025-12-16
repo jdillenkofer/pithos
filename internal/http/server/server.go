@@ -856,60 +856,86 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-type byteRange struct {
-	start *int64
-	end   *int64
-}
-
-func (br byteRange) generateContentRangeValue(length int64) string {
+// generateContentRangeValue creates a Content-Range header value from a storage.ByteRange.
+// For suffix ranges (Start=nil), it uses the object size to calculate the actual range.
+func generateContentRangeValue(br storage.ByteRange, objectSize int64) string {
 	start := int64(0)
-	if br.start != nil {
-		start = *br.start
+	if br.Start != nil {
+		start = *br.Start
+	} else if br.End != nil {
+		// Suffix range: calculate start from object size
+		suffixLength := min(*br.End, objectSize)
+		start = objectSize - suffixLength
 	}
-	end := length - 1
-	if br.end != nil {
-		end = *br.end
+
+	end := objectSize - 1
+	if br.Start != nil && br.End != nil {
+		// Normal range with explicit end (exclusive, so subtract 1 for inclusive)
+		end = *br.End - 1
+	} else if br.Start == nil && br.End != nil {
+		// Suffix range
+		end = objectSize - 1
 	}
-	contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, length)
+
+	contentRangeValue := fmt.Sprintf("bytes %d-%d/%d", start, end, objectSize)
 	return contentRangeValue
 }
 
 var errInvalidByteRange error = fmt.Errorf("invalid byte range")
 
-func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
-	byteRanges := []byteRange{}
-	if rangeHeader != "" {
-		rangeUnitAndRangesSplit := strings.SplitN(rangeHeader, "=", 2)
-		if len(rangeUnitAndRangesSplit) != 2 || len(rangeUnitAndRangesSplit) > 0 && rangeUnitAndRangesSplit[0] != "bytes" {
-			return nil, errInvalidByteRange
+// parseRangeHeader parses HTTP Range header and returns storage.ByteRange array.
+// It converts HTTP ranges (inclusive end) to storage ranges (exclusive end) automatically.
+// Suffix ranges (bytes=-N) are passed through as-is to be resolved by the storage layer.
+func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
+	var ranges []storage.ByteRange
+	if rangeHeader == "" {
+		return ranges, nil
+	}
+
+	rangeUnitAndRangesSplit := strings.SplitN(rangeHeader, "=", 2)
+	if len(rangeUnitAndRangesSplit) != 2 || rangeUnitAndRangesSplit[0] != "bytes" {
+		return nil, errInvalidByteRange
+	}
+
+	rangesSplit := strings.SplitSeq(rangeUnitAndRangesSplit[1], ",")
+	for rangeVal := range rangesSplit {
+		rangeVal = strings.TrimSpace(rangeVal)
+		byteSplit := strings.SplitN(rangeVal, "-", 2)
+		if len(byteSplit) != 2 {
+			continue
 		}
-		ranges := rangeUnitAndRangesSplit[1]
-		rangesSplit := strings.Split(ranges, ",")
-		for _, rangeVal := range rangesSplit {
-			var start *int64 = nil
-			var end *int64 = nil
 
-			rangeVal = strings.TrimSpace(rangeVal)
-			byteSplit := strings.SplitN(rangeVal, "-", 2)
-			if len(byteSplit) == 2 {
-				startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
-				if err == nil {
-					start = &startByte
-				}
-				endByte, err := strconv.ParseInt(byteSplit[1], 10, 64)
-				if err == nil {
-					end = &endByte
-				}
-			}
+		var start *int64
+		var end *int64
 
-			byteRangeVal := byteRange{
-				start: start,
-				end:   end,
+		if byteSplit[0] != "" {
+			startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
+			if err == nil {
+				start = &startByte
 			}
-			byteRanges = append(byteRanges, byteRangeVal)
+		}
+		if byteSplit[1] != "" {
+			endByte, err := strconv.ParseInt(byteSplit[1], 10, 64)
+			if err == nil {
+				end = &endByte
+			}
+		}
+
+		if start == nil && end != nil {
+			// Suffix range (bytes=-N): pass through as-is
+			ranges = append(ranges, storage.ByteRange{Start: nil, End: end})
+		} else if start != nil {
+			// Normal range: convert inclusive end to exclusive end
+			var exclusiveEnd *int64
+			if end != nil {
+				excEnd := *end + 1
+				exclusiveEnd = &excEnd
+			}
+			ranges = append(ranges, storage.ByteRange{Start: start, End: exclusiveEnd})
 		}
 	}
-	return byteRanges, nil
+
+	return ranges, nil
 }
 
 func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1021,34 +1047,11 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	slog.Info("Getting object", "bucket", bucketName.String(), "key", key.String())
 
-	// Parse range header (validation will be done in GetObject)
-	byteRanges, err := parseRangeHeader(rangeHeaderValue)
+	// Parse range header and convert to storage.ByteRange (validation will be done in GetObject)
+	storageRanges, err := parseRangeHeader(rangeHeaderValue)
 	if err != nil {
 		w.WriteHeader(416)
 		return
-	}
-
-	// Convert byteRange to storage.ByteRange
-	storageRanges := make([]storage.ByteRange, len(byteRanges))
-	for i, br := range byteRanges {
-		if br.start == nil && br.end != nil {
-			// Suffix range (bytes=-N): pass as-is, will be resolved by storage layer
-			storageRanges[i] = storage.ByteRange{
-				Start: nil,
-				End:   br.end,
-			}
-		} else {
-			// Normal range: convert inclusive end to exclusive end for storage layer
-			var exclusiveEnd *int64
-			if br.end != nil {
-				end := *br.end + 1
-				exclusiveEnd = &end
-			}
-			storageRanges[i] = storage.ByteRange{
-				Start: br.start,
-				End:   exclusiveEnd,
-			}
-		}
 	}
 
 	// GetObject now returns metadata and readers in a single transaction
@@ -1070,20 +1073,20 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	// Calculate sizes for each range
 	var sizes []int64
 	var totalSize int64 = 0
-	if len(byteRanges) > 0 {
-		for _, byteRange := range byteRanges {
+	if len(storageRanges) > 0 {
+		for _, byteRange := range storageRanges {
 			var size int64
-			if byteRange.start == nil && byteRange.end != nil {
+			if byteRange.Start == nil && byteRange.End != nil {
 				// Suffix range: size is the suffix length (or object size if smaller)
-				suffixLength := *byteRange.end
+				suffixLength := *byteRange.End
 				size = min(suffixLength, object.Size)
-			} else if byteRange.start != nil {
-				// Normal range
+			} else if byteRange.Start != nil {
+				// Normal range (End is exclusive)
 				var end int64 = object.Size
-				if byteRange.end != nil {
-					end = *byteRange.end + 1
+				if byteRange.End != nil {
+					end = *byteRange.End
 				}
-				size = end - *byteRange.start
+				size = end - *byteRange.Start
 			}
 			sizes = append(sizes, size)
 			totalSize += size
@@ -1109,23 +1112,22 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	})()
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
 	responseHeaders.Set(acceptRangesHeader, "bytes")
-	if len(byteRanges) > 1 {
+	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()
 		rangeHeaderLength := int64(0)
 		rangeHeaders := []string{}
 		for idx := range readers {
-			byteRangeEntry := byteRanges[idx]
-			contentRangeValue := byteRangeEntry.generateContentRangeValue(object.Size)
+			contentRangeValue := generateContentRangeValue(storageRanges[idx], object.Size)
 			rangeHeader := fmt.Sprintf("%s: %s\r\n\r\n", contentRangeHeader, contentRangeValue)
 			rangeHeaders = append(rangeHeaders, rangeHeader)
 			rangeHeaderLength += int64(len(rangeHeader))
 		}
 		separatorLength := int64(len(separator))
-		byteRangesCount := int64(len(byteRanges))
-		startCrlfLength := (byteRangesCount - 1) * 2 /* \r\n */
+		rangesCount := int64(len(storageRanges))
+		startCrlfLength := (rangesCount - 1) * 2 /* \r\n */
 		separatorLineLength := (2 /* -- */ + 2 /* \r\n */ + separatorLength)
 		endSeparatorLineLength := separatorLineLength + 2 /* \r\n */ + 2 /* -- at the end */
-		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*byteRangesCount + endSeparatorLineLength
+		totalSize = totalSize + startCrlfLength + rangeHeaderLength + separatorLineLength*rangesCount + endSeparatorLineLength
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		responseHeaders.Set(contentTypeHeader, fmt.Sprintf("multipart/byteranges; boundary=%v", separator))
 		w.WriteHeader(206)
@@ -1141,10 +1143,9 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			ioutils.CopyN(writer, readers[idx], sizes[idx])
 		}
 		io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator))
-	} else if len(byteRanges) == 1 {
+	} else if len(storageRanges) == 1 {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
-		firstRangeEntry := byteRanges[0]
-		contentRangeValue := firstRangeEntry.generateContentRangeValue(object.Size)
+		contentRangeValue := generateContentRangeValue(storageRanges[0], object.Size)
 		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
