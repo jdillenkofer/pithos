@@ -189,35 +189,62 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
-func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObject")
 	defer span.End()
 
-	var byteRange *string = nil
-	if startByte != nil && endByte != nil {
-		r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
-		byteRange = &r
-	} else if startByte != nil {
-		r := fmt.Sprintf("bytes=%d-", *startByte)
-		byteRange = &r
-	} else if endByte != nil {
-		r := fmt.Sprintf("bytes=-%d", *endByte-1)
-		byteRange = &r
-	}
-	getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucketName.String()),
-		Key:    aws.String(key.String()),
-		Range:  byteRange,
-	})
-	var notFoundError *types.NotFound
-	if err != nil && errors.As(err, &notFoundError) {
-		return nil, storage.ErrNoSuchBucket
-	}
-	if err != nil {
-		return nil, err
+	// If no ranges specified, get the entire object
+	if len(ranges) == 0 {
+		ranges = []storage.ByteRange{{Start: nil, End: nil}}
 	}
 
-	return getObjectResult.Body, nil
+	// First, get object metadata
+	object, err := rs.HeadObject(ctx, bucketName, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get each range
+	readers := []io.ReadCloser{}
+	for _, byteRange := range ranges {
+		startByte := byteRange.Start
+		endByte := byteRange.End
+
+		var awsRange *string = nil
+		if startByte != nil && endByte != nil {
+			r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
+			awsRange = &r
+		} else if startByte != nil {
+			r := fmt.Sprintf("bytes=%d-", *startByte)
+			awsRange = &r
+		} else if endByte != nil {
+			r := fmt.Sprintf("bytes=-%d", *endByte-1)
+			awsRange = &r
+		}
+		getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(bucketName.String()),
+			Key:    aws.String(key.String()),
+			Range:  awsRange,
+		})
+		var notFoundError *types.NotFound
+		if err != nil && errors.As(err, &notFoundError) {
+			// Close any readers we've already opened
+			for _, r := range readers {
+				r.Close()
+			}
+			return nil, nil, storage.ErrNoSuchBucket
+		}
+		if err != nil {
+			// Close any readers we've already opened
+			for _, r := range readers {
+				r.Close()
+			}
+			return nil, nil, err
+		}
+		readers = append(readers, getObjectResult.Body)
+	}
+
+	return object, readers, nil
 }
 
 func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {

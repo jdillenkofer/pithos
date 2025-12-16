@@ -285,23 +285,26 @@ func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketNa
 	return mObject, nil
 }
 
-func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetObject")
 	defer span.End()
 
-	reader, err := psm.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
+	object, readers, err := psm.innerStorage.GetObject(ctx, bucketName, key, ranges)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
-		return nil, err
+		return nil, nil, err
 	}
 
-	reader = ioutils.NewStatsReadCloser(reader, func(n int) {
-		psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
-	})
+	// Wrap each reader with stats tracking
+	for i, reader := range readers {
+		readers[i] = ioutils.NewStatsReadCloser(reader, func(n int) {
+			psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
+		})
+	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 
-	return reader, nil
+	return object, readers, nil
 }
 
 func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {

@@ -365,16 +365,16 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.Buck
 	return os.innerStorage.HeadObject(ctx, bucketName, key)
 }
 
-func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObject")
 	defer span.End()
 
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return os.innerStorage.GetObject(ctx, bucketName, key, startByte, endByte)
+	return os.innerStorage.GetObject(ctx, bucketName, key, ranges)
 }
 
 func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {

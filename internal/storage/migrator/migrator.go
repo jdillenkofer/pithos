@@ -106,10 +106,14 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 }
 
 func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName, sourceObject storage.Object) error {
-	obj, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
+	_, readers, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil)
 	if err != nil {
 		return err
 	}
+	if len(readers) == 0 {
+		return fmt.Errorf("no readers returned")
+	}
+	obj := readers[0]
 	defer obj.Close()
 
 	tempFile, err := os.CreateTemp("", "pithos-migrator-*")

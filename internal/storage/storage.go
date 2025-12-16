@@ -32,6 +32,19 @@ type Object struct {
 	Size              int64
 }
 
+// ByteRange represents a byte range for GetObject operations.
+// Start and End use exclusive end indexing (End points one past the last byte).
+// Examples:
+//   - Start=0, End=10: bytes 0-9 (10 bytes)
+//   - Start=nil, End=nil: entire object
+//   - Start=nil, End=500: suffix range - last 500 bytes (will be converted to absolute range)
+//
+// Suffix ranges (Start=nil, End=N) are converted to absolute ranges by the storage layer.
+type ByteRange struct {
+	Start *int64
+	End   *int64
+}
+
 type ListBucketResult struct {
 	Objects        []Object
 	CommonPrefixes []string
@@ -141,6 +154,7 @@ var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
 var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
+var ErrInvalidRange error = errors.New("InvalidRange")
 
 var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
 
@@ -190,7 +204,11 @@ type BucketManager interface {
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey) (*Object, error)
-	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error)
+	// GetObject retrieves an object with optional byte ranges.
+	// If ranges is empty or nil, returns the entire object as a single reader.
+	// All operations are performed in a single transaction to ensure consistency.
+	// Returns the object metadata, a list of readers (one per range), and an error.
+	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey) error
 }
