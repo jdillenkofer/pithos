@@ -148,10 +148,14 @@ func benchmarkDownloadSpeedForSize(ctx context.Context, st storage.Storage, buck
 			return 0, err
 		}
 
-		reader, err := st.GetObject(ctx, bucketName, key, nil, nil)
+		_, readers, err := st.GetObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return 0, err
 		}
+		if len(readers) == 0 {
+			return 0, fmt.Errorf("no readers returned")
+		}
+		reader := readers[0]
 
 		// Read all data to measure download speed
 		buf := make([]byte, 64*1024) // 64KB buffer

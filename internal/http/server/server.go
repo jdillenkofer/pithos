@@ -406,6 +406,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 400
 	case storage.ErrBadDigest:
 		statusCode = 400
+	case storage.ErrInvalidRange:
+		statusCode = 416
 	case storage.ErrNoSuchBucket:
 		statusCode = 404
 	case storage.ErrBucketAlreadyExists:
@@ -874,7 +876,7 @@ func (br byteRange) generateContentRangeValue(length int64) string {
 
 var errInvalidByteRange error = fmt.Errorf("invalid byte range")
 
-func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]byteRange, error) {
+func parseRangeHeader(rangeHeader string) ([]byteRange, error) {
 	byteRanges := []byteRange{}
 	if rangeHeader != "" {
 		rangeUnitAndRangesSplit := strings.SplitN(rangeHeader, "=", 2)
@@ -898,21 +900,6 @@ func parseAndValidateRangeHeader(rangeHeader string, object *storage.Object) ([]
 				if err == nil {
 					end = &endByte
 				}
-
-				// Translate suffix range to int range
-				if start == nil && end != nil {
-					startByte = object.Size - *end
-					start = &startByte
-					endByte = object.Size - 1
-					end = &endByte
-				}
-			}
-
-			if start != nil && *start < 0 {
-				return nil, errInvalidByteRange
-			}
-			if end != nil && *end >= object.Size {
-				return nil, errInvalidByteRange
 			}
 
 			byteRangeVal := byteRange{
@@ -1033,16 +1020,42 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	slog.Info("Getting object", "bucket", bucketName.String(), "key", key.String())
-	// @Concurrency: headObject and getObject run in different transactions and possibly return inconsistent data
-	object, err := s.storage.HeadObject(ctx, bucketName, key)
+
+	// Parse range header (validation will be done in GetObject)
+	byteRanges, err := parseRangeHeader(rangeHeaderValue)
 	if err != nil {
-		handleError(err, w, r)
+		w.WriteHeader(416)
 		return
 	}
 
-	byteRanges, err := parseAndValidateRangeHeader(rangeHeaderValue, object)
+	// Convert byteRange to storage.ByteRange
+	storageRanges := make([]storage.ByteRange, len(byteRanges))
+	for i, br := range byteRanges {
+		if br.start == nil && br.end != nil {
+			// Suffix range (bytes=-N): pass as-is, will be resolved by storage layer
+			storageRanges[i] = storage.ByteRange{
+				Start: nil,
+				End:   br.end,
+			}
+		} else {
+			// Normal range: convert inclusive end to exclusive end for storage layer
+			var exclusiveEnd *int64
+			if br.end != nil {
+				end := *br.end + 1
+				exclusiveEnd = &end
+			}
+			storageRanges[i] = storage.ByteRange{
+				Start: br.start,
+				End:   exclusiveEnd,
+			}
+		}
+	}
+
+	// GetObject now returns metadata and readers in a single transaction
+	// It also validates the ranges and returns ErrInvalidRange if invalid
+	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges)
 	if err != nil {
-		w.WriteHeader(416)
+		handleError(err, w, r)
 		return
 	}
 
@@ -1054,42 +1067,36 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders.Set(contentTypeHeader, contentType)
 	setETagHeaderFromObject(responseHeaders, object)
 
-	var readers []io.ReadCloser
+	// Calculate sizes for each range
 	var sizes []int64
 	var totalSize int64 = 0
 	if len(byteRanges) > 0 {
 		for _, byteRange := range byteRanges {
-			var end int64 = object.Size
-			if byteRange.end != nil {
-				// convert to exclusive end indexing
-				end = *byteRange.end + 1
-			}
-			if byteRange.start != nil {
-				size := end - *byteRange.start
-				sizes = append(sizes, size)
-				totalSize += size
-			}
-			rangeReader, err := s.storage.GetObject(ctx, bucketName, key, byteRange.start, &end)
-			if err != nil {
-				for _, rangeReader := range readers {
-					rangeReader.Close()
+			var size int64
+			if byteRange.start == nil && byteRange.end != nil {
+				// Suffix range: size is the suffix length (or object size if smaller)
+				suffixLength := *byteRange.end
+				size = min(suffixLength, object.Size)
+			} else if byteRange.start != nil {
+				// Normal range
+				var end int64 = object.Size
+				if byteRange.end != nil {
+					end = *byteRange.end + 1
 				}
-				handleError(err, w, r)
-				return
+				size = end - *byteRange.start
 			}
-			rangeReader = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObjectRange", rangeReader)
-			readers = append(readers, rangeReader)
+			sizes = append(sizes, size)
+			totalSize += size
+		}
+		// Wrap readers with tracing
+		for i, reader := range readers {
+			readers[i] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObjectRange", reader)
 		}
 	} else {
-		// we only include the headers for requests without range headers
+		// No range specified - we only include the headers for requests without range headers
 		setChecksumHeadersFromObject(responseHeaders, object)
-		reader, err := s.storage.GetObject(ctx, bucketName, key, nil, nil)
-		if err != nil {
-			handleError(err, w, r)
-			return
-		}
-		reader = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObject", reader)
-		readers = append(readers, reader)
+		// Wrap the single reader with tracing
+		readers[0] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObject", readers[0])
 		size := object.Size
 		sizes = append(sizes, size)
 		totalSize = size

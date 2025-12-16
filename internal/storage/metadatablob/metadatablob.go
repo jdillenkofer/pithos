@@ -277,69 +277,135 @@ func (mbs *metadataBlobStorage) HeadObject(ctx context.Context, bucketName stora
 	return &o, err
 }
 
-func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (mbs *metadataBlobStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataBlobStorage.GetObject")
 	defer span.End()
 
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
 	if err != nil {
 		tx.Rollback()
-		return nil, err
+		return nil, nil, err
 	}
 
-	blobReaders := []io.ReadCloser{}
-	blobsSizeUntilNow := int64(0)
-	bytesSkipped := int64(0)
-	newStartByteOffset := int64(0)
-	if startByte != nil {
-		newStartByteOffset = *startByte
+	// If no ranges specified, return the entire object
+	if len(ranges) == 0 {
+		ranges = []storage.ByteRange{{Start: nil, End: nil}}
 	}
-	skippingAtTheStart := true
-	for _, blob := range object.Blobs {
-		// We only get blobs within the requested byte range
-		if endByte != nil && *endByte < blobsSizeUntilNow {
-			break
-		}
-		blobsSizeUntilNow += blob.Size
-		if skippingAtTheStart && newStartByteOffset >= blob.Size {
-			newStartByteOffset -= blob.Size
-			bytesSkipped += blob.Size
+
+	// Translate suffix ranges and validate all ranges
+	for i, byteRange := range ranges {
+		// Handle suffix range (e.g., bytes=-500 means last 500 bytes)
+		if byteRange.Start == nil && byteRange.End != nil {
+			if *byteRange.End <= 0 {
+				tx.Rollback()
+				return nil, nil, storage.ErrInvalidRange
+			}
+			suffixLength := *byteRange.End
+			if suffixLength > object.Size {
+				suffixLength = object.Size
+			}
+			start := object.Size - suffixLength
+			end := object.Size
+			ranges[i] = storage.ByteRange{Start: &start, End: &end}
 			continue
 		}
-		skippingAtTheStart = false
 
-		blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
-		if err != nil {
+		// Validate normal ranges
+		if byteRange.Start != nil && *byteRange.Start < 0 {
 			tx.Rollback()
-			return nil, err
+			return nil, nil, storage.ErrInvalidRange
 		}
-		blobReaders = append(blobReaders, blobReader)
+		if byteRange.End != nil && *byteRange.End > object.Size {
+			tx.Rollback()
+			return nil, nil, storage.ErrInvalidRange
+		}
+		if byteRange.Start != nil && byteRange.End != nil && *byteRange.Start >= *byteRange.End {
+			tx.Rollback()
+			return nil, nil, storage.ErrInvalidRange
+		}
 	}
 
-	var reader io.ReadCloser = ioutils.NewMultiReadCloser(blobReaders...)
+	readers := []io.ReadCloser{}
+
+	// Process each range
+	for _, byteRange := range ranges {
+		startByte := byteRange.Start
+		endByte := byteRange.End
+
+		blobReaders := []io.ReadCloser{}
+		blobsSizeUntilNow := int64(0)
+		bytesSkipped := int64(0)
+		newStartByteOffset := int64(0)
+		if startByte != nil {
+			newStartByteOffset = *startByte
+		}
+		skippingAtTheStart := true
+		for _, blob := range object.Blobs {
+			// We only get blobs within the requested byte range
+			if endByte != nil && *endByte < blobsSizeUntilNow {
+				break
+			}
+			blobsSizeUntilNow += blob.Size
+			if skippingAtTheStart && newStartByteOffset >= blob.Size {
+				newStartByteOffset -= blob.Size
+				bytesSkipped += blob.Size
+				continue
+			}
+			skippingAtTheStart = false
+
+			blobReader, err := mbs.blobStore.GetBlob(ctx, tx, blob.Id)
+			if err != nil {
+				tx.Rollback()
+				// Close any readers we've already opened
+				for _, r := range readers {
+					r.Close()
+				}
+				for _, r := range blobReaders {
+					r.Close()
+				}
+				return nil, nil, err
+			}
+			blobReaders = append(blobReaders, blobReader)
+		}
+
+		var reader io.ReadCloser = ioutils.NewMultiReadCloser(blobReaders...)
+
+		// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
+		// because the LimitedStartSeekCloser changes the offsets
+		if endByte != nil {
+			reader = ioutils.NewLimitedEndReadCloser(reader, *endByte-bytesSkipped)
+		}
+		if startByte != nil {
+			_, err = ioutils.SkipNBytes(reader, newStartByteOffset)
+			if err != nil {
+				tx.Rollback()
+				// Close any readers we've already opened
+				for _, r := range readers {
+					r.Close()
+				}
+				reader.Close()
+				return nil, nil, err
+			}
+		}
+		readers = append(readers, reader)
+	}
 
 	err = tx.Commit()
 	if err != nil {
-		return nil, err
+		// Close all readers if commit fails
+		for _, r := range readers {
+			r.Close()
+		}
+		return nil, nil, err
 	}
 
-	// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
-	// because the LimitedStartSeekCloser changes the offsets
-	if endByte != nil {
-		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte-bytesSkipped)
-	}
-	if startByte != nil {
-		_, err = ioutils.SkipNBytes(reader, newStartByteOffset)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return reader, nil
+	storageObject := convertObject(*object)
+	return &storageObject, readers, nil
 }
 
 func (mbs *metadataBlobStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {

@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"go.opentelemetry.io/otel"
@@ -119,49 +120,77 @@ func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.Bucke
 	return object, nil
 }
 
-func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetObject")
 	defer span.End()
 
-	var reader io.ReadCloser
+	// If no ranges specified, get the entire object
+	if len(ranges) == 0 {
+		ranges = []storage.ByteRange{{Start: nil, End: nil}}
+	}
+
+	// Get object metadata
+	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	data, err := cs.cache.Get(cacheKey)
 	if err != nil && err != ErrCacheMiss {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err == ErrCacheMiss {
 		// @TODO: only cache byteRange that was requested
-		reader, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil, nil)
+		_, readers, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		if len(readers) == 0 {
+			return nil, nil, fmt.Errorf("no readers returned")
+		}
+		reader := readers[0]
 		defer reader.Close()
 
 		data, err = io.ReadAll(reader)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		err = cs.cache.Set(cacheKey, data)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	reader = ioutils.NewByteReadSeekCloser(data)
 
-	// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
-	// because the LimitedStartSeekCloser changes the offsets
-	if endByte != nil {
-		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
-	}
-	if startByte != nil {
-		_, err := ioutils.SkipNBytes(reader, *startByte)
-		if err != nil {
-			return nil, err
+	// Create readers for each range
+	readers := []io.ReadCloser{}
+	for _, byteRange := range ranges {
+		startByte := byteRange.Start
+		endByte := byteRange.End
+
+		var reader io.ReadCloser = ioutils.NewByteReadSeekCloser(data)
+
+		// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
+		// because the LimitedStartSeekCloser changes the offsets
+		if endByte != nil {
+			reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 		}
+		if startByte != nil {
+			_, err := ioutils.SkipNBytes(reader, *startByte)
+			if err != nil {
+				// Close any readers we've already opened
+				for _, r := range readers {
+					r.Close()
+				}
+				return nil, nil, err
+			}
+		}
+		readers = append(readers, reader)
 	}
-	return reader, nil
+
+	return object, readers, nil
 }
 
 func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {

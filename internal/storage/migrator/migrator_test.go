@@ -143,8 +143,10 @@ func TestStorageMigrator(t *testing.T) {
 	buckets, err := storage2.ListBuckets(ctx)
 	assert.Nil(t, err)
 	assert.Equal(t, bucketName, buckets[0].Name)
-	reader, err := storage2.GetObject(ctx, bucketName, objectKey, nil, nil)
+	_, readers, err := storage2.GetObject(ctx, bucketName, objectKey, nil)
 	assert.Nil(t, err)
+	assert.True(t, len(readers) > 0)
+	reader := readers[0]
 	data, err := io.ReadAll(reader)
 	assert.Nil(t, err)
 	assert.Equal(t, objectData, data)

@@ -134,11 +134,11 @@ func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage
 	return rs.primaryStorage.HeadObject(ctx, bucketName, key)
 }
 
-func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, startByte *int64, endByte *int64) (io.ReadCloser, error) {
+func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetObject")
 	defer span.End()
 
-	return rs.primaryStorage.GetObject(ctx, bucketName, key, startByte, endByte)
+	return rs.primaryStorage.GetObject(ctx, bucketName, key, ranges)
 }
 
 func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
