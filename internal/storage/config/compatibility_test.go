@@ -192,3 +192,43 @@ func TestBackwardCompatibility_SftpBlobStore(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, instantiator)
 }
+
+func TestBackwardCompatibility_CachePesistorTypo(t *testing.T) {
+	configJSON := []byte(`{
+		"type": "CacheStorage",
+		"cache": {
+			"type": "GenericCache",
+			"cachePesistor": {
+				"type": "InMemoryPersistor"
+			},
+			"cacheEvictionPolicy": {
+				"type": "EvictNothingEvictionPolicy"
+			}
+		},
+		"innerStorage": {
+			"type": "MetadataPartStorage",
+			"db": {
+				"type": "SqliteDatabase",
+				"dbPath": ":memory:"
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": ":memory:"
+				}
+			},
+			"partStore": {
+				"type": "SqlPartStore",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": ":memory:"
+				}
+			}
+		}
+	}`)
+
+	instantiator, err := CreateStorageInstantiatorFromJson(configJSON)
+	assert.NoError(t, err)
+	assert.NotNil(t, instantiator)
+}
