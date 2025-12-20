@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -25,36 +24,9 @@ const (
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
-
-	// Deprecated: Use FilesystemPartStore instead. Will be removed in a future version.
-	filesystemBlobStoreType = "FilesystemBlobStore"
-	// Deprecated: Use TinkEncryptionPartStoreMiddleware instead. Will be removed in a future version.
-	tinkEncryptionBlobStoreMiddlewareType = "TinkEncryptionBlobStoreMiddleware"
-	// Deprecated: Use OutboxPartStore instead. Will be removed in a future version.
-	outboxBlobStoreType = "OutboxBlobStore"
-	// Deprecated: Use SftpPartStore instead. Will be removed in a future version.
-	sftpBlobStoreType = "SftpBlobStore"
-	// Deprecated: Use SqlPartStore instead. Will be removed in a future version.
-	sqlBlobStoreType = "SqlBlobStore"
 )
 
 type PartStoreInstantiator = internalConfig.DynamicJsonInstantiator[partstore.PartStore]
-
-// Deprecated: Use FilesystemPartStoreConfiguration instead. Will be removed in a future version.
-type FilesystemBlobStoreConfiguration struct {
-	FilesystemPartStoreConfiguration
-}
-
-func (f *FilesystemBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
-	slog.Warn("FilesystemBlobStore is deprecated. Please use FilesystemPartStore instead.")
-	type filesystemBlobStoreConfiguration FilesystemBlobStoreConfiguration
-	err := json.Unmarshal(b, (*filesystemBlobStoreConfiguration)(f))
-	if err != nil {
-		return err
-	}
-	// No nested structs to handle specifically, just the type/root which are shared
-	return nil
-}
 
 type FilesystemPartStoreConfiguration struct {
 	Root internalConfig.StringProvider `json:"root"`
@@ -67,61 +39,6 @@ func (f *FilesystemPartStoreConfiguration) RegisterReferences(diCollection depen
 
 func (f *FilesystemPartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
 	return filesystem.New(f.Root.Value())
-}
-
-// Deprecated: Use TinkEncryptionPartStoreMiddlewareConfiguration instead. Will be removed in a future version.
-type TinkEncryptionBlobStoreMiddlewareConfiguration struct {
-	TinkEncryptionPartStoreMiddlewareConfiguration
-}
-
-func (t *TinkEncryptionBlobStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	slog.Warn("TinkEncryptionBlobStoreMiddleware is deprecated. Please use TinkEncryptionPartStoreMiddleware instead.")
-	type tinkEncryptionBlobStoreMiddlewareConfigurationAlias struct {
-		KMSType             internalConfig.StringProvider `json:"kmsType"`
-		KeyURI              internalConfig.StringProvider `json:"keyURI,omitempty"`
-		AWSRegion           internalConfig.StringProvider `json:"awsRegion,omitempty"`
-		VaultAddress        internalConfig.StringProvider `json:"vaultAddress,omitempty"`
-		VaultToken          internalConfig.StringProvider `json:"vaultToken,omitempty"`
-		VaultRoleID         internalConfig.StringProvider `json:"vaultRoleId,omitempty"`
-		VaultSecretID       internalConfig.StringProvider `json:"vaultSecretId,omitempty"`
-		Password            internalConfig.StringProvider `json:"password,omitempty"`
-		TPMPath             internalConfig.StringProvider `json:"tpmPath,omitempty"`
-		TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"`
-		TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`
-		RawInnerPartStore   json.RawMessage               `json:"innerPartStore"`
-		RawInnerBlobStore   json.RawMessage               `json:"innerBlobStore"`
-		internalConfig.DynamicJsonType
-	}
-	var alias tinkEncryptionBlobStoreMiddlewareConfigurationAlias
-	err := json.Unmarshal(b, &alias)
-	if err != nil {
-		return err
-	}
-
-	t.KMSType = alias.KMSType
-	t.KeyURI = alias.KeyURI
-	t.AWSRegion = alias.AWSRegion
-	t.VaultAddress = alias.VaultAddress
-	t.VaultToken = alias.VaultToken
-	t.VaultRoleID = alias.VaultRoleID
-	t.VaultSecretID = alias.VaultSecretID
-	t.Password = alias.Password
-	t.TPMPath = alias.TPMPath
-	t.TPMPersistentHandle = alias.TPMPersistentHandle
-	t.TPMKeyFilePath = alias.TPMKeyFilePath
-	t.Type = alias.Type
-
-	if alias.RawInnerBlobStore != nil {
-		t.RawInnerPartStore = alias.RawInnerBlobStore
-	} else {
-		t.RawInnerPartStore = alias.RawInnerPartStore
-	}
-
-	t.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(t.RawInnerPartStore)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 type TinkEncryptionPartStoreMiddlewareConfiguration struct {
@@ -142,8 +59,6 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMKeyFilePath             internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
 	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
-	// For backward compatibility
-	RawInnerBlobStore json.RawMessage `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -153,13 +68,6 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte)
 	if err != nil {
 		return err
 	}
-
-	if t.RawInnerBlobStore != nil {
-		if t.RawInnerPartStore == nil {
-			t.RawInnerPartStore = t.RawInnerBlobStore
-		}
-	}
-
 	t.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(t.RawInnerPartStore)
 	if err != nil {
 		return err
@@ -257,52 +165,11 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 	}
 }
 
-// Deprecated: Use OutboxPartStoreConfiguration instead. Will be removed in a future version.
-type OutboxBlobStoreConfiguration struct {
-	OutboxPartStoreConfiguration
-}
-
-func (o *OutboxBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
-	slog.Warn("OutboxBlobStore is deprecated. Please use OutboxPartStore instead.")
-	type outboxBlobStoreConfigurationAlias struct {
-		RawDatabase        json.RawMessage `json:"db"`
-		RawInnerPartStore  json.RawMessage `json:"innerPartStore"`
-		RawInnerBlobStore  json.RawMessage `json:"innerBlobStore"`
-		internalConfig.DynamicJsonType
-	}
-	var alias outboxBlobStoreConfigurationAlias
-	err := json.Unmarshal(b, &alias)
-	if err != nil {
-		return err
-	}
-
-	o.RawDatabase = alias.RawDatabase
-	o.Type = alias.Type
-
-	if alias.RawInnerBlobStore != nil {
-		o.RawInnerPartStore = alias.RawInnerBlobStore
-	} else {
-		o.RawInnerPartStore = alias.RawInnerPartStore
-	}
-
-	o.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(o.RawDatabase)
-	if err != nil {
-		return err
-	}
-	o.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(o.RawInnerPartStore)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 type OutboxPartStoreConfiguration struct {
 	DatabaseInstantiator       databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase                json.RawMessage                     `json:"db"`
 	InnerPartStoreInstantiator PartStoreInstantiator               `json:"-"`
 	RawInnerPartStore          json.RawMessage                     `json:"innerPartStore"`
-	// For backward compatibility
-	RawInnerBlobStore json.RawMessage `json:"innerBlobStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -311,12 +178,6 @@ func (o *OutboxPartStoreConfiguration) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, (*outboxPartStoreConfiguration)(o))
 	if err != nil {
 		return err
-	}
-
-	if o.RawInnerBlobStore != nil {
-		if o.RawInnerPartStore == nil {
-			o.RawInnerPartStore = o.RawInnerBlobStore
-		}
 	}
 
 	o.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(o.RawDatabase)
@@ -358,25 +219,6 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	return outbox.New(db, innerPartStore, partOutboxEntryRepository)
 }
 
-// Deprecated: Use SftpPartStoreConfiguration instead. Will be removed in a future version.
-type SftpBlobStoreConfiguration struct {
-	SftpPartStoreConfiguration
-}
-
-func (s *SftpBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
-	slog.Warn("SftpBlobStore is deprecated. Please use SftpPartStore instead.")
-	type sftpBlobStoreConfiguration SftpBlobStoreConfiguration
-	err := json.Unmarshal(b, (*sftpBlobStoreConfiguration)(s))
-	if err != nil {
-		return err
-	}
-	s.SshClientConfigInstantiator, err = sftpConfig.CreateSshClientConfigInstantiatorFromJson(s.RawSshClientConfig)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 type SftpPartStoreConfiguration struct {
 	Addr                        internalConfig.StringProvider          `json:"addr"`
 	SshClientConfigInstantiator sftpConfig.SshClientConfigInstantiator `json:"-"`
@@ -412,25 +254,6 @@ func (s *SftpPartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 		return nil, err
 	}
 	return sftp.New(s.Addr.Value(), sshClientConfig, s.Root.Value())
-}
-
-// Deprecated: Use SqlPartStoreConfiguration instead. Will be removed in a future version.
-type SqlBlobStoreConfiguration struct {
-	SqlPartStoreConfiguration
-}
-
-func (s *SqlBlobStoreConfiguration) UnmarshalJSON(b []byte) error {
-	slog.Warn("SqlBlobStore is deprecated. Please use SqlPartStore instead.")
-	type sqlBlobStoreConfiguration SqlBlobStoreConfiguration
-	err := json.Unmarshal(b, (*sqlBlobStoreConfiguration)(s))
-	if err != nil {
-		return err
-	}
-	s.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(s.RawDatabase)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 type SqlPartStoreConfiguration struct {
@@ -483,24 +306,14 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 	switch bc.Type {
 	case filesystemPartStoreType:
 		bi = &FilesystemPartStoreConfiguration{}
-	case filesystemBlobStoreType:
-		bi = &FilesystemBlobStoreConfiguration{}
 	case tinkEncryptionPartStoreMiddlewareType:
 		bi = &TinkEncryptionPartStoreMiddlewareConfiguration{}
-	case tinkEncryptionBlobStoreMiddlewareType:
-		bi = &TinkEncryptionBlobStoreMiddlewareConfiguration{}
 	case outboxPartStoreType:
 		bi = &OutboxPartStoreConfiguration{}
-	case outboxBlobStoreType:
-		bi = &OutboxBlobStoreConfiguration{}
 	case sftpPartStoreType:
 		bi = &SftpPartStoreConfiguration{}
-	case sftpBlobStoreType:
-		bi = &SftpBlobStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
-	case sqlBlobStoreType:
-		bi = &SqlBlobStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown partStore type")
 	}
