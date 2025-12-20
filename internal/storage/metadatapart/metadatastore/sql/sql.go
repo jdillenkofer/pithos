@@ -778,13 +778,11 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	}
 
 	parts := []*metadatastore.MultipartPart{}
-	startOffset := -1
 	var nextPartNumberMarker *string = nil
 	isTruncated := false
 	for idx, part := range partEntities {
 		sequenceNumberI32 := int32(part.SequenceNumber)
 		if sequenceNumberI32 <= partNumberMarkerI32 {
-			startOffset = idx
 			continue
 		}
 		parts = append(parts, &metadatastore.MultipartPart{
@@ -799,7 +797,7 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 			Size:              part.Size,
 		})
 		if len(parts) >= int(opts.MaxParts) {
-			isTruncated = len(parts)-(startOffset+1) > int(opts.MaxParts)
+			isTruncated = idx < len(partEntities)-1
 			lastPartNumberMarker := strconv.Itoa(part.SequenceNumber)
 			nextPartNumberMarker = &lastPartNumberMarker
 			break
