@@ -156,7 +156,7 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 
-var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
+var MaxEntitySize int64 = 5 * 1000 * 1000 * 1000 // 5 GB
 
 // ListObjectsOptions defines options for listing objects
 type ListObjectsOptions struct {

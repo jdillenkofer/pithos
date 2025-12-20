@@ -33,6 +33,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -824,14 +825,12 @@ func TestPutObject(t *testing.T) {
 			}
 			assert.NotNil(t, createBucketResult)
 
-			// We need a large enough payload to exceed the maximum allowed size
-			var largePayload []byte = make([]byte, storage.MaxEntitySize+1)
-			r := rand.New(rand.NewSource(int64(1337)))
-			r.Read(largePayload)
+			// Use a LimitReader over a repeating source to simulate a large payload without allocating 5GB of RAM
+			largePayload := io.LimitReader(ioutils.NewRepeatingReader([]byte("huge")), storage.MaxEntitySize+1)
 
 			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 				Bucket: bucketName,
-				Body:   bytes.NewReader(largePayload),
+				Body:   largePayload,
 				Key:    key,
 			})
 			assert.Nil(t, putObjectResult)
@@ -1778,14 +1777,12 @@ func TestMultipartUpload(t *testing.T) {
 			uploadId := createMultiPartUploadResult.UploadId
 			assert.NotNil(t, uploadId)
 
-			// We need a large enough payload to exceed the maximum allowed size
-			var largePayload []byte = make([]byte, storage.MaxEntitySize+1)
-			r := rand.New(rand.NewSource(int64(1337)))
-			r.Read(largePayload)
+			// Use a LimitReader over a repeating source to simulate a large payload without allocating 5GB of RAM
+			largePayload := io.LimitReader(ioutils.NewRepeatingReader([]byte("huge")), storage.MaxEntitySize+1)
 
 			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
-				Body:       bytes.NewReader(largePayload),
+				Body:       largePayload,
 				Key:        key,
 				UploadId:   uploadId,
 				PartNumber: aws.Int32(1),
