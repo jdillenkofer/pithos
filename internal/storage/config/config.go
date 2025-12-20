@@ -20,8 +20,8 @@ import (
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
-	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/config"
+	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -31,8 +31,10 @@ import (
 )
 
 const (
-	cacheStorageType                 = "CacheStorage"
-	metadataPartStorageType          = "MetadataPartStorage"
+	cacheStorageType        = "CacheStorage"
+	metadataPartStorageType = "MetadataPartStorage"
+	// Deprecated: Use MetadataPartStorage instead. Will be removed in a future version.
+	metadataBlobStorageType          = "MetadataBlobStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
@@ -91,6 +93,56 @@ func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.D
 	return cache.New(cacheImpl, innerStorage)
 }
 
+// Deprecated: Use MetadataPartStorageConfiguration instead. Will be removed in a future version.
+type MetadataBlobStorageConfiguration struct {
+	MetadataPartStorageConfiguration
+}
+
+func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
+	slog.Warn("MetadataBlobStorage is deprecated. Please use MetadataPartStorage instead.")
+	// Map old field names to new ones if necessary, but since we use json.RawMessage and custom parsing in MetadataPartStorageConfiguration,
+	// we need to check if the json uses "blobStore" or "partStore".
+	// However, MetadataPartStorageConfiguration.UnmarshalJSON expects "partStore".
+	// So we need a struct that accepts "blobStore" and puts it into "RawPartStore".
+
+	type metadataBlobStorageConfigurationAlias struct {
+		RawDatabase      json.RawMessage `json:"db"`
+		RawMetadataStore json.RawMessage `json:"metadataStore"`
+		RawPartStore     json.RawMessage `json:"partStore"`
+		RawBlobStore     json.RawMessage `json:"blobStore"`
+		internalConfig.DynamicJsonType
+	}
+	var alias metadataBlobStorageConfigurationAlias
+	err := json.Unmarshal(b, &alias)
+	if err != nil {
+		return err
+	}
+
+	m.RawDatabase = alias.RawDatabase
+	m.RawMetadataStore = alias.RawMetadataStore
+	m.Type = alias.Type
+
+	if alias.RawBlobStore != nil {
+		m.RawPartStore = alias.RawBlobStore
+	} else {
+		m.RawPartStore = alias.RawPartStore
+	}
+
+	m.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(m.RawDatabase)
+	if err != nil {
+		return err
+	}
+	m.MetadataStoreInstantiator, err = metadataStoreConfig.CreateMetadataStoreInstantiatorFromJson(m.RawMetadataStore)
+	if err != nil {
+		return err
+	}
+	m.PartStoreInstantiator, err = partStoreConfig.CreatePartStoreInstantiatorFromJson(m.RawPartStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 type MetadataPartStorageConfiguration struct {
 	DatabaseInstantiator      databaseConfig.DatabaseInstantiator           `json:"-"`
 	RawDatabase               json.RawMessage                               `json:"db"`
@@ -98,6 +150,8 @@ type MetadataPartStorageConfiguration struct {
 	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
 	PartStoreInstantiator     partStoreConfig.PartStoreInstantiator         `json:"-"`
 	RawPartStore              json.RawMessage                               `json:"partStore"`
+	// For backward compatibility
+	RawBlobStore json.RawMessage `json:"blobStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -107,6 +161,14 @@ func (m *MetadataPartStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
+
+	if m.RawBlobStore != nil {
+		slog.Warn("blobStore field is deprecated. Please use partStore instead.")
+		if m.RawPartStore == nil {
+			m.RawPartStore = m.RawBlobStore
+		}
+	}
+
 	m.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(m.RawDatabase)
 	if err != nil {
 		return err
@@ -407,6 +469,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &CacheStorageConfiguration{}
 	case metadataPartStorageType:
 		si = &MetadataPartStorageConfiguration{}
+	case metadataBlobStorageType:
+		si = &MetadataBlobStorageConfiguration{}
 	case conditionalStorageMiddlewareType:
 		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:
