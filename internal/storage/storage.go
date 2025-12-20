@@ -10,7 +10,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
 type Bucket struct {
@@ -104,7 +104,7 @@ type ListMultipartUploadsResult struct {
 	IsTruncated        bool
 }
 
-type Part struct {
+type MultipartPart struct {
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -124,7 +124,7 @@ type ListPartsResult struct {
 	NextPartNumberMarker *string
 	MaxParts             int32
 	IsTruncated          bool
-	Parts                []*Part
+	Parts                []*MultipartPart
 }
 
 type ChecksumInput = metadatastore.ChecksumInput
@@ -156,7 +156,7 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 
-var MaxEntitySize int64 = 900 * 1000 * 1000 // 900 MB
+var MaxEntitySize int64 = 5 * 1000 * 1000 * 1000 // 5 GB
 
 // ListObjectsOptions defines options for listing objects
 type ListObjectsOptions struct {
@@ -301,7 +301,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 		}
 
 		if object.Size != int64(len(content)) {
-			return errors.New("invalid blob length")
+			return errors.New("invalid part length")
 		}
 
 		listBucketResult, err := storage.ListObjects(ctx, bucketName, ListObjectsOptions{

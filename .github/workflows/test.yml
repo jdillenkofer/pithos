@@ -41,296 +41,296 @@ jobs:
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-normal-sql
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-normal-sql
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-normal-sql
           - os: ubuntu-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-normal-fs
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-normal-fs
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-normal-fs
           # --- SQLite - path - normal ---
           - os: ubuntu-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-normal-sql
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-normal-sql
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-normal-sql
           - os: ubuntu-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-normal-fs
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-normal-fs
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-normal-fs
           # --- SQLite - host - replicated ---
           - os: ubuntu-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-replicated-sql
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-replicated-sql
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-host-replicated-sql
           - os: ubuntu-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-replicated-fs
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-replicated-fs
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-host-replicated-fs
           # --- SQLite - path - replicated ---
           - os: ubuntu-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-replicated-sql
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-replicated-sql
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: sqlite-path-replicated-sql
           - os: ubuntu-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-replicated-fs
           - os: macos-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-replicated-fs
           - os: windows-latest
             db: sqlite
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: sqlite-path-replicated-fs
           # --- Postgres - host - normal ---
           - os: ubuntu-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-host-normal-sql
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-host-normal-sql
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-host-normal-sql
           - os: ubuntu-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-normal-fs
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-normal-fs
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-normal-fs
           # --- Postgres - path - normal ---
           - os: ubuntu-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-path-normal-sql
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-path-normal-sql
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             name: postgres-path-normal-sql
           - os: ubuntu-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-normal-fs
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-normal-fs
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-normal-fs
           # --- Postgres - host - replicated ---
           - os: ubuntu-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-host-replicated-sql
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-host-replicated-sql
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-host-replicated-sql
           - os: ubuntu-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-replicated-fs
           - os: macos-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-replicated-fs
           - os: windows-latest
             db: postgres
             path_style: host
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-host-replicated-fs
           # --- Postgres - path - replicated ---
           - os: ubuntu-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-path-replicated-sql
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-path-replicated-sql
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: sql
+            part_store: sql
             name: postgres-path-replicated-sql
           - os: ubuntu-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-replicated-fs
           - os: macos-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-replicated-fs
           - os: windows-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             name: postgres-path-replicated-fs
           # --- Tink Encryption Tests ---
           # SQLite with Tink encryption
@@ -338,42 +338,42 @@ jobs:
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             encryption: tink
             name: sqlite-host-normal-sql-tink-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             encryption: tink
             name: sqlite-host-normal-sql-tink-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             encryption: tink
             name: sqlite-host-normal-sql-tink-encrypted
           - os: ubuntu-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             encryption: tink
             name: sqlite-host-normal-fs-tink-encrypted
           - os: macos-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             encryption: tink
             name: sqlite-host-normal-fs-tink-encrypted
           - os: windows-latest
             db: sqlite
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             encryption: tink
             name: sqlite-host-normal-fs-tink-encrypted
           # PostgreSQL with Tink encryption
@@ -381,21 +381,21 @@ jobs:
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: sql
+            part_store: sql
             encryption: tink
             name: postgres-host-normal-sql-tink-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: host
             repl_mode: none
-            blob_store: filesystem
+            part_store: filesystem
             encryption: tink
             name: postgres-host-normal-fs-tink-encrypted
           - os: ubuntu-latest
             db: postgres
             path_style: path
             repl_mode: replicated
-            blob_store: filesystem
+            part_store: filesystem
             encryption: tink
             name: postgres-path-replicated-fs-tink-encrypted
     runs-on: ${{ matrix.os }}
@@ -411,7 +411,7 @@ jobs:
           TEST_NAME: ${{ matrix.name }}
         shell: bash
         run: |
-          args="-db ${{ matrix.db }} -path-style ${{ matrix.path_style }} -repl-mode ${{ matrix.repl_mode }} -blob-store ${{ matrix.blob_store }}"
-          if [ -n "${{ matrix.encryption }}" ]; then args="$args -blob-store-encryption ${{ matrix.encryption }}"; fi
+          args="-db ${{ matrix.db }} -path-style ${{ matrix.path_style }} -repl-mode ${{ matrix.repl_mode }} -part-store ${{ matrix.part_store }}"
+          if [ -n "${{ matrix.encryption }}" ]; then args="$args -part-store-encryption ${{ matrix.encryption }}"; fi
           echo "Running: $TEST_NAME"
           go test ./... -v -timeout 2h -integration $args

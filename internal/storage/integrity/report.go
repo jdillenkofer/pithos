@@ -12,13 +12,13 @@ type ValidationResult struct {
 	ObjectKey      string
 	Success        bool
 	ErrorType      string
-	BlobFailures   []BlobFailure
+	PartFailures   []PartFailure
 	ObjectFailures []string
 	ActionTaken    string // e.g., "None", "Deleted"
 }
 
-type BlobFailure struct {
-	BlobID         string
+type PartFailure struct {
+	PartID         string
 	SequenceNumber int
 	Error          string
 }
@@ -64,10 +64,10 @@ func OutputHumanReadable(report *ValidationReport, w io.Writer) error {
 			if !result.Success {
 				fmt.Fprintf(w, "  Bucket: %s, Key: %s\n", result.BucketName, result.ObjectKey)
 				fmt.Fprintf(w, "    Error: %s\n", result.ErrorType)
-				if len(result.BlobFailures) > 0 {
-					fmt.Fprintf(w, "    Blob Failures:\n")
-					for _, bf := range result.BlobFailures {
-						fmt.Fprintf(w, "      - BlobID: %s, Seq: %d, Error: %s\n", bf.BlobID, bf.SequenceNumber, bf.Error)
+				if len(result.PartFailures) > 0 {
+					fmt.Fprintf(w, "    Part Failures:\n")
+					for _, bf := range result.PartFailures {
+						fmt.Fprintf(w, "      - PartID: %s, Seq: %d, Error: %s\n", bf.PartID, bf.SequenceNumber, bf.Error)
 					}
 				}
 				if len(result.ObjectFailures) > 0 {

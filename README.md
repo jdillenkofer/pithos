@@ -144,7 +144,7 @@ The following storage backends and middlewares are available:
 ##### Storage Types
 
 ###### Primary Storage Backends
-- **MetadataBlobStorage**: A storage backend that separates metadata and blob storage
+- **MetadataPartStorage**: A storage backend that separates metadata and blob storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
   - Configurable blob stores (filesystem, SFTP)
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
@@ -162,14 +162,14 @@ The following storage backends and middlewares are available:
 - **ConditionalStorage**: Implements conditional forwarding to different storage backends based on the bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 
-###### Blob Store Middleware
-- **TinkEncryptionBlobStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
-- **OutboxBlobStore**: Implements outbox pattern for reliable blob operations
+###### Part Store Middleware
+- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
+- **OutboxPartStore**: Implements outbox pattern for reliable blob operations
 
 The default configuration (using SQLite) looks like this:
 ```json
 {
-  "type": "MetadataBlobStorage",
+  "type": "MetadataPartStorage",
   "db": {
     "type": "RegisterDatabaseReference",
     "refName": "db",
@@ -185,8 +185,8 @@ The default configuration (using SQLite) looks like this:
       "refName": "db"
     }
   },
-  "blobStore": {
-    "type": "SqlBlobStore",
+  "partStore": {
+    "type": "SqlPartStore",
     "db": {
       "type": "DatabaseReference",
       "refName": "db"
@@ -198,7 +198,7 @@ The default configuration (using SQLite) looks like this:
 For PostgreSQL, you can use this configuration:
 ```json
 {
-  "type": "MetadataBlobStorage",
+  "type": "MetadataPartStorage",
   "db": {
     "type": "RegisterDatabaseReference",
     "refName": "db",
@@ -214,8 +214,8 @@ For PostgreSQL, you can use this configuration:
       "refName": "db"
     }
   },
-  "blobStore": {
-    "type": "SqlBlobStore",
+  "partStore": {
+    "type": "SqlPartStore",
     "db": {
       "type": "DatabaseReference",
       "refName": "db"

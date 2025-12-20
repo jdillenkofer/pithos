@@ -4,21 +4,21 @@ import (
 	"errors"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	postgresBlob "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/blob"
-	postgresBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/blobcontent"
-	postgresBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/bloboutboxentry"
+	postgresPart "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/part"
+	postgresPartContent "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/partcontent"
+	postgresPartOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/partoutboxentry"
 	postgresBucket "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/bucket"
 	postgresObject "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/object"
 	postgresStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/storageoutboxentry"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blobcontent"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bloboutboxentry"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
-	sqliteBlob "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blob"
-	sqliteBlobContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/blobcontent"
-	sqliteBlobOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bloboutboxentry"
+	sqlitePart "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/part"
+	sqlitePartContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partcontent"
+	sqlitePartOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partoutboxentry"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
@@ -37,13 +37,13 @@ func NewStorageOutboxEntryRepository(db database.Database) (storageoutboxentry.R
 	return nil, errUnknownDatabaseType
 }
 
-func NewBlobOutboxEntryRepository(db database.Database) (bloboutboxentry.Repository, error) {
+func NewPartOutboxEntryRepository(db database.Database) (partoutboxentry.Repository, error) {
 	dbType := db.GetDatabaseType()
 	switch dbType {
 	case database.DB_TYPE_POSTGRES:
-		return postgresBlobOutboxEntry.NewRepository()
+		return postgresPartOutboxEntry.NewRepository()
 	case database.DB_TYPE_SQLITE:
-		return sqliteBlobOutboxEntry.NewRepository()
+		return sqlitePartOutboxEntry.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }
@@ -70,24 +70,24 @@ func NewObjectRepository(db database.Database) (object.Repository, error) {
 	return nil, errUnknownDatabaseType
 }
 
-func NewBlobRepository(db database.Database) (blob.Repository, error) {
+func NewPartRepository(db database.Database) (part.Repository, error) {
 	dbType := db.GetDatabaseType()
 	switch dbType {
 	case database.DB_TYPE_POSTGRES:
-		return postgresBlob.NewRepository()
+		return postgresPart.NewRepository()
 	case database.DB_TYPE_SQLITE:
-		return sqliteBlob.NewRepository()
+		return sqlitePart.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }
 
-func NewBlobContentRepository(db database.Database) (blobcontent.Repository, error) {
+func NewPartContentRepository(db database.Database) (partcontent.Repository, error) {
 	dbType := db.GetDatabaseType()
 	switch dbType {
 	case database.DB_TYPE_POSTGRES:
-		return postgresBlobContent.NewRepository()
+		return postgresPartContent.NewRepository()
 	case database.DB_TYPE_SQLITE:
-		return sqliteBlobContent.NewRepository()
+		return sqlitePartContent.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }

@@ -24,7 +24,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -1003,7 +1003,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		NextPartNumberMarker: result.NextPartNumberMarker,
 		MaxParts:             result.MaxParts,
 		IsTruncated:          result.IsTruncated,
-		Parts: sliceutils.Map(func(part *storage.Part) *PartResult {
+		Parts: sliceutils.Map(func(part *storage.MultipartPart) *PartResult {
 			return &PartResult{
 				ETag:              part.ETag,
 				ChecksumCRC32:     part.ChecksumCRC32,
