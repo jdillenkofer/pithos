@@ -468,8 +468,8 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 		NextPartNumberMarker: listPartsResult.NextPartNumberMarker,
 		MaxParts:             *listPartsResult.MaxParts,
 		IsTruncated:          *listPartsResult.IsTruncated,
-		Parts: sliceutils.Map(func(part types.Part) *storage.Part {
-			return &storage.Part{
+		Parts: sliceutils.Map(func(part types.Part) *storage.MultipartPart {
+			return &storage.MultipartPart{
 				ETag:              *part.ETag,
 				ChecksumCRC32:     part.ChecksumCRC32,
 				ChecksumCRC32C:    part.ChecksumCRC32C,

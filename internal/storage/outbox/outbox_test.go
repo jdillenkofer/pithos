@@ -10,14 +10,14 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
-	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMetadataBlobStorageWithOutbox(t *testing.T) {
+func TestMetadataPartStorageWithOutbox(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	if err != nil {
@@ -43,9 +43,9 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		}
 	}()
 
-	blobStore, err := filesystemBlobStore.New(storagePath)
+	partStore, err := filesystemPartStore.New(storagePath)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		slog.Error(fmt.Sprintf("Could not create SqlPartStore: %s", err))
 		os.Exit(1)
 	}
 
@@ -59,20 +59,20 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := repositoryFactory.NewBlobRepository(db)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
 	}
 
-	metadataBlobStorage, err := metadatablob.NewStorage(db, metadataStore, blobStore)
+	metadataPartStorage, err := metadatapart.NewStorage(db, metadataStore, partStore)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		slog.Error(fmt.Sprintf("Could not create SqlPartStore: %s", err))
 		os.Exit(1)
 	}
 
@@ -102,7 +102,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 
 	// We need a second db, because only one transaction can run at the same time
 	// each storage operation opens a new transaction and since outboxStorage and
-	// metadataBlobStorage would open separate transactions, we would deadlock the test.
+	// metadataPartStorage would open separate transactions, we would deadlock the test.
 	// To avoid this each storage type gets its own db.
 	// In the future i want to redesign storage implementations to use the already open transaction.
 	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
@@ -111,7 +111,7 @@ func TestMetadataBlobStorageWithOutbox(t *testing.T) {
 		os.Exit(1)
 
 	}
-	outboxStorage, err := NewStorage(db2, metadataBlobStorage, storageOutboxEntryRepository)
+	outboxStorage, err := NewStorage(db2, metadataPartStorage, storageOutboxEntryRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
 		os.Exit(1)

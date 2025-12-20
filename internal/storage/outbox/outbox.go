@@ -15,7 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"

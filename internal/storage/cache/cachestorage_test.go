@@ -15,9 +15,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
-	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
@@ -48,14 +48,14 @@ func TestCacheStorage(t *testing.T) {
 		}
 	}()
 
-	blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartContentRepository: %s", err))
 		os.Exit(1)
 	}
-	blobStore, err := sqlBlobStore.New(db, blobContentRepository)
+	partStore, err := sqlPartStore.New(db, partContentRepository)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		slog.Error(fmt.Sprintf("Could not create SqlPartStore: %s", err))
 		os.Exit(1)
 	}
 
@@ -69,20 +69,20 @@ func TestCacheStorage(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := repositoryFactory.NewBlobRepository(db)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
 	}
 
-	metadataBlobStorage, err := metadatablob.NewStorage(db, metadataStore, blobStore)
+	metadataPartStorage, err := metadatapart.NewStorage(db, metadataStore, partStore)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create MetadataBlobStorage: %s", err))
+		slog.Error(fmt.Sprintf("Could not create MetadataPartStorage: %s", err))
 		os.Exit(1)
 	}
 
@@ -121,7 +121,7 @@ func TestCacheStorage(t *testing.T) {
 		os.Exit(1)
 	}
 
-	cacheStorage, err := New(cache, metadataBlobStorage)
+	cacheStorage, err := New(cache, metadataPartStorage)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create CacheStorage: %s", err))
 		os.Exit(1)

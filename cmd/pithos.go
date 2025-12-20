@@ -28,7 +28,7 @@ import (
 
 const defaultStorageConfig = `
 {
-  "type": "MetadataBlobStorage",
+  "type": "MetadataPartStorage",
   "db": {
     "type": "RegisterDatabaseReference",
 	"refName": "db",
@@ -44,8 +44,8 @@ const defaultStorageConfig = `
 	  "refName": "db"
 	}
   },
-  "blobStore": {
-    "type": "SqlBlobStore",
+  "partStore": {
+    "type": "SqlPartStore",
 	"db": {
 	  "type": "DatabaseReference",
 	  "refName": "db"

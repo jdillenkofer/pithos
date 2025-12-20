@@ -68,7 +68,7 @@ func TestStorageMigrator(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "RegisterDatabaseReference",
 				"refName": "db",
@@ -84,8 +84,8 @@ func TestStorageMigrator(t *testing.T) {
 					"refName": "db"
 				}
 			},
-			"blobStore": {
-				"type": "FilesystemBlobStore",
+			"partStore": {
+				"type": "FilesystemPartStore",
 				"root": %s
 			}
 		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
@@ -105,7 +105,7 @@ func TestStorageMigrator(t *testing.T) {
 	storagePath2 := *tempDir2
 	dbPath2 := filepath.Join(storagePath2, "pithos.db")
 	jsonData2 := fmt.Sprintf(`{
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "RegisterDatabaseReference",
 				"refName": "db",
@@ -121,8 +121,8 @@ func TestStorageMigrator(t *testing.T) {
 					"refName": "db"
 				}
 			},
-			"blobStore": {
-				"type": "SqlBlobStore",
+			"partStore": {
+				"type": "SqlPartStore",
 				"db": {
 					"type": "DatabaseReference",
 					"refName": "db"

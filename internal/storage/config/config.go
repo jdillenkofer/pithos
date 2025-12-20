@@ -19,9 +19,9 @@ import (
 	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
-	blobStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/config"
-	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/config"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
+	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/config"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -32,7 +32,7 @@ import (
 
 const (
 	cacheStorageType                 = "CacheStorage"
-	metadataBlobStorageType          = "MetadataBlobStorage"
+	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
@@ -91,19 +91,19 @@ func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.D
 	return cache.New(cacheImpl, innerStorage)
 }
 
-type MetadataBlobStorageConfiguration struct {
+type MetadataPartStorageConfiguration struct {
 	DatabaseInstantiator      databaseConfig.DatabaseInstantiator           `json:"-"`
 	RawDatabase               json.RawMessage                               `json:"db"`
 	MetadataStoreInstantiator metadataStoreConfig.MetadataStoreInstantiator `json:"-"`
 	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
-	BlobStoreInstantiator     blobStoreConfig.BlobStoreInstantiator         `json:"-"`
-	RawBlobStore              json.RawMessage                               `json:"blobStore"`
+	PartStoreInstantiator     partStoreConfig.PartStoreInstantiator         `json:"-"`
+	RawPartStore              json.RawMessage                               `json:"partStore"`
 	internalConfig.DynamicJsonType
 }
 
-func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
-	type metadataBlobStorageConfiguration MetadataBlobStorageConfiguration
-	err := json.Unmarshal(b, (*metadataBlobStorageConfiguration)(m))
+func (m *MetadataPartStorageConfiguration) UnmarshalJSON(b []byte) error {
+	type metadataPartStorageConfiguration MetadataPartStorageConfiguration
+	err := json.Unmarshal(b, (*metadataPartStorageConfiguration)(m))
 	if err != nil {
 		return err
 	}
@@ -115,14 +115,14 @@ func (m *MetadataBlobStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	m.BlobStoreInstantiator, err = blobStoreConfig.CreateBlobStoreInstantiatorFromJson(m.RawBlobStore)
+	m.PartStoreInstantiator, err = partStoreConfig.CreatePartStoreInstantiatorFromJson(m.RawPartStore)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *MetadataBlobStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+func (m *MetadataPartStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	err := m.DatabaseInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
@@ -131,14 +131,14 @@ func (m *MetadataBlobStorageConfiguration) RegisterReferences(diCollection depen
 	if err != nil {
 		return err
 	}
-	err = m.BlobStoreInstantiator.RegisterReferences(diCollection)
+	err = m.PartStoreInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	db, err := m.DatabaseInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
@@ -147,11 +147,11 @@ func (m *MetadataBlobStorageConfiguration) Instantiate(diProvider dependencyinje
 	if err != nil {
 		return nil, err
 	}
-	blobStore, err := m.BlobStoreInstantiator.Instantiate(diProvider)
+	partStore, err := m.PartStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
-	return metadatablob.NewStorage(db, metadataStore, blobStore)
+	return metadatapart.NewStorage(db, metadataStore, partStore)
 }
 
 type ConditionalStorageMiddlewareConfiguration struct {
@@ -405,8 +405,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 	switch sc.Type {
 	case cacheStorageType:
 		si = &CacheStorageConfiguration{}
-	case metadataBlobStorageType:
-		si = &MetadataBlobStorageConfiguration{}
+	case metadataPartStorageType:
+		si = &MetadataPartStorageConfiguration{}
 	case conditionalStorageMiddlewareType:
 		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:

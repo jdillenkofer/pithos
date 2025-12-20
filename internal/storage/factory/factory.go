@@ -9,17 +9,17 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
-	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	tinkEncryptionBlobStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/middlewares/encryption/tink"
-	outboxBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/outbox"
-	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	tinkEncryptionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
+	outboxPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
+	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 )
 
-// EncryptionType represents the type of encryption to use for blob storage
+// EncryptionType represents the type of encryption to use for part storage
 type EncryptionType string
 
 const (
@@ -27,7 +27,7 @@ const (
 	EncryptionTypeTink EncryptionType = "tink"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemBlobStore bool, encryptionType EncryptionType, blobStoreEncryptionPassword string, wrapBlobStoreWithOutbox bool) storage.Storage {
+func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -39,33 +39,33 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := repositoryFactory.NewBlobRepository(db)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error during NewSqlMetadataStore: ", err))
 		os.Exit(1)
 	}
 
-	var blobStore blobstore.BlobStore
-	if useFilesystemBlobStore {
-		blobStore, err = filesystemBlobStore.New(filepath.Join(storagePath, "blobs"))
+	var partStore partstore.PartStore
+	if useFilesystemPartStore {
+		partStore, err = filesystemPartStore.New(filepath.Join(storagePath, "parts"))
 		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewFilesystemBlobStore: ", err))
+			slog.Error(fmt.Sprint("Error during NewFilesystemPartStore: ", err))
 			os.Exit(1)
 		}
 	} else {
-		blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
+		partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
 		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
+			slog.Error(fmt.Sprintf("Could not create PartContentRepository: %s", err))
 			os.Exit(1)
 		}
-		blobStore, err = sqlBlobStore.New(db, blobContentRepository)
+		partStore, err = sqlPartStore.New(db, partContentRepository)
 		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewSqlBlobStore: ", err))
+			slog.Error(fmt.Sprint("Error during NewSqlPartStore: ", err))
 			os.Exit(1)
 		}
 	}
@@ -73,13 +73,13 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 	// Apply encryption middleware based on encryption type
 	switch encryptionType {
 	case EncryptionTypeTink:
-		if blobStoreEncryptionPassword == "" {
+		if partStoreEncryptionPassword == "" {
 			slog.Error("Encryption password is required for Tink encryption")
 			os.Exit(1)
 		}
-		blobStore, err = tinkEncryptionBlobStoreMiddleware.NewWithLocalKMS(blobStoreEncryptionPassword, blobStore)
+		partStore, err = tinkEncryptionPartStoreMiddleware.NewWithLocalKMS(partStoreEncryptionPassword, partStore)
 		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewTinkEncryptionBlobStoreMiddleware: ", err))
+			slog.Error(fmt.Sprint("Error during NewTinkEncryptionPartStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	case EncryptionTypeNone:
@@ -89,22 +89,22 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemBlobSt
 		os.Exit(1)
 	}
 
-	if wrapBlobStoreWithOutbox {
-		blobOutboxEntryRepository, err := repositoryFactory.NewBlobOutboxEntryRepository(db)
+	if wrapPartStoreWithOutbox {
+		partOutboxEntryRepository, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create BlobOutboxEntryRepository: %s", err))
+			slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 			os.Exit(1)
 		}
-		blobStore, err = outboxBlobStore.New(db, blobStore, blobOutboxEntryRepository)
+		partStore, err = outboxPartStore.New(db, partStore, partOutboxEntryRepository)
 		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewOutboxBlobStore: ", err))
+			slog.Error(fmt.Sprint("Error during NewOutboxPartStore: ", err))
 			os.Exit(1)
 		}
 	}
 	var store storage.Storage
-	store, err = metadatablob.NewStorage(db, metadataStore, blobStore)
+	store, err = metadatapart.NewStorage(db, metadataStore, partStore)
 	if err != nil {
-		slog.Error(fmt.Sprint("Error during NewMetadataBlobStorage: ", err))
+		slog.Error(fmt.Sprint("Error during NewMetadataPartStorage: ", err))
 		os.Exit(1)
 	}
 

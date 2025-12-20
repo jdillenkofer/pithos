@@ -10,10 +10,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob"
-	filesystemBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/filesystem"
-	sqlBlobStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore/sql"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
@@ -55,14 +55,14 @@ func TestConditionalStorage(t *testing.T) {
 		}
 	}()
 
-	blobContentRepository, err := repositoryFactory.NewBlobContentRepository(db)
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobContentRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartContentRepository: %s", err))
 		os.Exit(1)
 	}
-	blobStore, err := sqlBlobStore.New(db, blobContentRepository)
+	partStore, err := sqlPartStore.New(db, partContentRepository)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create SqlBlobStore: %s", err))
+		slog.Error(fmt.Sprintf("Could not create SqlPartStore: %s", err))
 		os.Exit(1)
 	}
 
@@ -76,26 +76,26 @@ func TestConditionalStorage(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository: %s", err))
 		os.Exit(1)
 	}
-	blobRepository, err := repositoryFactory.NewBlobRepository(db)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobRepository: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, blobRepository)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
 	}
 
-	metadataBlobStorage, err := metadatablob.NewStorage(db, metadataStore, blobStore)
+	metadataPartStorage, err := metadatapart.NewStorage(db, metadataStore, partStore)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create MetadataBlobStorage: %s", err))
+		slog.Error(fmt.Sprintf("Could not create MetadataPartStorage: %s", err))
 		os.Exit(1)
 	}
 
-	fsBlobStore, err := filesystemBlobStore.New(storagePath)
+	fsPartStore, err := filesystemPartStore.New(storagePath)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create FilesystemBlobStore: %s", err))
+		slog.Error(fmt.Sprintf("Could not create FilesystemPartStore: %s", err))
 		os.Exit(1)
 	}
 
@@ -109,25 +109,25 @@ func TestConditionalStorage(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository 2: %s", err))
 		os.Exit(1)
 	}
-	blobRepository2, err := repositoryFactory.NewBlobRepository(db2)
+	partRepository2, err := repositoryFactory.NewPartRepository(db2)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create BlobRepository 2: %s", err))
+		slog.Error(fmt.Sprintf("Could not create PartRepository 2: %s", err))
 		os.Exit(1)
 	}
-	metadataStore2, err := sqlMetadataStore.New(db2, bucketRepository2, objectRepository2, blobRepository2)
+	metadataStore2, err := sqlMetadataStore.New(db2, bucketRepository2, objectRepository2, partRepository2)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore 2: %s", err))
 		os.Exit(1)
 	}
 
-	metadataBlobStorage2, err := metadatablob.NewStorage(db2, metadataStore2, fsBlobStore)
+	metadataPartStorage2, err := metadatapart.NewStorage(db2, metadataStore2, fsPartStore)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create MetadataBlobStorage: %s", err))
+		slog.Error(fmt.Sprintf("Could not create MetadataPartStorage: %s", err))
 		os.Exit(1)
 	}
 
-	bucketToStorageMap := map[string]storage.Storage{"bucket": metadataBlobStorage}
-	conditionalStorage, err := NewStorageMiddleware(bucketToStorageMap, metadataBlobStorage2)
+	bucketToStorageMap := map[string]storage.Storage{"bucket": metadataPartStorage}
+	conditionalStorage, err := NewStorageMiddleware(bucketToStorageMap, metadataPartStorage2)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create ConditionalStorage: %s", err))
 		os.Exit(1)

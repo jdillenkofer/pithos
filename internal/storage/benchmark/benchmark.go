@@ -9,7 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
 type SizeBenchmark struct {

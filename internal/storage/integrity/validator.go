@@ -18,10 +18,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/blob"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/blobstore"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatablob/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
 type Validator struct {
@@ -46,10 +46,10 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 		Results:   []ValidationResult{},
 	}
 
-	// Find BlobStore using reflection
-	blobStore := findBlobStore(v.storage)
-	if blobStore == nil {
-		return nil, fmt.Errorf("could not find BlobStore in storage hierarchy")
+	// Find PartStore using reflection
+	partStore := findPartStore(v.storage)
+	if partStore == nil {
+		return nil, fmt.Errorf("could not find PartStore in storage hierarchy")
 	}
 
 	// Get database connection
@@ -65,9 +65,9 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 	}
 
 	// Create repositories
-	blobRepo, err := repository.NewBlobRepository(db)
+	partRepo, err := repository.NewPartRepository(db)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create blob repository: %w", err)
+		return nil, fmt.Errorf("failed to create part repository: %w", err)
 	}
 	objectRepo, err := repository.NewObjectRepository(db)
 	if err != nil {
@@ -102,7 +102,7 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 			slog.Info(fmt.Sprintf("Validating object %d (Bucket: %s, Object: %s) - Rate: %.2f obj/s",
 				processedObjects, bucket.Name, object.Key, rate))
 
-			result := v.validateObject(ctx, db, blobStore, blobRepo, objectRepo, bucket.Name, object)
+			result := v.validateObject(ctx, db, partStore, partRepo, objectRepo, bucket.Name, object)
 			report.Results = append(report.Results, result)
 
 			if result.Success {
@@ -133,8 +133,8 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 	return report, nil
 }
 
-func (v *Validator) validateObject(ctx context.Context, db database.Database, blobStore blobstore.BlobStore,
-	blobRepo blob.Repository, objectRepo object.Repository,
+func (v *Validator) validateObject(ctx context.Context, db database.Database, partStore partstore.PartStore,
+	partRepo part.Repository, objectRepo object.Repository,
 	bucketName storage.BucketName, object storage.Object) ValidationResult {
 
 	result := ValidationResult{
@@ -159,27 +159,27 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, bl
 		return result
 	}
 
-	// Get blobs
-	blobs, err := blobRepo.FindBlobsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objEntity.Id)
+	// Get parts
+	parts, err := partRepo.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objEntity.Id)
 	if err != nil {
 		result.Success = false
-		result.ErrorType = fmt.Sprintf("Failed to get blobs: %v", err)
+		result.ErrorType = fmt.Sprintf("Failed to get parts: %v", err)
 		return result
 	}
 
-	// Validate each blob
-	var blobChecksums []storage.ChecksumValues
+	// Validate each part
+	var partChecksums []storage.ChecksumValues
 
-	for _, blob := range blobs {
-		// Read blob content
-		reader, err := blobStore.GetBlob(ctx, tx, blob.BlobId)
+	for _, part := range parts {
+		// Read part content
+		reader, err := partStore.GetPart(ctx, tx, part.PartId)
 		if err != nil {
 			result.Success = false
-			result.ErrorType = "Blob retrieval failed"
-			result.BlobFailures = append(result.BlobFailures, BlobFailure{
-				BlobID:         blob.BlobId.String(),
-				SequenceNumber: blob.SequenceNumber,
-				Error:          fmt.Sprintf("GetBlob failed: %v", err),
+			result.ErrorType = "Part retrieval failed"
+			result.PartFailures = append(result.PartFailures, PartFailure{
+				PartID:         part.PartId.String(),
+				SequenceNumber: part.SequenceNumber,
+				Error:          fmt.Sprintf("GetPart failed: %v", err),
 			})
 			continue
 		}
@@ -193,34 +193,34 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, bl
 
 		if err != nil {
 			result.Success = false
-			result.BlobFailures = append(result.BlobFailures, BlobFailure{
-				BlobID:         blob.BlobId.String(),
-				SequenceNumber: blob.SequenceNumber,
+			result.PartFailures = append(result.PartFailures, PartFailure{
+				PartID:         part.PartId.String(),
+				SequenceNumber: part.SequenceNumber,
 				Error:          fmt.Sprintf("Checksum calculation failed: %v", err),
 			})
 			continue
 		}
 
-		blobChecksums = append(blobChecksums, *calculated)
+		partChecksums = append(partChecksums, *calculated)
 
-		// Verify blob checksums
-		if err := verifyBlobChecksums(blob, *calculated); err != nil {
+		// Verify part checksums
+		if err := verifyPartChecksums(part, *calculated); err != nil {
 			result.Success = false
-			result.BlobFailures = append(result.BlobFailures, BlobFailure{
-				BlobID:         blob.BlobId.String(),
-				SequenceNumber: blob.SequenceNumber,
+			result.PartFailures = append(result.PartFailures, PartFailure{
+				PartID:         part.PartId.String(),
+				SequenceNumber: part.SequenceNumber,
 				Error:          err.Error(),
 			})
 		}
 	}
 
 	if !result.Success {
-		result.ErrorType = "Blob validation failed"
+		result.ErrorType = "Part validation failed"
 		return result
 	}
 
-	// Validate object checksums (derived from blobs)
-	if err := verifyObjectChecksums(object, blobs, blobChecksums); err != nil {
+	// Validate object checksums (derived from parts)
+	if err := verifyObjectChecksums(object, parts, partChecksums); err != nil {
 		result.Success = false
 		result.ErrorType = "Object checksum mismatch"
 		result.ObjectFailures = append(result.ObjectFailures, err.Error())
@@ -229,46 +229,46 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, bl
 	return result
 }
 
-func verifyBlobChecksums(blob blob.Entity, calculated storage.ChecksumValues) error {
+func verifyPartChecksums(part part.Entity, calculated storage.ChecksumValues) error {
 	// ETag (MD5)
-	if blob.ETag != "" && calculated.ETag != nil {
-		if blob.ETag != *calculated.ETag {
-			return fmt.Errorf("ETag mismatch: expected %s, got %s", blob.ETag, *calculated.ETag)
+	if part.ETag != "" && calculated.ETag != nil {
+		if part.ETag != *calculated.ETag {
+			return fmt.Errorf("ETag mismatch: expected %s, got %s", part.ETag, *calculated.ETag)
 		}
 	}
 
-	if blob.ChecksumCRC32 != nil && calculated.ChecksumCRC32 != nil {
-		if *blob.ChecksumCRC32 != *calculated.ChecksumCRC32 {
+	if part.ChecksumCRC32 != nil && calculated.ChecksumCRC32 != nil {
+		if *part.ChecksumCRC32 != *calculated.ChecksumCRC32 {
 			return fmt.Errorf("CRC32 mismatch")
 		}
 	}
-	if blob.ChecksumCRC32C != nil && calculated.ChecksumCRC32C != nil {
-		if *blob.ChecksumCRC32C != *calculated.ChecksumCRC32C {
+	if part.ChecksumCRC32C != nil && calculated.ChecksumCRC32C != nil {
+		if *part.ChecksumCRC32C != *calculated.ChecksumCRC32C {
 			return fmt.Errorf("CRC32C mismatch")
 		}
 	}
-	if blob.ChecksumCRC64NVME != nil && calculated.ChecksumCRC64NVME != nil {
-		if *blob.ChecksumCRC64NVME != *calculated.ChecksumCRC64NVME {
+	if part.ChecksumCRC64NVME != nil && calculated.ChecksumCRC64NVME != nil {
+		if *part.ChecksumCRC64NVME != *calculated.ChecksumCRC64NVME {
 			return fmt.Errorf("CRC64NVME mismatch")
 		}
 	}
-	if blob.ChecksumSHA1 != nil && calculated.ChecksumSHA1 != nil {
-		if *blob.ChecksumSHA1 != *calculated.ChecksumSHA1 {
+	if part.ChecksumSHA1 != nil && calculated.ChecksumSHA1 != nil {
+		if *part.ChecksumSHA1 != *calculated.ChecksumSHA1 {
 			return fmt.Errorf("SHA1 mismatch")
 		}
 	}
-	if blob.ChecksumSHA256 != nil && calculated.ChecksumSHA256 != nil {
-		if *blob.ChecksumSHA256 != *calculated.ChecksumSHA256 {
+	if part.ChecksumSHA256 != nil && calculated.ChecksumSHA256 != nil {
+		if *part.ChecksumSHA256 != *calculated.ChecksumSHA256 {
 			return fmt.Errorf("SHA256 mismatch")
 		}
 	}
 	return nil
 }
 
-func verifyObjectChecksums(object storage.Object, blobs []blob.Entity, blobChecksums []storage.ChecksumValues) error {
-	// If single blob, object checksums should match blob checksums
-	if len(blobs) == 1 {
-		calculated := blobChecksums[0]
+func verifyObjectChecksums(object storage.Object, parts []part.Entity, partChecksums []storage.ChecksumValues) error {
+	// If single part, object checksums should match part checksums
+	if len(parts) == 1 {
+		calculated := partChecksums[0]
 
 		if object.ETag != "" && calculated.ETag != nil {
 			if object.ETag != *calculated.ETag {
@@ -304,17 +304,17 @@ func verifyObjectChecksums(object storage.Object, blobs []blob.Entity, blobCheck
 	}
 
 	// Multipart upload
-	// Convert blobs to PartChecksums
-	parts := make([]checksumutils.PartChecksums, len(blobs))
-	for i, blob := range blobs {
-		parts[i] = checksumutils.PartChecksums{
-			ETag:              blob.ETag,
-			ChecksumCRC32:     blob.ChecksumCRC32,
-			ChecksumCRC32C:    blob.ChecksumCRC32C,
-			ChecksumCRC64NVME: blob.ChecksumCRC64NVME,
-			ChecksumSHA1:      blob.ChecksumSHA1,
-			ChecksumSHA256:    blob.ChecksumSHA256,
-			Size:              blob.Size,
+	// Convert parts to PartChecksums
+	pChecksums := make([]checksumutils.PartChecksums, len(parts))
+	for i, part := range parts {
+		pChecksums[i] = checksumutils.PartChecksums{
+			ETag:              part.ETag,
+			ChecksumCRC32:     part.ChecksumCRC32,
+			ChecksumCRC32C:    part.ChecksumCRC32C,
+			ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+			ChecksumSHA1:      part.ChecksumSHA1,
+			ChecksumSHA256:    part.ChecksumSHA256,
+			Size:              part.Size,
 		}
 	}
 
@@ -323,7 +323,7 @@ func verifyObjectChecksums(object storage.Object, blobs []blob.Entity, blobCheck
 		checksumType = *object.ChecksumType
 	}
 
-	calculatedChecksums, err := checksumutils.CalculateMultipartChecksums(parts, checksumType)
+	calculatedChecksums, err := checksumutils.CalculateMultipartChecksums(pChecksums, checksumType)
 	if err != nil {
 		return fmt.Errorf("failed to calculate multipart checksums: %v", err)
 	}
@@ -382,7 +382,7 @@ func (v *Validator) confirmDeletion(result ValidationResult) bool {
 	return false
 }
 
-func findBlobStore(s interface{}) blobstore.BlobStore {
+func findPartStore(s interface{}) partstore.PartStore {
 	val := reflect.ValueOf(s)
 	if val.Kind() == reflect.Ptr {
 		val = val.Elem()
@@ -391,14 +391,14 @@ func findBlobStore(s interface{}) blobstore.BlobStore {
 		return nil
 	}
 
-	// Check if any field is a BlobStore
-	blobStoreType := reflect.TypeOf((*blobstore.BlobStore)(nil)).Elem()
+	// Check if any field is a PartStore
+	partStoreType := reflect.TypeOf((*partstore.PartStore)(nil)).Elem()
 
 	for i := 0; i < val.NumField(); i++ {
 		field := val.Field(i)
-		if field.Type().Implements(blobStoreType) {
+		if field.Type().Implements(partStoreType) {
 			// Handle unexported fields
-			return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(blobstore.BlobStore)
+			return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(partstore.PartStore)
 		}
 	}
 
@@ -409,7 +409,7 @@ func findBlobStore(s interface{}) blobstore.BlobStore {
 		if field.Type().Implements(storageType) {
 			// Recurse
 			inner := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface()
-			if bs := findBlobStore(inner); bs != nil {
+			if bs := findPartStore(inner); bs != nil {
 				return bs
 			}
 		}

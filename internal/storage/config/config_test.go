@@ -58,7 +58,7 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 	return postgresContainer, nil
 }
 
-func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
+func TestCanCreateMetadataPartStorageWithPostgresFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	testutils.SkipOnWindowsInGitHubActions(t)
 	testutils.SkipOnMacOSInGitHubActions(t)
@@ -78,7 +78,7 @@ func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "RegisterDatabaseReference",
 				"refName": "db",
@@ -94,8 +94,8 @@ func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 					"refName": "db"
 				}
 			},
-			"blobStore": {
-				"type": "FilesystemBlobStore",
+			"partStore": {
+				"type": "FilesystemPartStore",
 				"root": %s
 			}
 		}`, strconv.Quote(dbUrl), strconv.Quote(storagePath))
@@ -105,7 +105,7 @@ func TestCanCreateMetadataBlobStorageWithPostgresFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
-func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
+func TestCanCreateMetadataPartStorageFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	tempDir, cleanup, err := config.CreateTempDir()
@@ -115,7 +115,7 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "RegisterDatabaseReference",
 				"refName": "db",
@@ -131,8 +131,8 @@ func TestCanCreateMetadataBlobStorageFromJson(t *testing.T) {
 					"refName": "db"
 				}
 			},
-			"blobStore": {
-				"type": "FilesystemBlobStore",
+			"partStore": {
+				"type": "FilesystemPartStore",
 				"root": %s
 			}
 		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
@@ -163,7 +163,7 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 				}
 			},
 			"innerStorage": {
-				"type": "MetadataBlobStorage",
+				"type": "MetadataPartStorage",
 				"db": {
 					"type": "RegisterDatabaseReference",
 					"refName": "db",
@@ -179,8 +179,8 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 						"refName": "db"
 					}
 				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
+				"partStore": {
+					"type": "FilesystemPartStore",
 					"root": %s
 				}
 			}
@@ -204,7 +204,7 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 	  "type": "ConditionalStorageMiddleware",
 	  "bucketToStorageMap": {
 		"test": {
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "RegisterDatabaseReference",
 				"refName": "db",
@@ -220,14 +220,14 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 					"refName": "db"
 				}
 			},
-			"blobStore": {
-				"type": "FilesystemBlobStore",
+			"partStore": {
+				"type": "FilesystemPartStore",
 				"root": %s
 			}
 		}
 	  },
 	  "defaultStorage": {
-			"type": "MetadataBlobStorage",
+			"type": "MetadataPartStorage",
 			"db": {
 				"type": "DatabaseReference",
 				"refName": "db"
@@ -239,8 +239,8 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 				"refName": "db"
 			}
 			},
-			"blobStore": {
-				"type": "SqlBlobStore",
+			"partStore": {
+				"type": "SqlPartStore",
 				"db": {
 					"type": "DatabaseReference",
 					"refName": "db"
@@ -266,7 +266,7 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	jsonData := fmt.Sprintf(`{
 			"type": "PrometheusStorageMiddleware",
 			"innerStorage": {
-				"type": "MetadataBlobStorage",
+				"type": "MetadataPartStorage",
 				"db": {
 					"type": "RegisterDatabaseReference",
 					"refName": "db",
@@ -282,8 +282,8 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 						"refName": "db"
 					}
 				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
+				"partStore": {
+					"type": "FilesystemPartStore",
 					"root": %s
 				}
 			}
@@ -314,7 +314,7 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 				}
 			},
 			"innerStorage": {
-				"type": "MetadataBlobStorage",
+				"type": "MetadataPartStorage",
 				"db": {
 					"type": "DatabaseReference",
 					"refName": "db"
@@ -326,8 +326,8 @@ func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 						"refName": "db"
 					}
 				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
+				"partStore": {
+					"type": "FilesystemPartStore",
 					"root": %s
 				}
 			}
@@ -350,7 +350,7 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	jsonData := fmt.Sprintf(`{
 			"type": "ReplicationStorage",
 			"primaryStorage": {
-				"type": "MetadataBlobStorage",
+				"type": "MetadataPartStorage",
 				"db": {
 					"type": "RegisterDatabaseReference",
 					"refName": "db",
@@ -366,8 +366,8 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 						"refName": "db"
 					}
 				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
+				"partStore": {
+					"type": "FilesystemPartStore",
 					"root": %s
 				}
 			},
@@ -391,7 +391,7 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	jsonData := fmt.Sprintf(`{
 			"type": "ReplicationStorage",
 			"primaryStorage": {
-				"type": "MetadataBlobStorage",
+				"type": "MetadataPartStorage",
 				"db": {
 					"type": "RegisterDatabaseReference",
 					"refName": "db",
@@ -407,14 +407,14 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 						"refName": "db"
 					}
 				},
-				"blobStore": {
-					"type": "FilesystemBlobStore",
+				"partStore": {
+					"type": "FilesystemPartStore",
 					"root": %s
 				}
 			},
 			"secondaryStorages": [
 				{
-					"type": "MetadataBlobStorage",
+					"type": "MetadataPartStorage",
 					"db": {
 						"type": "DatabaseReference",
 						"refName": "db"
@@ -426,8 +426,8 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 							"refName": "db"
 						}
 					},
-					"blobStore": {
-						"type": "FilesystemBlobStore",
+					"partStore": {
+						"type": "FilesystemPartStore",
 						"root": %s
 					}
 				}
