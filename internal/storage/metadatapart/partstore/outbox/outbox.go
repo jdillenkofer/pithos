@@ -153,7 +153,7 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 	return obs.innerPartStore.Stop(ctx)
 }
 
-const chunkSize = 64 * 1024 * 1024 // 64MB
+const chunkSize = 256 * 1000 * 1000 // 256MB
 
 func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
 	entry := partOutboxEntry.Entity{

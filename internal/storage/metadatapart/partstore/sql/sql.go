@@ -37,7 +37,7 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 	}, nil
 }
 
-const chunkSize = 64 * 1024 * 1024 // 64MB
+const chunkSize = 256 * 1000 * 1000 // 256MB
 
 func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")

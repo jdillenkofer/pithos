@@ -82,9 +82,9 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create data larger than chunkSize (64MB)
-	// We'll use 64MB + 1MB = 65MB
-	const size = 65 * 1024 * 1024
+	// Create data larger than chunkSize (256MB)
+	// We'll use 256MB + 1MB = 257MB
+	const size = 257 * 1000 * 1000
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = byte(i % 256)
@@ -103,11 +103,11 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	chunks, err := partContentRepository.FindPartContentChunksById(ctx, tx, *partId)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(chunks), "Expected 2 chunks for 65MB data with 64MB chunkSize")
+	assert.Equal(t, 2, len(chunks), "Expected 2 chunks for 257MB data with 256MB chunkSize")
 	assert.Equal(t, 0, chunks[0].ChunkIndex)
 	assert.Equal(t, 1, chunks[1].ChunkIndex)
-	assert.Equal(t, 64*1024*1024, len(chunks[0].Content))
-	assert.Equal(t, 1*1024*1024, len(chunks[1].Content))
+	assert.Equal(t, 256*1000*1000, len(chunks[0].Content))
+	assert.Equal(t, 1*1000*1000, len(chunks[1].Content))
 	tx.Commit()
 
 	// Get the part back and verify content
@@ -121,4 +121,3 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 	assert.Equal(t, data, retrievedData)
 	tx.Commit()
 }
-

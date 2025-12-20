@@ -386,7 +386,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 	return os.innerStorage.GetObject(ctx, bucketName, key, ranges)
 }
 
-const chunkSize = 64 * 1024 * 1024 // 64MB
+const chunkSize = 256 * 1000 * 1000 // 256MB
 
 func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
