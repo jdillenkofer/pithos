@@ -9,7 +9,7 @@ import (
 )
 
 type Repository interface {
-	FindPartContentById(ctx context.Context, tx *sql.Tx, id partstore.PartId) (*Entity, error)
+	FindPartContentChunksById(ctx context.Context, tx *sql.Tx, id partstore.PartId) ([]*Entity, error)
 	FindPartContentIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 	PutPartContent(ctx context.Context, tx *sql.Tx, partContent *Entity) error
 	SavePartContent(ctx context.Context, tx *sql.Tx, partContent *Entity) error
@@ -17,8 +17,9 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id        *partstore.PartId
-	Content   []byte
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Id         *partstore.PartId
+	ChunkIndex int
+	Content    []byte
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }

@@ -98,7 +98,7 @@ type sqliteDatabase struct {
 }
 
 func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	if opts.ReadOnly {
+	if opts != nil && opts.ReadOnly {
 		return sdb.readOnlyDb.BeginTx(ctx, opts)
 	}
 	return sdb.writeableDb.BeginTx(ctx, opts)

@@ -37,21 +37,44 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 	}, nil
 }
 
+const chunkSize = 64 * 1024 * 1024 // 64MB
+
 func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
 
-	content, err := io.ReadAll(reader)
+	// Delete existing content first to avoid stale chunks if overwriting
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx, partId)
 	if err != nil {
 		return err
 	}
-	partContentEntity := partContent.Entity{
-		Id:      ptrutils.ToPtr(partId),
-		Content: content,
-	}
-	err = bs.partContentRepository.PutPartContent(ctx, tx, &partContentEntity)
-	if err != nil {
-		return err
+
+	buffer := make([]byte, chunkSize)
+	chunkIndex := 0
+	for {
+		n, err := io.ReadFull(reader, buffer)
+		if n > 0 {
+			// Create a copy of the read bytes to store
+			content := make([]byte, n)
+			copy(content, buffer[:n])
+
+			partContentEntity := partContent.Entity{
+				Id:         ptrutils.ToPtr(partId),
+				ChunkIndex: chunkIndex,
+				Content:    content,
+			}
+			err = bs.partContentRepository.SavePartContent(ctx, tx, &partContentEntity)
+			if err != nil {
+				return err
+			}
+			chunkIndex++
+		}
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return err
+		}
 	}
 
 	return nil
@@ -61,16 +84,20 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstor
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPart")
 	defer span.End()
 
-	partContentEntity, err := bs.partContentRepository.FindPartContentById(ctx, tx, partId)
+	chunks, err := bs.partContentRepository.FindPartContentChunksById(ctx, tx, partId)
 	if err != nil {
 		return nil, err
 	}
-	if partContentEntity == nil {
+	if len(chunks) == 0 {
 		return nil, partstore.ErrPartNotFound
 	}
-	reader := ioutils.NewByteReadSeekCloser(partContentEntity.Content)
 
-	return reader, nil
+	readers := make([]io.Reader, len(chunks))
+	for i, chunk := range chunks {
+		readers[i] = ioutils.NewByteReadSeekCloser(chunk.Content)
+	}
+
+	return io.NopCloser(io.MultiReader(readers...)), nil
 }
 
 func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
