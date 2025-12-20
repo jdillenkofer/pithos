@@ -150,3 +150,45 @@ func TestBackwardCompatibility_MetadataPartStorageWithBlobStoreField(t *testing.
 	assert.NoError(t, err)
 	assert.NotNil(t, instantiator)
 }
+
+func TestBackwardCompatibility_SftpBlobStore(t *testing.T) {
+	configJSON := []byte(`{
+		"type": "MetadataPartStorage",
+		"db": {
+			"type": "RegisterDatabaseReference",
+			"refName": "mainDb",
+			"db": {
+				"type": "SqliteDatabase",
+				"dbPath": ":memory:"
+			}
+		},
+		"metadataStore": {
+			"type": "SqlMetadataStore",
+			"db": {
+				"type": "DatabaseReference",
+				"refName": "mainDb"
+			}
+		},
+		"partStore": {
+			"type": "SftpBlobStore",
+			"addr": "localhost:22",
+			"sshClientConfig": {
+				"user": "test",
+				"authMethods": [
+					{
+						"type": "PasswordAuthMethod",
+						"password": "test-password"
+					}
+				],
+				"hostKeyCallback": {
+					"type": "InsecureIgnoreHostKeyCallback"
+				}
+			},
+			"root": "/tmp/pithos-sftp"
+		}
+	}`)
+
+	instantiator, err := CreateStorageInstantiatorFromJson(configJSON)
+	assert.NoError(t, err)
+	assert.NotNil(t, instantiator)
+}
