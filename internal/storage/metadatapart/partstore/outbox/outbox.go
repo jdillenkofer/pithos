@@ -13,11 +13,11 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
+	"github.com/oklog/ulid/v2"
 )
 
 type outboxPartStore struct {
@@ -68,7 +68,17 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 		switch entry.Operation {
 		case partOutboxEntry.PutPartOperation:
-			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, bytes.NewReader(entry.Content))
+			chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *entry.Id)
+			if err != nil {
+				tx.Rollback()
+				time.Sleep(5 * time.Second)
+				return
+			}
+			readers := make([]io.Reader, len(chunks))
+			for i, chunk := range chunks {
+				readers[i] = bytes.NewReader(chunk.Content)
+			}
+			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, io.MultiReader(readers...))
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -143,15 +153,16 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 	return obs.innerPartStore.Stop(ctx)
 }
 
-func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, partId partstore.PartId, content []byte) error {
+const chunkSize = 64 * 1024 * 1024 // 64MB
+
+func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
 	entry := partOutboxEntry.Entity{
 		Operation: operation,
 		PartId:    partId,
-		Content:   content,
 	}
 	err := obs.partOutboxEntryRepository.SavePartOutboxEntry(ctx, tx, &entry)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Put struct{} in the channel unless it is full
@@ -160,21 +171,43 @@ func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *sql.Tx
 	default:
 	}
 
-	return nil
+	return entry.Id, nil
 }
 
 func (obs *outboxPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.PutPart")
 	defer span.End()
 
-	content, err := io.ReadAll(reader)
+	entryId, err := obs.storePartOutboxEntry(ctx, tx, partOutboxEntry.PutPartOperation, partId)
 	if err != nil {
 		return err
 	}
 
-	err = obs.storePartOutboxEntry(ctx, tx, partOutboxEntry.PutPartOperation, partId, content)
-	if err != nil {
-		return err
+	buffer := make([]byte, chunkSize)
+	chunkIndex := 0
+	for {
+		n, err := io.ReadFull(reader, buffer)
+		if n > 0 {
+			content := make([]byte, n)
+			copy(content, buffer[:n])
+
+			chunk := partOutboxEntry.ContentChunk{
+				OutboxEntryId: *entryId,
+				ChunkIndex:    chunkIndex,
+				Content:       content,
+			}
+			err = obs.partOutboxEntryRepository.SavePartOutboxContentChunk(ctx, tx, &chunk)
+			if err != nil {
+				return err
+			}
+			chunkIndex++
+		}
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				break
+			}
+			return err
+		}
 	}
 
 	return nil
@@ -184,16 +217,21 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId part
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPart")
 	defer span.End()
 
-	lastPartOutboxEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx, partId)
+	lastEntryId, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryIdByPartId(ctx, tx, partId)
 	if err != nil {
 		return nil, err
 	}
-	if lastPartOutboxEntry != nil {
-		switch lastPartOutboxEntry.Operation {
-		case partOutboxEntry.PutPartOperation:
-			return ioutils.NewByteReadSeekCloser(lastPartOutboxEntry.Content), nil
-		case partOutboxEntry.DeletePartOperation:
-			return nil, partstore.ErrPartNotFound
+	if lastEntryId != nil {
+		chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *lastEntryId)
+		if err != nil {
+			return nil, err
+		}
+		if len(chunks) > 0 {
+			readers := make([]io.Reader, len(chunks))
+			for i, chunk := range chunks {
+				readers[i] = bytes.NewReader(chunk.Content)
+			}
+			return io.NopCloser(io.MultiReader(readers...)), nil
 		}
 	}
 	return obs.innerPartStore.GetPart(ctx, tx, partId)
@@ -244,7 +282,7 @@ func (obs *outboxPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId p
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.DeletePart")
 	defer span.End()
 
-	err := obs.storePartOutboxEntry(ctx, tx, partOutboxEntry.DeletePartOperation, partId, []byte{})
+	_, err := obs.storePartOutboxEntry(ctx, tx, partOutboxEntry.DeletePartOperation, partId)
 	if err != nil {
 		return err
 	}
