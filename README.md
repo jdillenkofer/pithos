@@ -144,9 +144,9 @@ The following storage backends and middlewares are available:
 ##### Storage Types
 
 ###### Primary Storage Backends
-- **MetadataPartStorage**: A storage backend that separates metadata and blob storage
+- **MetadataPartStorage**: A storage backend that separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
-  - Configurable blob stores (filesystem, SFTP)
+  - Configurable part stores (filesystem, SFTP)
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
   - Compatible with other S3-compatible services
   - Configurable endpoint, region, and credentials
@@ -164,7 +164,7 @@ The following storage backends and middlewares are available:
 
 ###### Part Store Middleware
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
-- **OutboxPartStore**: Implements outbox pattern for reliable blob operations
+- **OutboxPartStore**: Implements outbox pattern for reliable part operations
 
 The default configuration (using SQLite) looks like this:
 ```json

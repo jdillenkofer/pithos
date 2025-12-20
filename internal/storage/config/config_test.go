@@ -155,7 +155,7 @@ func TestCanCreateCacheStorageFromJson(t *testing.T) {
 			"type": "CacheStorage",
 			"cache": {
 				"type": "GenericCache",
-				"cachePesistor": {
+				"cachePersistor": {
 					"type": "InMemoryPersistor"
 				},
 				"cacheEvictionPolicy": {

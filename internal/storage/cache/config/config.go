@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -23,8 +22,6 @@ type GenericCacheConfiguration struct {
 	RawCachePersistor               json.RawMessage                                      `json:"cachePersistor"`
 	CacheEvictionPolicyInstantiator evictionPolicyConfig.CacheEvictionPolicyInstantiator `json:"-"`
 	RawCacheEvictionPolicy          json.RawMessage                                      `json:"cacheEvictionPolicy"`
-	// For backward compatibility
-	RawCachePesistor json.RawMessage `json:"cachePesistor"`
 	internalConfig.DynamicJsonType
 }
 
@@ -33,13 +30,6 @@ func (c *GenericCacheConfiguration) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, (*genericCacheConfiguration)(c))
 	if err != nil {
 		return err
-	}
-
-	if c.RawCachePesistor != nil {
-		if c.RawCachePersistor == nil {
-			slog.Warn("cachePesistor field is deprecated. Please use cachePersistor instead.")
-			c.RawCachePersistor = c.RawCachePesistor
-		}
 	}
 
 	c.CachePersistorInstantiator, err = persistorConfig.CreateCachePersistorInstantiatorFromJson(c.RawCachePersistor)

@@ -36,7 +36,7 @@ func TestCanCreateCacheFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	jsonData := `{
 	  "type": "GenericCache",
-	  "cachePesistor": {
+	  "cachePersistor": {
 	    "type": "InMemoryPersistor"
 	  },
 	  "cacheEvictionPolicy": {
