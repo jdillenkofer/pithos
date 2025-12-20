@@ -27,7 +27,7 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	db, err := sqlite.OpenDatabase(dbPath)
 	if err != nil {
-		slog.Error("Couldn't open database")
+		slog.Error(fmt.Sprintf("Couldn't open database: %v", err))
 		os.Exit(1)
 	}
 	defer func() {
@@ -84,7 +84,7 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 	dbPath2 := filepath.Join(storagePath2, "pithos.db")
 	db2, err := sqlite.OpenDatabase(dbPath2)
 	if err != nil {
-		slog.Error("Couldn't open database")
+		slog.Error(fmt.Sprintf("Couldn't open database 2: %v", err))
 		os.Exit(1)
 	}
 	defer func() {

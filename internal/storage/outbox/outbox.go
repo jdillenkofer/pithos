@@ -17,6 +17,7 @@ import (
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/task"
+	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -86,8 +87,17 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.PutObjectStorageOperation:
-			// @TODO: Use checksumInput
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, bytes.NewReader(entry.Data), nil)
+			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, *entry.Id)
+			if err != nil {
+				tx.Rollback()
+				time.Sleep(5 * time.Second)
+				return
+			}
+			readers := make([]io.Reader, len(chunks))
+			for i, chunk := range chunks {
+				readers[i] = bytes.NewReader(chunk.Content)
+			}
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -168,16 +178,15 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string, data []byte) error {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucketName,
 		Key:       key,
-		Data:      data,
 	}
 	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &entry)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Put struct{} in the channel unless it is full
@@ -186,7 +195,7 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 	default:
 	}
 
-	return nil
+	return entry.Id, nil
 }
 
 func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -197,7 +206,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", []byte{})
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "")
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -217,7 +226,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", []byte{})
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "")
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -377,6 +386,8 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 	return os.innerStorage.GetObject(ctx, bucketName, key, ranges)
 }
 
+const chunkSize = 64 * 1024 * 1024 // 64MB
+
 func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
@@ -386,11 +397,38 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 		return nil, err
 	}
 	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-		data, err := io.ReadAll(reader)
+		entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String())
 		if err != nil {
 			return err
 		}
-		return os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), data)
+
+		buffer := make([]byte, chunkSize)
+		chunkIndex := 0
+		for {
+			n, err := io.ReadFull(reader, buffer)
+			if n > 0 {
+				content := make([]byte, n)
+				copy(content, buffer[:n])
+
+				chunk := storageOutboxEntry.ContentChunk{
+					OutboxEntryId: *entryId,
+					ChunkIndex:    chunkIndex,
+					Content:       content,
+				}
+				err = os.storageOutboxEntryRepository.SaveStorageOutboxContentChunk(ctx, tx, &chunk)
+				if err != nil {
+					return err
+				}
+				chunkIndex++
+			}
+			if err != nil {
+				if err == io.EOF || err == io.ErrUnexpectedEOF {
+					break
+				}
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		tx.Rollback()
@@ -425,7 +463,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), []byte{})
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
 	if err != nil {
 		tx.Rollback()
 		return err

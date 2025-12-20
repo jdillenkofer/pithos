@@ -15,7 +15,9 @@ type Repository interface {
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
 	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
+	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*ContentChunk, error)
 	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *Entity) error
+	SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
 	DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error
 }
 
@@ -25,9 +27,14 @@ type Entity struct {
 	Bucket      storage.BucketName
 	Key         string
 	ContentType *string
-	Data        []byte
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type ContentChunk struct {
+	OutboxEntryId ulid.ULID
+	ChunkIndex    int
+	Content       []byte
 }
 
 const (
