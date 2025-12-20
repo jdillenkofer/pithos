@@ -217,12 +217,16 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId part
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPart")
 	defer span.End()
 
-	lastEntryId, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryIdByPartId(ctx, tx, partId)
+	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx, partId)
 	if err != nil {
 		return nil, err
 	}
-	if lastEntryId != nil {
-		chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *lastEntryId)
+	if lastEntry != nil {
+		if lastEntry.Operation == partOutboxEntry.DeletePartOperation {
+			return nil, partstore.ErrPartNotFound
+		}
+
+		chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *lastEntry.Id)
 		if err != nil {
 			return nil, err
 		}

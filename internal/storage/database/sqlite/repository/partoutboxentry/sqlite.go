@@ -14,7 +14,7 @@ type sqliteRepository struct {
 }
 
 const (
-	findLastPartOutboxEntryIdByPartIdStmt      = "SELECT id FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
+	findLastPartOutboxEntryByPartIdStmt        = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
 	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT e.id, e.operation, e.part_id, e.created_at, e.updated_at FROM part_outbox_entries e INNER JOIN ( SELECT part_id, MAX(id) as max_id FROM part_outbox_entries GROUP BY part_id) m ON e.part_id = m.part_id AND e.id = m.max_id"
 	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
 	findPartOutboxEntryChunksByIdStmt          = "SELECT outbox_entry_id, chunk_index, content FROM part_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
@@ -73,18 +73,9 @@ func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxen
 	}, nil
 }
 
-func (bor *sqliteRepository) FindLastPartOutboxEntryIdByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*ulid.ULID, error) {
-	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryIdByPartIdStmt, partId.String())
-	var id string
-	err := row.Scan(&id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	u := ulid.MustParse(id)
-	return &u, nil
+func (bor *sqliteRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, partId.String())
+	return convertRowToPartOutboxEntryEntity(row)
 }
 
 func (bor *sqliteRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]partoutboxentry.Entity, error) {

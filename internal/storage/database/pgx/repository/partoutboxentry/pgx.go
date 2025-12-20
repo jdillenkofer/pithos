@@ -14,7 +14,7 @@ type pgxRepository struct {
 }
 
 const (
-	findLastPartOutboxEntryIdByPartIdStmt         = "SELECT id FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
+	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
 	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY part_id, id DESC"
 	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
 	findFirstPartOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
@@ -74,18 +74,9 @@ func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxen
 	}, nil
 }
 
-func (bor *pgxRepository) FindLastPartOutboxEntryIdByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*ulid.ULID, error) {
-	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryIdByPartIdStmt, partId.String())
-	var id string
-	err := row.Scan(&id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	u := ulid.MustParse(id)
-	return &u, nil
+func (bor *pgxRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, partId.String())
+	return convertRowToPartOutboxEntryEntity(row)
 }
 
 func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]partoutboxentry.Entity, error) {
