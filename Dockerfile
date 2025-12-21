@@ -17,6 +17,9 @@ RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
 # Create non-root user (UID 10001)
 RUN adduser -D -u 10001 appuser
 
+# Create a temporary directory with correct permissions
+RUN mkdir -m 1777 /tmp-dir
+
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 
 # Change ownership of the binary to appuser
@@ -30,6 +33,7 @@ WORKDIR /app
 COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
 COPY --from=app-builder /etc/passwd /etc/passwd
 COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
+COPY --from=app-builder --chown=10001:10001 /tmp-dir /tmp
 
 EXPOSE 9000
 
