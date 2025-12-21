@@ -12,6 +12,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// maxMemoryCacheSize is the maximum size of a payload that will be cached in memory
+// before switching to a disk-based cache.
+const maxMemoryCacheSize = 10 * 1000 * 1000
+
 type replicationStorage struct {
 	*lifecycle.ValidatedLifecycle
 	primaryStorage                      storage.Storage
@@ -145,8 +149,8 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
 	defer span.End()
 
-	// Use disk cache instead of memory
-	readSeekCloser, err := ioutils.NewDiskCachedReadSeekCloser(reader)
+	// Use smart cache (memory up to maxMemoryCacheSize, then disk)
+	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +218,8 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPart")
 	defer span.End()
 
-	// Use disk cache instead of memory
-	readSeekCloser, err := ioutils.NewDiskCachedReadSeekCloser(reader)
+	// Use smart cache (memory up to maxMemoryCacheSize, then disk)
+	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
 	if err != nil {
 		return nil, err
 	}

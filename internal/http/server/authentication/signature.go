@@ -35,6 +35,10 @@ const expectedRequest = "aws4_request"
 
 const contentEncodingAwsChunked = "aws-chunked"
 
+// maxMemoryCacheSize is the maximum size of a payload that will be cached in memory
+// before switching to a disk-based cache.
+const maxMemoryCacheSize = 10 * 1000 * 1000
+
 var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 
 type AccessKeyIdContextKey struct{}
@@ -190,7 +194,8 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 }
 
 func generateHashedPayload(r *http.Request) (*string, error) {
-	reader, err := ioutils.NewDiskCachedReadSeekCloser(r.Body)
+	// Use smart cache (memory up to maxMemoryCacheSize, then disk)
+	reader, err := ioutils.NewSmartCachedReadSeekCloser(r.Body, maxMemoryCacheSize)
 	if err != nil {
 		return nil, err
 	}
