@@ -189,6 +189,10 @@ The following storage backends and middlewares are available:
 ###### Storage Middleware
 - **ConditionalStorage**: Implements conditional forwarding to different storage backends based on the bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
+- **AuditStorage**: Provides cryptographically signed audit logs for all storage operations
+  - Supports multiple output sinks (Binary, JSON, Text)
+  - Chained hashing for tamper detection
+  - Ed25519 signatures for authenticity
 
 ###### Part Store Middleware
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
@@ -252,6 +256,49 @@ For PostgreSQL, you can use this configuration:
 }
 ```
 
+##### Audit Log Middleware Configuration
+You can wrap any storage backend with the `AuditStorageMiddleware` to enable operation logging. This example shows how to configure it with a binary file sink:
+
+```json
+{
+  "type": "AuditStorageMiddleware",
+  "innerStorage": {
+     "type": "MetadataPartStorage",
+     ...
+  },
+  "privateKey": "<Base64-encoded-Ed25519-private-key>",
+  "sinks": [
+    {
+      "type": "file",
+      "format": "bin",
+      "path": "./data/audit.log"
+    }
+  ]
+}
+```
+
+##### Audit Log Security Recommendation
+To prevent any program (including Pithos) from overwriting or truncating existing audit logs, you can use filesystem-level append-only attributes. This ensures that data can only be added to the end of the file.
+
+**Linux:**
+Requires root privileges or `CAP_LINUX_IMMUTABLE`.
+```sh
+sudo chattr +a ./data/audit.log
+```
+
+**macOS:**
+- **User level** (Owner can set/unset): `chflags uappnd ./data/audit.log`
+- **System level** (Root only): `sudo chflags sappnd ./data/audit.log`
+
+For maximum security on macOS, use `sappnd`. This prevents the Pithos process (if running as the file owner) from removing the protection if it were to be compromised.
+
+To disable the protection (e.g., to archive or delete the log), use:
+
+- **Linux:** `sudo chattr -a ./data/audit.log`
+- **macOS:** `chflags nouappnd ./data/audit.log` or `sudo chflags nosappnd ./data/audit.log`
+
+With these attributes set, Pithos can still read the file to retrieve the last hash for the chain, but it cannot delete or modify previous entries.
+
 ##### Storage Migration
 Pithos supports storage migration through the `migrate-storage` subcommand. 
 This subcommand allows you to change your storage backend without losing data.
@@ -263,6 +310,23 @@ pithos migrate-storage ./storage_source.json ./storage_target.json
 
 The migrate-storage subcommand migrates data bucket by bucket from the source storage to the target storage.
 If the target storage bucket is not empty, it will not overwrite an existing object. Instead, it will log an error and exit the command to prevent accidental data loss.
+
+##### Audit Log Verification and Conversion
+Pithos provides the `audit-log` subcommand to verify the cryptographic integrity of audit logs and convert them between different formats (Binary, JSON, Text).
+
+```sh
+pithos audit-log [log-file] --public-key <Base64-Public-Key> [options]
+```
+
+Available options:
+- `--public-key`: (Required) The Base64 encoded Ed25519 public key corresponding to the private key used for signing.
+- `--format`: Output format. Options: `json` (default), `text`, `bin`.
+- `--output`: Output path. Use `-` for stdout (default).
+
+**Example: Convert binary log to human-readable text**
+```sh
+pithos audit-log ./data/audit.log --public-key nHBi++... --format text --output audit_report.txt
+```
 
 #### Monitoring
 We support Prometheus metrics for monitoring the server. You can enable the monitoring endpoints by setting the following environment variables:

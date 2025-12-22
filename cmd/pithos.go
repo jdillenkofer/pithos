@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"bufio"
 
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -24,6 +25,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
+	"encoding/base64"
+	"crypto/ed25519"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 )
 
 const defaultStorageConfig = `
@@ -64,11 +69,12 @@ const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
+const subcommandAuditLog = "audit-log"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
 		os.Exit(1)
 	}
 
@@ -84,8 +90,10 @@ func main() {
 		benchmarkStorage(ctx)
 	case subcommandValidateStorage:
 		validateStorage(ctx)
+	case subcommandAuditLog:
+		auditLogTool()
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
 		os.Exit(1)
 	}
 }
@@ -469,4 +477,61 @@ func validateStorage(ctx context.Context) {
 	}
 
 	slog.Info("Storage integrity validation successfully completed!")
+}
+
+func auditLogTool() {
+	fs := flag.NewFlagSet(subcommandAuditLog, flag.ExitOnError)
+	publicKeyBase64 := fs.String("public-key", "", "Base64 encoded Ed25519 public key for verification")
+	format := fs.String("format", "json", "Output format (json, text, bin)")
+	outputPath := fs.String("output", "-", "Output path (use '-' for stdout)")
+	
+	if len(os.Args) < 3 {
+		slog.Info(fmt.Sprintf("Usage: %s %s [log-file] --public-key <key> [--format <json|text|bin>] [--output <path>]", os.Args[0], subcommandAuditLog))
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	logFilePath := os.Args[2]
+	
+	// Parse flags starting from after the log file path
+	if len(os.Args) > 3 {
+		fs.Parse(os.Args[3:])
+	}
+
+	if *publicKeyBase64 == "" {
+		slog.Error("Public key is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	decodedKey, err := base64.StdEncoding.DecodeString(*publicKeyBase64)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to decode public key: %v", err))
+		os.Exit(1)
+	}
+
+	if len(decodedKey) != ed25519.PublicKeySize {
+		slog.Error(fmt.Sprintf("Invalid public key size: expected %d, got %d", ed25519.PublicKeySize, len(decodedKey)))
+		os.Exit(1)
+	}
+
+	var out io.Writer = os.Stdout
+	if *outputPath != "-" {
+		f, err := os.Create(*outputPath)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Failed to create output file: %v", err))
+			os.Exit(1)
+		}
+		defer f.Close()
+		out = f
+	}
+
+	bw := bufio.NewWriter(out)
+	defer bw.Flush()
+
+	err = tool.RunAuditLogTool(logFilePath, signing.NewEd25519Verifier(ed25519.PublicKey(decodedKey)), *format, bw)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Audit log verification failed: %v", err))
+		os.Exit(1)
+	}
 }

@@ -28,6 +28,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/prometheus/client_golang/prometheus"
+	"encoding/base64"
+	"crypto/ed25519"
+	"crypto/sha512"
+	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
 const (
@@ -35,6 +42,7 @@ const (
 	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
+	auditStorageMiddlewareType       = "AuditStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
@@ -255,6 +263,107 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider depend
 	return prometheusMiddleware.NewStorageMiddleware(innerStorage, prometheusRegisterer.(prometheus.Registerer))
 }
 
+type SinkConfiguration struct {
+	Type   string `json:"type"`   // "file"
+	Format string `json:"format"` // "bin", "json", "text"
+	Path   string `json:"path"`
+}
+
+type AuditStorageMiddlewareConfiguration struct {
+	InnerStorageInstantiator StorageInstantiator `json:"-"`
+	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
+	Sinks                    []SinkConfiguration `json:"sinks"`
+	PrivateKey               string              `json:"privateKey"` // Base64 encoded
+	internalConfig.DynamicJsonType
+}
+
+func (a *AuditStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type auditStorageMiddlewareConfiguration AuditStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*auditStorageMiddlewareConfiguration)(a))
+	if err != nil {
+		return err
+	}
+	a.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(a.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *AuditStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return a.InnerStorageInstantiator.RegisterReferences(diCollection)
+}
+
+func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	innerStorage, err := a.InnerStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	
+	decodedKey, err := base64.StdEncoding.DecodeString(a.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode private key: %w", err)
+	}
+	
+	if len(decodedKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("invalid private key size")
+	}
+
+	var sinks []sink.Sink
+	var lastHash []byte
+
+	for _, sc := range a.Sinks {
+		var s serialization.Serializer
+		switch sc.Format {
+		case "bin":
+			s = &serialization.BinarySerializer{}
+		case "json":
+			s = &serialization.JsonSerializer{Indent: true}
+		case "text":
+			s = &serialization.TextSerializer{}
+		default:
+			return nil, fmt.Errorf("unknown audit log format: %s", sc.Format)
+		}
+
+		var curSink sink.Sink
+		var curHash []byte
+
+		switch sc.Type {
+		case "file":
+			var fs *sink.WriterSink
+			fs, curHash, err = sink.NewFileSink(sc.Path, s)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create file sink at %s: %w", sc.Path, err)
+			}
+			curSink = fs
+		default:
+			return nil, fmt.Errorf("unknown audit log sink type: %s", sc.Type)
+		}
+
+		sinks = append(sinks, curSink)
+		if lastHash == nil && len(curHash) > 0 {
+			lastHash = curHash
+		}
+	}
+
+	if len(sinks) == 0 {
+		return nil, errors.New("at least one audit log sink must be configured")
+	}
+
+	var finalSink sink.Sink
+	if len(sinks) == 1 {
+		finalSink = sinks[0]
+	} else {
+		finalSink = sink.NewMultiSink(sinks...)
+	}
+
+	if lastHash == nil {
+		lastHash = make([]byte, sha512.Size)
+	}
+	
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), lastHash), nil
+}
+
 type OutboxStorageConfiguration struct {
 	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase              json.RawMessage                     `json:"db"`
@@ -412,6 +521,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:
 		si = &PrometheusStorageMiddlewareConfiguration{}
+	case auditStorageMiddlewareType:
+		si = &AuditStorageMiddlewareConfiguration{}
 	case outboxStorageType:
 		si = &OutboxStorageConfiguration{}
 	case replicationStorageType:
