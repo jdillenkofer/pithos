@@ -258,8 +258,14 @@ jobs:
       - run-tests
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # Needed for keyless signing with Cosign
     steps:
       - uses: actions/checkout@v4
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to DockerHub
@@ -269,6 +275,7 @@ jobs:
           username: jdillenkofer
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and (optionally) Push Docker Image (multi-arch)
+        id: build-and-push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -280,6 +287,13 @@ jobs:
             jdillenkofer/pithos:latest
           build-args: |
             SKIP_TESTS=true
+      - name: Sign the published Docker image
+        if: ${{ github.event.inputs.dryrun != 'true' }}
+        env:
+          TAG: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          cosign sign --yes jdillenkofer/pithos:${TAG} jdillenkofer/pithos:latest
 
   release:
     name: Create Release
@@ -288,14 +302,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write # Needed for keyless signing with Cosign
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
       - name: Download Binaries
         uses: actions/download-artifact@v4
         with:
           path: binaries
+      - name: Prepare Artifacts and Sign
+        run: |
+          mkdir -p dist
+          cp binaries/pithos-linux-amd64/pithos-linux-amd64 dist/
+          cp binaries/pithos-linux-arm64/pithos-linux-arm64 dist/
+          cp binaries/pithos-darwin-amd64/pithos-darwin-amd64 dist/
+          cp binaries/pithos-darwin-arm64/pithos-darwin-arm64 dist/
+          cp binaries/pithos-windows-amd64/pithos-windows-amd64.exe dist/
+          cp binaries/pithos-windows-arm64/pithos-windows-arm64.exe dist/
+          
+          cd dist
+          sha256sum * > checksums.txt
+          
+          # Sign the checksums file
+          cosign sign-blob --yes \
+            --output-certificate checksums.txt.pem \
+            --output-signature checksums.txt.sig \
+            checksums.txt
       - name: Create Release
         uses: softprops/action-gh-release@v1
         env:
@@ -307,9 +342,4 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            binaries/pithos-linux-amd64/pithos-linux-amd64
-            binaries/pithos-linux-arm64/pithos-linux-arm64
-            binaries/pithos-darwin-amd64/pithos-darwin-amd64
-            binaries/pithos-darwin-arm64/pithos-darwin-arm64
-            binaries/pithos-windows-amd64/pithos-windows-amd64.exe
-            binaries/pithos-windows-arm64/pithos-windows-arm64.exe
+            dist/*
