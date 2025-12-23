@@ -1,11 +1,11 @@
 package sink
 
 import (
+	"bytes"
 	"crypto/sha512"
 	"io"
 	"os"
 	"sync"
-	"bufio"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
@@ -13,16 +13,15 @@ import (
 
 type WriterSink struct {
 	writer     io.Writer
-	bufWriter  *bufio.Writer
 	closer     io.Closer
 	serializer serialization.Serializer
 	mu         sync.Mutex
+	buf        bytes.Buffer
 }
 
 func NewWriterSink(writer io.Writer, serializer serialization.Serializer) *WriterSink {
 	return &WriterSink{
 		writer:     writer,
-		bufWriter:  bufio.NewWriter(writer),
 		serializer: serializer,
 	}
 }
@@ -85,41 +84,25 @@ func NewBinaryFileSink(path string) (*WriterSink, []byte, error) {
 }
 
 func (s *WriterSink) WriteEntry(e *auditlog.Entry) error {
-
 	s.mu.Lock()
-
 	defer s.mu.Unlock()
 
-
-
-	if err := s.serializer.Encode(s.bufWriter, e); err != nil {
-
+	s.buf.Reset()
+	if err := s.serializer.Encode(&s.buf, e); err != nil {
 		return err
-
 	}
 
-	return s.bufWriter.Flush()
-
+	_, err := s.writer.Write(s.buf.Bytes())
+	return err
 }
 
-
-
 func (s *WriterSink) Close() error {
-
 	s.mu.Lock()
-
 	defer s.mu.Unlock()
 
-	
-
-	_ = s.bufWriter.Flush()
-
 	if s.closer != nil {
-
 		return s.closer.Close()
-
 	}
 
 	return nil
-
 }
