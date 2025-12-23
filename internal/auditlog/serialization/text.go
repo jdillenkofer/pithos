@@ -78,7 +78,7 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 	}
 
 	version, _ := strconv.Atoi(matches[1])
-	ts, err := time.Parse(textTimestampFormat, matches[2])
+	ts, err := time.ParseInLocation(textTimestampFormat, matches[2], time.UTC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse timestamp: %w", err)
 	}

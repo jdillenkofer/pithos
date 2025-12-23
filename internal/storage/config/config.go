@@ -28,13 +28,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/prometheus/client_golang/prometheus"
-	"encoding/base64"
-	"crypto/ed25519"
 	"crypto/sha512"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
@@ -302,23 +299,14 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		return nil, err
 	}
 	
-	decodedKey, err := base64.StdEncoding.DecodeString(a.Ed25519PrivateKey)
+	edPriv, err := signing.LoadEd25519PrivateKey(a.Ed25519PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode private key: %w", err)
-	}
-	
-	if len(decodedKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("invalid private key size")
+		return nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
 	}
 
-	decodedMlKey, err := base64.StdEncoding.DecodeString(a.MlDsaPrivateKey)
+	mlPriv, err := signing.LoadMlDsaPrivateKey(a.MlDsaPrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode ML-DSA private key: %w", err)
-	}
-
-	mlPriv := &mldsa65.PrivateKey{}
-	if err := mlPriv.UnmarshalBinary(decodedMlKey); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ML-DSA private key: %w", err)
+		return nil, fmt.Errorf("failed to load ML-DSA private key: %w", err)
 	}
 
 	var sinks []sink.Sink
@@ -376,7 +364,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		lastHash = make([]byte, sha512.Size)
 	}
 	
-	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(edPriv), signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
 }
 
 type OutboxStorageConfiguration struct {

@@ -97,12 +97,62 @@ cosign verify-blob \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-### Configuration
-Pithos can be configured using command-line arguments or environment variables.
-For a complete list of available command-line arguments, you can run:
+### CLI Subcommands
+
+Pithos provides several subcommands for managing and maintaining the storage server.
+
+#### `serve`
+Starts the S3-compatible object storage server.
 ```sh
-./pithos serve --help
+pithos serve [options]
 ```
+For a complete list of available command-line arguments, run `./pithos serve --help`.
+
+#### `migrate-storage`
+Migrates data between two different storage configurations.
+```sh
+pithos migrate-storage <source-config.json> <destination-config.json>
+```
+The migration is performed bucket by bucket. To prevent data loss, it will not overwrite existing objects in the destination.
+
+#### `benchmark-storage`
+Measures the performance of a storage configuration.
+```sh
+pithos benchmark-storage <config.json>
+```
+This command performs upload and download benchmarks with various object sizes and reports the speeds.
+
+#### `validate-storage`
+Checks the integrity of all objects in the storage.
+```sh
+pithos validate-storage <config.json> [options]
+```
+Available options:
+- `-delete-corrupted`: Delete objects that fail integrity checks.
+- `-force`: Force deletion without confirmation.
+- `-json`: Output results in JSON format.
+- `-output <path>`: Write the validation report to a file.
+
+#### `audit-log`
+Provides tools for verifying, dumping, and analyzing audit logs.
+```sh
+pithos audit-log <verify|dump|stats> [options]
+```
+Common options:
+- `-input-file <path>`: (Required) Path to the audit log file.
+- `-input-format <bin|json|text>`: Input format (default: `bin`).
+- `-ed25519-public-key <key>`: (Required) Base64 encoded Ed25519 public key or path to key file.
+- `-ml-dsa-public-key <key>`: Base64 encoded ML-DSA public key or path to key file.
+
+Subcommand specific options:
+- `dump`: Supports `-output-format <json|text|bin>` and `-output-file <path>`.
+
+**Example: Verify an audit log**
+```sh
+pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++...
+```
+
+### Configuration
 
 The following environment variables are available:
 

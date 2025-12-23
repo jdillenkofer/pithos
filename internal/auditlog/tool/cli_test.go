@@ -89,8 +89,22 @@ func TestRunAuditLogTool(t *testing.T) {
 	tmpFile.Close()
 
 	// Verify
-	err := RunAuditLogTool(tmpFile.Name(), edVerifier, mlVerifier, "text", io.Discard)
+	auditTool := NewAuditLogTool(tmpFile.Name(), edVerifier, mlVerifier)
+	err := auditTool.Verify("bin")
 	if err != nil {
 		t.Fatalf("Verification failed: %v", err)
+	}
+
+	err = auditTool.Dump("bin", "text", io.Discard)
+	if err != nil {
+		t.Fatalf("Dump failed: %v", err)
+	}
+
+	stats, err := auditTool.Stats("bin")
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != auditlog.GroundingBlockSize+2 {
+		t.Errorf("Expected %d total entries, got %d", auditlog.GroundingBlockSize+2, stats.TotalEntries)
 	}
 }

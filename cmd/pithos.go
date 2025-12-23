@@ -25,9 +25,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
-	"encoding/base64"
-	"crypto/ed25519"
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 )
@@ -481,61 +478,54 @@ func validateStorage(ctx context.Context) {
 }
 
 func auditLogTool() {
-	fs := flag.NewFlagSet(subcommandAuditLog, flag.ExitOnError)
-	publicKeyBase64 := fs.String("public-key", "", "Base64 encoded Ed25519 public key for verification")
-	mlDsaPublicKeyBase64 := fs.String("ml-dsa-public-key", "", "Base64 encoded ML-DSA public key for grounding verification")
-	format := fs.String("format", "json", "Output format (json, text, bin)")
-	outputPath := fs.String("output", "-", "Output path (use '-' for stdout)")
-	
 	if len(os.Args) < 3 {
-		slog.Info(fmt.Sprintf("Usage: %s %s [log-file] --public-key <key> [--ml-dsa-public-key <key>] [--format <json|text|bin>] [--output <path>]", os.Args[0], subcommandAuditLog))
-		fs.PrintDefaults()
+		slog.Info(fmt.Sprintf("Usage: %s %s [verify|dump|stats] [options]", os.Args[0], subcommandAuditLog))
 		os.Exit(1)
 	}
 
-	logFilePath := os.Args[2]
+	sub := os.Args[2]
+	fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
 	
-	// Parse flags starting from after the log file path
-	if len(os.Args) > 3 {
-		fs.Parse(os.Args[3:])
-	}
+	inputFilePath := fs.String("input-file", "", "Path to the audit log file")
+	inputFormat := fs.String("input-format", "bin", "Input format (bin, json)")
+	ed25519PubKeyStr := fs.String("ed25519-public-key", "", "Base64 encoded Ed25519 public key or path to key file")
+	mlDsaPubKeyStr := fs.String("ml-dsa-public-key", "", "Base64 encoded ML-DSA public key or path to key file")
+	outputFormat := fs.String("output-format", "json", "Output format (json, text, bin) - only for dump")
+	outputFilePath := fs.String("output-file", "-", "Output path (use '-' for stdout)")
 
-	if *publicKeyBase64 == "" {
-		slog.Error("Public key is required")
+	fs.Parse(os.Args[3:])
+
+	if *inputFilePath == "" {
+		slog.Error("Input file path is required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
-	decodedKey, err := base64.StdEncoding.DecodeString(*publicKeyBase64)
-	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to decode public key: %v", err))
+	if *ed25519PubKeyStr == "" {
+		slog.Error("Ed25519 public key is required")
+		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
-	if len(decodedKey) != ed25519.PublicKeySize {
-		slog.Error(fmt.Sprintf("Invalid public key size: expected %d, got %d", ed25519.PublicKeySize, len(decodedKey)))
+	edPubKey, err := signing.LoadEd25519PublicKey(*ed25519PubKeyStr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to load Ed25519 public key: %v", err))
 		os.Exit(1)
 	}
 
 	var mlDsaVerifier signing.Verifier
-	if *mlDsaPublicKeyBase64 != "" {
-		decodedMlKey, err := base64.StdEncoding.DecodeString(*mlDsaPublicKeyBase64)
+	if *mlDsaPubKeyStr != "" {
+		mlPub, err := signing.LoadMlDsaPublicKey(*mlDsaPubKeyStr)
 		if err != nil {
-			slog.Error(fmt.Sprintf("Failed to decode ML-DSA public key: %v", err))
-			os.Exit(1)
-		}
-		
-		mlPub := &mldsa65.PublicKey{}
-		if err := mlPub.UnmarshalBinary(decodedMlKey); err != nil {
-			slog.Error(fmt.Sprintf("Failed to unmarshal ML-DSA public key: %v", err))
+			slog.Error(fmt.Sprintf("Failed to load ML-DSA public key: %v", err))
 			os.Exit(1)
 		}
 		mlDsaVerifier = signing.NewMlDsaVerifier(mlPub)
 	}
 
 	var out io.Writer = os.Stdout
-	if *outputPath != "-" {
-		f, err := os.Create(*outputPath)
+	if *outputFilePath != "-" {
+		f, err := os.Create(*outputFilePath)
 		if err != nil {
 			slog.Error(fmt.Sprintf("Failed to create output file: %v", err))
 			os.Exit(1)
@@ -547,9 +537,25 @@ func auditLogTool() {
 	bw := bufio.NewWriter(out)
 	defer bw.Flush()
 
-	err = tool.RunAuditLogTool(logFilePath, signing.NewEd25519Verifier(ed25519.PublicKey(decodedKey)), mlDsaVerifier, *format, bw)
+	auditTool := tool.NewAuditLogTool(*inputFilePath, signing.NewEd25519Verifier(edPubKey), mlDsaVerifier)
+
+	switch sub {
+	case "verify":
+		err = auditTool.Verify(*inputFormat)
+		if err == nil {
+			fmt.Fprintln(os.Stderr, "Audit log verification successful!")
+		}
+	case "dump":
+		err = auditTool.Dump(*inputFormat, *outputFormat, bw)
+	case "stats":
+		err = auditTool.PrintStats(*inputFormat, bw)
+	default:
+		slog.Error(fmt.Sprintf("Unknown audit-log subcommand: %s", sub))
+		os.Exit(1)
+	}
+
 	if err != nil {
-		slog.Error(fmt.Sprintf("Audit log verification failed: %v", err))
+		slog.Error(fmt.Sprintf("Audit log operation failed: %v", err))
 		os.Exit(1)
 	}
 }
