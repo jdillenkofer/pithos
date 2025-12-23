@@ -31,39 +31,43 @@ func (s *WriterSink) WithCloser(closer io.Closer) *WriterSink {
 	return s
 }
 
-func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink, []byte, error) {
+func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink, []byte, [][]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	
 	var lastHash []byte
+	var hashBuffer [][]byte
 
 	if info.Size() > 0 {
 		if _, err := f.Seek(0, 0); err != nil {
 			f.Close()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		
-		var lastEntry *auditlog.Entry
 		dec := serializer.NewDecoder(f)
 		for {
 			e, err := dec.Decode()
 			if err != nil {
 				break // EOF or error
 			}
-			lastEntry = e
+			lastHash = e.Hash
+			
+			if e.Type == auditlog.EntryTypeLog {
+				hashBuffer = append(hashBuffer, e.Hash)
+			} else if e.Type == auditlog.EntryTypeGrounding || e.Type == auditlog.EntryTypeGenesis {
+				hashBuffer = nil // Reset on grounding or genesis
+			}
 		}
 		
-		if lastEntry != nil {
-			lastHash = lastEntry.Hash
-		} else {
+		if lastHash == nil {
 			lastHash = make([]byte, sha512.Size)
 		}
 	} else {
@@ -73,13 +77,13 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	// Reset offset to end for appending
 	if _, err := f.Seek(0, 2); err != nil {
 		f.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return NewWriterSink(f, serializer).WithCloser(f), lastHash, nil
+	return NewWriterSink(f, serializer).WithCloser(f), lastHash, hashBuffer, nil
 }
 
-func NewBinaryFileSink(path string) (*WriterSink, []byte, error) {
+func NewBinaryFileSink(path string) (*WriterSink, []byte, [][]byte, error) {
 	return NewFileSink(path, &serialization.BinarySerializer{})
 }
 

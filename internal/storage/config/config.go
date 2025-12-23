@@ -323,6 +323,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 
 	var sinks []sink.Sink
 	var lastHash []byte
+	var initialHashBuffer [][]byte
 
 	for _, sc := range a.Sinks {
 		var s serialization.Serializer
@@ -339,11 +340,12 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 
 		var curSink sink.Sink
 		var curHash []byte
+		var curBuffer [][]byte
 
 		switch sc.Type {
 		case "file":
 			var fs *sink.WriterSink
-			fs, curHash, err = sink.NewFileSink(sc.Path, s)
+			fs, curHash, curBuffer, err = sink.NewFileSink(sc.Path, s)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create file sink at %s: %w", sc.Path, err)
 			}
@@ -355,6 +357,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		sinks = append(sinks, curSink)
 		if lastHash == nil && len(curHash) > 0 {
 			lastHash = curHash
+			initialHashBuffer = curBuffer
 		}
 	}
 
@@ -373,7 +376,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		lastHash = make([]byte, sha512.Size)
 	}
 	
-	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), signing.NewMlDsaSigner(mlPriv), lastHash), nil
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
 }
 
 type OutboxStorageConfiguration struct {

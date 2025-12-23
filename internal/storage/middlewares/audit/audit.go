@@ -26,14 +26,18 @@ type AuditLogMiddleware struct {
 	mu          sync.Mutex
 }
 
-func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.Signer, mlDsaSigner signing.Signer, lastHash []byte) *AuditLogMiddleware {
+func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.Signer, mlDsaSigner signing.Signer, lastHash []byte, initialHashBuffer [][]byte) *AuditLogMiddleware {
 	m := &AuditLogMiddleware{
 		next:        next,
 		sink:        sink,
 		signer:      signer,
 		mlDsaSigner: mlDsaSigner,
 		lastHash:    lastHash,
-		hashBuffer:  make([][]byte, 0, auditlog.GroundingBlockSize),
+		hashBuffer:  initialHashBuffer,
+	}
+	
+	if m.hashBuffer == nil {
+		m.hashBuffer = make([][]byte, 0, auditlog.GroundingBlockSize)
 	}
 	
 	isZero := true

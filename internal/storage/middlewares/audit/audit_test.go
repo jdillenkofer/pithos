@@ -49,14 +49,14 @@ func TestAuditLogMiddleware(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	s, lastHash, err := sink.NewBinaryFileSink(tmpFile.Name())
+	s, lastHash, initialBuffer, err := sink.NewBinaryFileSink(tmpFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 
 	mock := &mockStorage{}
-	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash)
+	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash, initialBuffer)
 
 	ctx := context.Background()
 	bucketName := metadatastore.MustNewBucketName("test-bucket")
