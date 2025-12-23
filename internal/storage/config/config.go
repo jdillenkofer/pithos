@@ -31,6 +31,7 @@ import (
 	"crypto/sha512"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
@@ -267,12 +268,35 @@ type SinkConfiguration struct {
 	Path   string `json:"path"`
 }
 
+type VaultSigningConfiguration struct {
+	Address  string `json:"address"`
+	Token    string `json:"token,omitempty"`
+	RoleID   string `json:"roleId,omitempty"`
+	SecretID string `json:"secretId,omitempty"`
+	KeyName  string `json:"keyName"`
+	Mount    string `json:"mount,omitempty"`
+}
+
+type Ed25519SigningConfiguration struct {
+	PrivateKey string                     `json:"privateKey,omitempty"` // File path or base64 encoded
+	Vault      *VaultSigningConfiguration `json:"vault,omitempty"`
+}
+
+type MlDsaSigningConfiguration struct {
+	PrivateKey string `json:"privateKey"` // File path or base64 encoded
+}
+
+type SigningConfiguration struct {
+	Ed25519 *Ed25519SigningConfiguration `json:"ed25519"`
+	MlDsa   *MlDsaSigningConfiguration   `json:"mlDsa"`
+}
+
 type AuditStorageMiddlewareConfiguration struct {
-	InnerStorageInstantiator StorageInstantiator `json:"-"`
-	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
-	Sinks                    []SinkConfiguration `json:"sinks"`
-	Ed25519PrivateKey        string              `json:"ed25519PrivateKey"` // Base64 encoded
-	MlDsaPrivateKey          string              `json:"mlDsaPrivateKey"`   // Base64 encoded
+	InnerStorageInstantiator StorageInstantiator   `json:"-"`
+	RawInnerStorage          json.RawMessage       `json:"innerStorage"`
+	Sinks                    []SinkConfiguration   `json:"sinks"`
+	Signing                  *SigningConfiguration `json:"signing"`
+	
 	internalConfig.DynamicJsonType
 }
 
@@ -299,12 +323,49 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		return nil, err
 	}
 	
-	edPriv, err := signing.LoadEd25519PrivateKey(a.Ed25519PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
+	if a.Signing == nil {
+		return nil, errors.New("signing configuration is required")
 	}
 
-	mlPriv, err := signing.LoadMlDsaPrivateKey(a.MlDsaPrivateKey)
+	// Ed25519 Signer
+	var edSigner signing.Signer
+	if a.Signing.Ed25519 == nil {
+		return nil, errors.New("signing.ed25519 configuration is required")
+	}
+
+	if a.Signing.Ed25519.Vault != nil {
+		// Use Vault Signer
+		vc := a.Signing.Ed25519.Vault
+		if vc.Address == "" {
+			return nil, errors.New("signing.ed25519.vault.address is required")
+		}
+		if vc.KeyName == "" {
+			return nil, errors.New("signing.ed25519.vault.keyName is required")
+		}
+		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyName, vc.Mount, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Vault signer: %w", err)
+		}
+	} else {
+		// Use Local Ed25519 Key
+		if a.Signing.Ed25519.PrivateKey == "" {
+			return nil, errors.New("signing.ed25519.privateKey is required if vault is not configured")
+		}
+		edPriv, err := signing.LoadEd25519PrivateKey(a.Signing.Ed25519.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
+		}
+		edSigner = signing.NewEd25519Signer(edPriv)
+	}
+
+	// ML-DSA Signer
+	if a.Signing.MlDsa == nil {
+		return nil, errors.New("signing.mlDsa configuration is required")
+	}
+	if a.Signing.MlDsa.PrivateKey == "" {
+		return nil, errors.New("signing.mlDsa.privateKey is required")
+	}
+	mlPriv, err := signing.LoadMlDsaPrivateKey(a.Signing.MlDsa.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load ML-DSA private key: %w", err)
 	}
@@ -364,7 +425,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		lastHash = make([]byte, sha512.Size)
 	}
 	
-	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(edPriv), signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, edSigner, signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
 }
 
 type OutboxStorageConfiguration struct {

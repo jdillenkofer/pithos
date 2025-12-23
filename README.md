@@ -318,8 +318,9 @@ For PostgreSQL, you can use this configuration:
 ```
 
 ##### Audit Log Middleware Configuration
-You can wrap any storage backend with the `AuditStorageMiddleware` to enable operation logging. This example shows how to configure it with a binary file sink:
+You can wrap any storage backend with the `AuditStorageMiddleware` to enable operation logging. 
 
+**Option 1: Using Local Keys**
 ```json
 {
   "type": "AuditStorageMiddleware",
@@ -327,8 +328,14 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
      "type": "MetadataPartStorage",
      ...
   },
-  "ed25519PrivateKey": "<Base64-encoded-Ed25519-private-key>",
-  "mlDsaPrivateKey": "<Base64-encoded-ML-DSA-65-private-key>",
+  "signing": {
+    "ed25519": {
+      "privateKey": "<Base64-encoded-Ed25519-private-key-or-path>"
+    },
+    "mlDsa": {
+      "privateKey": "<Base64-encoded-ML-DSA-65-private-key-or-path>"
+    }
+  },
   "sinks": [
     {
       "type": "file",
@@ -336,6 +343,29 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
       "path": "./data/audit.log"
     }
   ]
+}
+```
+
+**Option 2: Using HashiCorp Vault for Ed25519 Signing**
+```json
+{
+  "type": "AuditStorageMiddleware",
+  "innerStorage": { ... },
+  "signing": {
+    "ed25519": {
+      "vault": {
+        "address": "https://vault.example.com:8200",
+        "roleId": "my-app-role-id",
+        "secretId": "my-app-role-secret-id",
+        "keyName": "audit-log-key",
+        "mount": "transit"
+      }
+    },
+    "mlDsa": {
+      "privateKey": "./keys/mldsa_priv.key"
+    }
+  },
+  "sinks": [ ... ]
 }
 ```
 

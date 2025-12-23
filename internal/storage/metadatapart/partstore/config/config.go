@@ -128,7 +128,7 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, errors.New("cannot use both vaultToken and AppRole authentication - choose one method")
 		}
 
-		return tink.NewWithHCVault(address, token, roleID, secretID, keyURI, innerPartStore)
+		return tink.NewWithHCVault(address, token, roleID, secretID, keyURI, innerPartStore, nil)
 	case "local":
 		password := t.Password.Value()
 		if password == "" {
