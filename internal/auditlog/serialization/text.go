@@ -15,8 +15,10 @@ import (
 
 type TextSerializer struct{}
 
+const textTimestampFormat = "2006-01-02 15:04:05.000000000"
+
 func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
-	timestamp := e.Timestamp.UTC().Format("2006-01-02 15:04:05")
+	timestamp := e.Timestamp.UTC().Format(textTimestampFormat)
 	base := fmt.Sprintf("V%d [%s] TYPE: %s", e.Version, timestamp, e.Type)
 
 	switch d := e.Details.(type) {
@@ -76,7 +78,7 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 	}
 
 	version, _ := strconv.Atoi(matches[1])
-	ts, err := time.Parse("2006-01-02 15:04:05", matches[2])
+	ts, err := time.Parse(textTimestampFormat, matches[2])
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse timestamp: %w", err)
 	}
