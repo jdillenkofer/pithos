@@ -29,10 +29,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/prometheus/client_golang/prometheus"
 	"crypto/sha512"
-	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	auditlogSinkConfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
@@ -262,12 +262,6 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider depend
 	return prometheusMiddleware.NewStorageMiddleware(innerStorage, prometheusRegisterer.(prometheus.Registerer))
 }
 
-type SinkConfiguration struct {
-	Type   string `json:"type"`   // "file"
-	Format string `json:"format"` // "bin", "json", "text"
-	Path   string `json:"path"`
-}
-
 type VaultSigningConfiguration struct {
 	Address  string `json:"address"`
 	Token    string `json:"token,omitempty"`
@@ -292,11 +286,12 @@ type SigningConfiguration struct {
 }
 
 type AuditStorageMiddlewareConfiguration struct {
-	InnerStorageInstantiator StorageInstantiator   `json:"-"`
-	RawInnerStorage          json.RawMessage       `json:"innerStorage"`
-	Sinks                    []SinkConfiguration   `json:"sinks"`
-	Signing                  *SigningConfiguration `json:"signing"`
-	
+	InnerStorageInstantiator StorageInstantiator                   `json:"-"`
+	RawInnerStorage          json.RawMessage                       `json:"innerStorage"`
+	SinkInstantiators        []auditlogSinkConfig.SinkInstantiator `json:"-"`
+	RawSinks                 []json.RawMessage                     `json:"sinks"`
+	Signing                  *SigningConfiguration                 `json:"signing"`
+
 	internalConfig.DynamicJsonType
 }
 
@@ -310,11 +305,28 @@ func (a *AuditStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
+	for _, rawSink := range a.RawSinks {
+		sinkInstantiator, err := auditlogSinkConfig.CreateSinkInstantiatorFromJson(rawSink)
+		if err != nil {
+			return err
+		}
+		a.SinkInstantiators = append(a.SinkInstantiators, sinkInstantiator)
+	}
 	return nil
 }
 
 func (a *AuditStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	return a.InnerStorageInstantiator.RegisterReferences(diCollection)
+	err := a.InnerStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	for _, sinkInstantiator := range a.SinkInstantiators {
+		err = sinkInstantiator.RegisterReferences(diCollection)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
@@ -322,7 +334,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if a.Signing == nil {
 		return nil, errors.New("signing configuration is required")
 	}
@@ -374,39 +386,25 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 	var lastHash []byte
 	var initialHashBuffer [][]byte
 
-	for _, sc := range a.Sinks {
-		var s serialization.Serializer
-		switch sc.Format {
-		case "bin":
-			s = &serialization.BinarySerializer{}
-		case "json":
-			s = &serialization.JsonSerializer{Indent: true}
-		case "text":
-			s = &serialization.TextSerializer{}
-		default:
-			return nil, fmt.Errorf("unknown audit log format: %s", sc.Format)
-		}
-
-		var curSink sink.Sink
-		var curHash []byte
-		var curBuffer [][]byte
-
-		switch sc.Type {
-		case "file":
-			var fs *sink.WriterSink
-			fs, curHash, curBuffer, err = sink.NewFileSink(sc.Path, s)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create file sink at %s: %w", sc.Path, err)
-			}
-			curSink = fs
-		default:
-			return nil, fmt.Errorf("unknown audit log sink type: %s", sc.Type)
+	for _, si := range a.SinkInstantiators {
+		curSink, err := si.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
 		}
 
 		sinks = append(sinks, curSink)
-		if lastHash == nil && len(curHash) > 0 {
-			lastHash = curHash
-			initialHashBuffer = curBuffer
+
+		if lastHash == nil {
+			if isp, ok := curSink.(sink.InitialStateProvider); ok {
+				state, err := isp.InitialState()
+				if err != nil {
+					return nil, fmt.Errorf("failed to get initial state from sink: %w", err)
+				}
+				if state != nil && len(state.LastHash) > 0 {
+					lastHash = state.LastHash
+					initialHashBuffer = state.HashBuffer
+				}
+			}
 		}
 	}
 
@@ -424,7 +422,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 	if lastHash == nil {
 		lastHash = make([]byte, sha512.Size)
 	}
-	
+
 	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, edSigner, signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
 }
 

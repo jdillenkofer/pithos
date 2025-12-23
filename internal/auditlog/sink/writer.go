@@ -12,11 +12,12 @@ import (
 )
 
 type WriterSink struct {
-	writer     io.Writer
-	closer     io.Closer
-	serializer serialization.Serializer
-	mu         sync.Mutex
-	buf        bytes.Buffer
+	writer       io.Writer
+	closer       io.Closer
+	serializer   serialization.Serializer
+	mu           sync.Mutex
+	buf          bytes.Buffer
+	initialState *InitialState
 }
 
 func NewWriterSink(writer io.Writer, serializer serialization.Serializer) *WriterSink {
@@ -31,16 +32,20 @@ func (s *WriterSink) WithCloser(closer io.Closer) *WriterSink {
 	return s
 }
 
-func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink, []byte, [][]byte, error) {
+func (s *WriterSink) InitialState() (*InitialState, error) {
+	return s.initialState, nil
+}
+
+func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, nil, nil, err
+		return nil, err
 	}
 	
 	var lastHash []byte
@@ -49,7 +54,7 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	if info.Size() > 0 {
 		if _, err := f.Seek(0, 0); err != nil {
 			f.Close()
-			return nil, nil, nil, err
+			return nil, err
 		}
 		
 		dec := serializer.NewDecoder(f)
@@ -77,13 +82,19 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	// Reset offset to end for appending
 	if _, err := f.Seek(0, 2); err != nil {
 		f.Close()
-		return nil, nil, nil, err
+		return nil, err
 	}
 
-	return NewWriterSink(f, serializer).WithCloser(f), lastHash, hashBuffer, nil
+	ws := NewWriterSink(f, serializer).WithCloser(f)
+	ws.initialState = &InitialState{
+		LastHash:   lastHash,
+		HashBuffer: hashBuffer,
+	}
+
+	return ws, nil
 }
 
-func NewBinaryFileSink(path string) (*WriterSink, []byte, [][]byte, error) {
+func NewBinaryFileSink(path string) (*WriterSink, error) {
 	return NewFileSink(path, &serialization.BinarySerializer{})
 }
 

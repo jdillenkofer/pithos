@@ -338,9 +338,11 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
   },
   "sinks": [
     {
-      "type": "file",
-      "format": "bin",
-      "path": "./data/audit.log"
+      "type": "FileSink",
+      "path": "./data/audit.log",
+      "serializer": {
+        "type": "BinarySerializer"
+      }
     }
   ]
 }
@@ -365,7 +367,16 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
       "privateKey": "./keys/mldsa_priv.key"
     }
   },
-  "sinks": [ ... ]
+  "sinks": [
+    {
+      "type": "FileSink",
+      "path": "./data/audit.log",
+      "serializer": {
+        "type": "JsonSerializer",
+        "indent": true
+      }
+    }
+  ]
 }
 ```
 

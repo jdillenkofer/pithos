@@ -49,11 +49,18 @@ func TestAuditLogMiddleware(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	s, lastHash, initialBuffer, err := sink.NewBinaryFileSink(tmpFile.Name())
+	s, err := sink.NewBinaryFileSink(tmpFile.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
+
+	state, err := s.InitialState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastHash := state.LastHash
+	initialBuffer := state.HashBuffer
 
 	mock := &mockStorage{}
 	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash, initialBuffer)
