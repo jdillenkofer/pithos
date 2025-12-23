@@ -11,6 +11,7 @@ import (
 	"os"
 	"reflect"
 	"bufio"
+	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -479,11 +480,74 @@ func validateStorage(ctx context.Context) {
 
 func auditLogTool() {
 	if len(os.Args) < 3 {
-		slog.Info(fmt.Sprintf("Usage: %s %s [verify|dump|stats] [options]", os.Args[0], subcommandAuditLog))
+		slog.Info(fmt.Sprintf("Usage: %s %s [verify|dump|stats|keygen] [options]", os.Args[0], subcommandAuditLog))
 		os.Exit(1)
 	}
 
 	sub := os.Args[2]
+	if sub == "keygen" {
+		fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
+		outputBase := fs.String("f", "", "Output base filename (e.g. 'audit_key')")
+		fs.Parse(os.Args[3:])
+
+		auditTool := tool.NewAuditLogTool("", nil, nil)
+		if *outputBase == "" {
+			err := auditTool.Keygen(os.Stdout)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Key generation failed: %v", err))
+				os.Exit(1)
+			}
+			return
+		}
+
+		// File-based keygen
+		keys, err := auditTool.GenerateAuditKeys()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Key generation failed: %v", err))
+			os.Exit(1)
+		}
+
+		edBase := *outputBase + "_ed25519"
+		mlBase := *outputBase + "_mldsa"
+		files := []string{edBase, edBase + ".pub", mlBase, mlBase + ".pub"}
+
+		existing := []string{}
+		for _, f := range files {
+			if _, err := os.Stat(f); err == nil {
+				existing = append(existing, f)
+			}
+		}
+
+		if len(existing) > 0 {
+			fmt.Printf("The following files already exist:\n")
+			for _, f := range existing {
+				fmt.Printf("  %s\n", f)
+			}
+			fmt.Print("Overwrite (y/n)? ")
+			var response string
+			fmt.Scanln(&response)
+			if strings.ToLower(response) != "y" {
+				fmt.Println("Key generation aborted.")
+				return
+			}
+		}
+
+		if err := auditTool.WriteKeypair(edBase, keys.Ed25519Priv, keys.Ed25519Pub); err != nil {
+			slog.Error(fmt.Sprintf("Failed to write Ed25519 keys: %v", err))
+			os.Exit(1)
+		}
+		if err := auditTool.WriteKeypair(mlBase, keys.MlDsaPriv, keys.MlDsaPub); err != nil {
+			slog.Error(fmt.Sprintf("Failed to write ML-DSA keys: %v", err))
+			os.Exit(1)
+		}
+
+		fmt.Printf("Keys saved to:\n")
+		for _, f := range files {
+			fmt.Printf("  %s\n", f)
+		}
+		return
+	}
+
 	fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
 	
 	inputFilePath := fs.String("input-file", "", "Path to the audit log file")

@@ -95,3 +95,17 @@ func isLikelyRawKey(data []byte) bool {
 	l := len(data)
 	return l == ed25519.PublicKeySize || l == ed25519.PrivateKeySize || l == mldsa65.PublicKeySize || l == mldsa65.PrivateKeySize
 }
+
+func GenerateEd25519KeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	return ed25519.GenerateKey(nil)
+}
+
+func GenerateMlDsaKeyPair() ([]byte, []byte, error) {
+	pub, priv, err := mldsa65.GenerateKey(nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubBytes, _ := pub.MarshalBinary()
+	privBytes, _ := priv.MarshalBinary()
+	return pubBytes, privBytes, nil
+}

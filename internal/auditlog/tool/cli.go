@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"crypto/sha512"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -212,6 +213,68 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 	}
 
 	return stats, nil
+}
+
+type AuditKeys struct {
+	Ed25519Pub  []byte
+	Ed25519Priv []byte
+	MlDsaPub    []byte
+	MlDsaPriv   []byte
+}
+
+func (t *AuditLogTool) GenerateAuditKeys() (*AuditKeys, error) {
+	// Ed25519
+	edPub, edPriv, err := signing.GenerateEd25519KeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate Ed25519 key: %w", err)
+	}
+
+	// ML-DSA
+	mlPub, mlPriv, err := signing.GenerateMlDsaKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ML-DSA key: %w", err)
+	}
+
+	return &AuditKeys{
+		Ed25519Pub:  edPub,
+		Ed25519Priv: edPriv,
+		MlDsaPub:    mlPub,
+		MlDsaPriv:   mlPriv,
+	}, nil
+}
+
+func (t *AuditLogTool) Keygen(out io.Writer) error {
+	keys, err := t.GenerateAuditKeys()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "--- Audit Log Key Pairs ---\n\n")
+	fmt.Fprintf(out, "Ed25519 (Used for per-entry signing):\n")
+	fmt.Fprintf(out, "  Private Key: %s\n", base64.StdEncoding.EncodeToString(keys.Ed25519Priv))
+	fmt.Fprintf(out, "  Public Key:  %s\n\n", base64.StdEncoding.EncodeToString(keys.Ed25519Pub))
+
+	fmt.Fprintf(out, "ML-DSA-65 (Used for Post-Quantum grounding):\n")
+	fmt.Fprintf(out, "  Private Key: %s\n", base64.StdEncoding.EncodeToString(keys.MlDsaPriv))
+	fmt.Fprintf(out, "  Public Key:  %s\n\n", base64.StdEncoding.EncodeToString(keys.MlDsaPub))
+
+	fmt.Fprintf(out, "Keep private keys secure. You need them in your storage.json configuration.\n")
+	fmt.Fprintf(out, "Use public keys for verification with 'audit-log verify'.\n")
+
+	return nil
+}
+
+func (t *AuditLogTool) WriteKeypair(path string, priv []byte, pub []byte) error {
+	privPath := path
+	pubPath := path + ".pub"
+
+	if err := os.WriteFile(privPath, []byte(base64.StdEncoding.EncodeToString(priv)+"\n"), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(pubPath, []byte(base64.StdEncoding.EncodeToString(pub)+"\n"), 0644); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (t *AuditLogTool) verifyEntry(entry *auditlog.Entry, idx int, prevHash *[]byte, hashBuffer *[][]byte) error {

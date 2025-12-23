@@ -134,18 +134,28 @@ Available options:
 - `-output <path>`: Write the validation report to a file.
 
 #### `audit-log`
-Provides tools for verifying, dumping, and analyzing audit logs.
+Provides tools for verifying, dumping, analyzing, and generating keys for audit logs.
 ```sh
-pithos audit-log <verify|dump|stats> [options]
+pithos audit-log <verify|dump|stats|keygen> [options]
 ```
 Common options:
-- `-input-file <path>`: (Required) Path to the audit log file.
+- `-input-file <path>`: (Required for verify|dump|stats) Path to the audit log file.
 - `-input-format <bin|json|text>`: Input format (default: `bin`).
-- `-ed25519-public-key <key>`: (Required) Base64 encoded Ed25519 public key or path to key file.
+- `-ed25519-public-key <key>`: (Required for verify|dump|stats) Base64 encoded Ed25519 public key or path to key file.
 - `-ml-dsa-public-key <key>`: Base64 encoded ML-DSA public key or path to key file.
 
 Subcommand specific options:
 - `dump`: Supports `-output-format <json|text|bin>` and `-output-file <path>`.
+
+**Example: Generate key pairs for the audit log**
+```sh
+pithos audit-log keygen [-f <filename>]
+```
+- If no `-f` flag is provided, keys are printed to stdout.
+- If `-f` is provided, keys are saved to files (e.g., `mykey_ed25519`, `mykey_ed25519.pub`, etc.). 
+- Pithos will prompt for confirmation before overwriting existing files.
+
+The **private keys** must be kept secret and added to your `storage.json` configuration to enable signing. The **public keys** are used with the `verify` command.
 
 **Example: Verify an audit log**
 ```sh
