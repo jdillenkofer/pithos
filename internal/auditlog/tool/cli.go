@@ -8,8 +8,8 @@ import (
 	"os"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
-	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 )
 
@@ -77,12 +77,13 @@ func RunAuditLogTool(logPath string, verifier signing.Verifier, mlDsaVerifier si
 		}
 
 		// Grounding Verification
-		if entry.Type == auditlog.EntryTypeLog {
+		switch entry.Type {
+		case auditlog.EntryTypeLog:
 			hashBuffer = append(hashBuffer, entry.Hash)
 			if len(hashBuffer) > auditlog.GroundingBlockSize {
 				return &VerificationError{idx, fmt.Sprintf("too many log entries without grounding: expected grounding after %d entries", auditlog.GroundingBlockSize)}
 			}
-		} else if entry.Type == auditlog.EntryTypeGrounding {
+		case auditlog.EntryTypeGrounding:
 			if len(hashBuffer) != auditlog.GroundingBlockSize {
 				return &VerificationError{idx, fmt.Sprintf("grounding entry appeared at wrong interval: expected %d entries, got %d", auditlog.GroundingBlockSize, len(hashBuffer))}
 			}
@@ -112,7 +113,7 @@ func RunAuditLogTool(logPath string, verifier signing.Verifier, mlDsaVerifier si
 
 			hashBuffer = nil // Reset for next block
 		}
-		
+
 		if err := outputSink.WriteEntry(entry); err != nil {
 			return err
 		}
