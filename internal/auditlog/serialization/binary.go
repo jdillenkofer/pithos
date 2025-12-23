@@ -19,29 +19,48 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 	if err := binary.Write(w, binary.BigEndian, e.Timestamp.UnixNano()); err != nil {
 		return err
 	}
-	if err := writeString(w, string(e.Operation)); err != nil {
+	if err := writeString(w, string(e.Type)); err != nil {
 		return err
 	}
-	if err := writeString(w, string(e.Phase)); err != nil {
-		return err
-	}
-	if err := writeString(w, e.Bucket); err != nil {
-		return err
-	}
-	if err := writeString(w, e.Key); err != nil {
-		return err
-	}
-	if err := writeString(w, e.UploadID); err != nil {
-		return err
-	}
-	if err := binary.Write(w, binary.BigEndian, e.PartNumber); err != nil {
-		return err
-	}
-	if err := writeString(w, e.Actor); err != nil {
-		return err
-	}
-	if err := writeString(w, e.Error); err != nil {
-		return err
+
+	switch d := e.Details.(type) {
+	case *auditlog.GenesisDetails:
+		// No fields
+	case *auditlog.LogDetails:
+		if err := writeString(w, string(d.Operation)); err != nil {
+			return err
+		}
+		if err := writeString(w, string(d.Phase)); err != nil {
+			return err
+		}
+		if err := writeString(w, d.Bucket); err != nil {
+			return err
+		}
+		if err := writeString(w, d.Key); err != nil {
+			return err
+		}
+		if err := writeString(w, d.UploadID); err != nil {
+			return err
+		}
+		if err := binary.Write(w, binary.BigEndian, d.PartNumber); err != nil {
+			return err
+		}
+		if err := writeString(w, d.Actor); err != nil {
+			return err
+		}
+		if err := writeString(w, d.Error); err != nil {
+			return err
+		}
+	case *auditlog.GroundingDetails:
+		if err := writeBytes(w, d.MerkleRootHash); err != nil {
+			return err
+		}
+		if err := writeBytes(w, d.SignatureEd25519); err != nil {
+			return err
+		}
+		if err := writeBytes(w, d.SignatureMlDsa); err != nil {
+			return err
+		}
 	}
 	
 	// Hashes and signatures are fixed length
@@ -59,7 +78,7 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		return err
 	}
 	
-	if err := writeBytes(w, e.Signature); err != nil {
+	if err := writeBytes(w, e.SignatureEd25519); err != nil {
 		return err
 	}
 	
@@ -87,35 +106,60 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 	}
 	e.Timestamp = time.Unix(0, ts)
 	
-	op, err := readString(d.r)
+	typeStr, err := readString(d.r)
 	if err != nil {
 		return nil, err
 	}
-	e.Operation = auditlog.Operation(op)
-	
-	phaseStr, err := readString(d.r)
-	if err != nil {
-		return nil, err
-	}
-	e.Phase = auditlog.Phase(phaseStr)
-	
-	if e.Bucket, err = readString(d.r); err != nil {
-		return nil, err
-	}
-	if e.Key, err = readString(d.r); err != nil {
-		return nil, err
-	}
-	if e.UploadID, err = readString(d.r); err != nil {
-		return nil, err
-	}
-	if err := binary.Read(d.r, binary.BigEndian, &e.PartNumber); err != nil {
-		return nil, err
-	}
-	if e.Actor, err = readString(d.r); err != nil {
-		return nil, err
-	}
-	if e.Error, err = readString(d.r); err != nil {
-		return nil, err
+	e.Type = auditlog.EntryType(typeStr)
+
+	switch e.Type {
+	case auditlog.EntryTypeGenesis:
+		e.Details = &auditlog.GenesisDetails{}
+	case auditlog.EntryTypeLog:
+		dls := &auditlog.LogDetails{}
+		op, err := readString(d.r)
+		if err != nil {
+			return nil, err
+		}
+		dls.Operation = auditlog.Operation(op)
+		
+		phaseStr, err := readString(d.r)
+		if err != nil {
+			return nil, err
+		}
+		dls.Phase = auditlog.Phase(phaseStr)
+		
+		if dls.Bucket, err = readString(d.r); err != nil {
+			return nil, err
+		}
+		if dls.Key, err = readString(d.r); err != nil {
+			return nil, err
+		}
+		if dls.UploadID, err = readString(d.r); err != nil {
+			return nil, err
+		}
+		if err := binary.Read(d.r, binary.BigEndian, &dls.PartNumber); err != nil {
+			return nil, err
+		}
+		if dls.Actor, err = readString(d.r); err != nil {
+			return nil, err
+		}
+		if dls.Error, err = readString(d.r); err != nil {
+			return nil, err
+		}
+		e.Details = dls
+	case auditlog.EntryTypeGrounding:
+		dls := &auditlog.GroundingDetails{}
+		if dls.MerkleRootHash, err = readBytes(d.r); err != nil {
+			return nil, err
+		}
+		if dls.SignatureEd25519, err = readBytes(d.r); err != nil {
+			return nil, err
+		}
+		if dls.SignatureMlDsa, err = readBytes(d.r); err != nil {
+			return nil, err
+		}
+		e.Details = dls
 	}
 	
 	e.PreviousHash = make([]byte, sha512.Size)
@@ -128,7 +172,7 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		return nil, err
 	}
 	
-	e.Signature, err = readBytes(d.r)
+	e.SignatureEd25519, err = readBytes(d.r)
 	if err != nil {
 		return nil, err
 	}

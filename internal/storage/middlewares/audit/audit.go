@@ -17,19 +17,23 @@ import (
 )
 
 type AuditLogMiddleware struct {
-	next     storage.Storage
-	sink     sink.Sink
-	signer   signing.Signer
-	lastHash []byte
-	mu       sync.Mutex
+	next        storage.Storage
+	sink        sink.Sink
+	signer      signing.Signer
+	mlDsaSigner signing.Signer
+	lastHash    []byte
+	hashBuffer  [][]byte
+	mu          sync.Mutex
 }
 
-func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.Signer, lastHash []byte) *AuditLogMiddleware {
+func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.Signer, mlDsaSigner signing.Signer, lastHash []byte) *AuditLogMiddleware {
 	m := &AuditLogMiddleware{
-		next:     next,
-		sink:     sink,
-		signer:   signer,
-		lastHash: lastHash,
+		next:        next,
+		sink:        sink,
+		signer:      signer,
+		mlDsaSigner: mlDsaSigner,
+		lastHash:    lastHash,
+		hashBuffer:  make([][]byte, 0, auditlog.GroundingBlockSize),
 	}
 	
 	isZero := true
@@ -45,11 +49,11 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 		genesis := &auditlog.Entry{
 			Version:      auditlog.CurrentVersion,
 			Timestamp:    time.Now().UTC(),
-			Operation:    "GENESIS",
-			Bucket:       "SYSTEM",
+			Type:         auditlog.EntryTypeGenesis,
+			Details:      &auditlog.GenesisDetails{},
 			PreviousHash: pithosHash[:],
 		}
-		genesis.Sign(signer)
+		_ = genesis.Sign(signer)
 		if err := sink.WriteEntry(genesis); err == nil {
 			m.lastHash = genesis.Hash
 		}
@@ -72,26 +76,59 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 	}
 
 	entry := &auditlog.Entry{
-		Version:    auditlog.CurrentVersion,
-		Timestamp:  time.Now(),
-		Operation:  op,
-		Phase:      phase,
-		Bucket:     bucket,
-		Key:        key,
-		UploadID:   uploadId,
-		PartNumber: partNumber,
-		Actor:      actor,
-		Error:      errMsg,
+		Version:   auditlog.CurrentVersion,
+		Timestamp: time.Now(),
+		Type:      auditlog.EntryTypeLog,
+		Details: &auditlog.LogDetails{
+			Operation:  op,
+			Phase:      phase,
+			Bucket:     bucket,
+			Key:        key,
+			UploadID:   uploadId,
+			PartNumber: partNumber,
+			Actor:      actor,
+			Error:      errMsg,
+		},
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	
 	entry.PreviousHash = m.lastHash
-	entry.Sign(m.signer)
+	_ = entry.Sign(m.signer)
 
 	if err := m.sink.WriteEntry(entry); err == nil {
 		m.lastHash = entry.Hash
+		m.hashBuffer = append(m.hashBuffer, entry.Hash)
+		
+		if len(m.hashBuffer) >= auditlog.GroundingBlockSize {
+			m.emitGrounding()
+		}
+	}
+}
+
+func (m *AuditLogMiddleware) emitGrounding() {
+	root := auditlog.CalculateMerkleRoot(m.hashBuffer)
+	
+	sigEd, _ := m.signer.Sign(root)
+	sigMl, _ := m.mlDsaSigner.Sign(root)
+	
+	grounding := &auditlog.Entry{
+		Version:   auditlog.CurrentVersion,
+		Timestamp: time.Now().UTC(),
+		Type:      auditlog.EntryTypeGrounding,
+		Details: &auditlog.GroundingDetails{
+			MerkleRootHash:   root,
+			SignatureEd25519: sigEd,
+			SignatureMlDsa:   sigMl,
+		},
+		PreviousHash: m.lastHash,
+	}
+	
+	_ = grounding.Sign(m.signer)
+	if err := m.sink.WriteEntry(grounding); err == nil {
+		m.lastHash = grounding.Hash
+		m.hashBuffer = m.hashBuffer[:0]
 	}
 }
 

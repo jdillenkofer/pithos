@@ -27,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"encoding/base64"
 	"crypto/ed25519"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 )
@@ -482,11 +483,12 @@ func validateStorage(ctx context.Context) {
 func auditLogTool() {
 	fs := flag.NewFlagSet(subcommandAuditLog, flag.ExitOnError)
 	publicKeyBase64 := fs.String("public-key", "", "Base64 encoded Ed25519 public key for verification")
+	mlDsaPublicKeyBase64 := fs.String("ml-dsa-public-key", "", "Base64 encoded ML-DSA public key for grounding verification")
 	format := fs.String("format", "json", "Output format (json, text, bin)")
 	outputPath := fs.String("output", "-", "Output path (use '-' for stdout)")
 	
 	if len(os.Args) < 3 {
-		slog.Info(fmt.Sprintf("Usage: %s %s [log-file] --public-key <key> [--format <json|text|bin>] [--output <path>]", os.Args[0], subcommandAuditLog))
+		slog.Info(fmt.Sprintf("Usage: %s %s [log-file] --public-key <key> [--ml-dsa-public-key <key>] [--format <json|text|bin>] [--output <path>]", os.Args[0], subcommandAuditLog))
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
@@ -515,6 +517,22 @@ func auditLogTool() {
 		os.Exit(1)
 	}
 
+	var mlDsaVerifier signing.Verifier
+	if *mlDsaPublicKeyBase64 != "" {
+		decodedMlKey, err := base64.StdEncoding.DecodeString(*mlDsaPublicKeyBase64)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Failed to decode ML-DSA public key: %v", err))
+			os.Exit(1)
+		}
+		
+		mlPub := &mldsa65.PublicKey{}
+		if err := mlPub.UnmarshalBinary(decodedMlKey); err != nil {
+			slog.Error(fmt.Sprintf("Failed to unmarshal ML-DSA public key: %v", err))
+			os.Exit(1)
+		}
+		mlDsaVerifier = signing.NewMlDsaVerifier(mlPub)
+	}
+
 	var out io.Writer = os.Stdout
 	if *outputPath != "-" {
 		f, err := os.Create(*outputPath)
@@ -529,7 +547,7 @@ func auditLogTool() {
 	bw := bufio.NewWriter(out)
 	defer bw.Flush()
 
-	err = tool.RunAuditLogTool(logFilePath, signing.NewEd25519Verifier(ed25519.PublicKey(decodedKey)), *format, bw)
+	err = tool.RunAuditLogTool(logFilePath, signing.NewEd25519Verifier(ed25519.PublicKey(decodedKey)), mlDsaVerifier, *format, bw)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Audit log verification failed: %v", err))
 		os.Exit(1)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -36,6 +37,11 @@ func TestAuditLogMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	_, mlPriv, err := mldsa65.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tmpFile, err := os.CreateTemp("", "audit_log_test")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +56,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 	defer s.Close()
 
 	mock := &mockStorage{}
-	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), lastHash)
+	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash)
 
 	ctx := context.Background()
 	bucketName := metadatastore.MustNewBucketName("test-bucket")
@@ -73,8 +79,8 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if genesis.Operation != "GENESIS" {
-		t.Errorf("expected GENESIS op, got %s", genesis.Operation)
+	if genesis.Type != auditlog.EntryTypeGenesis {
+		t.Errorf("expected GENESIS type, got %s", genesis.Type)
 	}
 	expectedPrevHash := sha512.Sum512([]byte("pithos"))
 	if string(genesis.PreviousHash) != string(expectedPrevHash[:]) {
@@ -89,14 +95,18 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entryStart.Operation != auditlog.OpCreateBucket {
-		t.Errorf("expected OpCreateBucket, got %s", entryStart.Operation)
+	if entryStart.Type != auditlog.EntryTypeLog {
+		t.Errorf("expected LOG type, got %s", entryStart.Type)
 	}
-	if entryStart.Phase != auditlog.PhaseStart {
-		t.Errorf("expected START phase, got %s", entryStart.Phase)
+	dStart := entryStart.Details.(*auditlog.LogDetails)
+	if dStart.Operation != auditlog.OpCreateBucket {
+		t.Errorf("expected OpCreateBucket, got %s", dStart.Operation)
 	}
-	if entryStart.Bucket != "test-bucket" {
-		t.Errorf("expected bucket test-bucket, got %s", entryStart.Bucket)
+	if dStart.Phase != auditlog.PhaseStart {
+		t.Errorf("expected START phase, got %s", dStart.Phase)
+	}
+	if dStart.Bucket != "test-bucket" {
+		t.Errorf("expected bucket test-bucket, got %s", dStart.Bucket)
 	}
 	if !entryStart.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryStart signature verification failed")
@@ -107,11 +117,15 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entryEnd.Operation != auditlog.OpCreateBucket {
-		t.Errorf("expected OpCreateBucket, got %s", entryEnd.Operation)
+	if entryEnd.Type != auditlog.EntryTypeLog {
+		t.Errorf("expected LOG type, got %s", entryEnd.Type)
 	}
-	if entryEnd.Phase != auditlog.PhaseComplete {
-		t.Errorf("expected COMPLETE phase, got %s", entryEnd.Phase)
+	dEnd := entryEnd.Details.(*auditlog.LogDetails)
+	if dEnd.Operation != auditlog.OpCreateBucket {
+		t.Errorf("expected OpCreateBucket, got %s", dEnd.Operation)
+	}
+	if dEnd.Phase != auditlog.PhaseComplete {
+		t.Errorf("expected COMPLETE phase, got %s", dEnd.Phase)
 	}
 	if !entryEnd.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryEnd signature verification failed")

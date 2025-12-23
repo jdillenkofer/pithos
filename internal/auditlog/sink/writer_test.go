@@ -18,10 +18,13 @@ func TestWriterSink_WriteEntry(t *testing.T) {
 	entry := &auditlog.Entry{
 		Version:   1,
 		Timestamp: time.Date(2025, 12, 23, 10, 0, 0, 0, time.UTC),
-		Operation: auditlog.OpPutObject,
-		Phase:     auditlog.PhaseComplete,
-		Bucket:    "test-bucket",
-		Key:       "test-key",
+		Type:      auditlog.EntryTypeLog,
+		Details: &auditlog.LogDetails{
+			Operation: auditlog.OpPutObject,
+			Phase:     auditlog.PhaseComplete,
+			Bucket:    "test-bucket",
+			Key:       "test-key",
+		},
 	}
 
 	if err := sink.WriteEntry(entry); err != nil {

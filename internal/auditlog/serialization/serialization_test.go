@@ -17,28 +17,64 @@ import (
 )
 
 func TestSerializers(t *testing.T) {
-	entry := &auditlog.Entry{
-		Version:      auditlog.CurrentVersion,
-		Timestamp:    time.Date(2025, 12, 22, 10, 0, 0, 0, time.UTC),
-		Operation:    auditlog.OpCreateBucket,
-		Phase:        auditlog.PhaseStart,
-		Bucket:       "test-bucket",
-		Key:          "test-key",
-		Actor:        "test-actor",
-		PreviousHash: make([]byte, sha512.Size),
-		Hash:         make([]byte, sha512.Size),
-		Signature:    make([]byte, 64),
+	entries := []*auditlog.Entry{
+		{
+			Version:          auditlog.CurrentVersion,
+			Timestamp:        time.Date(2025, 12, 22, 10, 0, 0, 0, time.UTC),
+			Type:             auditlog.EntryTypeGenesis,
+			Details:          &auditlog.GenesisDetails{},
+			PreviousHash:     make([]byte, sha512.Size),
+			Hash:             make([]byte, sha512.Size),
+			SignatureEd25519: make([]byte, 64),
+		},
+		{
+			Version:   auditlog.CurrentVersion,
+			Timestamp: time.Date(2025, 12, 22, 10, 0, 1, 0, time.UTC),
+			Type:      auditlog.EntryTypeLog,
+			Details: &auditlog.LogDetails{
+				Operation:  auditlog.OpCreateBucket,
+				Phase:      auditlog.PhaseStart,
+				Bucket:     "test-bucket",
+				Key:        "test-key",
+				Actor:      "test-actor",
+			},
+			PreviousHash:     make([]byte, sha512.Size),
+			Hash:             make([]byte, sha512.Size),
+			SignatureEd25519: make([]byte, 64),
+		},
+		{
+			Version:   auditlog.CurrentVersion,
+			Timestamp: time.Date(2025, 12, 22, 11, 0, 0, 0, time.UTC),
+			Type:      auditlog.EntryTypeGrounding,
+			Details: &auditlog.GroundingDetails{
+				MerkleRootHash:   make([]byte, 64),
+				SignatureEd25519: make([]byte, 64),
+				SignatureMlDsa:   make([]byte, 64),
+			},
+			PreviousHash:     make([]byte, sha512.Size),
+			Hash:             make([]byte, sha512.Size),
+			SignatureEd25519: make([]byte, 64),
+		},
 	}
 
-	for i := range entry.PreviousHash {
-		entry.PreviousHash[i] = byte(i)
-		entry.Hash[i] = byte(i + 1)
-	}
-	for i := range entry.Signature {
-		entry.Signature[i] = byte(i + 2)
+	for _, entry := range entries {
+		for i := range entry.PreviousHash {
+			entry.PreviousHash[i] = byte(i)
+			entry.Hash[i] = byte(i + 1)
+		}
+		for i := range entry.SignatureEd25519 {
+			entry.SignatureEd25519[i] = byte(i + 2)
+		}
+		if d, ok := entry.Details.(*auditlog.GroundingDetails); ok {
+			for i := range d.MerkleRootHash {
+				d.MerkleRootHash[i] = byte(i + 3)
+				d.SignatureEd25519[i] = byte(i + 4)
+				d.SignatureMlDsa[i] = byte(i + 5)
+			}
+		}
 	}
 
-	tests := []struct {
+	testCases := []struct {
 		name       string
 		serializer Serializer
 	}{
@@ -56,26 +92,30 @@ func TestSerializers(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf := new(bytes.Buffer)
-			if err := tt.serializer.Encode(buf, entry); err != nil {
-				t.Fatalf("Encode failed: %v", err)
-			}
+	for _, ts := range testCases {
+		t.Run(ts.name, func(t *testing.T) {
+			for i, entry := range entries {
+				t.Run(fmt.Sprintf("EntryType_%s", entry.Type), func(t *testing.T) {
+					buf := new(bytes.Buffer)
+					if err := ts.serializer.Encode(buf, entry); err != nil {
+						t.Fatalf("Encode failed: %v", err)
+					}
 
-			dec := tt.serializer.NewDecoder(buf)
-			decoded, err := dec.Decode()
-			if err != nil {
-				t.Fatalf("Decode failed: %v", err)
-			}
+					dec := ts.serializer.NewDecoder(buf)
+					decoded, err := dec.Decode()
+					if err != nil {
+						t.Fatalf("Decode failed: %v", err)
+					}
 
-			// Normalize timestamps to UTC for comparison
-			decoded.Timestamp = decoded.Timestamp.UTC()
-			expected := *entry
-			expected.Timestamp = expected.Timestamp.UTC()
+					// Normalize timestamps to UTC for comparison
+					decoded.Timestamp = decoded.Timestamp.UTC()
+					expected := *entries[i]
+					expected.Timestamp = expected.Timestamp.UTC()
 
-			if !reflect.DeepEqual(expected, *decoded) {
-				t.Errorf("Decoded entry mismatch\nExpected: %+v\nGot:      %+v", expected, *decoded)
+					if !reflect.DeepEqual(expected, *decoded) {
+						t.Errorf("Decoded entry mismatch\nExpected: %+v\nGot:      %+v", expected, *decoded)
+					}
+				})
 			}
 		})
 	}
@@ -89,16 +129,19 @@ func BenchmarkSerializers(b *testing.B) {
 	prevHash := make([]byte, 64)
 	for i := 0; i < batchSize; i++ {
 		e := &auditlog.Entry{
-			Version:      auditlog.CurrentVersion,
-			Timestamp:    time.Now().UTC(),
-			Operation:    auditlog.OpPutObject,
-			Phase:        auditlog.PhaseComplete,
-			Bucket:       "benchmark-bucket",
-			Key:          fmt.Sprintf("object-%d", i),
-			Actor:        "admin",
+			Version:   auditlog.CurrentVersion,
+			Timestamp: time.Now().UTC(),
+			Type:      auditlog.EntryTypeLog,
+			Details: &auditlog.LogDetails{
+				Operation: auditlog.OpPutObject,
+				Phase:     auditlog.PhaseComplete,
+				Bucket:    "benchmark-bucket",
+				Key:       fmt.Sprintf("object-%d", i),
+				Actor:     "admin",
+			},
 			PreviousHash: prevHash,
 		}
-		e.Sign(signing.NewEd25519Signer(priv))
+		_ = e.Sign(signing.NewEd25519Signer(priv))
 		entries[i] = e
 		prevHash = e.Hash
 	}

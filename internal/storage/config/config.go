@@ -34,6 +34,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
@@ -273,7 +274,8 @@ type AuditStorageMiddlewareConfiguration struct {
 	InnerStorageInstantiator StorageInstantiator `json:"-"`
 	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
 	Sinks                    []SinkConfiguration `json:"sinks"`
-	PrivateKey               string              `json:"privateKey"` // Base64 encoded
+	Ed25519PrivateKey        string              `json:"ed25519PrivateKey"` // Base64 encoded
+	MlDsaPrivateKey          string              `json:"mlDsaPrivateKey"`   // Base64 encoded
 	internalConfig.DynamicJsonType
 }
 
@@ -300,13 +302,23 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		return nil, err
 	}
 	
-	decodedKey, err := base64.StdEncoding.DecodeString(a.PrivateKey)
+	decodedKey, err := base64.StdEncoding.DecodeString(a.Ed25519PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode private key: %w", err)
 	}
 	
 	if len(decodedKey) != ed25519.PrivateKeySize {
 		return nil, errors.New("invalid private key size")
+	}
+
+	decodedMlKey, err := base64.StdEncoding.DecodeString(a.MlDsaPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ML-DSA private key: %w", err)
+	}
+
+	mlPriv := &mldsa65.PrivateKey{}
+	if err := mlPriv.UnmarshalBinary(decodedMlKey); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal ML-DSA private key: %w", err)
 	}
 
 	var sinks []sink.Sink
@@ -361,7 +373,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		lastHash = make([]byte, sha512.Size)
 	}
 	
-	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), lastHash), nil
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, signing.NewEd25519Signer(ed25519.PrivateKey(decodedKey)), signing.NewMlDsaSigner(mlPriv), lastHash), nil
 }
 
 type OutboxStorageConfiguration struct {

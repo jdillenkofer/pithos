@@ -192,7 +192,8 @@ The following storage backends and middlewares are available:
 - **AuditStorage**: Provides cryptographically signed audit logs for all storage operations
   - Supports multiple output sinks (Binary, JSON, Text)
   - Chained hashing for tamper detection
-  - Ed25519 signatures for authenticity
+  - Dual-signatures for grounding: Ed25519 and ML-DSA (Post-Quantum)
+  - Automated grounding every 1,000 entries using Merkle Trees for high-integrity checkpoints
 
 ###### Part Store Middleware
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
@@ -266,7 +267,8 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
      "type": "MetadataPartStorage",
      ...
   },
-  "privateKey": "<Base64-encoded-Ed25519-private-key>",
+  "ed25519PrivateKey": "<Base64-encoded-Ed25519-private-key>",
+  "mlDsaPrivateKey": "<Base64-encoded-ML-DSA-65-private-key>",
   "sinks": [
     {
       "type": "file",
@@ -312,14 +314,15 @@ The migrate-storage subcommand migrates data bucket by bucket from the source st
 If the target storage bucket is not empty, it will not overwrite an existing object. Instead, it will log an error and exit the command to prevent accidental data loss.
 
 ##### Audit Log Verification and Conversion
-Pithos provides the `audit-log` subcommand to verify the cryptographic integrity of audit logs and convert them between different formats (Binary, JSON, Text).
+Pithos provides the `audit-log` subcommand to verify the cryptographic integrity of audit logs and convert them between different formats (Binary, JSON, Text). The tool verifies the hash chain, individual entry signatures, and validates grounding checkpoints (Merkle Roots) every 1,000 entries.
 
 ```sh
-pithos audit-log [log-file] --public-key <Base64-Public-Key> [options]
+pithos audit-log [log-file] --public-key <Base64-Ed25519-Key> [--ml-dsa-public-key <Base64-ML-DSA-Key>] [options]
 ```
 
 Available options:
-- `--public-key`: (Required) The Base64 encoded Ed25519 public key corresponding to the private key used for signing.
+- `--public-key`: (Required) The Base64 encoded Ed25519 public key corresponding to the private key used for signing entries and grounding events.
+- `--ml-dsa-public-key`: (Optional) The Base64 encoded ML-DSA-65 public key used to verify the post-quantum grounding signatures.
 - `--format`: Output format. Options: `json` (default), `text`, `bin`.
 - `--output`: Output path. Use `-` for stdout (default).
 

@@ -17,38 +17,41 @@ type TextSerializer struct{}
 
 func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 	timestamp := e.Timestamp.UTC().Format("2006-01-02 15:04:05")
+	base := fmt.Sprintf("V%d [%s] TYPE: %s", e.Version, timestamp, e.Type)
 
-	op := escape(string(e.Operation))
-	phase := escape(string(e.Phase))
-	bucket := escape(e.Bucket)
-
-	base := fmt.Sprintf("V%d [%s] %-25s %-10s Bucket: %s", e.Version, timestamp, op, phase, bucket)
-
-	if e.Key != "" {
-		base += fmt.Sprintf(" | Key: %s", escape(e.Key))
-	}
-	if e.UploadID != "" {
-		base += fmt.Sprintf(" | UploadID: %s", escape(e.UploadID))
-	}
-	if e.PartNumber != 0 {
-		base += fmt.Sprintf(" | Part: %d", e.PartNumber)
-	}
-	if e.Actor != "" {
-		base += fmt.Sprintf(" | Actor: %s", escape(e.Actor))
-	}
-	if e.Error != "" {
-		base += fmt.Sprintf(" | Error: %s", escape(e.Error))
+	switch d := e.Details.(type) {
+	case *auditlog.GenesisDetails:
+		base += " | GENESIS"
+	case *auditlog.LogDetails:
+		base += fmt.Sprintf(" | %s %s Bucket: %s", escape(string(d.Operation)), escape(string(d.Phase)), escape(d.Bucket))
+		if d.Key != "" {
+			base += fmt.Sprintf(" | Key: %s", escape(d.Key))
+		}
+		if d.UploadID != "" {
+			base += fmt.Sprintf(" | UploadID: %s", escape(d.UploadID))
+		}
+		if d.PartNumber != 0 {
+			base += fmt.Sprintf(" | Part: %d", d.PartNumber)
+		}
+		if d.Actor != "" {
+			base += fmt.Sprintf(" | Actor: %s", escape(d.Actor))
+		}
+		if d.Error != "" {
+			base += fmt.Sprintf(" | Error: %s", escape(d.Error))
+		}
+	case *auditlog.GroundingDetails:
+		base += fmt.Sprintf(" | MerkleRoot: %x | SigEd: %x | SigMl: %x", d.MerkleRootHash, d.SignatureEd25519, d.SignatureMlDsa)
 	}
 
 	base += fmt.Sprintf(" | PrevHash: %x", e.PreviousHash)
 	base += fmt.Sprintf(" | Hash: %x", e.Hash)
-	base += fmt.Sprintf(" | Signature: %x", e.Signature)
+	base += fmt.Sprintf(" | SigEd25519: %x", e.SignatureEd25519)
 
 	_, err := fmt.Fprintln(w, base)
 	return err
 }
 
-var textLogRegex = regexp.MustCompile(`^V(\d+)\s+\[(.*?)\]\s+(.*?)\s+(.*?)\s+Bucket:\s+(.*?)(?:\s+\|.*)?$`)
+var textLogRegex = regexp.MustCompile(`^V(\d+)\s+\[(.*?)\]\s+TYPE:\s+(.*?)(?:\s+\|.*)?$`)
 
 func (s *TextSerializer) NewDecoder(r io.Reader) Decoder {
 	return &TextDecoder{scanner: bufio.NewScanner(r)}
@@ -81,13 +84,75 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 	entry := &auditlog.Entry{
 		Version:   uint16(version),
 		Timestamp: ts,
-		Operation: auditlog.Operation(unescape(strings.TrimSpace(matches[3]))),
-		Phase:     auditlog.Phase(unescape(strings.TrimSpace(matches[4]))),
-		Bucket:    unescape(strings.TrimSpace(matches[5])),
+		Type:      auditlog.EntryType(strings.TrimSpace(matches[3])),
 	}
 
-	// Parse optional fields separated by " | "
 	parts := strings.Split(line, " | ")
+	
+	switch entry.Type {
+	case auditlog.EntryTypeGenesis:
+		entry.Details = &auditlog.GenesisDetails{}
+	case auditlog.EntryTypeLog:
+		dls := &auditlog.LogDetails{}
+		if len(parts) > 1 {
+			opPhase := strings.Fields(parts[1])
+			if len(opPhase) >= 2 {
+				dls.Operation = auditlog.Operation(unescape(opPhase[0]))
+				dls.Phase = auditlog.Phase(unescape(opPhase[1]))
+			}
+			if idx := strings.Index(parts[1], "Bucket: "); idx != -1 {
+				dls.Bucket = unescape(strings.TrimSpace(parts[1][idx+8:]))
+			}
+		}
+		
+		for _, part := range parts[2:] {
+			kv := strings.SplitN(part, ": ", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(kv[0])
+			val := strings.TrimSpace(kv[1])
+
+			switch key {
+			case "Key":
+				dls.Key = unescape(val)
+			case "UploadID":
+				dls.UploadID = unescape(val)
+			case "Part":
+				p, _ := strconv.Atoi(val)
+				dls.PartNumber = int32(p)
+			case "Actor":
+				dls.Actor = unescape(val)
+			case "Error":
+				dls.Error = unescape(val)
+			}
+		}
+		entry.Details = dls
+	case auditlog.EntryTypeGrounding:
+		dls := &auditlog.GroundingDetails{}
+		for _, part := range parts[1:] {
+			kv := strings.SplitN(part, ": ", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(kv[0])
+			val := strings.TrimSpace(kv[1])
+			switch key {
+			case "MerkleRoot":
+				h, _ := hex.DecodeString(val)
+				dls.MerkleRootHash = h
+			case "SigEd":
+				h, _ := hex.DecodeString(val)
+				dls.SignatureEd25519 = h
+			case "SigMl":
+				h, _ := hex.DecodeString(val)
+				dls.SignatureMlDsa = h
+			}
+		}
+		entry.Details = dls
+	}
+
+	// Parse common envelope fields
 	for _, part := range parts[1:] {
 		kv := strings.SplitN(part, ": ", 2)
 		if len(kv) != 2 {
@@ -97,26 +162,15 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 		val := strings.TrimSpace(kv[1])
 
 		switch key {
-		case "Key":
-			entry.Key = unescape(val)
-		case "UploadID":
-			entry.UploadID = unescape(val)
-		case "Part":
-			p, _ := strconv.Atoi(val)
-			entry.PartNumber = int32(p)
-		case "Actor":
-			entry.Actor = unescape(val)
-		case "Error":
-			entry.Error = unescape(val)
 		case "PrevHash":
 			h, _ := hex.DecodeString(val)
 			entry.PreviousHash = h
 		case "Hash":
 			h, _ := hex.DecodeString(val)
 			entry.Hash = h
-		case "Signature":
+		case "SigEd25519":
 			h, _ := hex.DecodeString(val)
-			entry.Signature = h
+			entry.SignatureEd25519 = h
 		}
 	}
 
@@ -124,10 +178,10 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 }
 
 func escape(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "|", `\|`)
 	return s
 }
 
