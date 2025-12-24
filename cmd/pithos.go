@@ -571,21 +571,24 @@ func auditLogTool() {
 		os.Exit(1)
 	}
 
+	if *mlDsaPubKeyStr == "" {
+		slog.Error("ML-DSA public key is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
 	edPubKey, err := signing.LoadEd25519PublicKey(*ed25519PubKeyStr)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Failed to load Ed25519 public key: %v", err))
 		os.Exit(1)
 	}
 
-	var mlDsaVerifier signing.Verifier
-	if *mlDsaPubKeyStr != "" {
-		mlPub, err := signing.LoadMlDsaPublicKey(*mlDsaPubKeyStr)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Failed to load ML-DSA public key: %v", err))
-			os.Exit(1)
-		}
-		mlDsaVerifier = signing.NewMlDsaVerifier(mlPub)
+	mlPub, err := signing.LoadMlDsaPublicKey(*mlDsaPubKeyStr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to load ML-DSA public key: %v", err))
+		os.Exit(1)
 	}
+	mlDsaVerifier := signing.NewMlDsaVerifier(mlPub)
 
 	var out io.Writer = os.Stdout
 	if *outputFilePath != "-" {

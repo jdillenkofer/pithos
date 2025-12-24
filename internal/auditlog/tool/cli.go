@@ -327,10 +327,8 @@ func (t *AuditLogTool) verifyEntry(entry *auditlog.Entry, idx int, prevHash *[]b
 		}
 
 		// 3. Verify ML-DSA signature of Merkle Root
-		if t.mlDsaVerifier != nil {
-			if !t.mlDsaVerifier.Verify(details.MerkleRootHash, details.SignatureMlDsa) {
-				return &VerificationError{idx, "merkle root ML-DSA signature invalid"}
-			}
+		if !t.mlDsaVerifier.Verify(details.MerkleRootHash, details.SignatureMlDsa) {
+			return &VerificationError{idx, "merkle root ML-DSA signature invalid"}
 		}
 
 		*hashBuffer = nil // Reset for next block
