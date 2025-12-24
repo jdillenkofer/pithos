@@ -1,12 +1,14 @@
 package serialization
 
 import (
+	"crypto/ed25519"
 	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 	"io"
 	"time"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 )
 
@@ -55,10 +57,16 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if err := writeBytes(w, d.MerkleRootHash); err != nil {
 			return err
 		}
-		if err := writeBytes(w, d.SignatureEd25519); err != nil {
+		if len(d.SignatureEd25519) != ed25519.SignatureSize {
+			return errors.New("invalid Ed25519 signature length in grounding details")
+		}
+		if _, err := w.Write(d.SignatureEd25519); err != nil {
 			return err
 		}
-		if err := writeBytes(w, d.SignatureMlDsa); err != nil {
+		if len(d.SignatureMlDsa) != mldsa65.SignatureSize {
+			return errors.New("invalid ML-DSA signature length in grounding details")
+		}
+		if _, err := w.Write(d.SignatureMlDsa); err != nil {
 			return err
 		}
 	}
@@ -78,7 +86,10 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		return err
 	}
 	
-	if err := writeBytes(w, e.SignatureEd25519); err != nil {
+	if len(e.SignatureEd25519) != ed25519.SignatureSize {
+		return errors.New("invalid entry signature length")
+	}
+	if _, err := w.Write(e.SignatureEd25519); err != nil {
 		return err
 	}
 	
@@ -153,10 +164,12 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		if dls.MerkleRootHash, err = readBytes(d.r); err != nil {
 			return nil, err
 		}
-		if dls.SignatureEd25519, err = readBytes(d.r); err != nil {
+		dls.SignatureEd25519 = make([]byte, ed25519.SignatureSize)
+		if _, err := io.ReadFull(d.r, dls.SignatureEd25519); err != nil {
 			return nil, err
 		}
-		if dls.SignatureMlDsa, err = readBytes(d.r); err != nil {
+		dls.SignatureMlDsa = make([]byte, mldsa65.SignatureSize)
+		if _, err := io.ReadFull(d.r, dls.SignatureMlDsa); err != nil {
 			return nil, err
 		}
 		e.Details = dls
@@ -172,8 +185,8 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		return nil, err
 	}
 	
-	e.SignatureEd25519, err = readBytes(d.r)
-	if err != nil {
+	e.SignatureEd25519 = make([]byte, ed25519.SignatureSize)
+	if _, err := io.ReadFull(d.r, e.SignatureEd25519); err != nil {
 		return nil, err
 	}
 	

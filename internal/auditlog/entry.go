@@ -2,11 +2,13 @@ package auditlog
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha512"
 	"encoding/binary"
 	"io"
 	"time"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 )
 
@@ -103,8 +105,14 @@ func (e *Entry) CalculateHash() []byte {
 		writeString(buf, d.Error)
 	case *GroundingDetails:
 		writeBytes(buf, d.MerkleRootHash)
-		writeBytes(buf, d.SignatureEd25519)
-		writeBytes(buf, d.SignatureMlDsa)
+		if len(d.SignatureEd25519) != ed25519.SignatureSize {
+			panic("invalid Ed25519 signature length")
+		}
+		buf.Write(d.SignatureEd25519)
+		if len(d.SignatureMlDsa) != mldsa65.SignatureSize {
+			panic("invalid ML-DSA signature length")
+		}
+		buf.Write(d.SignatureMlDsa)
 	}
 
 	// Write previous hash

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
@@ -25,7 +26,7 @@ func TestSerializers(t *testing.T) {
 			Details:          &auditlog.GenesisDetails{},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
-			SignatureEd25519: make([]byte, 64),
+			SignatureEd25519: make([]byte, ed25519.SignatureSize),
 		},
 		{
 			Version:   auditlog.CurrentVersion,
@@ -40,20 +41,20 @@ func TestSerializers(t *testing.T) {
 			},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
-			SignatureEd25519: make([]byte, 64),
+			SignatureEd25519: make([]byte, ed25519.SignatureSize),
 		},
 		{
 			Version:   auditlog.CurrentVersion,
 			Timestamp: time.Date(2025, 12, 22, 11, 0, 0, 0, time.UTC),
 			Type:      auditlog.EntryTypeGrounding,
 			Details: &auditlog.GroundingDetails{
-				MerkleRootHash:   make([]byte, 64),
-				SignatureEd25519: make([]byte, 64),
-				SignatureMlDsa:   make([]byte, 64),
+				MerkleRootHash:   make([]byte, sha512.Size),
+				SignatureEd25519: make([]byte, ed25519.SignatureSize),
+				SignatureMlDsa:   make([]byte, mldsa65.SignatureSize),
 			},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
-			SignatureEd25519: make([]byte, 64),
+			SignatureEd25519: make([]byte, ed25519.SignatureSize),
 		},
 	}
 
