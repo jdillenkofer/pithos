@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
@@ -50,7 +50,7 @@ func TestSerializers(t *testing.T) {
 			Details: &auditlog.GroundingDetails{
 				MerkleRootHash:   make([]byte, sha512.Size),
 				SignatureEd25519: make([]byte, ed25519.SignatureSize),
-				SignatureMlDsa:   make([]byte, mldsa65.SignatureSize),
+				SignatureMlDsa87:   make([]byte, mldsa87.SignatureSize),
 			},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
@@ -70,7 +70,7 @@ func TestSerializers(t *testing.T) {
 			for i := range d.MerkleRootHash {
 				d.MerkleRootHash[i] = byte(i + 3)
 				d.SignatureEd25519[i] = byte(i + 4)
-				d.SignatureMlDsa[i] = byte(i + 5)
+				d.SignatureMlDsa87[i] = byte(i + 5)
 			}
 		}
 	}

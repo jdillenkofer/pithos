@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
 func LoadEd25519PublicKey(input string) (ed25519.PublicKey, error) {
@@ -37,26 +37,26 @@ func LoadEd25519PrivateKey(input string) (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(data), nil
 }
 
-func LoadMlDsaPublicKey(input string) (*mldsa65.PublicKey, error) {
+func LoadMlDsa87PublicKey(input string) (*mldsa87.PublicKey, error) {
 	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
 
-	pub := &mldsa65.PublicKey{}
+	pub := &mldsa87.PublicKey{}
 	if err := pub.UnmarshalBinary(data); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ML-DSA public key: %w", err)
 	}
 	return pub, nil
 }
 
-func LoadMlDsaPrivateKey(input string) (*mldsa65.PrivateKey, error) {
+func LoadMlDsa87PrivateKey(input string) (*mldsa87.PrivateKey, error) {
 	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
 
-	priv := &mldsa65.PrivateKey{}
+	priv := &mldsa87.PrivateKey{}
 	if err := priv.UnmarshalBinary(data); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ML-DSA private key: %w", err)
 	}
@@ -99,8 +99,8 @@ func GenerateEd25519KeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 	return ed25519.GenerateKey(nil)
 }
 
-func GenerateMlDsaKeyPair() ([]byte, []byte, error) {
-	pub, priv, err := mldsa65.GenerateKey(nil)
+func GenerateMlDsa87KeyPair() ([]byte, []byte, error) {
+	pub, priv, err := mldsa87.GenerateKey(nil)
 	if err != nil {
 		return nil, nil, err
 	}

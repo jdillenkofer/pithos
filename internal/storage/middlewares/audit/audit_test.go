@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -37,7 +37,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, mlPriv, err := mldsa65.GenerateKey(rand.Reader)
+	_, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 	}
 
 	mock := &mockStorage{}
-	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash, initialBuffer)
+	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsa87Signer(mlPriv), lastHash, initialBuffer)
 
 	ctx := context.Background()
 	bucketName := metadatastore.MustNewBucketName("test-bucket")

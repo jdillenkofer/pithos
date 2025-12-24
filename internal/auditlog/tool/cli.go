@@ -15,16 +15,16 @@ import (
 )
 
 type AuditLogTool struct {
-	logPath       string
-	verifier      signing.Verifier
-	mlDsaVerifier signing.Verifier
+	logPath         string
+	verifier        signing.Verifier
+	mlDsa87Verifier signing.Verifier
 }
 
-func NewAuditLogTool(logPath string, verifier signing.Verifier, mlDsaVerifier signing.Verifier) *AuditLogTool {
+func NewAuditLogTool(logPath string, verifier signing.Verifier, mlDsa87Verifier signing.Verifier) *AuditLogTool {
 	return &AuditLogTool{
-		logPath:       logPath,
-		verifier:      verifier,
-		mlDsaVerifier: mlDsaVerifier,
+		logPath:         logPath,
+		verifier:        verifier,
+		mlDsa87Verifier: mlDsa87Verifier,
 	}
 }
 
@@ -53,7 +53,7 @@ func (t *AuditLogTool) Verify(inputFormat string) error {
 		return err
 	}
 
-	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
+	val := auditlog.NewValidator(t.verifier, t.mlDsa87Verifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -96,7 +96,7 @@ func (t *AuditLogTool) Dump(inputFormat string, outputFormat string, out io.Writ
 		return fmt.Errorf("unknown output format: %s", outputFormat)
 	}
 
-	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
+	val := auditlog.NewValidator(t.verifier, t.mlDsa87Verifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -148,7 +148,7 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 		Actors:     make(map[string]int),
 	}
 
-	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
+	val := auditlog.NewValidator(t.verifier, t.mlDsa87Verifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -193,8 +193,8 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 type AuditKeys struct {
 	Ed25519Pub  []byte
 	Ed25519Priv []byte
-	MlDsaPub    []byte
-	MlDsaPriv   []byte
+	MlDsa87Pub  []byte
+	MlDsa87Priv []byte
 }
 
 func (t *AuditLogTool) GenerateAuditKeys() (*AuditKeys, error) {
@@ -205,16 +205,16 @@ func (t *AuditLogTool) GenerateAuditKeys() (*AuditKeys, error) {
 	}
 
 	// ML-DSA
-	mlPub, mlPriv, err := signing.GenerateMlDsaKeyPair()
+	mlPub, mlPriv, err := signing.GenerateMlDsa87KeyPair()
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate ML-DSA key: %w", err)
+		return nil, fmt.Errorf("failed to generate ML-DSA-87 key: %w", err)
 	}
 
 	return &AuditKeys{
 		Ed25519Pub:  edPub,
 		Ed25519Priv: edPriv,
-		MlDsaPub:    mlPub,
-		MlDsaPriv:   mlPriv,
+		MlDsa87Pub:  mlPub,
+		MlDsa87Priv: mlPriv,
 	}, nil
 }
 
@@ -229,9 +229,9 @@ func (t *AuditLogTool) Keygen(out io.Writer) error {
 	fmt.Fprintf(out, "%s\n", pemString("ED25519 PRIVATE KEY", keys.Ed25519Priv))
 	fmt.Fprintf(out, "%s\n", pemString("ED25519 PUBLIC KEY", keys.Ed25519Pub))
 
-	fmt.Fprintf(out, "ML-DSA-65 (Used for Post-Quantum grounding):\n")
-	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-65 PRIVATE KEY", keys.MlDsaPriv))
-	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-65 PUBLIC KEY", keys.MlDsaPub))
+	fmt.Fprintf(out, "ML-DSA-87 (Used for Post-Quantum grounding):\n")
+	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-87 PRIVATE KEY", keys.MlDsa87Priv))
+	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-87 PUBLIC KEY", keys.MlDsa87Pub))
 
 	fmt.Fprintf(out, "Keep private keys secure. You need them in your storage.json configuration.\n")
 	fmt.Fprintf(out, "Use public keys for verification with 'audit-log verify'.\n")
@@ -269,8 +269,8 @@ func (t *AuditLogTool) WriteKeypair(path string, priv []byte, pub []byte) error 
 		header = "ED25519 PRIVATE KEY"
 		pubHeader = "ED25519 PUBLIC KEY"
 	} else if strings.Contains(path, "mldsa") {
-		header = "ML-DSA-65 PRIVATE KEY"
-		pubHeader = "ML-DSA-65 PUBLIC KEY"
+		header = "ML-DSA-87 PRIVATE KEY"
+		pubHeader = "ML-DSA-87 PUBLIC KEY"
 	}
 
 	if err := t.writePem(privPath, header, priv, 0600); err != nil {

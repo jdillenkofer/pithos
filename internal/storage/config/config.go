@@ -275,13 +275,13 @@ type Ed25519SigningConfiguration struct {
 	Vault      *VaultSigningConfiguration `json:"vault,omitempty"`
 }
 
-type MlDsaSigningConfiguration struct {
+type MlDsa87SigningConfiguration struct {
 	PrivateKey string `json:"privateKey"` // File path or base64 encoded
 }
 
 type SigningConfiguration struct {
 	Ed25519 *Ed25519SigningConfiguration `json:"ed25519"`
-	MlDsa   *MlDsaSigningConfiguration   `json:"mlDsa"`
+	MlDsa87 *MlDsa87SigningConfiguration `json:"mlDsa87"`
 }
 
 type AuditStorageMiddlewareConfiguration struct {
@@ -370,15 +370,15 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 	}
 
 	// ML-DSA Signer
-	if a.Signing.MlDsa == nil {
-		return nil, errors.New("signing.mlDsa configuration is required")
+	if a.Signing.MlDsa87 == nil {
+		return nil, errors.New("signing.mlDsa87 configuration is required")
 	}
-	if a.Signing.MlDsa.PrivateKey == "" {
-		return nil, errors.New("signing.mlDsa.privateKey is required")
+	if a.Signing.MlDsa87.PrivateKey == "" {
+		return nil, errors.New("signing.mlDsa87.privateKey is required")
 	}
-	mlPriv, err := signing.LoadMlDsaPrivateKey(a.Signing.MlDsa.PrivateKey)
+	mlPriv, err := signing.LoadMlDsa87PrivateKey(a.Signing.MlDsa87.PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load ML-DSA private key: %w", err)
+		return nil, fmt.Errorf("failed to load ML-DSA-87 private key: %w", err)
 	}
 
 	var sinks []sink.Sink
@@ -422,7 +422,7 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		lastHash = make([]byte, sha512.Size)
 	}
 
-	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, edSigner, signing.NewMlDsaSigner(mlPriv), lastHash, initialHashBuffer), nil
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, edSigner, signing.NewMlDsa87Signer(mlPriv), lastHash, initialHashBuffer), nil
 }
 
 type OutboxStorageConfiguration struct {

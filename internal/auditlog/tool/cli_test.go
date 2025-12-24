@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -19,12 +19,12 @@ import (
 
 func TestRunAuditLogTool(t *testing.T) {
 	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
-	mlPub, mlPriv, _ := mldsa65.GenerateKey(rand.Reader)
+	mlPub, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
 
 	edSigner := signing.NewEd25519Signer(edPriv)
 	edVerifier := signing.NewEd25519Verifier(edPub)
-	mlSigner := signing.NewMlDsaSigner(mlPriv)
-	mlVerifier := signing.NewMlDsaVerifier(mlPub)
+	mlSigner := signing.NewMlDsa87Signer(mlPriv)
+	mlVerifier := signing.NewMlDsa87Verifier(mlPub)
 
 	tmpFile, _ := os.CreateTemp("", "cli_test")
 	defer os.Remove(tmpFile.Name())
@@ -80,7 +80,7 @@ func TestRunAuditLogTool(t *testing.T) {
 		Details: &auditlog.GroundingDetails{
 			MerkleRootHash:   root,
 			SignatureEd25519: sigEd,
-			SignatureMlDsa:   sigMl,
+			SignatureMlDsa87:   sigMl,
 		},
 		PreviousHash: prevHash,
 	}

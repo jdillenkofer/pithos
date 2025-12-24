@@ -124,7 +124,7 @@ func (m *AuditLogMiddleware) emitGrounding() {
 		Details: &auditlog.GroundingDetails{
 			MerkleRootHash:   root,
 			SignatureEd25519: sigEd,
-			SignatureMlDsa:   sigMl,
+			SignatureMlDsa87:   sigMl,
 		},
 		PreviousHash: m.lastHash,
 	}

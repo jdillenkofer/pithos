@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 )
 
@@ -63,10 +63,10 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if _, err := w.Write(d.SignatureEd25519); err != nil {
 			return err
 		}
-		if len(d.SignatureMlDsa) != mldsa65.SignatureSize {
-			return errors.New("invalid ML-DSA signature length in grounding details")
+		if len(d.SignatureMlDsa87) != mldsa87.SignatureSize {
+			return errors.New("invalid ML-DSA-87 signature length in grounding details")
 		}
-		if _, err := w.Write(d.SignatureMlDsa); err != nil {
+		if _, err := w.Write(d.SignatureMlDsa87); err != nil {
 			return err
 		}
 	}
@@ -168,8 +168,8 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		if _, err := io.ReadFull(d.r, dls.SignatureEd25519); err != nil {
 			return nil, err
 		}
-		dls.SignatureMlDsa = make([]byte, mldsa65.SignatureSize)
-		if _, err := io.ReadFull(d.r, dls.SignatureMlDsa); err != nil {
+		dls.SignatureMlDsa87 = make([]byte, mldsa87.SignatureSize)
+		if _, err := io.ReadFull(d.r, dls.SignatureMlDsa87); err != nil {
 			return nil, err
 		}
 		e.Details = dls

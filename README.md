@@ -142,7 +142,7 @@ Common options:
 - `-input-file <path>`: (Required for verify|dump|stats) Path to the audit log file.
 - `-input-format <bin|json|text>`: Input format (default: `bin`).
 - `-ed25519-public-key <key>`: (Required for verify|dump|stats) Base64 encoded Ed25519 public key or path to key file.
-- `-ml-dsa-public-key <key>`: (Required for verify|dump|stats) Base64 encoded ML-DSA public key or path to key file.
+- `-ml-dsa-87-public-key <key>`: (Required for verify|dump|stats) Base64 encoded ML-DSA-87 public key or path to key file.
 
 Subcommand specific options:
 - `dump`: Supports `-output-format <json|text|bin>` and `-output-file <path>`.
@@ -159,7 +159,7 @@ The **private keys** must be kept secret and added to your `storage.json` config
 
 **Example: Verify an audit log**
 ```sh
-pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-public-key v9A2s...
+pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s...
 ```
 
 ### Configuration
@@ -332,8 +332,8 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
     "ed25519": {
       "privateKey": "<Base64-encoded-Ed25519-private-key-or-path>"
     },
-    "mlDsa": {
-      "privateKey": "<Base64-encoded-ML-DSA-65-private-key-or-path>"
+    "mlDsa87": {
+      "privateKey": "<Base64-encoded-ML-DSA-87-private-key-or-path>"
     }
   },
   "sinks": [
@@ -362,7 +362,7 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
         "keyPath": "transit/audit-log-key"
       }
     },
-    "mlDsa": {
+    "mlDsa87": {
       "privateKey": "./keys/mldsa_priv.key"
     }
   },
@@ -417,19 +417,19 @@ If the target storage bucket is not empty, it will not overwrite an existing obj
 Pithos provides the `audit-log` subcommand to verify the cryptographic integrity of audit logs and convert them between different formats (Binary, JSON, Text). The tool verifies the hash chain, individual entry signatures, and validates grounding checkpoints (Merkle Roots) every 1,000 entries.
 
 ```sh
-pithos audit-log verify -input-file [log-file] -ed25519-public-key <Base64-Ed25519-Key> -ml-dsa-public-key <Base64-ML-DSA-Key> [options]
+pithos audit-log verify -input-file [log-file] -ed25519-public-key <Base64-Ed25519-Key> -ml-dsa-87-public-key <Base64-ML-DSA-Key> [options]
 ```
 
 Available options:
 - `-ed25519-public-key`: (Required) The Base64 encoded Ed25519 public key corresponding to the private key used for signing entries and grounding events.
-- `-ml-dsa-public-key`: (Required) The Base64 encoded ML-DSA-65 public key used to verify the post-quantum grounding signatures.
+- `-ml-dsa-87-public-key`: (Required) The Base64 encoded ML-DSA-87 public key used to verify the post-quantum grounding signatures.
 - `-input-format`: Input format. Options: `bin` (default), `json`.
 - `-output-format`: Output format (only for `dump`). Options: `json` (default), `text`, `bin`.
 - `-output-file`: Output path. Use `-` for stdout (default).
 
 **Example: Convert binary log to human-readable text**
 ```sh
-pithos audit-log dump -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-public-key v9A2s... -output-format text -output-file audit_report.txt
+pithos audit-log dump -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s... -output-format text -output-file audit_report.txt
 ```
 
 #### Monitoring

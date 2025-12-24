@@ -42,7 +42,7 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 			base += fmt.Sprintf(" | Error: %s", escape(d.Error))
 		}
 	case *auditlog.GroundingDetails:
-		base += fmt.Sprintf(" | MerkleRoot: %x | SigEd: %x | SigMl: %x", d.MerkleRootHash, d.SignatureEd25519, d.SignatureMlDsa)
+		base += fmt.Sprintf(" | MerkleRoot: %x | SigEd: %x | SigMl87: %x", d.MerkleRootHash, d.SignatureEd25519, d.SignatureMlDsa87)
 	}
 
 	base += fmt.Sprintf(" | PrevHash: %x", e.PreviousHash)
@@ -146,9 +146,9 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 			case "SigEd":
 				h, _ := hex.DecodeString(val)
 				dls.SignatureEd25519 = h
-			case "SigMl":
+			case "SigMl87":
 				h, _ := hex.DecodeString(val)
-				dls.SignatureMlDsa = h
+				dls.SignatureMlDsa87 = h
 			}
 		}
 		entry.Details = dls

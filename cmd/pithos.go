@@ -536,8 +536,8 @@ func auditLogTool() {
 			slog.Error(fmt.Sprintf("Failed to write Ed25519 keys: %v", err))
 			os.Exit(1)
 		}
-		if err := auditTool.WriteKeypair(mlBase, keys.MlDsaPriv, keys.MlDsaPub); err != nil {
-			slog.Error(fmt.Sprintf("Failed to write ML-DSA keys: %v", err))
+		if err := auditTool.WriteKeypair(mlBase, keys.MlDsa87Priv, keys.MlDsa87Pub); err != nil {
+			slog.Error(fmt.Sprintf("Failed to write ML-DSA-87 keys: %v", err))
 			os.Exit(1)
 		}
 
@@ -553,7 +553,7 @@ func auditLogTool() {
 	inputFilePath := fs.String("input-file", "", "Path to the audit log file")
 	inputFormat := fs.String("input-format", "bin", "Input format (bin, json)")
 	ed25519PubKeyStr := fs.String("ed25519-public-key", "", "Base64 encoded Ed25519 public key or path to key file")
-	mlDsaPubKeyStr := fs.String("ml-dsa-public-key", "", "Base64 encoded ML-DSA public key or path to key file")
+	mlDsaPubKeyStr := fs.String("ml-dsa-87-public-key", "", "Base64 encoded ML-DSA-87 public key or path to key file")
 	outputFormat := fs.String("output-format", "json", "Output format (json, text, bin) - only for dump")
 	outputFilePath := fs.String("output-file", "-", "Output path (use '-' for stdout)")
 
@@ -572,7 +572,7 @@ func auditLogTool() {
 	}
 
 	if *mlDsaPubKeyStr == "" {
-		slog.Error("ML-DSA public key is required")
+		slog.Error("ML-DSA-87 public key is required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
@@ -583,12 +583,12 @@ func auditLogTool() {
 		os.Exit(1)
 	}
 
-	mlPub, err := signing.LoadMlDsaPublicKey(*mlDsaPubKeyStr)
+	mlPub, err := signing.LoadMlDsa87PublicKey(*mlDsaPubKeyStr)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Failed to load ML-DSA public key: %v", err))
+		slog.Error(fmt.Sprintf("Failed to load ML-DSA-87 public key: %v", err))
 		os.Exit(1)
 	}
-	mlDsaVerifier := signing.NewMlDsaVerifier(mlPub)
+	mlDsa87Verifier := signing.NewMlDsa87Verifier(mlPub)
 
 	var out io.Writer = os.Stdout
 	if *outputFilePath != "-" {
@@ -604,7 +604,7 @@ func auditLogTool() {
 	bw := bufio.NewWriter(out)
 	defer bw.Flush()
 
-	auditTool := tool.NewAuditLogTool(*inputFilePath, signing.NewEd25519Verifier(edPubKey), mlDsaVerifier)
+	auditTool := tool.NewAuditLogTool(*inputFilePath, signing.NewEd25519Verifier(edPubKey), mlDsa87Verifier)
 
 	switch sub {
 	case "verify":

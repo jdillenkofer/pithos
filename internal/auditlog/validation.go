@@ -18,18 +18,18 @@ func (e *VerificationError) Error() string {
 }
 
 type Validator struct {
-	Verifier      signing.Verifier
-	MlDsaVerifier signing.Verifier
-	PrevHash      []byte
-	HashBuffer    [][]byte
-	Index         int
+	Verifier        signing.Verifier
+	MlDsa87Verifier signing.Verifier
+	PrevHash        []byte
+	HashBuffer      [][]byte
+	Index           int
 }
 
-func NewValidator(verifier, mlDsaVerifier signing.Verifier) *Validator {
+func NewValidator(verifier, mlDsa87Verifier signing.Verifier) *Validator {
 	return &Validator{
-		Verifier:      verifier,
-		MlDsaVerifier: mlDsaVerifier,
-		HashBuffer:    make([][]byte, 0, GroundingBlockSize),
+		Verifier:        verifier,
+		MlDsa87Verifier: mlDsa87Verifier,
+		HashBuffer:      make([][]byte, 0, GroundingBlockSize),
 	}
 }
 
@@ -92,9 +92,9 @@ func (v *Validator) ValidateEntry(entry *Entry) error {
 		}
 
 		// Verify ML-DSA signature of Merkle Root if verifier is provided
-		if v.MlDsaVerifier != nil {
-			if !v.MlDsaVerifier.Verify(details.MerkleRootHash, details.SignatureMlDsa) {
-				return &VerificationError{v.Index, "merkle root ML-DSA signature invalid"}
+		if v.MlDsa87Verifier != nil {
+			if !v.MlDsa87Verifier.Verify(details.MerkleRootHash, details.SignatureMlDsa87) {
+				return &VerificationError{v.Index, "merkle root ML-DSA-87 signature invalid"}
 			}
 		}
 

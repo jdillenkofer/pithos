@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 )
 
@@ -67,7 +67,7 @@ type LogDetails struct {
 type GroundingDetails struct {
 	MerkleRootHash   []byte
 	SignatureEd25519 []byte
-	SignatureMlDsa   []byte
+	SignatureMlDsa87 []byte
 }
 
 type Entry struct {
@@ -109,10 +109,10 @@ func (e *Entry) CalculateHash() []byte {
 			panic("invalid Ed25519 signature length")
 		}
 		buf.Write(d.SignatureEd25519)
-		if len(d.SignatureMlDsa) != mldsa65.SignatureSize {
-			panic("invalid ML-DSA signature length")
+		if len(d.SignatureMlDsa87) != mldsa87.SignatureSize {
+			panic("invalid ML-DSA-87 signature length")
 		}
-		buf.Write(d.SignatureMlDsa)
+		buf.Write(d.SignatureMlDsa87)
 	}
 
 	// Write previous hash

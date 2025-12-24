@@ -38,7 +38,7 @@ type jsonLogDetails struct {
 type jsonGroundingDetails struct {
 	MerkleRootHash   string `json:"merkle_root_hash"`
 	SignatureEd25519 string `json:"signature_ed25519"`
-	SignatureMlDsa   string `json:"signature_ml_dsa"`
+	SignatureMlDsa87 string `json:"signature_ml_dsa_87"`
 }
 
 func (s *JsonSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
@@ -63,7 +63,7 @@ func (s *JsonSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		details, err = json.Marshal(jsonGroundingDetails{
 			MerkleRootHash:   hex.EncodeToString(d.MerkleRootHash),
 			SignatureEd25519: hex.EncodeToString(d.SignatureEd25519),
-			SignatureMlDsa:   hex.EncodeToString(d.SignatureMlDsa),
+			SignatureMlDsa87: hex.EncodeToString(d.SignatureMlDsa87),
 		})
 	}
 
@@ -156,11 +156,11 @@ func (d *JsonDecoder) Decode() (*auditlog.Entry, error) {
 		}
 		root, _ := hex.DecodeString(jd.MerkleRootHash)
 		sigEd, _ := hex.DecodeString(jd.SignatureEd25519)
-		sigMl, _ := hex.DecodeString(jd.SignatureMlDsa)
+		sigMl, _ := hex.DecodeString(jd.SignatureMlDsa87)
 		e.Details = &auditlog.GroundingDetails{
 			MerkleRootHash:   root,
 			SignatureEd25519: sigEd,
-			SignatureMlDsa:   sigMl,
+			SignatureMlDsa87: sigMl,
 		}
 	}
 

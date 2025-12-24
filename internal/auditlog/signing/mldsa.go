@@ -1,38 +1,38 @@
 package signing
 
 import (
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
-type MlDsaSigner struct {
-	priv *mldsa65.PrivateKey
+type MlDsa87Signer struct {
+	priv *mldsa87.PrivateKey
 }
 
-func NewMlDsaSigner(priv *mldsa65.PrivateKey) *MlDsaSigner {
-	return &MlDsaSigner{priv: priv}
+func NewMlDsa87Signer(priv *mldsa87.PrivateKey) *MlDsa87Signer {
+	return &MlDsa87Signer{priv: priv}
 }
 
-func (s *MlDsaSigner) Sign(data []byte) ([]byte, error) {
-	// ML-DSA-65 Sign implementation using SignTo. 
+func (s *MlDsa87Signer) Sign(data []byte) ([]byte, error) {
+	// ML-DSA-87 Sign implementation using SignTo. 
 	// We use randomized=true for security as per recommended practices.
-	sig := make([]byte, mldsa65.SignatureSize)
-	err := mldsa65.SignTo(s.priv, data, nil, true, sig)
+	sig := make([]byte, mldsa87.SignatureSize)
+	err := mldsa87.SignTo(s.priv, data, nil, true, sig)
 	if err != nil {
 		return nil, err
 	}
 	return sig, nil
 }
 
-type MlDsaVerifier struct {
-	pub *mldsa65.PublicKey
+type MlDsa87Verifier struct {
+	pub *mldsa87.PublicKey
 }
 
-func NewMlDsaVerifier(pub *mldsa65.PublicKey) *MlDsaVerifier {
-	return &MlDsaVerifier{pub: pub}
+func NewMlDsa87Verifier(pub *mldsa87.PublicKey) *MlDsa87Verifier {
+	return &MlDsa87Verifier{pub: pub}
 }
 
-func (v *MlDsaVerifier) Verify(data, signature []byte) bool {
-	// ML-DSA-65 Verify implementation.
+func (v *MlDsa87Verifier) Verify(data, signature []byte) bool {
+	// ML-DSA-87 Verify implementation.
 	// Context is usually empty in standard use cases unless specified.
-	return mldsa65.Verify(v.pub, data, nil, signature)
+	return mldsa87.Verify(v.pub, data, nil, signature)
 }
