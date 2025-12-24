@@ -3,10 +3,11 @@ package tool
 import (
 	"bytes"
 	"crypto/sha512"
-	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
@@ -251,12 +252,12 @@ func (t *AuditLogTool) Keygen(out io.Writer) error {
 
 	fmt.Fprintf(out, "--- Audit Log Key Pairs ---\n\n")
 	fmt.Fprintf(out, "Ed25519 (Used for per-entry signing):\n")
-	fmt.Fprintf(out, "  Private Key: %s\n", base64.StdEncoding.EncodeToString(keys.Ed25519Priv))
-	fmt.Fprintf(out, "  Public Key:  %s\n\n", base64.StdEncoding.EncodeToString(keys.Ed25519Pub))
+	fmt.Fprintf(out, "%s\n", pemString("ED25519 PRIVATE KEY", keys.Ed25519Priv))
+	fmt.Fprintf(out, "%s\n", pemString("ED25519 PUBLIC KEY", keys.Ed25519Pub))
 
 	fmt.Fprintf(out, "ML-DSA-65 (Used for Post-Quantum grounding):\n")
-	fmt.Fprintf(out, "  Private Key: %s\n", base64.StdEncoding.EncodeToString(keys.MlDsaPriv))
-	fmt.Fprintf(out, "  Public Key:  %s\n\n", base64.StdEncoding.EncodeToString(keys.MlDsaPub))
+	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-65 PRIVATE KEY", keys.MlDsaPriv))
+	fmt.Fprintf(out, "%s\n", pemString("ML-DSA-65 PUBLIC KEY", keys.MlDsaPub))
 
 	fmt.Fprintf(out, "Keep private keys secure. You need them in your storage.json configuration.\n")
 	fmt.Fprintf(out, "Use public keys for verification with 'audit-log verify'.\n")
@@ -264,14 +265,44 @@ func (t *AuditLogTool) Keygen(out io.Writer) error {
 	return nil
 }
 
+func pemString(header string, data []byte) string {
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  header,
+		Bytes: data,
+	}))
+}
+
+func (t *AuditLogTool) writePem(path, header string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return pem.Encode(f, &pem.Block{
+		Type:  header,
+		Bytes: data,
+	})
+}
+
 func (t *AuditLogTool) WriteKeypair(path string, priv []byte, pub []byte) error {
 	privPath := path
 	pubPath := path + ".pub"
 
-	if err := os.WriteFile(privPath, []byte(base64.StdEncoding.EncodeToString(priv)+"\n"), 0600); err != nil {
+	header := "PRIVATE KEY"
+	pubHeader := "PUBLIC KEY"
+	if strings.Contains(path, "ed25519") {
+		header = "ED25519 PRIVATE KEY"
+		pubHeader = "ED25519 PUBLIC KEY"
+	} else if strings.Contains(path, "mldsa") {
+		header = "ML-DSA-65 PRIVATE KEY"
+		pubHeader = "ML-DSA-65 PUBLIC KEY"
+	}
+
+	if err := t.writePem(privPath, header, priv, 0600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(pubPath, []byte(base64.StdEncoding.EncodeToString(pub)+"\n"), 0644); err != nil {
+	if err := t.writePem(pubPath, pubHeader, pub, 0644); err != nil {
 		return err
 	}
 	return nil

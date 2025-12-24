@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 )
 
 func LoadEd25519PublicKey(input string) (ed25519.PublicKey, error) {
-	data, err := loadRawData(input)
+	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +25,7 @@ func LoadEd25519PublicKey(input string) (ed25519.PublicKey, error) {
 }
 
 func LoadEd25519PrivateKey(input string) (ed25519.PrivateKey, error) {
-	data, err := loadRawData(input)
+	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func LoadEd25519PrivateKey(input string) (ed25519.PrivateKey, error) {
 }
 
 func LoadMlDsaPublicKey(input string) (*mldsa65.PublicKey, error) {
-	data, err := loadRawData(input)
+	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func LoadMlDsaPublicKey(input string) (*mldsa65.PublicKey, error) {
 }
 
 func LoadMlDsaPrivateKey(input string) (*mldsa65.PrivateKey, error) {
-	data, err := loadRawData(input)
+	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
@@ -63,37 +63,36 @@ func LoadMlDsaPrivateKey(input string) (*mldsa65.PrivateKey, error) {
 	return priv, nil
 }
 
-func loadRawData(input string) ([]byte, error) {
+func loadKeyData(input string) ([]byte, error) {
 	// Try to read as file first
 	data, err := os.ReadFile(input)
 	if err == nil {
-		data = bytes.TrimSpace(data)
-		// Try raw bytes if size matches common key sizes (heuristically)
-		// otherwise try base64
-		if isLikelyRawKey(data) {
-			return data, nil
-		}
-		
-		decoded, err := base64.StdEncoding.DecodeString(string(data))
-		if err == nil {
-			return decoded, nil
-		}
-		// If it was a file but not valid base64 and not raw, we might have issues, 
-		// but we'll fall through to treat the original input string as base64.
+		return decodeKey(data)
 	}
 
-	// Try as base64 string
-	input = strings.TrimSpace(input)
-	decoded, err := base64.StdEncoding.DecodeString(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64: %w", err)
-	}
-	return decoded, nil
+	// Treat input string as the key data itself
+	return decodeKey([]byte(input))
 }
 
-func isLikelyRawKey(data []byte) bool {
-	l := len(data)
-	return l == ed25519.PublicKeySize || l == ed25519.PrivateKeySize || l == mldsa65.PublicKeySize || l == mldsa65.PrivateKeySize
+func decodeKey(data []byte) ([]byte, error) {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty key data")
+	}
+
+	// 1. Try PEM
+	block, _ := pem.Decode(data)
+	if block != nil {
+		return block.Bytes, nil
+	}
+
+	// 2. Try Base64
+	decoded, err := base64.StdEncoding.DecodeString(string(data))
+	if err == nil {
+		return decoded, nil
+	}
+
+	return nil, fmt.Errorf("failed to decode key: must be PEM or Base64 encoded")
 }
 
 func GenerateEd25519KeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
