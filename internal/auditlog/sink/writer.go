@@ -3,6 +3,7 @@ package sink
 import (
 	"bytes"
 	"crypto/sha512"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -47,7 +48,7 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 		f.Close()
 		return nil, err
 	}
-	
+
 	var lastHash []byte
 	var hashBuffer [][]byte
 
@@ -56,29 +57,33 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 			f.Close()
 			return nil, err
 		}
-		
+
 		dec := serializer.NewDecoder(f)
+		val := auditlog.NewValidator(nil, nil)
 		for {
 			e, err := dec.Decode()
 			if err != nil {
-				break // EOF or error
+				if err == io.EOF {
+					break // Successfully read all entries
+				}
+				f.Close()
+				return nil, fmt.Errorf("failed to read audit log entry %d: %w", val.Index, err)
 			}
+
+			if err := val.ValidateEntry(e); err != nil {
+				f.Close()
+				return nil, err
+			}
+
 			lastHash = e.Hash
-			
-			if e.Type == auditlog.EntryTypeLog {
-				hashBuffer = append(hashBuffer, e.Hash)
-			} else if e.Type == auditlog.EntryTypeGrounding || e.Type == auditlog.EntryTypeGenesis {
-				hashBuffer = nil // Reset on grounding or genesis
-			}
+			hashBuffer = val.HashBuffer
 		}
-		
-		if lastHash == nil {
-			lastHash = make([]byte, sha512.Size)
-		}
-	} else {
+	}
+
+	if lastHash == nil {
 		lastHash = make([]byte, sha512.Size)
 	}
-	
+
 	// Reset offset to end for appending
 	if _, err := f.Seek(0, 2); err != nil {
 		f.Close()

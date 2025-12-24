@@ -1,8 +1,6 @@
 package tool
 
 import (
-	"bytes"
-	"crypto/sha512"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -15,15 +13,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 )
-
-type VerificationError struct {
-	EntryIndex int
-	Reason     string
-}
-
-func (e *VerificationError) Error() string {
-	return fmt.Sprintf("verification failed at entry %d: %s", e.EntryIndex, e.Reason)
-}
 
 type AuditLogTool struct {
 	logPath       string
@@ -64,9 +53,7 @@ func (t *AuditLogTool) Verify(inputFormat string) error {
 		return err
 	}
 
-	var prevHash []byte
-	var hashBuffer [][]byte
-	idx := 0
+	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -74,15 +61,12 @@ func (t *AuditLogTool) Verify(inputFormat string) error {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to read entry %d: %w", idx, err)
+			return fmt.Errorf("failed to read entry %d: %w", val.Index, err)
 		}
 
-		if err := t.verifyEntry(entry, idx, &prevHash, &hashBuffer); err != nil {
+		if err := val.ValidateEntry(entry); err != nil {
 			return err
 		}
-
-		prevHash = entry.Hash
-		idx++
 	}
 
 	return nil
@@ -112,9 +96,7 @@ func (t *AuditLogTool) Dump(inputFormat string, outputFormat string, out io.Writ
 		return fmt.Errorf("unknown output format: %s", outputFormat)
 	}
 
-	var prevHash []byte
-	var hashBuffer [][]byte
-	idx := 0
+	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -122,19 +104,16 @@ func (t *AuditLogTool) Dump(inputFormat string, outputFormat string, out io.Writ
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to read entry %d: %w", idx, err)
+			return fmt.Errorf("failed to read entry %d: %w", val.Index, err)
 		}
 
-		if err := t.verifyEntry(entry, idx, &prevHash, &hashBuffer); err != nil {
+		if err := val.ValidateEntry(entry); err != nil {
 			return err
 		}
 
 		if err := outputSink.WriteEntry(entry); err != nil {
 			return err
 		}
-
-		prevHash = entry.Hash
-		idx++
 	}
 
 	return nil
@@ -169,9 +148,7 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 		Actors:     make(map[string]int),
 	}
 
-	var prevHash []byte
-	var hashBuffer [][]byte
-	idx := 0
+	val := auditlog.NewValidator(t.verifier, t.mlDsaVerifier)
 
 	for {
 		entry, err := dec.Decode()
@@ -179,10 +156,10 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 			if err == io.EOF {
 				break
 			}
-			return nil, fmt.Errorf("failed to read entry %d: %w", idx, err)
+			return nil, fmt.Errorf("failed to read entry %d: %w", val.Index, err)
 		}
 
-		if err := t.verifyEntry(entry, idx, &prevHash, &hashBuffer); err != nil {
+		if err := val.ValidateEntry(entry); err != nil {
 			return nil, err
 		}
 
@@ -208,9 +185,6 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 		case auditlog.EntryTypeGrounding:
 			stats.GroundingEntries++
 		}
-
-		prevHash = entry.Hash
-		idx++
 	}
 
 	return stats, nil
@@ -305,66 +279,6 @@ func (t *AuditLogTool) WriteKeypair(path string, priv []byte, pub []byte) error 
 	if err := t.writePem(pubPath, pubHeader, pub, 0644); err != nil {
 		return err
 	}
-	return nil
-}
-
-func (t *AuditLogTool) verifyEntry(entry *auditlog.Entry, idx int, prevHash *[]byte, hashBuffer *[][]byte) error {
-	// Verify Chain Integrity
-	if idx == 0 {
-		if entry.Type != auditlog.EntryTypeGenesis {
-			return &VerificationError{idx, "first entry is not GENESIS"}
-		}
-		expectedPrev := sha512.Sum512([]byte("pithos"))
-		if !bytes.Equal(entry.PreviousHash, expectedPrev[:]) {
-			return &VerificationError{idx, "genesis previous hash invalid"}
-		}
-	} else {
-		if !bytes.Equal(entry.PreviousHash, *prevHash) {
-			return &VerificationError{idx, fmt.Sprintf("chain break: expected prev hash %x, got %x", *prevHash, entry.PreviousHash)}
-		}
-	}
-
-	// Verify Entry Signature (Ed25519)
-	if !entry.Verify(t.verifier) {
-		return &VerificationError{idx, "entry signature invalid"}
-	}
-
-	// Grounding Verification
-	switch entry.Type {
-	case auditlog.EntryTypeLog:
-		*hashBuffer = append(*hashBuffer, entry.Hash)
-		if len(*hashBuffer) > auditlog.GroundingBlockSize {
-			return &VerificationError{idx, fmt.Sprintf("too many log entries without grounding: expected grounding after %d entries", auditlog.GroundingBlockSize)}
-		}
-	case auditlog.EntryTypeGrounding:
-		if len(*hashBuffer) != auditlog.GroundingBlockSize {
-			return &VerificationError{idx, fmt.Sprintf("grounding entry appeared at wrong interval: expected %d entries, got %d", auditlog.GroundingBlockSize, len(*hashBuffer))}
-		}
-
-		details, ok := entry.Details.(*auditlog.GroundingDetails)
-		if !ok {
-			return &VerificationError{idx, "invalid grounding details structure"}
-		}
-
-		// 1. Verify Merkle Root
-		calculatedRoot := auditlog.CalculateMerkleRoot(*hashBuffer)
-		if !bytes.Equal(calculatedRoot, details.MerkleRootHash) {
-			return &VerificationError{idx, fmt.Sprintf("merkle root mismatch: expected %x, got %x", details.MerkleRootHash, calculatedRoot)}
-		}
-
-		// 2. Verify Ed25519 signature of Merkle Root
-		if !t.verifier.Verify(details.MerkleRootHash, details.SignatureEd25519) {
-			return &VerificationError{idx, "merkle root Ed25519 signature invalid"}
-		}
-
-		// 3. Verify ML-DSA signature of Merkle Root
-		if !t.mlDsaVerifier.Verify(details.MerkleRootHash, details.SignatureMlDsa) {
-			return &VerificationError{idx, "merkle root ML-DSA signature invalid"}
-		}
-
-		*hashBuffer = nil // Reset for next block
-	}
-
 	return nil
 }
 
