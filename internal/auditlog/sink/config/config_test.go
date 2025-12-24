@@ -40,9 +40,8 @@ func TestFileSinkConfiguration_Instantiate(t *testing.T) {
 	// Verify it implements InitialStateProvider
 	isp, ok := s.(sink.InitialStateProvider)
 	assert.True(t, ok)
-	state, err := isp.InitialState()
+	_, err = isp.InitialState()
 	assert.Nil(t, err)
-	assert.NotNil(t, state)
 
 	err = s.Close()
 	assert.Nil(t, err)

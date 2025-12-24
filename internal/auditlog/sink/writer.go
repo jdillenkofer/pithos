@@ -2,7 +2,6 @@ package sink
 
 import (
 	"bytes"
-	"crypto/sha512"
 	"fmt"
 	"io"
 	"os"
@@ -78,10 +77,11 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 			lastHash = e.Hash
 			hashBuffer = val.HashBuffer
 		}
-	}
 
-	if lastHash == nil {
-		lastHash = make([]byte, sha512.Size)
+		if lastHash == nil {
+			f.Close()
+			return nil, fmt.Errorf("no valid audit log entries could be recovered from non-empty file: %s", path)
+		}
 	}
 
 	// Reset offset to end for appending
@@ -91,9 +91,11 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	}
 
 	ws := NewWriterSink(f, serializer).WithCloser(f)
-	ws.initialState = &InitialState{
-		LastHash:   lastHash,
-		HashBuffer: hashBuffer,
+	if lastHash != nil {
+		ws.initialState = &InitialState{
+			LastHash:   lastHash,
+			HashBuffer: hashBuffer,
+		}
 	}
 
 	return ws, nil

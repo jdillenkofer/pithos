@@ -59,8 +59,12 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lastHash := state.LastHash
-	initialBuffer := state.HashBuffer
+	var lastHash []byte
+	var initialBuffer [][]byte
+	if state != nil {
+		lastHash = state.LastHash
+		initialBuffer = state.HashBuffer
+	}
 
 	mock := &mockStorage{}
 	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsaSigner(mlPriv), lastHash, initialBuffer)
