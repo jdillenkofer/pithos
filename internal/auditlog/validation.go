@@ -18,18 +18,18 @@ func (e *VerificationError) Error() string {
 }
 
 type Validator struct {
-	Verifier        signing.Verifier
+	Ed25519Verifier signing.Verifier
 	MlDsa87Verifier signing.Verifier
 	PrevHash        []byte
 	HashBuffer      [][]byte
 	Index           int
 }
 
-func NewValidator(verifier, mlDsa87Verifier signing.Verifier) *Validator {
+func NewValidator(ed25519Verifier, mlDsa87Verifier signing.Verifier) *Validator {
 	return &Validator{
-		Verifier:        verifier,
-		MlDsa87Verifier: mlDsa87Verifier,
-		HashBuffer:      make([][]byte, 0, GroundingBlockSize),
+		Ed25519Verifier: ed25519Verifier,
+		MlDsa87Verifier:  mlDsa87Verifier,
+		HashBuffer:       make([][]byte, 0, GroundingBlockSize),
 	}
 }
 
@@ -55,8 +55,8 @@ func (v *Validator) ValidateEntry(entry *Entry) error {
 	}
 
 	// 3. Verify Entry Signature (Ed25519) if verifier is provided
-	if v.Verifier != nil {
-		if !entry.Verify(v.Verifier) {
+	if v.Ed25519Verifier != nil {
+		if !entry.Verify(v.Ed25519Verifier) {
 			return &VerificationError{v.Index, "entry signature invalid"}
 		}
 	}
@@ -85,8 +85,8 @@ func (v *Validator) ValidateEntry(entry *Entry) error {
 		}
 
 		// Verify Ed25519 signature of Merkle Root if verifier is provided
-		if v.Verifier != nil {
-			if !v.Verifier.Verify(details.MerkleRootHash, details.SignatureEd25519) {
+		if v.Ed25519Verifier != nil {
+			if !v.Ed25519Verifier.Verify(details.MerkleRootHash, details.SignatureEd25519) {
 				return &VerificationError{v.Index, "merkle root Ed25519 signature invalid"}
 			}
 		}
