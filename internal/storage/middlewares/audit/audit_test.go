@@ -49,7 +49,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	s, err := sink.NewBinaryFileSink(tmpFile.Name())
+	s, err := sink.NewFileSink(tmpFile.Name(), &serialization.BinarySerializer{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if !entryStart.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryStart signature verification failed")
 	}
-	
+
 	// Read entry 2 - COMPLETE
 	entryEnd, err := dec.Decode()
 	if err != nil {

@@ -101,10 +101,6 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	return ws, nil
 }
 
-func NewBinaryFileSink(path string) (*WriterSink, error) {
-	return NewFileSink(path, &serialization.BinarySerializer{})
-}
-
 func (s *WriterSink) WriteEntry(e *auditlog.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
