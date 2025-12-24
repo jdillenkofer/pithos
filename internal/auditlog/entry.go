@@ -108,12 +108,7 @@ func (e *Entry) CalculateHash() []byte {
 	}
 
 	// Write previous hash
-	if len(e.PreviousHash) > 0 {
-		buf.Write(e.PreviousHash)
-	} else {
-		// Genesis block or first entry might have a special empty/zero prev hash
-		buf.Write(make([]byte, sha512.Size))
-	}
+	buf.Write(e.PreviousHash)
 
 	h := sha512.Sum512(buf.Bytes())
 	return h[:]
