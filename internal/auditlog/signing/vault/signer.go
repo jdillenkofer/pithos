@@ -33,12 +33,14 @@ type Signer struct {
 // token: Vault token (use empty string "" if using AppRole)
 // roleID: Vault AppRole role ID (use empty string "" if using token)
 // secretID: Vault AppRole secret ID (use empty string "" if using token)
-// keyName: name of the key in Transit engine
-// mountPath: mount path of the Transit engine (default "transit")
-func NewSigner(vaultAddr, token, roleID, secretID, keyName, mountPath string, tlsConfig *tls.Config) (*Signer, error) {
-	if mountPath == "" {
-		mountPath = "transit"
+// keyPath: path to the key in Transit engine (e.g. "transit/keys/my-key")
+func NewSigner(vaultAddr, token, roleID, secretID, keyPath string, tlsConfig *tls.Config) (*Signer, error) {
+	lastSlash := strings.LastIndex(keyPath, "/")
+	if lastSlash == -1 {
+		return nil, fmt.Errorf("invalid keyPath: %s. Expected format: mount/keyname", keyPath)
 	}
+	mountPath := keyPath[:lastSlash]
+	keyName := keyPath[lastSlash+1:]
 
 	config := api.DefaultConfig()
 	config.Address = vaultAddr

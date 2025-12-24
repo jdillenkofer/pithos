@@ -359,8 +359,7 @@ You can wrap any storage backend with the `AuditStorageMiddleware` to enable ope
         "address": "https://vault.example.com:8200",
         "roleId": "my-app-role-id",
         "secretId": "my-app-role-secret-id",
-        "keyName": "audit-log-key",
-        "mount": "transit"
+        "keyPath": "transit/audit-log-key"
       }
     },
     "mlDsa": {

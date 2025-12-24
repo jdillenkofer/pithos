@@ -267,8 +267,7 @@ type VaultSigningConfiguration struct {
 	Token    string `json:"token,omitempty"`
 	RoleID   string `json:"roleId,omitempty"`
 	SecretID string `json:"secretId,omitempty"`
-	KeyName  string `json:"keyName"`
-	Mount    string `json:"mount,omitempty"`
+	KeyPath  string `json:"keyPath"`
 }
 
 type Ed25519SigningConfiguration struct {
@@ -351,10 +350,10 @@ func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyi
 		if vc.Address == "" {
 			return nil, errors.New("signing.ed25519.vault.address is required")
 		}
-		if vc.KeyName == "" {
-			return nil, errors.New("signing.ed25519.vault.keyName is required")
+		if vc.KeyPath == "" {
+			return nil, errors.New("signing.ed25519.vault.keyPath is required")
 		}
-		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyName, vc.Mount, nil)
+		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Vault signer: %w", err)
 		}

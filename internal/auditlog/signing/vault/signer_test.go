@@ -47,7 +47,7 @@ func TestNewSigner_AppRole(t *testing.T) {
 	defer ts.Close()
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	signer, err := NewSigner(ts.URL, "", "my-role-id", "my-secret-id", "my-key", "transit", tlsConfig)
+	signer, err := NewSigner(ts.URL, "", "my-role-id", "my-secret-id", "transit/my-key", tlsConfig)
 	require.NoError(t, err)
 	defer signer.Close()
 
@@ -60,9 +60,9 @@ func TestNewSigner_AppRole(t *testing.T) {
 
 func TestNewSigner_Token(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	signer, err := NewSigner("http://localhost:8200", "my-token", "", "", "my-key", "", nil)
+	signer, err := NewSigner("http://localhost:8200", "my-token", "", "", "transit/my-key", nil)
 	require.NoError(t, err)
-	assert.Equal(t, "transit", signer.mountPath) // Default
+	assert.Equal(t, "transit", signer.mountPath)
 	assert.Equal(t, "my-key", signer.keyName)
 }
 
@@ -111,7 +111,7 @@ func TestSigner_Sign(t *testing.T) {
 
 	// Initialize with token to skip auth call
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	signer, err := NewSigner(ts.URL, "valid-token", "", "", "my-key", "transit", tlsConfig)
+	signer, err := NewSigner(ts.URL, "valid-token", "", "", "transit/my-key", tlsConfig)
 	require.NoError(t, err)
 
 	sig, err := signer.Sign([]byte("data-to-sign"))
@@ -121,13 +121,17 @@ func TestSigner_Sign(t *testing.T) {
 
 func TestNewSigner_InvalidArgs(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	_, err := NewSigner("http://localhost:8200", "", "", "", "key", "", nil)
+	_, err := NewSigner("http://localhost:8200", "", "", "", "transit/key", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must be provided")
 
-	_, err = NewSigner("http://localhost:8200", "token", "role", "secret", "key", "", nil)
+	_, err = NewSigner("http://localhost:8200", "token", "role", "secret", "transit/key", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot use both")
+
+	_, err = NewSigner("http://localhost:8200", "token", "", "", "invalidkey", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid keyPath")
 }
 
 func TestSigner_RefreshToken(t *testing.T) {
@@ -157,7 +161,7 @@ func TestSigner_RefreshToken(t *testing.T) {
 	defer ts.Close()
 
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
-	signer, err := NewSigner(ts.URL, "", "role", "secret", "key", "transit", tlsConfig)
+	signer, err := NewSigner(ts.URL, "", "role", "secret", "transit/key", tlsConfig)
 	require.NoError(t, err)
 	defer signer.Close()
 
