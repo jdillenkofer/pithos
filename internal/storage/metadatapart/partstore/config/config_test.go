@@ -501,3 +501,37 @@ func TestCanCreateSqlPartStoreFromJson(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, partStore)
 }
+
+func TestCanCreateTinkEncryptionPartStoreMiddlewareWithMLKEMFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	// 64-byte seed in hex
+	pqSeed := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionPartStoreMiddleware",
+				 "kmsType": "local",
+				 "password": "test-password-123",
+				 "pqSeed": %s,
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(pqSeed), strconv.Quote(storagePath))
+
+	instantiator, err := CreatePartStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	config, ok := instantiator.(*TinkEncryptionPartStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, pqSeed, config.PQSeed.Value())
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}

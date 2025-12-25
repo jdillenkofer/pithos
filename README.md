@@ -256,7 +256,24 @@ The following storage backends and middlewares are available:
   - Automated grounding every 1,000 entries using Merkle Trees for high-integrity checkpoints
 
 ###### Part Store Middleware
-- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
+- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. 
+  - Features envelope encryption and key rotation capabilities.
+  - Supports **Post-Quantum Hybrid Encryption** using **ML-KEM-1024** (FIPS 203). It enhances the envelope encryption by deriving the data encryption key from both a classical secret (protected by your chosen KMS) and a post-quantum shared secret via HKDF.
+
+  **Configuration Example (with PQ-Encryption):**
+  ```json
+  {
+    "type": "TinkEncryptionPartStoreMiddleware",
+    "kmsType": "local",
+    "password": "your-strong-password",
+    "pqSeed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "innerPartStore": {
+      "type": "FilesystemPartStore",
+      "root": "./data/parts"
+    }
+  }
+  ```
+  *Note: `pqSeed` must be a 64-byte hex-encoded string. You can generate one using `openssl rand -hex 64`. Warning: If this seed is lost, encrypted data cannot be decrypted.*
 - **OutboxPartStore**: Implements outbox pattern for reliable part operations
 
 The default configuration (using SQLite) looks like this:

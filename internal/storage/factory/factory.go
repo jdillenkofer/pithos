@@ -77,7 +77,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 			slog.Error("Encryption password is required for Tink encryption")
 			os.Exit(1)
 		}
-		partStore, err = tinkEncryptionPartStoreMiddleware.NewWithLocalKMS(partStoreEncryptionPassword, partStore)
+		partStore, err = tinkEncryptionPartStoreMiddleware.NewWithLocalKMS(partStoreEncryptionPassword, partStore, nil)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewTinkEncryptionPartStoreMiddleware: ", err))
 			os.Exit(1)

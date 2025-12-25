@@ -81,7 +81,7 @@ func TestNewWithHCVault_AppRole(t *testing.T) {
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 
 	// Test successful creation
-	mw, err := NewWithHCVault(ts.URL, "", "role-id", "secret-id", "transit/keys/my-key", innerStore, tlsConfig)
+	mw, err := NewWithHCVault(ts.URL, "", "role-id", "secret-id", "transit/keys/my-key", innerStore, tlsConfig, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, mw)
 
@@ -122,7 +122,7 @@ func TestNewWithHCVault_Token(t *testing.T) {
 	innerStore := &mockPartStore{}
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 
-	mw, err := NewWithHCVault(ts.URL, "my-token", "", "", "transit/keys/my-key", innerStore, tlsConfig)
+	mw, err := NewWithHCVault(ts.URL, "my-token", "", "", "transit/keys/my-key", innerStore, tlsConfig, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, mw)
 
@@ -137,11 +137,11 @@ func TestNewWithHCVault_InvalidArgs(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	innerStore := &mockPartStore{}
 	
-	_, err := NewWithHCVault("http://localhost:8200", "", "", "", "key", innerStore, nil)
+	_, err := NewWithHCVault("http://localhost:8200", "", "", "", "key", innerStore, nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must be provided")
 
-	_, err = NewWithHCVault("http://localhost:8200", "token", "role", "secret", "key", innerStore, nil)
+	_, err = NewWithHCVault("http://localhost:8200", "token", "role", "secret", "key", innerStore, nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot use both")
 }
@@ -185,7 +185,7 @@ func TestTinkMiddleware_RefreshVaultToken(t *testing.T) {
 	innerStore := &mockPartStore{}
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 
-	mw, err := NewWithHCVault(ts.URL, "", "role", "secret", "transit/keys/my-key", innerStore, tlsConfig)
+	mw, err := NewWithHCVault(ts.URL, "", "role", "secret", "transit/keys/my-key", innerStore, tlsConfig, nil)
 	require.NoError(t, err)
 	
 	tinkMw, ok := mw.(*TinkEncryptionPartStoreMiddleware)

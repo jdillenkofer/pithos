@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/mlkem"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +59,13 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMPath                    internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
 	TPMPersistentHandle        internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
 	TPMKeyFilePath             internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
-	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
+	// PQ-safe specific
+	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
+	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
+	// previously encrypted data CANNOT be decrypted.
+	// To generate: openssl rand -hex 64
+	PQSeed internalConfig.StringProvider `json:"pqSeed,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
 }
@@ -89,6 +97,19 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		return nil, err
 	}
 
+	var mlkemKey *mlkem.DecapsulationKey1024
+	pqSeedHex := t.PQSeed.Value()
+	if pqSeedHex != "" {
+		seed, err := hex.DecodeString(pqSeedHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pqSeed format: %w", err)
+		}
+		mlkemKey, err = mlkem.NewDecapsulationKey1024(seed)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create ML-KEM key from seed: %w", err)
+		}
+	}
+
 	kmsType := t.KMSType.Value()
 
 	switch kmsType {
@@ -101,7 +122,7 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		if region == "" {
 			return nil, errors.New("awsRegion is required for AWS KMS")
 		}
-		return tink.NewWithAWSKMS(keyURI, region, innerPartStore)
+		return tink.NewWithAWSKMS(keyURI, region, innerPartStore, mlkemKey)
 	case "vault":
 		keyURI := t.KeyURI.Value()
 		address := t.VaultAddress.Value()
@@ -128,13 +149,13 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, errors.New("cannot use both vaultToken and AppRole authentication - choose one method")
 		}
 
-		return tink.NewWithHCVault(address, token, roleID, secretID, keyURI, innerPartStore, nil)
+		return tink.NewWithHCVault(address, token, roleID, secretID, keyURI, innerPartStore, nil, mlkemKey)
 	case "local":
 		password := t.Password.Value()
 		if password == "" {
 			return nil, errors.New("password is required for Local KMS")
 		}
-		return tink.NewWithLocalKMS(password, innerPartStore)
+		return tink.NewWithLocalKMS(password, innerPartStore, mlkemKey)
 	case "tpm":
 		tpmPath := t.TPMPath.Value()
 		if tpmPath == "" {
@@ -159,7 +180,7 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, innerPartStore)
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}
