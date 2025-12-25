@@ -37,7 +37,7 @@ func (s *WriterSink) InitialState() (*InitialState, error) {
 }
 
 func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
