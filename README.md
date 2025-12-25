@@ -34,7 +34,7 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 
 ### Prerequisites
 
-- Go 1.21 or higher
+- Go 1.25 or higher
 - Docker (optional)
 
 ### Installation
