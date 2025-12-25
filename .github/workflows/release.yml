@@ -113,9 +113,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
       - name: Build Binary
         env:
           GOOS: linux
@@ -139,9 +139,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
       - name: Install Cross-Compilation Tools
         run: |
           sudo apt-get update
@@ -177,9 +177,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
       - name: Build Binary
         env:
           GOOS: ${{ matrix.os }}
@@ -203,9 +203,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
       - name: Build Binary
         env:
           GOOS: windows
@@ -229,9 +229,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
       - name: Install Zig
         run: |
           wget https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz
