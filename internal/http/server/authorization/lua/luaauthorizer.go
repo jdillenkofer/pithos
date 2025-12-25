@@ -154,7 +154,15 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 	defer span.End()
 
 	L := lua.NewState()
-	lua.OpenLibraries(L)
+	// Load only necessary libraries
+	lua.Require(L, "_G", lua.BaseOpen, true)
+	L.Pop(1)
+	lua.Require(L, "table", lua.TableOpen, true)
+	L.Pop(1)
+	lua.Require(L, "string", lua.StringOpen, true)
+	L.Pop(1)
+	lua.Require(L, "math", lua.MathOpen, true)
+	L.Pop(1)
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
 		slog.Error("Error while executing Lua code", "error", err)
