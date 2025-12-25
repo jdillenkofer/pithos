@@ -1,6 +1,7 @@
 package tink
 
 import (
+	"crypto/mlkem"
 	"fmt"
 	"log/slog"
 	"os"
@@ -46,7 +47,7 @@ func TestTinkEncryptionPartStoreWithLocalKMS(t *testing.T) {
 	}
 
 	// Test with LocalKMS variant
-	tinkEncryptionPartStoreMiddleware, err := NewWithLocalKMS("test-password", filesystemPartStore)
+	tinkEncryptionPartStoreMiddleware, err := NewWithLocalKMS("test-password", filesystemPartStore, nil)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create TinkEncryptionPartStoreMiddleware: %s", err))
 		os.Exit(1)
@@ -89,12 +90,54 @@ func TestTinkEncryptionPartStoreWithLocalKMS_DifferentPasswords(t *testing.T) {
 	}
 
 	// Test that different passwords create different encryption results
-	middleware1, err := NewWithLocalKMS("password1", filesystemPartStore)
+	middleware1, err := NewWithLocalKMS("password1", filesystemPartStore, nil)
 	assert.Nil(t, err)
 
-	middleware2, err := NewWithLocalKMS("password2", filesystemPartStore)
+	middleware2, err := NewWithLocalKMS("password2", filesystemPartStore, nil)
 	assert.Nil(t, err)
 
 	// Ensure they are different instances with different master keys
 	assert.NotEqual(t, middleware1, middleware2)
+}
+
+func TestTinkEncryptionPartStoreWithMLKEM(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	storagePath, err := os.MkdirTemp("", "pithos-test-pq-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(storagePath)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	filesystemPartStore, err := filesystemPartStore.New(storagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Generate a 64-byte seed for ML-KEM-1024
+	seed := make([]byte, 64)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+
+	mlkemKey, err := mlkem.NewDecapsulationKey1024(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test with ML-KEM hybrid encryption
+	middleware, err := NewWithLocalKMS("test-password", filesystemPartStore, mlkemKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := []byte("TinkEncryptionPartStoreMiddleware with ML-KEM")
+	err = partstore.Tester(middleware, db, content)
+	assert.Nil(t, err)
 }

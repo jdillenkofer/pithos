@@ -2,7 +2,9 @@ package tink
 
 import (
 	"context"
+	"crypto/mlkem"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/binary"
@@ -20,6 +22,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/pkg/vault"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
 
 	aeadsubtle "github.com/google/tink/go/aead/subtle"
@@ -31,7 +34,7 @@ import (
 
 const (
 	// PartHeaderVersion is the current version of the part header format
-	PartHeaderVersion = 2
+	PartHeaderVersion = 3
 
 	// Key types for different KMS providers
 	KeyTypeAWS   = "aws"
@@ -47,11 +50,12 @@ const (
 
 // PartHeader contains metadata about the encryption used for a part
 type PartHeader struct {
-	Version      int    `json:"version"`               // Format version for future compatibility
-	KeyType      string `json:"keyType"`               // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
-	KeyURI       string `json:"keyURI"`                // Key identifier (empty for local)
-	EncryptedDEK []byte `json:"encryptedDEK"`          // The encrypted DEK
-	SegmentSize  int    `json:"segmentSize,omitempty"` // Size of ciphertext segments (defaults to 4096 if 0)
+	Version           int    `json:"version"`                     // Format version for future compatibility
+	KeyType           string `json:"keyType"`                     // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
+	KeyURI            string `json:"keyURI"`                      // Key identifier (empty for local)
+	EncryptedDEK      []byte `json:"encryptedDEK"`                // The encrypted DEK
+	SegmentSize       int    `json:"segmentSize,omitempty"`       // Size of ciphertext segments (defaults to 4096 if 0)
+	PQEncapsulatedKey []byte `json:"pqEncapsulatedKey,omitempty"` // PQ-safe encapsulated key (ML-KEM-1024)
 }
 
 // TinkEncryptionPartStoreMiddleware uses envelope encryption where each part has its own DEK.
@@ -61,6 +65,8 @@ type TinkEncryptionPartStoreMiddleware struct {
 	// Metadata for key rotation support
 	keyType string // KeyTypeAWS, KeyTypeVault, or KeyTypeLocal
 	keyURI  string // Key identifier (empty for local)
+	// PQ-safe encryption
+	mlkemKey *mlkem.DecapsulationKey1024
 	// Vault-specific configuration for key rotation and token refresh
 	vaultAddr     string // Vault address (for recreating client)
 	vaultToken    string // Vault token (for token-based auth)
@@ -175,6 +181,18 @@ func (mw *TinkEncryptionPartStoreMiddleware) startTokenRefreshLoop() {
 	}()
 }
 
+func deriveHybridKey(classicalKey, pqKey, salt []byte) ([]byte, error) {
+	// Use HKDF to combine the keys
+	// Salt is the part ID bytes
+	// Info is a fixed string
+	h := hkdf.New(sha256.New, append(classicalKey, pqKey...), salt, []byte("pithos-hybrid-dek"))
+	derivedKey := make([]byte, 32)
+	if _, err := io.ReadFull(h, derivedKey); err != nil {
+		return nil, err
+	}
+	return derivedKey, nil
+}
+
 // NewWithHCVault creates a new TinkEncryptionPartStoreMiddleware using HashiCorp Vault KMS.
 // Uses envelope encryption where each part has its own DEK encrypted with the Vault master key.
 // Supports both token-based and AppRole authentication.
@@ -186,7 +204,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) startTokenRefreshLoop() {
 // keyURI: relative path e.g. "transit/keys/my-key"
 //
 // Either (token) OR (roleID AND secretID) must be provided.
-func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPartStore partstore.PartStore, tlsConfig *tls.Config) (partstore.PartStore, error) {
+func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPartStore partstore.PartStore, tlsConfig *tls.Config, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Validate authentication parameters
 	hasToken := token != ""
 	hasAppRole := roleID != "" && secretID != ""
@@ -249,6 +267,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 		innerPartStore: innerPartStore,
 		keyType:        KeyTypeVault,
 		keyURI:         keyURI,
+		mlkemKey:       mlkemKey,
 		vaultAddr:      vaultAddr,
 		vaultToken:     actualToken,
 		vaultRoleID:    roleID,
@@ -268,7 +287,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 // NewWithLocalKMS creates a new TinkEncryptionPartStoreMiddleware using a local master key (KEK).
 // Uses envelope encryption where each part has its own DEK encrypted with the local master key.
 // kekBytes: the master key derived from a password using scrypt.
-func NewWithLocalKMS(password string, innerPartStore partstore.PartStore) (partstore.PartStore, error) {
+func NewWithLocalKMS(password string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	kekBytes, err := scrypt.Key([]byte(password), []byte("pithos"), 1<<16, 8, 1, 32)
 	if err != nil {
 		return nil, err
@@ -285,6 +304,7 @@ func NewWithLocalKMS(password string, innerPartStore partstore.PartStore) (parts
 		innerPartStore: innerPartStore,
 		keyType:        KeyTypeLocal,
 		keyURI:         "", // No URI for local keys
+		mlkemKey:       mlkemKey,
 		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),
 	}, nil
 }
@@ -293,7 +313,7 @@ func NewWithLocalKMS(password string, innerPartStore partstore.PartStore) (parts
 // Uses envelope encryption where each part has its own DEK encrypted with the AWS KMS master key.
 // keyURI: e.g. "aws-kms://arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
 // region: AWS region (e.g. "us-east-1")
-func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore) (partstore.PartStore, error) {
+func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create AWS KMS client
 	kmsClient, err := awskms.NewClient(keyURI)
 	if err != nil {
@@ -316,6 +336,7 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore) (p
 		innerPartStore: innerPartStore,
 		keyType:        KeyTypeAWS,
 		keyURI:         keyURI,
+		mlkemKey:       mlkemKey,
 		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),
 	}, nil
 }
@@ -326,7 +347,7 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore) (p
 // tpmPath: path to TPM device (e.g. "/dev/tpmrm0" or "/dev/tpm0")
 // persistentHandle: persistent handle for the TPM key (0x81000000–0x81FFFFFF)
 // keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
-func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, innerPartStore partstore.PartStore) (partstore.PartStore, error) {
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create TPM AEAD
 	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath)
 	if err != nil {
@@ -344,6 +365,7 @@ func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, inn
 		innerPartStore: innerPartStore,
 		keyType:        KeyTypeTPM,
 		keyURI:         fmt.Sprintf("tpm://%s/0x%08X", tpmPath, persistentHandle),
+		mlkemKey:       mlkemKey,
 		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),
 	}, nil
 }
@@ -375,33 +397,49 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *sq
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.PutPart")
 	defer span.End()
 
-	// Generate a new 32-byte DEK for this part
-	dek := make([]byte, 32)
-	if _, err := rand.Read(dek); err != nil {
+	// Generate a new 32-byte classical DEK for this part
+	classicalDEK := make([]byte, 32)
+	if _, err := rand.Read(classicalDEK); err != nil {
 		return err
+	}
+
+	var pqSharedSecret []byte
+	var pqEncapsulatedKey []byte
+	if mw.mlkemKey != nil {
+		pqSharedSecret, pqEncapsulatedKey = mw.mlkemKey.EncapsulationKey().Encapsulate()
+	}
+
+	finalDEK := classicalDEK
+	if pqSharedSecret != nil {
+		var err error
+		finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
+		if err != nil {
+			return err
+		}
 	}
 
 	segmentSize := DefaultSegmentSize
 
-	// Create streaming AEAD with the DEK
-	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, segmentSize, 0)
+	// Create streaming AEAD with the final (possibly hybrid) DEK
+	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(finalDEK, "SHA256", 32, segmentSize, 0)
 	if err != nil {
 		return err
 	}
 
-	// Encrypt the DEK with the master AEAD
-	encryptedDEK, err := mw.masterAEAD.Encrypt(dek, partId.Bytes())
+	// Encrypt the classical DEK with the master AEAD
+	encryptedDEK, err := mw.masterAEAD.Encrypt(classicalDEK, partId.Bytes())
 	if err != nil {
 		return err
 	}
 
 	// Create header with key metadata and encrypted DEK
 	header := PartHeader{
-		Version:      PartHeaderVersion,
-		KeyType:      mw.keyType,
-		KeyURI:       mw.keyURI,
-		EncryptedDEK: encryptedDEK,
-		SegmentSize:  segmentSize,
+		Version:           PartHeaderVersion,
+		KeyType:           mw.keyType,
+		KeyURI:            mw.keyURI,
+		EncryptedDEK:      encryptedDEK,
+		SegmentSize:       segmentSize,
+		PQEncapsulatedKey: pqEncapsulatedKey,
 	}
 
 	// Serialize header to JSON
@@ -492,11 +530,29 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 			return nil, fmt.Errorf("unsupported part header version: %d", header.Version)
 		}
 
-		// Decrypt the DEK with master AEAD
-		dek, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
+		// Decrypt the classical DEK with master AEAD
+		classicalDEK, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
 		if err != nil {
 			rc.Close()
 			return nil, err
+		}
+
+		finalDEK := classicalDEK
+		if len(header.PQEncapsulatedKey) > 0 {
+			if mw.mlkemKey == nil {
+				rc.Close()
+				return nil, fmt.Errorf("part is PQ-encrypted but no ML-KEM key is configured")
+			}
+			pqSharedSecret, err := mw.mlkemKey.Decapsulate(header.PQEncapsulatedKey)
+			if err != nil {
+				rc.Close()
+				return nil, fmt.Errorf("failed to decapsulate PQ key: %w", err)
+			}
+			finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
+			if err != nil {
+				rc.Close()
+				return nil, err
+			}
 		}
 
 		segmentSize := header.SegmentSize
@@ -504,8 +560,8 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 			segmentSize = LegacySegmentSize
 		}
 
-		// Create streaming AEAD with the DEK
-		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(dek, "SHA256", 32, segmentSize, 0)
+		// Create streaming AEAD with the final DEK
+		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(finalDEK, "SHA256", 32, segmentSize, 0)
 		if err != nil {
 			rc.Close()
 			return nil, err
