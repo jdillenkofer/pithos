@@ -1,15 +1,14 @@
 package tink
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/pkg/vault"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/scrypt"
@@ -66,6 +66,7 @@ type TinkEncryptionPartStoreMiddleware struct {
 	vaultToken    string // Vault token (for token-based auth)
 	vaultRoleID   string // Vault AppRole role ID (for AppRole auth)
 	vaultSecretID string // Vault AppRole secret ID (for AppRole auth)
+	tlsConfig     *tls.Config // TLS configuration for Vault client
 	// Token refresh mechanism
 	tokenMutex      sync.RWMutex  // Protects token refresh operations
 	tokenExpiry     time.Time     // When the current token expires
@@ -94,65 +95,6 @@ func testKeyAvailability(aead tink.AEAD, kmsType string) error {
 	return nil
 }
 
-// vaultAuthResponse represents the response from Vault authentication
-type vaultAuthResponse struct {
-	Auth struct {
-		ClientToken   string `json:"client_token"`
-		LeaseDuration int    `json:"lease_duration"`
-		Renewable     bool   `json:"renewable"`
-	} `json:"auth"`
-}
-
-// authenticateWithAppRole authenticates with Vault using AppRole and returns the client token and expiry
-func authenticateWithAppRole(vaultAddr, roleID, secretID string) (string, time.Time, error) {
-	// Convert vault address to proper HTTP URL
-	httpAddr := vaultAddr
-	if strings.HasPrefix(vaultAddr, "hcvault://") {
-		httpAddr = "https://" + vaultAddr[len("hcvault://"):]
-	} else if !strings.HasPrefix(vaultAddr, "http://") && !strings.HasPrefix(vaultAddr, "https://") {
-		httpAddr = "https://" + vaultAddr
-	}
-
-	// Prepare the AppRole login request
-	loginData := map[string]string{
-		"role_id":   roleID,
-		"secret_id": secretID,
-	}
-	loginJSON, err := json.Marshal(loginData)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to marshal AppRole login data: %w", err)
-	}
-
-	// Make the login request
-	loginURL := strings.TrimRight(httpAddr, "/") + "/v1/auth/approle/login"
-	resp, err := http.Post(loginURL, "application/json", bytes.NewReader(loginJSON))
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to authenticate with AppRole: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", time.Time{}, fmt.Errorf("AppRole authentication failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse the response
-	var authResp vaultAuthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
-		return "", time.Time{}, fmt.Errorf("failed to decode AppRole response: %w", err)
-	}
-
-	if authResp.Auth.ClientToken == "" {
-		return "", time.Time{}, fmt.Errorf("AppRole authentication returned empty token")
-	}
-
-	// Calculate token expiry (refresh at 80% of lease duration to be safe)
-	leaseDuration := time.Duration(authResp.Auth.LeaseDuration) * time.Second
-	refreshBuffer := leaseDuration * 20 / 100 // 20% buffer
-	expiry := time.Now().Add(leaseDuration - refreshBuffer)
-
-	return authResp.Auth.ClientToken, expiry, nil
-}
 
 // refreshVaultToken refreshes the AEAD with a new token
 func (mw *TinkEncryptionPartStoreMiddleware) refreshVaultToken() error {
@@ -160,7 +102,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) refreshVaultToken() error {
 	defer mw.tokenMutex.Unlock()
 
 	// Get new token using AppRole
-	newToken, newExpiry, err := authenticateWithAppRole(mw.vaultAddr, mw.vaultRoleID, mw.vaultSecretID)
+	newToken, newExpiry, err := vault.AuthenticateWithAppRole(mw.vaultAddr, mw.vaultRoleID, mw.vaultSecretID, mw.tlsConfig)
 	if err != nil {
 		return fmt.Errorf("failed to refresh Vault token: %w", err)
 	}
@@ -177,7 +119,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) refreshVaultToken() error {
 
 	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(mw.keyURI, "/")
 
-	kmsClient, err := hcvault.NewClient(uriPrefix, nil, newToken)
+	kmsClient, err := hcvault.NewClient(uriPrefix, mw.tlsConfig, newToken)
 	if err != nil {
 		return fmt.Errorf("failed to create new Vault client: %w", err)
 	}
@@ -244,7 +186,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) startTokenRefreshLoop() {
 // keyURI: relative path e.g. "transit/keys/my-key"
 //
 // Either (token) OR (roleID AND secretID) must be provided.
-func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPartStore partstore.PartStore) (partstore.PartStore, error) {
+func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPartStore partstore.PartStore, tlsConfig *tls.Config) (partstore.PartStore, error) {
 	// Validate authentication parameters
 	hasToken := token != ""
 	hasAppRole := roleID != "" && secretID != ""
@@ -262,7 +204,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 	var tokenExpiry time.Time
 	if hasAppRole {
 		var err error
-		actualToken, tokenExpiry, err = authenticateWithAppRole(vaultAddr, roleID, secretID)
+		actualToken, tokenExpiry, err = vault.AuthenticateWithAppRole(vaultAddr, roleID, secretID, tlsConfig)
 		if err != nil {
 			return nil, fmt.Errorf("AppRole authentication failed: %w", err)
 		}
@@ -286,7 +228,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(keyURI, "/")
 
 	// Register the Vault KMS client with Tink
-	kmsClient, err := hcvault.NewClient(uriPrefix, nil, actualToken)
+	kmsClient, err := hcvault.NewClient(uriPrefix, tlsConfig, actualToken)
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +253,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 		vaultToken:     actualToken,
 		vaultRoleID:    roleID,
 		vaultSecretID:  secretID,
+		tlsConfig:      tlsConfig,
 		tokenExpiry:    tokenExpiry,
 		stopRefresh:    make(chan struct{}),
 		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),

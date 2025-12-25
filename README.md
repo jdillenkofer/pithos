@@ -97,12 +97,72 @@ cosign verify-blob \
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-### Configuration
-Pithos can be configured using command-line arguments or environment variables.
-For a complete list of available command-line arguments, you can run:
+### CLI Subcommands
+
+Pithos provides several subcommands for managing and maintaining the storage server.
+
+#### `serve`
+Starts the S3-compatible object storage server.
 ```sh
-./pithos serve --help
+pithos serve [options]
 ```
+For a complete list of available command-line arguments, run `./pithos serve --help`.
+
+#### `migrate-storage`
+Migrates data between two different storage configurations.
+```sh
+pithos migrate-storage <source-config.json> <destination-config.json>
+```
+The migration is performed bucket by bucket. To prevent data loss, it will not overwrite existing objects in the destination.
+
+#### `benchmark-storage`
+Measures the performance of a storage configuration.
+```sh
+pithos benchmark-storage <config.json>
+```
+This command performs upload and download benchmarks with various object sizes and reports the speeds.
+
+#### `validate-storage`
+Checks the integrity of all objects in the storage.
+```sh
+pithos validate-storage <config.json> [options]
+```
+Available options:
+- `-delete-corrupted`: Delete objects that fail integrity checks.
+- `-force`: Force deletion without confirmation.
+- `-json`: Output results in JSON format.
+- `-output <path>`: Write the validation report to a file.
+
+#### `audit-log`
+Provides tools for verifying, dumping, analyzing, and generating keys for audit logs.
+```sh
+pithos audit-log <verify|dump|stats|keygen> [options]
+```
+Common options:
+- `-input-file <path>`: (Required for verify|dump|stats) Path to the audit log file.
+- `-input-format <bin|json|text>`: Input format (default: `bin`).
+- `-ed25519-public-key <key>`: (Required for verify|dump|stats) Base64 encoded Ed25519 public key or path to key file.
+- `-ml-dsa-87-public-key <key>`: (Required for verify|dump|stats) Base64 encoded ML-DSA-87 public key or path to key file.
+
+Subcommand specific options:
+- `dump`: Supports `-output-format <json|text|bin>` and `-output-file <path>`.
+
+**Example: Generate key pairs for the audit log**
+```sh
+pithos audit-log keygen [-f <filename>]
+```
+- If no `-f` flag is provided, keys are printed to stdout.
+- If `-f` is provided, keys are saved to files (e.g., `mykey_ed25519`, `mykey_ed25519.pub`, etc.). 
+- Pithos will prompt for confirmation before overwriting existing files.
+
+The **private keys** must be kept secret and added to your `storage.json` configuration to enable signing. The **public keys** are used with the `verify` command.
+
+**Example: Verify an audit log**
+```sh
+pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s...
+```
+
+### Configuration
 
 The following environment variables are available:
 
@@ -189,6 +249,11 @@ The following storage backends and middlewares are available:
 ###### Storage Middleware
 - **ConditionalStorage**: Implements conditional forwarding to different storage backends based on the bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
+- **AuditStorage**: Provides cryptographically signed audit logs for all storage operations
+  - Supports multiple output sinks (Binary, JSON, Text)
+  - Chained hashing for tamper detection
+  - Dual-signatures for grounding: Ed25519 and ML-DSA (Post-Quantum)
+  - Automated grounding every 1,000 entries using Merkle Trees for high-integrity checkpoints
 
 ###### Part Store Middleware
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. Features envelope encryption and key rotation capabilities
@@ -252,6 +317,90 @@ For PostgreSQL, you can use this configuration:
 }
 ```
 
+##### Audit Log Middleware Configuration
+You can wrap any storage backend with the `AuditStorageMiddleware` to enable operation logging. 
+
+**Option 1: Using Local Keys**
+```json
+{
+  "type": "AuditStorageMiddleware",
+  "innerStorage": {
+     "type": "MetadataPartStorage",
+     ...
+  },
+  "signing": {
+    "ed25519": {
+      "privateKey": "<Base64-encoded-Ed25519-private-key-or-path>"
+    },
+    "mlDsa87": {
+      "privateKey": "<Base64-encoded-ML-DSA-87-private-key-or-path>"
+    }
+  },
+  "sinks": [
+    {
+      "type": "FileSink",
+      "path": "./data/audit.log",
+      "serializer": {
+        "type": "BinarySerializer"
+      }
+    }
+  ]
+}
+```
+
+**Option 2: Using HashiCorp Vault for Ed25519 Signing**
+```json
+{
+  "type": "AuditStorageMiddleware",
+  "innerStorage": { ... },
+  "signing": {
+    "ed25519": {
+      "vault": {
+        "address": "https://vault.example.com:8200",
+        "roleId": "my-app-role-id",
+        "secretId": "my-app-role-secret-id",
+        "keyPath": "transit/audit-log-key"
+      }
+    },
+    "mlDsa87": {
+      "privateKey": "./keys/mldsa_priv.key"
+    }
+  },
+  "sinks": [
+    {
+      "type": "FileSink",
+      "path": "./data/audit.log",
+      "serializer": {
+        "type": "JsonSerializer",
+        "indent": true
+      }
+    }
+  ]
+}
+```
+
+##### Audit Log Security Recommendation
+To prevent any program (including Pithos) from overwriting or truncating existing audit logs, you can use filesystem-level append-only attributes. This ensures that data can only be added to the end of the file.
+
+**Linux:**
+Requires root privileges or `CAP_LINUX_IMMUTABLE`.
+```sh
+sudo chattr +a ./data/audit.log
+```
+
+**macOS:**
+- **User level** (Owner can set/unset): `chflags uappnd ./data/audit.log`
+- **System level** (Root only): `sudo chflags sappnd ./data/audit.log`
+
+For maximum security on macOS, use `sappnd`. This prevents the Pithos process (if running as the file owner) from removing the protection if it were to be compromised.
+
+To disable the protection (e.g., to archive or delete the log), use:
+
+- **Linux:** `sudo chattr -a ./data/audit.log`
+- **macOS:** `chflags nouappnd ./data/audit.log` or `sudo chflags nosappnd ./data/audit.log`
+
+With these attributes set, Pithos can still read the file to retrieve the last hash for the chain, but it cannot delete or modify previous entries.
+
 ##### Storage Migration
 Pithos supports storage migration through the `migrate-storage` subcommand. 
 This subcommand allows you to change your storage backend without losing data.
@@ -263,6 +412,25 @@ pithos migrate-storage ./storage_source.json ./storage_target.json
 
 The migrate-storage subcommand migrates data bucket by bucket from the source storage to the target storage.
 If the target storage bucket is not empty, it will not overwrite an existing object. Instead, it will log an error and exit the command to prevent accidental data loss.
+
+##### Audit Log Verification and Conversion
+Pithos provides the `audit-log` subcommand to verify the cryptographic integrity of audit logs and convert them between different formats (Binary, JSON, Text). The tool verifies the hash chain, individual entry signatures, and validates grounding checkpoints (Merkle Roots) every 1,000 entries.
+
+```sh
+pithos audit-log verify -input-file [log-file] -ed25519-public-key <Base64-Ed25519-Key> -ml-dsa-87-public-key <Base64-ML-DSA-Key> [options]
+```
+
+Available options:
+- `-ed25519-public-key`: (Required) The Base64 encoded Ed25519 public key corresponding to the private key used for signing entries and grounding events.
+- `-ml-dsa-87-public-key`: (Required) The Base64 encoded ML-DSA-87 public key used to verify the post-quantum grounding signatures.
+- `-input-format`: Input format. Options: `bin` (default), `json`.
+- `-output-format`: Output format (only for `dump`). Options: `json` (default), `text`, `bin`.
+- `-output-file`: Output path. Use `-` for stdout (default).
+
+**Example: Convert binary log to human-readable text**
+```sh
+pithos audit-log dump -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s... -output-format text -output-file audit_report.txt
+```
 
 #### Monitoring
 We support Prometheus metrics for monitoring the server. You can enable the monitoring endpoints by setting the following environment variables:

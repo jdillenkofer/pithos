@@ -2,16 +2,21 @@ package config
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"testing"
 
+	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	_ "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
@@ -437,6 +442,148 @@ func TestCanCreateReplicationStorageWithSecondaryStoragesFromJson(t *testing.T) 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
+}
+
+func TestCanCreateAuditStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	auditLogPath := filepath.Join(storagePath, "audit.log")
+
+	// Generate keys for signing
+	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
+	
+	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
+	mlPrivBytes, _ := mlPriv.MarshalBinary()
+	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)
+
+	jsonData := fmt.Sprintf(`{
+			"type": "AuditStorageMiddleware",
+			"innerStorage": {
+				"type": "MetadataPartStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"partStore": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			},
+			"sinks": [
+				{
+					"type": "FileSink",
+					"path": %s,
+					"serializer": {
+						"type": "BinarySerializer"
+					}
+				}
+			],
+			"signing": {
+				"ed25519": {
+					"privateKey": %s
+				},
+				"mlDsa87": {
+					"privateKey": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath), strconv.Quote(auditLogPath), strconv.Quote(edPrivEncoded), strconv.Quote(mlPrivEncoded))
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
+func TestCanCreateAuditStorageMiddlewareWithMultipleSinksFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	auditLog1 := filepath.Join(storagePath, "audit1.log")
+	auditLog2 := filepath.Join(storagePath, "audit2.log")
+
+	// Generate keys for signing
+	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
+	
+	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
+	mlPrivBytes, _ := mlPriv.MarshalBinary()
+	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)
+
+	jsonData := fmt.Sprintf(`{
+			"type": "AuditStorageMiddleware",
+			"innerStorage": {
+				"type": "MetadataPartStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"partStore": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			},
+			"sinks": [
+				{
+					"type": "FileSink",
+					"path": %s,
+					"serializer": {
+						"type": "BinarySerializer"
+					}
+				},
+				{
+					"type": "FileSink",
+					"path": %s,
+					"serializer": {
+						"type": "TextSerializer"
+					}
+				}
+			],
+			"signing": {
+				"ed25519": {
+					"privateKey": %s
+				},
+				"mlDsa87": {
+					"privateKey": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath), strconv.Quote(auditLog1), strconv.Quote(auditLog2), strconv.Quote(edPrivEncoded), strconv.Quote(mlPrivEncoded))
+
+	s, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
 }
 
 func TestCanCreateS3ClientStorageFromJson(t *testing.T) {

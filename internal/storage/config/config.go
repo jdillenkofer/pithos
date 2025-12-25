@@ -28,6 +28,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/prometheus/client_golang/prometheus"
+	"crypto/sha512"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
+	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	auditlogSinkConfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
+	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
 const (
@@ -35,6 +41,7 @@ const (
 	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
+	auditStorageMiddlewareType       = "AuditStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
@@ -255,6 +262,169 @@ func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider depend
 	return prometheusMiddleware.NewStorageMiddleware(innerStorage, prometheusRegisterer.(prometheus.Registerer))
 }
 
+type VaultSigningConfiguration struct {
+	Address  string `json:"address"`
+	Token    string `json:"token,omitempty"`
+	RoleID   string `json:"roleId,omitempty"`
+	SecretID string `json:"secretId,omitempty"`
+	KeyPath  string `json:"keyPath"`
+}
+
+type Ed25519SigningConfiguration struct {
+	PrivateKey string                     `json:"privateKey,omitempty"` // File path or base64 encoded
+	Vault      *VaultSigningConfiguration `json:"vault,omitempty"`
+}
+
+type MlDsa87SigningConfiguration struct {
+	PrivateKey string `json:"privateKey"` // File path or base64 encoded
+}
+
+type SigningConfiguration struct {
+	Ed25519 *Ed25519SigningConfiguration `json:"ed25519"`
+	MlDsa87 *MlDsa87SigningConfiguration `json:"mlDsa87"`
+}
+
+type AuditStorageMiddlewareConfiguration struct {
+	InnerStorageInstantiator StorageInstantiator                   `json:"-"`
+	RawInnerStorage          json.RawMessage                       `json:"innerStorage"`
+	SinkInstantiators        []auditlogSinkConfig.SinkInstantiator `json:"-"`
+	RawSinks                 []json.RawMessage                     `json:"sinks"`
+	Signing                  *SigningConfiguration                 `json:"signing"`
+
+	internalConfig.DynamicJsonType
+}
+
+func (a *AuditStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type auditStorageMiddlewareConfiguration AuditStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*auditStorageMiddlewareConfiguration)(a))
+	if err != nil {
+		return err
+	}
+	a.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(a.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	for _, rawSink := range a.RawSinks {
+		sinkInstantiator, err := auditlogSinkConfig.CreateSinkInstantiatorFromJson(rawSink)
+		if err != nil {
+			return err
+		}
+		a.SinkInstantiators = append(a.SinkInstantiators, sinkInstantiator)
+	}
+	return nil
+}
+
+func (a *AuditStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := a.InnerStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	for _, sinkInstantiator := range a.SinkInstantiators {
+		err = sinkInstantiator.RegisterReferences(diCollection)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *AuditStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	innerStorage, err := a.InnerStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	if a.Signing == nil {
+		return nil, errors.New("signing configuration is required")
+	}
+
+	// Ed25519 Signer
+	var edSigner signing.Signer
+	if a.Signing.Ed25519 == nil {
+		return nil, errors.New("signing.ed25519 configuration is required")
+	}
+
+	if a.Signing.Ed25519.Vault != nil {
+		// Use Vault Signer
+		vc := a.Signing.Ed25519.Vault
+		if vc.Address == "" {
+			return nil, errors.New("signing.ed25519.vault.address is required")
+		}
+		if vc.KeyPath == "" {
+			return nil, errors.New("signing.ed25519.vault.keyPath is required")
+		}
+		edSigner, err = signingVault.NewSigner(vc.Address, vc.Token, vc.RoleID, vc.SecretID, vc.KeyPath, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Vault signer: %w", err)
+		}
+	} else {
+		// Use Local Ed25519 Key
+		if a.Signing.Ed25519.PrivateKey == "" {
+			return nil, errors.New("signing.ed25519.privateKey is required if vault is not configured")
+		}
+		edPriv, err := signing.LoadEd25519PrivateKey(a.Signing.Ed25519.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load Ed25519 private key: %w", err)
+		}
+		edSigner = signing.NewEd25519Signer(edPriv)
+	}
+
+	// ML-DSA Signer
+	if a.Signing.MlDsa87 == nil {
+		return nil, errors.New("signing.mlDsa87 configuration is required")
+	}
+	if a.Signing.MlDsa87.PrivateKey == "" {
+		return nil, errors.New("signing.mlDsa87.privateKey is required")
+	}
+	mlPriv, err := signing.LoadMlDsa87PrivateKey(a.Signing.MlDsa87.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ML-DSA-87 private key: %w", err)
+	}
+
+	var sinks []sink.Sink
+	var lastHash []byte
+	var initialHashBuffer [][]byte
+
+	for _, si := range a.SinkInstantiators {
+		curSink, err := si.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+
+		sinks = append(sinks, curSink)
+
+		if lastHash == nil {
+			if isp, ok := curSink.(sink.InitialStateProvider); ok {
+				state, err := isp.InitialState()
+				if err != nil {
+					return nil, fmt.Errorf("failed to get initial state from sink: %w", err)
+				}
+				if state != nil && len(state.LastHash) > 0 {
+					lastHash = state.LastHash
+					initialHashBuffer = state.HashBuffer
+				}
+			}
+		}
+	}
+
+	if len(sinks) == 0 {
+		return nil, errors.New("at least one audit log sink must be configured")
+	}
+
+	var finalSink sink.Sink
+	if len(sinks) == 1 {
+		finalSink = sinks[0]
+	} else {
+		finalSink = sink.NewMultiSink(sinks...)
+	}
+
+	if lastHash == nil {
+		lastHash = make([]byte, sha512.Size)
+	}
+
+	return auditMiddleware.NewAuditLogMiddleware(innerStorage, finalSink, edSigner, signing.NewMlDsa87Signer(mlPriv), lastHash, initialHashBuffer), nil
+}
+
 type OutboxStorageConfiguration struct {
 	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase              json.RawMessage                     `json:"db"`
@@ -412,6 +582,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &ConditionalStorageMiddlewareConfiguration{}
 	case prometheusStorageMiddlewareType:
 		si = &PrometheusStorageMiddlewareConfiguration{}
+	case auditStorageMiddlewareType:
+		si = &AuditStorageMiddlewareConfiguration{}
 	case outboxStorageType:
 		si = &OutboxStorageConfiguration{}
 	case replicationStorageType:

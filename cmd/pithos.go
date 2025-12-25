@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"bufio"
+	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -24,6 +26,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 )
 
 const defaultStorageConfig = `
@@ -64,11 +68,12 @@ const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
+const subcommandAuditLog = "audit-log"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
 		os.Exit(1)
 	}
 
@@ -84,8 +89,10 @@ func main() {
 		benchmarkStorage(ctx)
 	case subcommandValidateStorage:
 		validateStorage(ctx)
+	case subcommandAuditLog:
+		auditLogTool()
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
 		os.Exit(1)
 	}
 }
@@ -469,4 +476,153 @@ func validateStorage(ctx context.Context) {
 	}
 
 	slog.Info("Storage integrity validation successfully completed!")
+}
+
+func auditLogTool() {
+	if len(os.Args) < 3 {
+		slog.Info(fmt.Sprintf("Usage: %s %s [verify|dump|stats|keygen] [options]", os.Args[0], subcommandAuditLog))
+		os.Exit(1)
+	}
+
+	sub := os.Args[2]
+	if sub == "keygen" {
+		fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
+		outputBase := fs.String("f", "", "Output base filename (e.g. 'audit_key')")
+		fs.Parse(os.Args[3:])
+
+		auditTool := tool.NewAuditLogTool("", nil, nil)
+		if *outputBase == "" {
+			err := auditTool.Keygen(os.Stdout)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Key generation failed: %v", err))
+				os.Exit(1)
+			}
+			return
+		}
+
+		// File-based keygen
+		keys, err := auditTool.GenerateAuditKeys()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Key generation failed: %v", err))
+			os.Exit(1)
+		}
+
+		edBase := *outputBase + "_ed25519"
+		mlBase := *outputBase + "_mldsa"
+		files := []string{edBase, edBase + ".pub", mlBase, mlBase + ".pub"}
+
+		existing := []string{}
+		for _, f := range files {
+			if _, err := os.Stat(f); err == nil {
+				existing = append(existing, f)
+			}
+		}
+
+		if len(existing) > 0 {
+			fmt.Printf("The following files already exist:\n")
+			for _, f := range existing {
+				fmt.Printf("  %s\n", f)
+			}
+			fmt.Print("Overwrite (y/n)? ")
+			var response string
+			fmt.Scanln(&response)
+			if strings.ToLower(response) != "y" {
+				fmt.Println("Key generation aborted.")
+				return
+			}
+		}
+
+		if err := auditTool.WriteKeypair(edBase, keys.Ed25519Priv, keys.Ed25519Pub); err != nil {
+			slog.Error(fmt.Sprintf("Failed to write Ed25519 keys: %v", err))
+			os.Exit(1)
+		}
+		if err := auditTool.WriteKeypair(mlBase, keys.MlDsa87Priv, keys.MlDsa87Pub); err != nil {
+			slog.Error(fmt.Sprintf("Failed to write ML-DSA-87 keys: %v", err))
+			os.Exit(1)
+		}
+
+		fmt.Printf("Keys saved to:\n")
+		for _, f := range files {
+			fmt.Printf("  %s\n", f)
+		}
+		return
+	}
+
+	fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
+	
+	inputFilePath := fs.String("input-file", "", "Path to the audit log file")
+	inputFormat := fs.String("input-format", "bin", "Input format (bin, json)")
+	ed25519PubKeyStr := fs.String("ed25519-public-key", "", "Base64 encoded Ed25519 public key or path to key file")
+	mlDsaPubKeyStr := fs.String("ml-dsa-87-public-key", "", "Base64 encoded ML-DSA-87 public key or path to key file")
+	outputFormat := fs.String("output-format", "json", "Output format (json, text, bin) - only for dump")
+	outputFilePath := fs.String("output-file", "-", "Output path (use '-' for stdout)")
+
+	fs.Parse(os.Args[3:])
+
+	if *inputFilePath == "" {
+		slog.Error("Input file path is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	if *ed25519PubKeyStr == "" {
+		slog.Error("Ed25519 public key is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	if *mlDsaPubKeyStr == "" {
+		slog.Error("ML-DSA-87 public key is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	edPubKey, err := signing.LoadEd25519PublicKey(*ed25519PubKeyStr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to load Ed25519 public key: %v", err))
+		os.Exit(1)
+	}
+
+	mlPub, err := signing.LoadMlDsa87PublicKey(*mlDsaPubKeyStr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to load ML-DSA-87 public key: %v", err))
+		os.Exit(1)
+	}
+	mlDsa87Verifier := signing.NewMlDsa87Verifier(mlPub)
+
+	var out io.Writer = os.Stdout
+	if *outputFilePath != "-" {
+		f, err := os.Create(*outputFilePath)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Failed to create output file: %v", err))
+			os.Exit(1)
+		}
+		defer f.Close()
+		out = f
+	}
+
+	bw := bufio.NewWriter(out)
+	defer bw.Flush()
+
+	auditTool := tool.NewAuditLogTool(*inputFilePath, signing.NewEd25519Verifier(edPubKey), mlDsa87Verifier)
+
+	switch sub {
+	case "verify":
+		err = auditTool.Verify(*inputFormat)
+		if err == nil {
+			fmt.Fprintln(os.Stderr, "Audit log verification successful!")
+		}
+	case "dump":
+		err = auditTool.Dump(*inputFormat, *outputFormat, bw)
+	case "stats":
+		err = auditTool.PrintStats(*inputFormat, bw)
+	default:
+		slog.Error(fmt.Sprintf("Unknown audit-log subcommand: %s", sub))
+		os.Exit(1)
+	}
+
+	if err != nil {
+		slog.Error(fmt.Sprintf("Audit log operation failed: %v", err))
+		os.Exit(1)
+	}
 }
