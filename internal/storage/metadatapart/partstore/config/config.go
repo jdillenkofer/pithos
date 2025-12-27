@@ -56,16 +56,17 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	// Local KMS specific (password for key derivation)
 	Password internalConfig.StringProvider `json:"password,omitempty"`
 	// TPM specific
-	TPMPath                    internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
-	TPMPersistentHandle        internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
-	TPMKeyFilePath             internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
+	TPMPath             internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
+	TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
+	TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
+	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa" (default) or "ecc-p256"
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
 	// previously encrypted data CANNOT be decrypted.
 	// To generate: openssl rand -hex 64
-	PQSeed internalConfig.StringProvider `json:"pqSeed,omitempty"`
-	InnerPartStoreInstantiator PartStoreInstantiator `json:"-"`
+	PQSeed                     internalConfig.StringProvider `json:"pqSeed,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
 }
@@ -180,7 +181,17 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, innerPartStore, mlkemKey)
+		// Get key algorithm (default to "rsa" for backward compatibility)
+		keyAlgorithm := t.TPMKeyAlgorithm.Value()
+		if keyAlgorithm == "" {
+			keyAlgorithm = "rsa" // Default to RSA for backward compatibility
+		}
+		// Validate key algorithm
+		if keyAlgorithm != "rsa" && keyAlgorithm != "ecc-p256" {
+			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa' or 'ecc-p256')", keyAlgorithm)
+		}
+
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

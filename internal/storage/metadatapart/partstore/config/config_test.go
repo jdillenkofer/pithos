@@ -456,6 +456,61 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareWithTPMAndPersistentHandle(t 
 	assert.Equal(t, "0x81000002", config.TPMPersistentHandle.Value())
 }
 
+func TestCanCreateTinkEncryptionPartStoreMiddlewareWithTPMECCP256(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionPartStoreMiddleware",
+				 "kmsType": "tpm",
+				 "tpmPath": "/dev/tpmrm0",
+				 "tpmKeyAlgorithm": "ecc-p256",
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	// Test that configuration parsing works
+	instantiator, err := CreatePartStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	// Verify the configuration was parsed correctly
+	config, ok := instantiator.(*TinkEncryptionPartStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "tpm", config.KMSType.Value())
+	assert.Equal(t, "/dev/tpmrm0", config.TPMPath.Value())
+	assert.Equal(t, "ecc-p256", config.TPMKeyAlgorithm.Value())
+}
+
+func TestTinkEncryptionPartStoreMiddlewareRejectsInvalidTPMKeyAlgorithm(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionPartStoreMiddleware",
+				 "kmsType": "tpm",
+				 "tpmPath": "/dev/tpmrm0",
+				 "tpmKeyAlgorithm": "invalid-algorithm",
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, partStore)
+	assert.Contains(t, err.Error(), "invalid tpmKeyAlgorithm")
+}
+
 func TestCanCreateOutboxPartStoreFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()

@@ -13,6 +13,14 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
+// Key algorithm constants for TPM primary key types
+const (
+	// KeyAlgorithmRSA specifies RSA-2048 as the primary key algorithm (default, for backward compatibility)
+	KeyAlgorithmRSA = "rsa"
+	// KeyAlgorithmECCP256 specifies ECC P-256 (NIST P-256) as the primary key algorithm
+	KeyAlgorithmECCP256 = "ecc-p256"
+)
+
 // AESKeyMaterial represents the persistent AES key material
 type AESKeyMaterial struct {
 	Private []byte `json:"private"` // TPM2BPrivate serialized
@@ -69,14 +77,19 @@ func isPersistentHandleFree(dev transport.TPM, handle tpm2.TPMHandle) (bool, err
 	return false, fmt.Errorf("failed to check handle availability: %w", err)
 }
 
-// getOrCreatePersistentKey either loads an existing persistent RSA primary key or creates and persists a new one.
-// If the persistent handle is occupied, it loads and uses that key.
-// If the persistent handle is free, it creates a new RSA primary key and persists it.
+// getOrCreatePersistentKey dispatches to the appropriate key creation function based on the key algorithm.
+// If the persistent handle is occupied, it verifies the existing key matches the expected algorithm.
+// If the persistent handle is free, it creates a new primary key with the specified algorithm.
 // Returns the handle and the name of the primary key.
-func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	// Validate that the handle is in the persistent range (0x81000000–0x81FFFFFF)
 	if persistentHandle < 0x81000000 || persistentHandle > 0x81FFFFFF {
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("handle 0x%08X not in persistent range (0x81000000-0x81FFFFFF)", persistentHandle)
+	}
+
+	// Default to RSA for backward compatibility
+	if keyAlgorithm == "" {
+		keyAlgorithm = KeyAlgorithmRSA
 	}
 
 	// Check if the handle is already occupied
@@ -86,33 +99,81 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 	}
 
 	if !isFree {
-		// Key already exists at this handle, verify it's an RSA key
-		read := tpm2.ReadPublic{ObjectHandle: persistentHandle}
-		pub, err := read.Execute(dev)
-		if err != nil {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to read public area of existing key: %w", err)
-		}
-
-		publicArea, err := pub.OutPublic.Contents()
-		if err != nil {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to parse public area: %w", err)
-		}
-
-		// Verify it's an RSA storage key (restricted decrypt key)
-		if publicArea.Type != tpm2.TPMAlgRSA {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not an RSA key", persistentHandle)
-		}
-
-		attrs := publicArea.ObjectAttributes
-		if !attrs.Decrypt || !attrs.Restricted {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not a storage key (missing Decrypt or Restricted)", persistentHandle)
-		}
-
-		// Key exists and is valid, use it
-		return persistentHandle, pub.Name, nil
+		// Key already exists at this handle, verify it matches the expected algorithm
+		return verifyExistingKey(dev, persistentHandle, keyAlgorithm)
 	}
 
-	// Handle is free, create a new RSA primary storage key (SRK)
+	// Handle is free, create a new primary key based on algorithm
+	switch keyAlgorithm {
+	case KeyAlgorithmRSA:
+		return createPersistentRSAKey(dev, persistentHandle)
+	case KeyAlgorithmECCP256:
+		return createPersistentECCKey(dev, persistentHandle)
+	default:
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
+	}
+}
+
+// verifyExistingKey verifies that an existing key at the handle matches the expected algorithm.
+func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	read := tpm2.ReadPublic{ObjectHandle: persistentHandle}
+	pub, err := read.Execute(dev)
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to read public area of existing key: %w", err)
+	}
+
+	publicArea, err := pub.OutPublic.Contents()
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to parse public area: %w", err)
+	}
+
+	attrs := publicArea.ObjectAttributes
+	if !attrs.Decrypt || !attrs.Restricted {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not a storage key (missing Decrypt or Restricted)", persistentHandle)
+	}
+
+	// Verify the key algorithm matches
+	switch keyAlgorithm {
+	case KeyAlgorithmRSA:
+		if publicArea.Type != tpm2.TPMAlgRSA {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but RSA was requested", persistentHandle, algName(publicArea.Type))
+		}
+	case KeyAlgorithmECCP256:
+		if publicArea.Type != tpm2.TPMAlgECC {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but ECC P-256 was requested", persistentHandle, algName(publicArea.Type))
+		}
+		// Additionally verify it's P-256 curve
+		eccParams, err := publicArea.Parameters.ECCDetail()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get ECC parameters: %w", err)
+		}
+		if eccParams.CurveID != tpm2.TPMECCNistP256 {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses curve %d, but NIST P-256 was requested", persistentHandle, eccParams.CurveID)
+		}
+	default:
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
+	}
+
+	// Key exists and is valid, use it
+	return persistentHandle, pub.Name, nil
+}
+
+// algName returns a human-readable name for a TPM algorithm
+func algName(alg tpm2.TPMAlgID) string {
+	switch alg {
+	case tpm2.TPMAlgRSA:
+		return "RSA"
+	case tpm2.TPMAlgECC:
+		return "ECC"
+	case tpm2.TPMAlgSymCipher:
+		return "SymCipher"
+	default:
+		return fmt.Sprintf("unknown(0x%04X)", alg)
+	}
+}
+
+// createPersistentRSAKey creates a new RSA primary storage key (SRK) and persists it.
+func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
 		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
@@ -120,33 +181,78 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 
 	createPrimaryRsp, err := createPrimaryCmd.Execute(dev)
 	if err != nil {
-		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create primary key: %w", err)
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create RSA primary key: %w", err)
 	}
 
-	// Persist the key to the persistent handle
+	return persistKey(dev, persistentHandle, createPrimaryRsp.ObjectHandle, createPrimaryRsp.Name)
+}
+
+// createPersistentECCKey creates a new ECC P-256 primary storage key and persists it.
+func createPersistentECCKey(dev transport.TPM, persistentHandle tpm2.TPMHandle) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	// ECC P-256 Storage Root Key template
+	eccSRKTemplate := tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgECC,
+		NameAlg: tpm2.TPMAlgSHA256,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			UserWithAuth:        true,
+			NoDA:                true,
+			Restricted:          true,
+			Decrypt:             true,
+		},
+		Parameters: tpm2.NewTPMUPublicParms(
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				Symmetric: tpm2.TPMTSymDefObject{
+					Algorithm: tpm2.TPMAlgAES,
+					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(128)),
+					Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+				},
+				CurveID: tpm2.TPMECCNistP256,
+			},
+		),
+	}
+
+	createPrimaryCmd := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(eccSRKTemplate),
+	}
+
+	createPrimaryRsp, err := createPrimaryCmd.Execute(dev)
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create ECC P-256 primary key: %w", err)
+	}
+
+	return persistKey(dev, persistentHandle, createPrimaryRsp.ObjectHandle, createPrimaryRsp.Name)
+}
+
+// persistKey persists a transient key to a persistent handle.
+func persistKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, transientHandle tpm2.TPMHandle, name tpm2.TPM2BName) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	evictCmd := tpm2.EvictControl{
 		Auth: tpm2.AuthHandle{
 			Handle: tpm2.TPMRHOwner,
 			Auth:   tpm2.PasswordAuth(nil),
 		},
 		ObjectHandle: &tpm2.NamedHandle{
-			Handle: createPrimaryRsp.ObjectHandle,
-			Name:   createPrimaryRsp.Name,
+			Handle: transientHandle,
+			Name:   name,
 		},
 		PersistentHandle: persistentHandle,
 	}
 
-	_, err = evictCmd.Execute(dev)
+	_, err := evictCmd.Execute(dev)
 	if err != nil {
 		// Try to flush the transient key before returning error
-		flushCmd := tpm2.FlushContext{FlushHandle: createPrimaryRsp.ObjectHandle}
+		flushCmd := tpm2.FlushContext{FlushHandle: transientHandle}
 		flushCmd.Execute(dev)
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to persist key: %w", err)
 	}
 
 	// After EvictControl, the transient handle is automatically flushed by the TPM
 	// and the key is now available at the persistent handle
-	return persistentHandle, createPrimaryRsp.Name, nil
+	return persistentHandle, name, nil
 }
 
 // createAESKey creates a new AES symmetric cipher key as a child of the primary RSA key.
@@ -263,15 +369,16 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 // On Windows: tpmPath can be empty or "default"
 // persistentHandle: the persistent handle to use (0x81000000–0x81FFFFFF range)
 // keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string) (*AEAD, error) {
+// keyAlgorithm: the primary key algorithm to use (KeyAlgorithmRSA or KeyAlgorithmECCP256), defaults to RSA if empty
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open TPM: %w", err)
 	}
 
-	// Get or create the persistent RSA primary key
-	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle))
+	// Get or create the persistent primary key with the specified algorithm
+	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle), keyAlgorithm)
 	if err != nil {
 		tpmDevice.Close()
 		return nil, fmt.Errorf("failed to get or create persistent primary key: %w", err)
