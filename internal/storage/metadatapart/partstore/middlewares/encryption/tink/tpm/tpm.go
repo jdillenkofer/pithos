@@ -63,6 +63,7 @@ type AEAD struct {
 	hmacKeyPublic  tpm2.TPM2BPublic  // Public portion of HMAC key
 	primaryName    tpm2.TPM2BName    // The cryptographic name of the primary key
 	allowLegacy    bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
+	symmetricKeySize uint16          // The symmetric key size in bits (128 or 256)
 }
 
 // isPersistentHandleFree checks if a persistent handle is available (not occupied).
@@ -106,13 +107,13 @@ func isPersistentHandleFree(dev transport.TPM, handle tpm2.TPMHandle) (bool, err
 // If the persistent handle is occupied, it verifies the existing key matches the expected algorithm.
 // If the persistent handle is free, it creates a new primary key with the specified algorithm.
 // Returns the handle and the name of the primary key.
-func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	// Validate that the handle is in the persistent range (0x81000000–0x81FFFFFF)
 	if persistentHandle < 0x81000000 || persistentHandle > 0x81FFFFFF {
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("handle 0x%08X not in persistent range (0x81000000-0x81FFFFFF)", persistentHandle)
 	}
 
-	// Default to RSA for backward compatibility
+	// Default to RSA-2048 for backward compatibility
 	if keyAlgorithm == "" {
 		keyAlgorithm = KeyAlgorithmRSA
 	}
@@ -125,34 +126,34 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 
 	if !isFree {
 		// Key already exists at this handle, verify it matches the expected algorithm
-		return verifyExistingKey(dev, persistentHandle, keyAlgorithm)
+		return verifyExistingKey(dev, persistentHandle, keyAlgorithm, symmetricKeySize)
 	}
 
 	// Handle is free, create a new primary key based on algorithm
 	switch keyAlgorithm {
 	case KeyAlgorithmRSA:
-		return createPersistentRSAKey(dev, persistentHandle, 2048)
+		return createPersistentRSAKey(dev, persistentHandle, 2048, symmetricKeySize)
 	case KeyAlgorithmRSA4096:
-		return createPersistentRSAKey(dev, persistentHandle, 4096)
+		return createPersistentRSAKey(dev, persistentHandle, 4096, symmetricKeySize)
 	case KeyAlgorithmECCP256:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP256)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP256, symmetricKeySize)
 	case KeyAlgorithmECCP384:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP384)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP384, symmetricKeySize)
 	case KeyAlgorithmECCP521:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP521)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP521, symmetricKeySize)
 	case KeyAlgorithmECCBrainpoolP256:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP256R1)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP256R1, symmetricKeySize)
 	case KeyAlgorithmECCBrainpoolP384:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP384R1)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP384R1, symmetricKeySize)
 	case KeyAlgorithmECCBrainpoolP512:
-		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP512R1)
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP512R1, symmetricKeySize)
 	default:
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
 	}
 }
 
 // verifyExistingKey verifies that an existing key at the handle matches the expected algorithm.
-func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	read := tpm2.ReadPublic{ObjectHandle: persistentHandle}
 	pub, err := read.Execute(dev)
 	if err != nil {
@@ -187,6 +188,17 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 		if rsaParams.KeyBits != expectedBits {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X is %d bits, but %d was requested", persistentHandle, rsaParams.KeyBits, expectedBits)
 		}
+		// Verify symmetric protection size
+		if rsaParams.Symmetric.Algorithm != tpm2.TPMAlgAES {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X uses %s for symmetric protection, but AES was requested", persistentHandle, algName(rsaParams.Symmetric.Algorithm))
+		}
+		keyBits, err := rsaParams.Symmetric.KeyBits.AES()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get AES key bits: %w", err)
+		}
+		if *keyBits != tpm2.TPMKeyBits(symmetricKeySize) {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X uses %d-bit AES, but %d-bit was requested", persistentHandle, *keyBits, symmetricKeySize)
+		}
 	case KeyAlgorithmECCP256, KeyAlgorithmECCP384, KeyAlgorithmECCP521, KeyAlgorithmECCBrainpoolP256, KeyAlgorithmECCBrainpoolP384, KeyAlgorithmECCBrainpoolP512:
 		if publicArea.Type != tpm2.TPMAlgECC {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but ECC was requested", persistentHandle, algName(publicArea.Type))
@@ -216,6 +228,18 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 		if eccParams.CurveID != expectedCurve {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses curve %d, but curve %d was requested", persistentHandle, eccParams.CurveID, expectedCurve)
 		}
+
+		// Verify symmetric protection size
+		if eccParams.Symmetric.Algorithm != tpm2.TPMAlgAES {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses %s for symmetric protection, but AES was requested", persistentHandle, algName(eccParams.Symmetric.Algorithm))
+		}
+		keyBits, err := eccParams.Symmetric.KeyBits.AES()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get AES key bits: %w", err)
+		}
+		if *keyBits != tpm2.TPMKeyBits(symmetricKeySize) {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses %d-bit AES, but %d-bit was requested", persistentHandle, *keyBits, symmetricKeySize)
+		}
 	default:
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
 	}
@@ -239,8 +263,8 @@ func algName(alg tpm2.TPMAlgID) string {
 }
 
 // createPersistentRSAKey creates a new RSA primary storage key (SRK) and persists it.
-func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyBits uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
-	// RSA Storage Root Key template with AES-256 symmetric protection
+func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyBits uint16, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	// RSA Storage Root Key template with AES symmetric protection
 	rsaSRKTemplate := tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgRSA,
 		NameAlg: tpm2.TPMAlgSHA256,
@@ -258,7 +282,7 @@ func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, 
 			&tpm2.TPMSRSAParms{
 				Symmetric: tpm2.TPMTSymDefObject{
 					Algorithm: tpm2.TPMAlgAES,
-					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(256)),
+					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
 					Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
 				},
 				KeyBits: tpm2.TPMKeyBits(keyBits),
@@ -280,7 +304,7 @@ func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, 
 }
 
 // createPersistentECCKey creates a new ECC primary storage key and persists it.
-func createPersistentECCKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, curveID tpm2.TPMECCCurve) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func createPersistentECCKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, curveID tpm2.TPMECCCurve, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	// ECC Storage Root Key template
 	eccSRKTemplate := tpm2.TPMTPublic{
 		Type:    tpm2.TPMAlgECC,
@@ -299,7 +323,7 @@ func createPersistentECCKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, 
 			&tpm2.TPMSECCParms{
 				Symmetric: tpm2.TPMTSymDefObject{
 					Algorithm: tpm2.TPMAlgAES,
-					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(256)),
+					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
 					Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
 				},
 				CurveID: curveID,
@@ -349,7 +373,7 @@ func persistKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, transientHan
 
 // createAESKey creates a new AES symmetric cipher key as a child of the primary RSA key.
 // Returns the private and public portions of the key for later loading.
-func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, symmetricKeySize uint16) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
 	createAES := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
@@ -372,7 +396,7 @@ func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName t
 					Sym: tpm2.TPMTSymDefObject{
 						Algorithm: tpm2.TPMAlgAES,
 						Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-						KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(256)),
+						KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
 					},
 				},
 			),
@@ -509,7 +533,8 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 // keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
 // keyAlgorithm: the primary key algorithm to use (KeyAlgorithmRSA or KeyAlgorithmECCP256), defaults to RSA if empty
 // allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool) (*AEAD, error) {
+// symmetricKeySize: the symmetric key size in bits (128 or 256)
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
@@ -517,7 +542,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 	}
 
 	// Get or create the persistent primary key with the specified algorithm
-	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle), keyAlgorithm)
+	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle), keyAlgorithm, symmetricKeySize)
 	if err != nil {
 		tpmDevice.Close()
 		return nil, fmt.Errorf("failed to get or create persistent primary key: %w", err)
@@ -578,7 +603,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		}
 	} else {
 		// No existing key, create a new AES key
-		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName)
+		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName, symmetricKeySize)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create AES key: %w", err)
@@ -629,6 +654,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		hmacKeyPublic:  hmacPublic,
 		primaryName:    primaryName,
 		allowLegacy:    allowLegacy,
+		symmetricKeySize: symmetricKeySize,
 	}, nil
 }
 

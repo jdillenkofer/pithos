@@ -60,6 +60,8 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
 	TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
 	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa" (default) or "ecc-p256"
+	// Symmetric key size in bits (128 or 256). Default is 128.
+	TPMSymmetricKeySize internalConfig.Int64Provider `json:"tpmSymmetricKeySize,omitempty"`
 	// If true, legacy unauthenticated decryption is disabled. Default is false (allowed).
 	TPMDisableLegacyDecryption internalConfig.BoolProvider `json:"tpmDisableLegacyDecryption,omitempty"`
 	// PQ-safe specific
@@ -196,8 +198,17 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')", keyAlgorithm)
 		}
 
+		// Get symmetric key size (default to 128 for backward compatibility)
+		symmetricKeySize := int(t.TPMSymmetricKeySize.Value())
+		if symmetricKeySize == 0 {
+			symmetricKeySize = 128
+		}
+		if symmetricKeySize != 128 && symmetricKeySize != 256 {
+			return nil, fmt.Errorf("invalid tpmSymmetricKeySize: %d (must be 128 or 256)", symmetricKeySize)
+		}
+
 		allowLegacy := !t.TPMDisableLegacyDecryption.Value()
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, innerPartStore, mlkemKey)
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, uint16(symmetricKeySize), innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}
