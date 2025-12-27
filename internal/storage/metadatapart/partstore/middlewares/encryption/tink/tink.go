@@ -347,9 +347,10 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, ml
 // persistentHandle: persistent handle for the TPM key (0x81000000–0x81FFFFFF)
 // keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
 // keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA if empty
-func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+// allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create TPM AEAD
-	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm)
+	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy)
 	if err != nil {
 		return nil, err
 	}

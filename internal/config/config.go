@@ -113,3 +113,34 @@ func (i *Int64Provider) UnmarshalJSON(b []byte) error {
 	}
 	return nil
 }
+
+type BoolProvider struct {
+	value bool
+}
+
+func (i *BoolProvider) Value() bool {
+	return i.value
+}
+
+func (i *BoolProvider) UnmarshalJSON(b []byte) error {
+	var rawBool bool
+	err := json.Unmarshal(b, &rawBool)
+	if err == nil {
+		i.value = rawBool
+		return nil
+	}
+	ekp := envKeyProvider{}
+	err = json.Unmarshal(b, &ekp)
+	if err != nil {
+		return err
+	}
+	if ekp.Type != envKeyType {
+		return errors.New("invalid boolProvider type")
+	}
+	envBool := os.Getenv(ekp.EnvKey)
+	i.value, err = strconv.ParseBool(envBool)
+	if err != nil {
+		return err
+	}
+	return nil
+}

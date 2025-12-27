@@ -60,6 +60,8 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
 	TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
 	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa" (default) or "ecc-p256"
+	// If true, legacy unauthenticated decryption is disabled. Default is false (allowed).
+	TPMDisableLegacyDecryption internalConfig.BoolProvider `json:"tpmDisableLegacyDecryption,omitempty"`
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
@@ -181,17 +183,21 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		// Get key algorithm (default to "rsa" for backward compatibility)
+		// Get key algorithm (default to "rsa-2048" for backward compatibility)
 		keyAlgorithm := t.TPMKeyAlgorithm.Value()
-		if keyAlgorithm == "" {
-			keyAlgorithm = "rsa" // Default to RSA for backward compatibility
+		if keyAlgorithm == "" || keyAlgorithm == "rsa" {
+			keyAlgorithm = "rsa-2048" // Default to RSA-2048
 		}
 		// Validate key algorithm
-		if keyAlgorithm != "rsa" && keyAlgorithm != "ecc-p256" {
-			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa' or 'ecc-p256')", keyAlgorithm)
+		switch keyAlgorithm {
+		case "rsa-2048", "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521":
+			// Valid
+		default:
+			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', or 'ecc-p521')", keyAlgorithm)
 		}
 
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, innerPartStore, mlkemKey)
+		allowLegacy := !t.TPMDisableLegacyDecryption.Value()
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

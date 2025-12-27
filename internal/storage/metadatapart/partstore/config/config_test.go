@@ -487,6 +487,37 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareWithTPMECCP256(t *testing.T) 
 	assert.Equal(t, "ecc-p256", config.TPMKeyAlgorithm.Value())
 }
 
+func TestCanCreateTinkEncryptionPartStoreMiddlewareWithTPMRSA2048(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "TinkEncryptionPartStoreMiddleware",
+				 "kmsType": "tpm",
+				 "tpmPath": "/dev/tpmrm0",
+				 "tpmKeyAlgorithm": "rsa-2048",
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	// Test that configuration parsing works
+	instantiator, err := CreatePartStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, instantiator)
+
+	// Verify the configuration was parsed correctly
+	config, ok := instantiator.(*TinkEncryptionPartStoreMiddlewareConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "tpm", config.KMSType.Value())
+	assert.Equal(t, "/dev/tpmrm0", config.TPMPath.Value())
+	assert.Equal(t, "rsa-2048", config.TPMKeyAlgorithm.Value())
+}
+
 func TestTinkEncryptionPartStoreMiddlewareRejectsInvalidTPMKeyAlgorithm(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
@@ -508,7 +539,7 @@ func TestTinkEncryptionPartStoreMiddlewareRejectsInvalidTPMKeyAlgorithm(t *testi
 	partStore, err := createPartStoreFromJson([]byte(jsonData))
 	assert.NotNil(t, err)
 	assert.Nil(t, partStore)
-	assert.Contains(t, err.Error(), "invalid tpmKeyAlgorithm")
+	assert.Contains(t, err.Error(), "invalid tpmKeyAlgorithm: invalid-algorithm (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', or 'ecc-p521')")
 }
 
 func TestCanCreateOutboxPartStoreFromJson(t *testing.T) {
