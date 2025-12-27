@@ -21,6 +21,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/pkg/vault"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/secureenclave"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
@@ -37,10 +38,11 @@ const (
 	PartHeaderVersion = 3
 
 	// Key types for different KMS providers
-	KeyTypeAWS   = "aws"
-	KeyTypeVault = "vault"
-	KeyTypeLocal = "local"
-	KeyTypeTPM   = "tpm"
+	KeyTypeAWS           = "aws"
+	KeyTypeVault         = "vault"
+	KeyTypeLocal         = "local"
+	KeyTypeTPM           = "tpm"
+	KeyTypeSecureEnclave = "secure-enclave"
 
 	// DefaultSegmentSize is the ciphertext segment size for new parts (128KB)
 	DefaultSegmentSize = 128 * 1024
@@ -373,6 +375,34 @@ func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, key
 	}, nil
 }
 
+// NewWithSecureEnclave creates a new TinkEncryptionPartStoreMiddleware using macOS Secure Enclave for key management.
+// Uses envelope encryption where each part has its own DEK encrypted with the Secure Enclave master key.
+// The master key never leaves the Secure Enclave hardware.
+// keyLabel: A unique identifier for the key in the Keychain (e.g., "pithos-master-key")
+// Note: Secure Enclave is only available on macOS with Apple Silicon (M1/M2/M3) or T1/T2 chips.
+func NewWithSecureEnclave(keyLabel string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+	// Create Secure Enclave AEAD
+	seAEAD, err := secureenclave.NewAEAD(keyLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	// Test key availability
+	if err := testKeyAvailability(seAEAD, KeyTypeSecureEnclave); err != nil {
+		seAEAD.Close()
+		return nil, err
+	}
+
+	return &TinkEncryptionPartStoreMiddleware{
+		masterAEAD:     seAEAD,
+		innerPartStore: innerPartStore,
+		keyType:        KeyTypeSecureEnclave,
+		keyURI:         fmt.Sprintf("secure-enclave://%s", keyLabel),
+		mlkemKey:       mlkemKey,
+		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),
+	}, nil
+}
+
 func (mw *TinkEncryptionPartStoreMiddleware) Start(ctx context.Context) error {
 	return mw.innerPartStore.Start(ctx)
 }
@@ -390,6 +420,16 @@ func (mw *TinkEncryptionPartStoreMiddleware) Stop(ctx context.Context) error {
 			if err := tpmAEAD.Close(); err != nil {
 				// Log error but continue with stopping inner part store
 				fmt.Printf("Warning: failed to close TPM AEAD: %v\n", err)
+			}
+		}
+	}
+
+	// If using Secure Enclave, close the Secure Enclave AEAD
+	if mw.keyType == KeyTypeSecureEnclave {
+		if seAEAD, ok := mw.masterAEAD.(*secureenclave.AEAD); ok {
+			if err := seAEAD.Close(); err != nil {
+				// Log error but continue with stopping inner part store
+				fmt.Printf("Warning: failed to close Secure Enclave AEAD: %v\n", err)
 			}
 		}
 	}

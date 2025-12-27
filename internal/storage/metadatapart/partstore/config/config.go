@@ -47,8 +47,8 @@ func (f *FilesystemPartStoreConfiguration) Instantiate(diProvider dependencyinje
 }
 
 type TinkEncryptionPartStoreMiddlewareConfiguration struct {
-	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local", "tpm"
-	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local/tpm KMS
+	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local", "tpm", "secure-enclave"
+	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local/tpm/secure-enclave KMS
 	// AWS KMS specific
 	AWSRegion internalConfig.StringProvider `json:"awsRegion,omitempty"`
 	// Vault specific
@@ -69,6 +69,8 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMHMACAlgorithm internalConfig.StringProvider `json:"tpmHMACAlgorithm,omitempty"`
 	// TPM Password for key authorization (optional, empty string for no password)
 	TPMPassword internalConfig.StringProvider `json:"tpmPassword,omitempty"`
+	// Secure Enclave specific (macOS only)
+	SecureEnclaveKeyLabel internalConfig.StringProvider `json:"secureEnclaveKeyLabel,omitempty"` // Unique identifier for the key in the Keychain (e.g., "pithos-master-key")
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
@@ -237,6 +239,12 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		}
 
 		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, tpmPassword, innerPartStore, mlkemKey)
+	case "secure-enclave":
+		keyLabel := t.SecureEnclaveKeyLabel.Value()
+		if keyLabel == "" {
+			keyLabel = "pithos-master-key" // default label
+		}
+		return tink.NewWithSecureEnclave(keyLabel, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}
