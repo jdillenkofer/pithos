@@ -190,10 +190,10 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		}
 		// Validate key algorithm
 		switch keyAlgorithm {
-		case "rsa-2048", "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521":
+		case "rsa-2048", "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521", "ecc-brainpool-p256", "ecc-brainpool-p384", "ecc-brainpool-p512":
 			// Valid
 		default:
-			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', or 'ecc-p521')", keyAlgorithm)
+			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')", keyAlgorithm)
 		}
 
 		allowLegacy := !t.TPMDisableLegacyDecryption.Value()

@@ -539,7 +539,7 @@ func TestTinkEncryptionPartStoreMiddlewareRejectsInvalidTPMKeyAlgorithm(t *testi
 	partStore, err := createPartStoreFromJson([]byte(jsonData))
 	assert.NotNil(t, err)
 	assert.Nil(t, partStore)
-	assert.Contains(t, err.Error(), "invalid tpmKeyAlgorithm: invalid-algorithm (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', or 'ecc-p521')")
+	assert.Contains(t, err.Error(), "invalid tpmKeyAlgorithm: invalid-algorithm (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')")
 }
 
 func TestCanCreateOutboxPartStoreFromJson(t *testing.T) {

@@ -26,6 +26,12 @@ const (
 	KeyAlgorithmECCP384 = "ecc-p384"
 	// KeyAlgorithmECCP521 specifies ECC P-521 (NIST P-521) as the primary key algorithm
 	KeyAlgorithmECCP521 = "ecc-p521"
+	// KeyAlgorithmECCBrainpoolP256 specifies Brainpool P256r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP256 = "ecc-brainpool-p256"
+	// KeyAlgorithmECCBrainpoolP384 specifies Brainpool P384r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP384 = "ecc-brainpool-p384"
+	// KeyAlgorithmECCBrainpoolP512 specifies Brainpool P512r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP512 = "ecc-brainpool-p512"
 
 	// EncryptedDataVersion1 is the version byte for the authenticated encryption format
 	EncryptedDataVersion1 = byte(1)
@@ -134,6 +140,12 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP384)
 	case KeyAlgorithmECCP521:
 		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP521)
+	case KeyAlgorithmECCBrainpoolP256:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP256R1)
+	case KeyAlgorithmECCBrainpoolP384:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP384R1)
+	case KeyAlgorithmECCBrainpoolP512:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP512R1)
 	default:
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
 	}
@@ -175,7 +187,7 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 		if rsaParams.KeyBits != expectedBits {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X is %d bits, but %d was requested", persistentHandle, rsaParams.KeyBits, expectedBits)
 		}
-	case KeyAlgorithmECCP256, KeyAlgorithmECCP384, KeyAlgorithmECCP521:
+	case KeyAlgorithmECCP256, KeyAlgorithmECCP384, KeyAlgorithmECCP521, KeyAlgorithmECCBrainpoolP256, KeyAlgorithmECCBrainpoolP384, KeyAlgorithmECCBrainpoolP512:
 		if publicArea.Type != tpm2.TPMAlgECC {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but ECC was requested", persistentHandle, algName(publicArea.Type))
 		}
@@ -193,6 +205,12 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 			expectedCurve = tpm2.TPMECCNistP384
 		case KeyAlgorithmECCP521:
 			expectedCurve = tpm2.TPMECCNistP521
+		case KeyAlgorithmECCBrainpoolP256:
+			expectedCurve = tpm2.TPMECCBrainpoolP256R1
+		case KeyAlgorithmECCBrainpoolP384:
+			expectedCurve = tpm2.TPMECCBrainpoolP384R1
+		case KeyAlgorithmECCBrainpoolP512:
+			expectedCurve = tpm2.TPMECCBrainpoolP512R1
 		}
 
 		if eccParams.CurveID != expectedCurve {
