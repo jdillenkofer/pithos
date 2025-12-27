@@ -162,6 +162,22 @@ The **private keys** must be kept secret and added to your `storage.json` config
 pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s...
 ```
 
+#### `tpm-info`
+Queries TPM (Trusted Platform Module) hardware capabilities to detect supported features.
+```sh
+pithos tpm-info [-tpm-path <path>]
+```
+Available options:
+- `-tpm-path`: Path to the TPM device (default: `/dev/tpmrm0`)
+
+This command performs trial key creations to detect:
+- Supported asymmetric algorithms (RSA, ECC)
+- RSA key sizes (2048, 4096 bits)
+- AES key sizes (128, 256 bits)
+- Supported elliptic curves (P-256, P-384, P-521, Brainpool curves)
+
+Useful for verifying TPM compatibility before configuring the `TinkEncryptionPartStoreMiddleware` with TPM support.
+
 ### Configuration
 
 The following environment variables are available:
