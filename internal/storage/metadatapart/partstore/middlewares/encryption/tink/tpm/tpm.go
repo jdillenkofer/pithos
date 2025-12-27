@@ -260,12 +260,112 @@ func algName(alg tpm2.TPMAlgID) string {
 	switch alg {
 	case tpm2.TPMAlgRSA:
 		return "RSA"
+	case tpm2.TPMAlgTDES:
+		return "TDES"
+	case tpm2.TPMAlgSHA1:
+		return "SHA1"
+	case tpm2.TPMAlgHMAC:
+		return "HMAC"
+	case tpm2.TPMAlgAES:
+		return "AES"
+	case tpm2.TPMAlgMGF1:
+		return "MGF1"
+	case tpm2.TPMAlgKeyedHash:
+		return "KeyedHash"
+	case tpm2.TPMAlgXOR:
+		return "XOR"
+	case tpm2.TPMAlgSHA256:
+		return "SHA256"
+	case tpm2.TPMAlgSHA384:
+		return "SHA384"
+	case tpm2.TPMAlgSHA512:
+		return "SHA512"
+	case tpm2.TPMAlgNull:
+		return "Null"
+	case tpm2.TPMAlgSM4:
+		return "SM4"
+	case tpm2.TPMAlgRSASSA:
+		return "RSASSA"
+	case tpm2.TPMAlgRSAES:
+		return "RSAES"
+	case tpm2.TPMAlgRSAPSS:
+		return "RSAPSS"
+	case tpm2.TPMAlgOAEP:
+		return "OAEP"
+	case tpm2.TPMAlgECDSA:
+		return "ECDSA"
+	case tpm2.TPMAlgECDH:
+		return "ECDH"
+	case tpm2.TPMAlgECDAA:
+		return "ECDAA"
+	case tpm2.TPMAlgSM2:
+		return "SM2"
+	case tpm2.TPMAlgECSchnorr:
+		return "ECSchnorr"
+	case tpm2.TPMAlgKDF1SP80056A:
+		return "KDF1_SP800_56A"
+	case tpm2.TPMAlgKDF2:
+		return "KDF2"
+	case tpm2.TPMAlgKDF1SP800108:
+		return "KDF1_SP800_108"
 	case tpm2.TPMAlgECC:
 		return "ECC"
 	case tpm2.TPMAlgSymCipher:
 		return "SymCipher"
+	case tpm2.TPMAlgCamellia:
+		return "Camellia"
+	case tpm2.TPMAlgCMAC:
+		return "CMAC"
+	case tpm2.TPMAlgCTR:
+		return "CTR"
+	case tpm2.TPMAlgOFB:
+		return "OFB"
+	case tpm2.TPMAlgCBC:
+		return "CBC"
+	case tpm2.TPMAlgCFB:
+		return "CFB"
+	case tpm2.TPMAlgECB:
+		return "ECB"
+	case tpm2.TPMAlgCCM:
+		return "CCM"
 	default:
 		return fmt.Sprintf("unknown(0x%04X)", alg)
+	}
+}
+
+// curveName returns a human-readable name for a TPM ECC curve
+func curveName(curve tpm2.TPMECCCurve) string {
+	switch curve {
+	case tpm2.TPMECCNone:
+		return "None"
+	case tpm2.TPMECCNistP192:
+		return "NIST P-192"
+	case tpm2.TPMECCNistP224:
+		return "NIST P-224"
+	case tpm2.TPMECCNistP256:
+		return "NIST P-256"
+	case tpm2.TPMECCNistP384:
+		return "NIST P-384"
+	case tpm2.TPMECCNistP521:
+		return "NIST P-521"
+	case tpm2.TPMECCBNP256:
+		return "BN P-256"
+	case tpm2.TPMECCBNP638:
+		return "BN P-638"
+	case tpm2.TPMECCSM2P256:
+		return "SM2 P-256"
+	case tpm2.TPMECCBrainpoolP256R1:
+		return "Brainpool P-256"
+	case tpm2.TPMECCBrainpoolP384R1:
+		return "Brainpool P-384"
+	case tpm2.TPMECCBrainpoolP512R1:
+		return "Brainpool P-512"
+	case tpm2.TPMECCCurve25519:
+		return "Curve25519"
+	case tpm2.TPMECCCurve448:
+		return "Curve448"
+	default:
+		return fmt.Sprintf("unknown(0x%04X)", curve)
 	}
 }
 
@@ -913,6 +1013,140 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	}
 
 	return decryptRsp.OutData.Buffer, nil
+}
+
+// TPMFeatures represents the supported features of a TPM
+type TPMFeatures struct {
+	Algorithms  []string
+	ECCCurves   []string
+	RSABitness  []int
+	AESBitness  []int
+}
+
+// DetectFeatures queries the TPM for supported algorithms and ECC curves
+func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
+	tpmDevice, err := openTPMDevice(tpmPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open TPM: %w", err)
+	}
+	defer tpmDevice.Close()
+
+	features := &TPMFeatures{}
+
+	// Query supported algorithms
+	algsRsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapAlgs,
+		Property:      0,
+		PropertyCount: 100,
+	}.Execute(tpmDevice)
+	if err == nil {
+		algs, err := algsRsp.CapabilityData.Data.Algorithms()
+		if err == nil {
+			for _, alg := range algs.AlgProperties {
+				features.Algorithms = append(features.Algorithms, algName(alg.Alg))
+			}
+		}
+	}
+
+	// Query supported ECC curves
+	curvesRsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapECCCurves,
+		Property:      0,
+		PropertyCount: 100,
+	}.Execute(tpmDevice)
+	if err == nil {
+		curves, err := curvesRsp.CapabilityData.Data.ECCCurves()
+		if err == nil {
+			for _, curve := range curves.ECCCurves {
+				features.ECCCurves = append(features.ECCCurves, curveName(curve))
+			}
+		}
+	}
+
+	// Detect supported RSA key sizes by trial creation
+	// We create a transient primary key to test child creation
+	createPrimaryCmd := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
+	}
+	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDevice)
+	if err == nil {
+		primaryHandle := createPrimaryRsp.ObjectHandle
+		primaryName := createPrimaryRsp.Name
+		defer tpm2.FlushContext{FlushHandle: primaryHandle}.Execute(tpmDevice)
+
+		for _, bits := range []int{4096, 3072, 2048} {
+			// Test RSA creation
+			createRSA := tpm2.Create{
+				ParentHandle: tpm2.NamedHandle{
+					Handle: primaryHandle,
+					Name:   primaryName,
+				},
+				InPublic: tpm2.New2B(tpm2.TPMTPublic{
+					Type:    tpm2.TPMAlgRSA,
+					NameAlg: tpm2.TPMAlgSHA256,
+					ObjectAttributes: tpm2.TPMAObject{
+						FixedTPM:            true,
+						FixedParent:         true,
+						SensitiveDataOrigin: true,
+						UserWithAuth:        true,
+						Decrypt:             true,
+					},
+					Parameters: tpm2.NewTPMUPublicParms(
+						tpm2.TPMAlgRSA,
+						&tpm2.TPMSRSAParms{
+							Symmetric: tpm2.TPMTSymDefObject{
+								Algorithm: tpm2.TPMAlgNull,
+							},
+							KeyBits: tpm2.TPMKeyBits(bits),
+						},
+					),
+				}),
+			}
+			_, err = createRSA.Execute(tpmDevice)
+			if err == nil {
+				features.RSABitness = append(features.RSABitness, bits)
+			}
+		}
+
+		// Detect supported AES key sizes
+		for _, bits := range []int{256, 192, 128} {
+			createAES := tpm2.Create{
+				ParentHandle: tpm2.NamedHandle{
+					Handle: primaryHandle,
+					Name:   primaryName,
+				},
+				InPublic: tpm2.New2B(tpm2.TPMTPublic{
+					Type:    tpm2.TPMAlgSymCipher,
+					NameAlg: tpm2.TPMAlgSHA256,
+					ObjectAttributes: tpm2.TPMAObject{
+						FixedTPM:            true,
+						FixedParent:         true,
+						SensitiveDataOrigin: true,
+						UserWithAuth:        true,
+						Decrypt:             true,
+						SignEncrypt:         true,
+					},
+					Parameters: tpm2.NewTPMUPublicParms(
+						tpm2.TPMAlgSymCipher,
+						&tpm2.TPMSSymCipherParms{
+							Sym: tpm2.TPMTSymDefObject{
+								Algorithm: tpm2.TPMAlgAES,
+								Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+								KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(bits)),
+							},
+						},
+					),
+				}),
+			}
+			_, err = createAES.Execute(tpmDevice)
+			if err == nil {
+				features.AESBitness = append(features.AESBitness, bits)
+			}
+		}
+	}
+
+	return features, nil
 }
 
 // Close closes the TPM device

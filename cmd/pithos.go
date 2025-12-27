@@ -28,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 )
 
 const defaultStorageConfig = `
@@ -69,11 +70,12 @@ const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
 const subcommandAuditLog = "audit-log"
+const subcommandTPMInfo = "tpm-info"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
 		os.Exit(1)
 	}
 
@@ -91,8 +93,10 @@ func main() {
 		validateStorage(ctx)
 	case subcommandAuditLog:
 		auditLogTool()
+	case subcommandTPMInfo:
+		tpmInfo()
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
 		os.Exit(1)
 	}
 }
@@ -624,5 +628,38 @@ func auditLogTool() {
 	if err != nil {
 		slog.Error(fmt.Sprintf("Audit log operation failed: %v", err))
 		os.Exit(1)
+	}
+}
+
+func tpmInfo() {
+	fs := flag.NewFlagSet(subcommandTPMInfo, flag.ExitOnError)
+	tpmPath := fs.String("tpm-path", "/dev/tpmrm0", "Path to TPM device")
+	fs.Parse(os.Args[2:])
+
+	features, err := tpm.DetectFeatures(*tpmPath)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to detect TPM features: %v", err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("TPM Device: %s\n", *tpmPath)
+	fmt.Println("\nSupported Algorithms:")
+	for _, alg := range features.Algorithms {
+		fmt.Printf("  - %s\n", alg)
+	}
+
+	fmt.Println("\nSupported ECC Curves:")
+	for _, curve := range features.ECCCurves {
+		fmt.Printf("  - %s\n", curve)
+	}
+
+	fmt.Println("\nSupported RSA Key Sizes (bits):")
+	for _, bits := range features.RSABitness {
+		fmt.Printf("  - %d\n", bits)
+	}
+
+	fmt.Println("\nSupported AES Key Sizes (bits):")
+	for _, bits := range features.AESBitness {
+		fmt.Printf("  - %d\n", bits)
 	}
 }
