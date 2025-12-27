@@ -33,10 +33,15 @@ const (
 	// KeyAlgorithmECCBrainpoolP512 specifies Brainpool P512r1 as the primary key algorithm
 	KeyAlgorithmECCBrainpoolP512 = "ecc-brainpool-p512"
 
+	// HMACAlgorithmSHA256 specifies HMAC-SHA256
+	HMACAlgorithmSHA256 = "sha256"
+	// HMACAlgorithmSHA384 specifies HMAC-SHA384
+	HMACAlgorithmSHA384 = "sha384"
+	// HMACAlgorithmSHA512 specifies HMAC-SHA512
+	HMACAlgorithmSHA512 = "sha512"
+
 	// EncryptedDataVersion1 is the version byte for the authenticated encryption format
 	EncryptedDataVersion1 = byte(1)
-	// HMACSize is the size of SHA256 HMAC
-	HMACSize = 32
 )
 
 // AESKeyMaterial represents the persistent AES key material and optional HMAC key material
@@ -64,6 +69,8 @@ type AEAD struct {
 	primaryName    tpm2.TPM2BName    // The cryptographic name of the primary key
 	allowLegacy    bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
 	symmetricKeySize uint16          // The symmetric key size in bits (128 or 256)
+	hmacAlg        tpm2.TPMAlgID     // The HMAC algorithm
+	hmacSize       int               // The size of the HMAC tag
 }
 
 // isPersistentHandleFree checks if a persistent handle is available (not occupied).
@@ -412,7 +419,7 @@ func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName t
 }
 
 // createHMACKey creates a new HMAC key as a child of the primary key.
-func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, alg tpm2.TPMAlgID) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
 	createHMAC := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
@@ -420,7 +427,7 @@ func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName 
 		},
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type:    tpm2.TPMAlgKeyedHash,
-			NameAlg: tpm2.TPMAlgSHA256,
+			NameAlg: tpm2.TPMAlgSHA256, // Name algorithm for the key itself
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM:            true,
 				FixedParent:         true,
@@ -436,7 +443,7 @@ func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName 
 						Details: tpm2.NewTPMUSchemeKeyedHash(
 							tpm2.TPMAlgHMAC,
 							&tpm2.TPMSSchemeHMAC{
-								HashAlg: tpm2.TPMAlgSHA256,
+								HashAlg: alg,
 							},
 						),
 					},
@@ -525,20 +532,35 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 	return &keyMaterial, nil
 }
 
-// NewAEAD creates a new AEAD primitive that uses TPM for encryption/decryption
-// The key is created and sealed in the TPM and never exposed
-// On Linux: tpmPath should be "/dev/tpmrm0" or "/dev/tpm0"
-// On Windows: tpmPath can be empty or "default"
-// persistentHandle: the persistent handle to use (0x81000000–0x81FFFFFF range)
-// keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
-// keyAlgorithm: the primary key algorithm to use (KeyAlgorithmRSA or KeyAlgorithmECCP256), defaults to RSA if empty
+// keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA if empty
 // allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
 // symmetricKeySize: the symmetric key size in bits (128 or 256)
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16) (*AEAD, error) {
+// hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16, hmacAlgorithm string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open TPM: %w", err)
+	}
+
+	// Determine HMAC algorithm and size from configuration
+	// Default to SHA256
+	hmacAlg := tpm2.TPMAlgSHA256
+	hmacSize := 32
+
+	switch hmacAlgorithm {
+	case "", HMACAlgorithmSHA256:
+		hmacAlg = tpm2.TPMAlgSHA256
+		hmacSize = 32
+	case HMACAlgorithmSHA384:
+		hmacAlg = tpm2.TPMAlgSHA384
+		hmacSize = 48
+	case HMACAlgorithmSHA512:
+		hmacAlg = tpm2.TPMAlgSHA512
+		hmacSize = 64
+	default:
+		tpmDevice.Close()
+		return nil, fmt.Errorf("unsupported HMAC algorithm: %s", hmacAlgorithm)
 	}
 
 	// Get or create the persistent primary key with the specified algorithm
@@ -592,9 +614,45 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 				return nil, fmt.Errorf("failed to unmarshal HMAC public key: %w", err)
 			}
 			hmacPublic = *pubHMAC
+
+			hmacPublicArea, err := pubHMAC.Contents()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to parse HMAC public area: %w", err)
+			}
+
+			// Inspect the existing HMAC key to set the algorithm and size correctly
+			// This ensures we can read data even if the config changed (as long as the key wasn't rotated)
+			hmacParams, err := hmacPublicArea.Parameters.KeyedHashDetail()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to get HMAC params: %w", err)
+			}
+			
+			hmacScheme, err := hmacParams.Scheme.Details.HMAC()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to get HMAC scheme details: %w", err)
+			}
+
+			hmacAlg = hmacScheme.HashAlg
+			switch hmacAlg {
+			case tpm2.TPMAlgSHA256:
+				hmacSize = 32
+			case tpm2.TPMAlgSHA384:
+				hmacSize = 48
+			case tpm2.TPMAlgSHA512:
+				hmacSize = 64
+			default:
+				// Fallback or error? Let's assume standard sizes for now or error out.
+				// For robustness, we could query the hash algorithm info, but hardcoding known supported ones is safer.
+				tpmDevice.Close()
+				return nil, fmt.Errorf("loaded HMAC key uses unsupported hash algorithm: 0x%x", hmacAlg)
+			}
+
 		} else {
 			// Upgrade: Create HMAC key if missing (existing file, no HMAC key)
-			hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName)
+			hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
 			if err != nil {
 				tpmDevice.Close()
 				return nil, fmt.Errorf("failed to create HMAC key: %w", err)
@@ -609,7 +667,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 			return nil, fmt.Errorf("failed to create AES key: %w", err)
 		}
 		// And create new HMAC key
-		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName)
+		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create HMAC key: %w", err)
@@ -655,6 +713,8 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		primaryName:    primaryName,
 		allowLegacy:    allowLegacy,
 		symmetricKeySize: symmetricKeySize,
+		hmacAlg:        hmacAlg,
+		hmacSize:       hmacSize,
 	}, nil
 }
 
@@ -675,7 +735,7 @@ func (t *AEAD) computeHMAC(data []byte) ([]byte, error) {
 		Buffer: tpm2.TPM2BMaxBuffer{
 			Buffer: data,
 		},
-		HashAlg: tpm2.TPMAlgSHA256,
+		HashAlg: t.hmacAlg,
 	}
 
 	hmacRsp, err := hmacCmd.Execute(t.tpmDevice)
@@ -738,7 +798,7 @@ func (t *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// 4. Construct result: [version(1)] [IV(16)] [ciphertext] [tag(32)]
+	// 4. Construct result: [version(1)] [IV(16)] [ciphertext] [tag]
 	result := make([]byte, 0, len(versionByte)+len(iv)+len(ciphertext)+len(tag))
 	result = append(result, versionByte...)
 	result = append(result, iv...)
@@ -796,15 +856,19 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 		return decryptRsp.OutData.Buffer, nil
 	}
 
-	// Authenticated Mode: [Version(1)] [IV(16)] [Ciphertext] [Tag(32)]
-	if len(ciphertext) < 1+16+HMACSize {
+	// Authenticated Mode: [Version(1)] [IV(16)] [Ciphertext] [Tag(t.hmacSize)]
+	if len(ciphertext) < 1+16+t.hmacSize {
 		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	if ciphertext[0] != EncryptedDataVersion1 {
+		return nil, fmt.Errorf("unsupported ciphertext version: %d", ciphertext[0])
 	}
 
 	// Parse components
 	// Version is at index 0
 	iv := ciphertext[1 : 1+16]
-	tagOffset := len(ciphertext) - HMACSize
+	tagOffset := len(ciphertext) - t.hmacSize
 	actualCiphertext := ciphertext[1+16 : tagOffset]
 	tag := ciphertext[tagOffset:]
 

@@ -62,6 +62,8 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa" (default) or "ecc-p256"
 	// Symmetric key size in bits (128 or 256). Default is 128.
 	TPMSymmetricKeySize internalConfig.Int64Provider `json:"tpmSymmetricKeySize,omitempty"`
+	// HMAC algorithm ("sha256", "sha384", "sha512"). Default is "sha256".
+	TPMHMACAlgorithm internalConfig.StringProvider `json:"tpmHMACAlgorithm,omitempty"`
 	// If true, legacy unauthenticated decryption is disabled. Default is false (allowed).
 	TPMDisableLegacyDecryption internalConfig.BoolProvider `json:"tpmDisableLegacyDecryption,omitempty"`
 	// PQ-safe specific
@@ -207,8 +209,17 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, fmt.Errorf("invalid tpmSymmetricKeySize: %d (must be 128 or 256)", symmetricKeySize)
 		}
 
+		// Get HMAC algorithm (default to sha256)
+		hmacAlgorithm := t.TPMHMACAlgorithm.Value()
+		if hmacAlgorithm == "" {
+			hmacAlgorithm = "sha256"
+		}
+		if hmacAlgorithm != "sha256" && hmacAlgorithm != "sha384" && hmacAlgorithm != "sha512" {
+			return nil, fmt.Errorf("invalid tpmHMACAlgorithm: %s (must be 'sha256', 'sha384', or 'sha512')", hmacAlgorithm)
+		}
+
 		allowLegacy := !t.TPMDisableLegacyDecryption.Value()
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, uint16(symmetricKeySize), innerPartStore, mlkemKey)
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, uint16(symmetricKeySize), hmacAlgorithm, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

@@ -349,9 +349,10 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, ml
 // keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA-2048 if empty
 // allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
 // symmetricKeySize: the symmetric key size in bits (128 or 256)
-func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+// hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16, hmacAlgorithm string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create TPM AEAD
-	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, symmetricKeySize)
+	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, symmetricKeySize, hmacAlgorithm)
 	if err != nil {
 		return nil, err
 	}
