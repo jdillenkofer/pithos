@@ -59,7 +59,7 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMPath             internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
 	TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
 	TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
-	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa" (default) or "ecc-p256"
+	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa-2048" (default), "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521", "ecc-brainpool-p256", "ecc-brainpool-p384", "ecc-brainpool-p512"
 	// Symmetric key size in bits (128 or 256). Default is 128.
 	TPMSymmetricKeySize internalConfig.Int64Provider `json:"tpmSymmetricKeySize,omitempty"`
 	// HMAC algorithm ("sha256", "sha384", "sha512"). Default is "sha256".
