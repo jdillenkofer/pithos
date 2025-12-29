@@ -661,11 +661,11 @@ func tpmInfo() {
 		fmt.Printf("  - %s\n", alg)
 	}
 
-	fmt.Println("\nAES Key Sizes (tpmSymmetricKeySize):")
-	if len(features.AESBitness) == 0 {
+	fmt.Println("\nSymmetric Algorithms (tpmSymmetricAlgorithm):")
+	if len(features.SymmetricAlgorithms) == 0 {
 		fmt.Println("  - None")
 	}
-	for _, bits := range features.AESBitness {
-		fmt.Printf("  - %d\n", bits)
+	for _, alg := range features.SymmetricAlgorithms {
+		fmt.Printf("  - %s\n", alg)
 	}
 }

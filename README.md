@@ -171,10 +171,9 @@ Available options:
 - `-tpm-path`: Path to the TPM device (default: `/dev/tpmrm0`)
 
 This command performs trial key creations to detect:
-- Supported asymmetric algorithms (RSA, ECC)
-- RSA key sizes (2048, 4096 bits)
-- AES key sizes (128, 256 bits)
-- Supported elliptic curves (P-256, P-384, P-521, Brainpool curves)
+- Supported asymmetric algorithms (RSA, ECC) for `tpmKeyAlgorithm`
+- Supported HMAC algorithms for `tpmHMACAlgorithm`
+- Supported symmetric algorithms (AES) for `tpmSymmetricAlgorithm`
 
 Useful for verifying TPM compatibility before configuring the `TinkEncryptionPartStoreMiddleware` with TPM support.
 
@@ -285,7 +284,7 @@ The following storage backends and middlewares are available:
     "tpmPersistentHandle": "0x81000001",
     "tpmKeyFilePath": "./data/tpm-key.json",
     "tpmKeyAlgorithm": "ecc-p384",
-    "tpmSymmetricKeySize": 256,
+    "tpmSymmetricAlgorithm": "aes-256",
     "tpmHMACAlgorithm": "sha256",
     "tpmDisableLegacyDecryption": true,
     "innerPartStore": {
@@ -294,7 +293,7 @@ The following storage backends and middlewares are available:
     }
   }
   ```
-  *Note: `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256`, `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricKeySize` can be `128` (default) or `256` (NIST Level 5).*
+  *Note: `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256`, `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` (default) or `aes-256` (NIST Level 5).*
 
   **Configuration Example (with PQ-Encryption):**
   ```json

@@ -40,6 +40,11 @@ const (
 	// HMACAlgorithmSHA512 specifies HMAC-SHA512
 	HMACAlgorithmSHA512 = "sha512"
 
+	// SymmetricAlgorithmAES128 specifies AES-128
+	SymmetricAlgorithmAES128 = "aes-128"
+	// SymmetricAlgorithmAES256 specifies AES-256
+	SymmetricAlgorithmAES256 = "aes-256"
+
 	// EncryptedDataVersion1 is the version byte for the authenticated encryption format
 	EncryptedDataVersion1 = byte(1)
 )
@@ -629,13 +634,25 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 
 // keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA if empty
 // allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
-// symmetricKeySize: the symmetric key size in bits (128 or 256)
+// symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
 // hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricKeySize uint16, hmacAlgorithm string) (*AEAD, error) {
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricAlgorithm string, hmacAlgorithm string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open TPM: %w", err)
+	}
+
+	// Map symmetric algorithm to key size
+	var symmetricKeySize uint16
+	switch symmetricAlgorithm {
+	case "", SymmetricAlgorithmAES128:
+		symmetricKeySize = 128
+	case SymmetricAlgorithmAES256:
+		symmetricKeySize = 256
+	default:
+		tpmDevice.Close()
+		return nil, fmt.Errorf("unsupported symmetric algorithm: %s", symmetricAlgorithm)
 	}
 
 	// Determine HMAC algorithm and size from configuration
@@ -1012,9 +1029,9 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 
 // TPMFeatures represents the supported features of a TPM as supported by Pithos
 type TPMFeatures struct {
-	PrimaryAlgorithms []string
-	HMACAlgorithms    []string
-	AESBitness        []int
+	PrimaryAlgorithms   []string
+	HMACAlgorithms      []string
+	SymmetricAlgorithms []string
 }
 
 // DetectFeatures queries the TPM for supported features and filters them to those supported by Pithos
@@ -1170,8 +1187,14 @@ func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 		}
 	}
 
-	// Detect supported AES key sizes
-	for _, bits := range []int{128, 256} {
+	// Detect supported Symmetric Algorithms
+	for _, alg := range []struct {
+		name string
+		bits uint16
+	}{
+		{SymmetricAlgorithmAES128, 128},
+		{SymmetricAlgorithmAES256, 256},
+	} {
 		createAES := tpm2.Create{
 			ParentHandle: tpm2.NamedHandle{
 				Handle: primaryHandle,
@@ -1194,7 +1217,7 @@ func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 						Sym: tpm2.TPMTSymDefObject{
 							Algorithm: tpm2.TPMAlgAES,
 							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-							KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(bits)),
+							KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(alg.bits)),
 						},
 					},
 				),
@@ -1202,7 +1225,7 @@ func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 		}
 		_, err = createAES.Execute(tpmDevice)
 		if err == nil {
-			features.AESBitness = append(features.AESBitness, bits)
+			features.SymmetricAlgorithms = append(features.SymmetricAlgorithms, alg.name)
 		}
 	}
 
