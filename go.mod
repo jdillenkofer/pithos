@@ -21,6 +21,7 @@ require (
 	github.com/klauspost/compress v1.18.6
 	github.com/klauspost/reedsolomon v1.14.1
 	github.com/mattn/go-sqlite3 v1.14.47
+	github.com/miekg/pkcs11 v1.1.2
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
