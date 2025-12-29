@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -10,9 +11,10 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"bufio"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
@@ -22,13 +24,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
-	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 )
 
 const defaultStorageConfig = `
@@ -553,7 +553,7 @@ func auditLogTool() {
 	}
 
 	fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
-	
+
 	inputFilePath := fs.String("input-file", "", "Path to the audit log file")
 	inputFormat := fs.String("input-format", "bin", "Input format (bin, json)")
 	ed25519PubKeyStr := fs.String("ed25519-public-key", "", "Base64 encoded Ed25519 public key or path to key file")
@@ -643,22 +643,28 @@ func tpmInfo() {
 	}
 
 	fmt.Printf("TPM Device: %s\n", *tpmPath)
-	fmt.Println("\nSupported Algorithms:")
-	for _, alg := range features.Algorithms {
+	fmt.Println("\nSupported Pithos Configuration Options:")
+
+	fmt.Println("\nPrimary Key Algorithms (tpmKeyAlgorithm):")
+	if len(features.PrimaryAlgorithms) == 0 {
+		fmt.Println("  - None")
+	}
+	for _, alg := range features.PrimaryAlgorithms {
 		fmt.Printf("  - %s\n", alg)
 	}
 
-	fmt.Println("\nSupported ECC Curves:")
-	for _, curve := range features.ECCCurves {
-		fmt.Printf("  - %s\n", curve)
+	fmt.Println("\nHMAC Algorithms (tpmHMACAlgorithm):")
+	if len(features.HMACAlgorithms) == 0 {
+		fmt.Println("  - None")
+	}
+	for _, alg := range features.HMACAlgorithms {
+		fmt.Printf("  - %s\n", alg)
 	}
 
-	fmt.Println("\nSupported RSA Key Sizes (bits):")
-	for _, bits := range features.RSABitness {
-		fmt.Printf("  - %d\n", bits)
+	fmt.Println("\nAES Key Sizes (tpmSymmetricKeySize):")
+	if len(features.AESBitness) == 0 {
+		fmt.Println("  - None")
 	}
-
-	fmt.Println("\nSupported AES Key Sizes (bits):")
 	for _, bits := range features.AESBitness {
 		fmt.Printf("  - %d\n", bits)
 	}

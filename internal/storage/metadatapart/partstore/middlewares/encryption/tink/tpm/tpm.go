@@ -1010,15 +1010,14 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	return decryptRsp.OutData.Buffer, nil
 }
 
-// TPMFeatures represents the supported features of a TPM
+// TPMFeatures represents the supported features of a TPM as supported by Pithos
 type TPMFeatures struct {
-	Algorithms []string
-	ECCCurves  []string
-	RSABitness []int
-	AESBitness []int
+	PrimaryAlgorithms []string
+	HMACAlgorithms    []string
+	AESBitness        []int
 }
 
-// DetectFeatures queries the TPM for supported algorithms and ECC curves
+// DetectFeatures queries the TPM for supported features and filters them to those supported by Pithos
 func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
@@ -1028,116 +1027,182 @@ func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 
 	features := &TPMFeatures{}
 
-	// Query supported algorithms
-	algsRsp, err := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapAlgs,
-		Property:      0,
-		PropertyCount: 100,
-	}.Execute(tpmDevice)
-	if err == nil {
-		algs, err := algsRsp.CapabilityData.Data.Algorithms()
-		if err == nil {
-			for _, alg := range algs.AlgProperties {
-				features.Algorithms = append(features.Algorithms, algName(alg.Alg))
-			}
-		}
-	}
-
-	// Query supported ECC curves
-	curvesRsp, err := tpm2.GetCapability{
-		Capability:    tpm2.TPMCapECCCurves,
-		Property:      0,
-		PropertyCount: 100,
-	}.Execute(tpmDevice)
-	if err == nil {
-		curves, err := curvesRsp.CapabilityData.Data.ECCCurves()
-		if err == nil {
-			for _, curve := range curves.ECCCurves {
-				features.ECCCurves = append(features.ECCCurves, curveName(curve))
-			}
-		}
-	}
-
-	// Detect supported RSA key sizes by trial creation
 	// We create a transient primary key to test child creation
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
 		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
 	}
 	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDevice)
-	if err == nil {
-		primaryHandle := createPrimaryRsp.ObjectHandle
-		primaryName := createPrimaryRsp.Name
-		defer tpm2.FlushContext{FlushHandle: primaryHandle}.Execute(tpmDevice)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create test primary key: %w", err)
+	}
+	primaryHandle := createPrimaryRsp.ObjectHandle
+	primaryName := createPrimaryRsp.Name
+	defer tpm2.FlushContext{FlushHandle: primaryHandle}.Execute(tpmDevice)
 
-		for _, bits := range []int{4096, 3072, 2048} {
-			// Test RSA creation
-			createRSA := tpm2.Create{
-				ParentHandle: tpm2.NamedHandle{
-					Handle: primaryHandle,
-					Name:   primaryName,
+	// Detect supported Primary Algorithms (RSA)
+	for _, alg := range []struct {
+		name string
+		bits uint16
+	}{
+		{KeyAlgorithmRSA, 2048},
+		{KeyAlgorithmRSA4096, 4096},
+	} {
+		createRSA := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgRSA,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
 				},
-				InPublic: tpm2.New2B(tpm2.TPMTPublic{
-					Type:    tpm2.TPMAlgRSA,
-					NameAlg: tpm2.TPMAlgSHA256,
-					ObjectAttributes: tpm2.TPMAObject{
-						FixedTPM:            true,
-						FixedParent:         true,
-						SensitiveDataOrigin: true,
-						UserWithAuth:        true,
-						Decrypt:             true,
-					},
-					Parameters: tpm2.NewTPMUPublicParms(
-						tpm2.TPMAlgRSA,
-						&tpm2.TPMSRSAParms{
-							Symmetric: tpm2.TPMTSymDefObject{
-								Algorithm: tpm2.TPMAlgNull,
-							},
-							KeyBits: tpm2.TPMKeyBits(bits),
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgRSA,
+					&tpm2.TPMSRSAParms{
+						Symmetric: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgNull,
 						},
-					),
-				}),
-			}
-			_, err = createRSA.Execute(tpmDevice)
-			if err == nil {
-				features.RSABitness = append(features.RSABitness, bits)
-			}
+						KeyBits: tpm2.TPMKeyBits(alg.bits),
+					},
+				),
+			}),
 		}
+		_, err = createRSA.Execute(tpmDevice)
+		if err == nil {
+			features.PrimaryAlgorithms = append(features.PrimaryAlgorithms, alg.name)
+		}
+	}
 
-		// Detect supported AES key sizes
-		for _, bits := range []int{256, 192, 128} {
-			createAES := tpm2.Create{
-				ParentHandle: tpm2.NamedHandle{
-					Handle: primaryHandle,
-					Name:   primaryName,
+	// Detect supported Primary Algorithms (ECC)
+	for _, alg := range []struct {
+		name  string
+		curve tpm2.TPMECCCurve
+	}{
+		{KeyAlgorithmECCP256, tpm2.TPMECCNistP256},
+		{KeyAlgorithmECCP384, tpm2.TPMECCNistP384},
+		{KeyAlgorithmECCP521, tpm2.TPMECCNistP521},
+		{KeyAlgorithmECCBrainpoolP256, tpm2.TPMECCBrainpoolP256R1},
+		{KeyAlgorithmECCBrainpoolP384, tpm2.TPMECCBrainpoolP384R1},
+		{KeyAlgorithmECCBrainpoolP512, tpm2.TPMECCBrainpoolP512R1},
+	} {
+		createECC := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgECC,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
 				},
-				InPublic: tpm2.New2B(tpm2.TPMTPublic{
-					Type:    tpm2.TPMAlgSymCipher,
-					NameAlg: tpm2.TPMAlgSHA256,
-					ObjectAttributes: tpm2.TPMAObject{
-						FixedTPM:            true,
-						FixedParent:         true,
-						SensitiveDataOrigin: true,
-						UserWithAuth:        true,
-						Decrypt:             true,
-						SignEncrypt:         true,
-					},
-					Parameters: tpm2.NewTPMUPublicParms(
-						tpm2.TPMAlgSymCipher,
-						&tpm2.TPMSSymCipherParms{
-							Sym: tpm2.TPMTSymDefObject{
-								Algorithm: tpm2.TPMAlgAES,
-								Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-								KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(bits)),
-							},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgECC,
+					&tpm2.TPMSECCParms{
+						Symmetric: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgNull,
 						},
-					),
-				}),
-			}
-			_, err = createAES.Execute(tpmDevice)
-			if err == nil {
-				features.AESBitness = append(features.AESBitness, bits)
-			}
+						CurveID: alg.curve,
+					},
+				),
+			}),
+		}
+		_, err = createECC.Execute(tpmDevice)
+		if err == nil {
+			features.PrimaryAlgorithms = append(features.PrimaryAlgorithms, alg.name)
+		}
+	}
+
+	// Detect supported HMAC algorithms
+	for _, alg := range []struct {
+		name string
+		alg  tpm2.TPMAlgID
+	}{
+		{HMACAlgorithmSHA256, tpm2.TPMAlgSHA256},
+		{HMACAlgorithmSHA384, tpm2.TPMAlgSHA384},
+		{HMACAlgorithmSHA512, tpm2.TPMAlgSHA512},
+	} {
+		createHMAC := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgKeyedHash,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					UserWithAuth:        true,
+					SensitiveDataOrigin: true,
+					SignEncrypt:         true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgKeyedHash,
+					&tpm2.TPMSKeyedHashParms{
+						Scheme: tpm2.TPMTKeyedHashScheme{
+							Scheme: tpm2.TPMAlgHMAC,
+							Details: tpm2.NewTPMUSchemeKeyedHash(
+								tpm2.TPMAlgHMAC,
+								&tpm2.TPMSSchemeHMAC{
+									HashAlg: alg.alg,
+								},
+							),
+						},
+					},
+				),
+			}),
+		}
+		_, err = createHMAC.Execute(tpmDevice)
+		if err == nil {
+			features.HMACAlgorithms = append(features.HMACAlgorithms, alg.name)
+		}
+	}
+
+	// Detect supported AES key sizes
+	for _, bits := range []int{128, 256} {
+		createAES := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgSymCipher,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
+					SignEncrypt:         true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgSymCipher,
+					&tpm2.TPMSSymCipherParms{
+						Sym: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgAES,
+							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+							KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(bits)),
+						},
+					},
+				),
+			}),
+		}
+		_, err = createAES.Execute(tpmDevice)
+		if err == nil {
+			features.AESBitness = append(features.AESBitness, bits)
 		}
 	}
 
