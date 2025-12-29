@@ -14,6 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
@@ -185,36 +186,36 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		// Get key algorithm (default to "ecc-p256")
+		// Get key algorithm (default to ecc-p256)
 		keyAlgorithm := t.TPMKeyAlgorithm.Value()
 		if keyAlgorithm == "" {
-			keyAlgorithm = "ecc-p256" // Default to ECC P-256
+			keyAlgorithm = tpm.KeyAlgorithmECCP256
 		}
 		// Validate key algorithm
 		switch keyAlgorithm {
-		case "rsa-2048", "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521", "ecc-brainpool-p256", "ecc-brainpool-p384", "ecc-brainpool-p512":
+		case tpm.KeyAlgorithmRSA2048, tpm.KeyAlgorithmRSA4096, tpm.KeyAlgorithmECCP256, tpm.KeyAlgorithmECCP384, tpm.KeyAlgorithmECCP521, tpm.KeyAlgorithmECCBrainpoolP256, tpm.KeyAlgorithmECCBrainpoolP384, tpm.KeyAlgorithmECCBrainpoolP512:
 			// Valid
 		default:
-			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')", keyAlgorithm)
+			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s", keyAlgorithm)
 		}
 
 		// Get symmetric key algorithm (default to aes-256)
 		symmetricAlgorithm := t.TPMSymmetricAlgorithm.Value()
 		if symmetricAlgorithm == "" {
-			symmetricAlgorithm = "aes-256"
+			symmetricAlgorithm = tpm.SymmetricAlgorithmAES256
 		}
 
 		// Get HMAC algorithm (default to sha256)
 		hmacAlgorithm := t.TPMHMACAlgorithm.Value()
 		if hmacAlgorithm == "" {
-			hmacAlgorithm = "sha256"
+			hmacAlgorithm = tpm.HMACAlgorithmSHA256
 		}
-		if hmacAlgorithm != "sha256" && hmacAlgorithm != "sha384" && hmacAlgorithm != "sha512" {
-			return nil, fmt.Errorf("invalid tpmHMACAlgorithm: %s (must be 'sha256', 'sha384', or 'sha512')", hmacAlgorithm)
+		if hmacAlgorithm != tpm.HMACAlgorithmSHA256 && hmacAlgorithm != tpm.HMACAlgorithmSHA384 && hmacAlgorithm != tpm.HMACAlgorithmSHA512 {
+			return nil, fmt.Errorf("invalid tpmHMACAlgorithm: %s", hmacAlgorithm)
 		}
 
-		if symmetricAlgorithm != "aes-128" && symmetricAlgorithm != "aes-256" {
-			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s (must be 'aes-128' or 'aes-256')", symmetricAlgorithm)
+		if symmetricAlgorithm != tpm.SymmetricAlgorithmAES128 && symmetricAlgorithm != tpm.SymmetricAlgorithmAES256 {
+			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s", symmetricAlgorithm)
 		}
 
 		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, innerPartStore, mlkemKey)
