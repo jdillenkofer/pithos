@@ -648,7 +648,6 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 	var aesPublic tpm2.TPM2BPublic
 	var hmacPrivate tpm2.TPM2BPrivate
 	var hmacPublic tpm2.TPM2BPublic
-	var dirty bool
 
 	// Try to load existing AES key material from file
 	keyMaterial, err := loadAESKeyMaterial(keyFilePath)
@@ -673,83 +672,70 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		}
 		aesPublic = *publicPtr
 
-		// Load HMAC keys if available
-		if len(keyMaterial.HMACPrivate) > 0 {
-			privHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPrivate](keyMaterial.HMACPrivate)
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to unmarshal HMAC private key: %w", err)
-			}
-			hmacPrivate = *privHMAC
+		// HMAC keys are required if key file exists
+		if len(keyMaterial.HMACPrivate) == 0 {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("key file exists but missing HMAC key material - please regenerate keys")
+		}
 
-			pubHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPublic](keyMaterial.HMACPublic)
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to unmarshal HMAC public key: %w", err)
-			}
-			hmacPublic = *pubHMAC
+		privHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPrivate](keyMaterial.HMACPrivate)
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to unmarshal HMAC private key: %w", err)
+		}
+		hmacPrivate = *privHMAC
 
-			hmacPublicArea, err := pubHMAC.Contents()
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to parse HMAC public area: %w", err)
-			}
+		pubHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPublic](keyMaterial.HMACPublic)
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to unmarshal HMAC public key: %w", err)
+		}
+		hmacPublic = *pubHMAC
 
-			// Inspect the existing HMAC key to set the algorithm and size correctly
-			// This ensures we can read data even if the config changed (as long as the key wasn't rotated)
-			hmacParams, err := hmacPublicArea.Parameters.KeyedHashDetail()
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to get HMAC params: %w", err)
-			}
+		hmacPublicArea, err := pubHMAC.Contents()
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to parse HMAC public area: %w", err)
+		}
 
-			hmacScheme, err := hmacParams.Scheme.Details.HMAC()
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to get HMAC scheme details: %w", err)
-			}
+		// Inspect the existing HMAC key to set the algorithm and size correctly
+		hmacParams, err := hmacPublicArea.Parameters.KeyedHashDetail()
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to get HMAC params: %w", err)
+		}
 
-			hmacAlg = hmacScheme.HashAlg
-			switch hmacAlg {
-			case tpm2.TPMAlgSHA256:
-				hmacSize = 32
-			case tpm2.TPMAlgSHA384:
-				hmacSize = 48
-			case tpm2.TPMAlgSHA512:
-				hmacSize = 64
-			default:
-				// Fallback or error? Let's assume standard sizes for now or error out.
-				// For robustness, we could query the hash algorithm info, but hardcoding known supported ones is safer.
-				tpmDevice.Close()
-				return nil, fmt.Errorf("loaded HMAC key uses unsupported hash algorithm: 0x%x", hmacAlg)
-			}
+		hmacScheme, err := hmacParams.Scheme.Details.HMAC()
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to get HMAC scheme details: %w", err)
+		}
 
-		} else {
-			// Upgrade: Create HMAC key if missing (existing file, no HMAC key)
-			hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
-			if err != nil {
-				tpmDevice.Close()
-				return nil, fmt.Errorf("failed to create HMAC key: %w", err)
-			}
-			dirty = true
+		hmacAlg = hmacScheme.HashAlg
+		switch hmacAlg {
+		case tpm2.TPMAlgSHA256:
+			hmacSize = 32
+		case tpm2.TPMAlgSHA384:
+			hmacSize = 48
+		case tpm2.TPMAlgSHA512:
+			hmacSize = 64
+		default:
+			tpmDevice.Close()
+			return nil, fmt.Errorf("loaded HMAC key uses unsupported hash algorithm: 0x%x", hmacAlg)
 		}
 	} else {
-		// No existing key, create a new AES key
+		// No existing key, create new AES and HMAC keys
 		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName, symmetricKeySize)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create AES key: %w", err)
 		}
-		// And create new HMAC key
 		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create HMAC key: %w", err)
 		}
-		dirty = true
-	}
 
-	if dirty {
 		// Save the key material for future use
 		if err := saveAESKeyMaterial(keyFilePath, aesPrivate, hmacPrivate, aesPublic, hmacPublic); err != nil {
 			tpmDevice.Close()
