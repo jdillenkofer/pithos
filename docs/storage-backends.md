@@ -108,7 +108,6 @@ Pithos supports multiple storage backends that can be configured in the storage 
   "tpmKeyAlgorithm": "ecc-p384",
   "tpmSymmetricAlgorithm": "aes-256",
   "tpmHMACAlgorithm": "sha256",
-  "tpmDisableLegacyDecryption": true,
   "innerPartStore": {
     "type": "FilesystemPartStore",
     "root": "./data/parts"
@@ -116,7 +115,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 }
 ```
 
-> **Note:** `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256`, `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` (default) or `aes-256` (NIST Level 5).
+> **Note:** `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256` (default), `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` or `aes-256` (default).
 
 ### Post-Quantum Encryption
 

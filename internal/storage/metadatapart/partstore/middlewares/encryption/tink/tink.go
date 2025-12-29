@@ -346,13 +346,12 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, ml
 // tpmPath: path to TPM device (e.g. "/dev/tpmrm0" or "/dev/tpm0")
 // persistentHandle: persistent handle for the TPM key (0x81000000–0x81FFFFFF)
 // keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
-// keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA-2048 if empty
-// allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
+// keyAlgorithm: the primary key algorithm, defaults to ECC P-256 if empty
 // symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
 // hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
-func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricAlgorithm string, hmacAlgorithm string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create TPM AEAD
-	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, symmetricAlgorithm, hmacAlgorithm)
+	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm)
 	if err != nil {
 		return nil, err
 	}

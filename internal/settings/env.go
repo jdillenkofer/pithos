@@ -8,8 +8,6 @@ import (
 
 const envKeyPrefix = "PITHOS"
 
-const legacyAccessKeyIdEnvKey = envKeyPrefix + "_ACCESS_KEY_ID"
-const legacySecretAccessKeyEnvKey = envKeyPrefix + "_SECRET_ACCESS_KEY"
 const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
@@ -25,20 +23,6 @@ const otelExporterEnvKey = envKeyPrefix + "_OTEL_EXPORTER"
 const otelEndpointEnvKey = envKeyPrefix + "_OTEL_ENDPOINT"
 
 func getCredentialsFromEnv() []Credentials {
-	// Check for legacy environment variables first
-	accessKeyId := getStringFromEnv(legacyAccessKeyIdEnvKey)
-	secretAccessKey := getStringFromEnv(legacySecretAccessKeyEnvKey)
-
-	if accessKeyId != nil && secretAccessKey != nil {
-		return []Credentials{
-			{
-				AccessKeyId:     *accessKeyId,
-				SecretAccessKey: *secretAccessKey,
-			},
-		}
-	}
-
-	// Check for new environment variables
 	var credentials []Credentials = nil
 	for i := 0; ; i++ {
 		accessKeyId := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_ACCESS_KEY_ID")

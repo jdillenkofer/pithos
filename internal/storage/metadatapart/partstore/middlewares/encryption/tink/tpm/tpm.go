@@ -72,7 +72,6 @@ type AEAD struct {
 	hmacKeyPrivate   tpm2.TPM2BPrivate // Private portion of HMAC key
 	hmacKeyPublic    tpm2.TPM2BPublic  // Public portion of HMAC key
 	primaryName      tpm2.TPM2BName    // The cryptographic name of the primary key
-	allowLegacy      bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
 	symmetricKeySize uint16            // The symmetric key size in bits (128 or 256)
 	hmacAlg          tpm2.TPMAlgID     // The HMAC algorithm
 	hmacSize         int               // The size of the HMAC tag
@@ -330,42 +329,6 @@ func algName(alg tpm2.TPMAlgID) string {
 		return "CCM"
 	default:
 		return fmt.Sprintf("unknown(0x%04X)", alg)
-	}
-}
-
-// curveName returns a human-readable name for a TPM ECC curve
-func curveName(curve tpm2.TPMECCCurve) string {
-	switch curve {
-	case tpm2.TPMECCNone:
-		return "None"
-	case tpm2.TPMECCNistP192:
-		return "NIST P-192"
-	case tpm2.TPMECCNistP224:
-		return "NIST P-224"
-	case tpm2.TPMECCNistP256:
-		return "NIST P-256"
-	case tpm2.TPMECCNistP384:
-		return "NIST P-384"
-	case tpm2.TPMECCNistP521:
-		return "NIST P-521"
-	case tpm2.TPMECCBNP256:
-		return "BN P-256"
-	case tpm2.TPMECCBNP638:
-		return "BN P-638"
-	case tpm2.TPMECCSM2P256:
-		return "SM2 P-256"
-	case tpm2.TPMECCBrainpoolP256R1:
-		return "Brainpool P-256"
-	case tpm2.TPMECCBrainpoolP384R1:
-		return "Brainpool P-384"
-	case tpm2.TPMECCBrainpoolP512R1:
-		return "Brainpool P-512"
-	case tpm2.TPMECCCurve25519:
-		return "Curve25519"
-	case tpm2.TPMECCCurve448:
-		return "Curve448"
-	default:
-		return fmt.Sprintf("unknown(0x%04X)", curve)
 	}
 }
 
@@ -632,11 +595,10 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 	return &keyMaterial, nil
 }
 
-// keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA if empty
-// allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
+// keyAlgorithm: the primary key algorithm
 // symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
-// hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricAlgorithm string, hmacAlgorithm string) (*AEAD, error) {
+// hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512")
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
@@ -646,7 +608,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 	// Map symmetric algorithm to key size
 	var symmetricKeySize uint16
 	switch symmetricAlgorithm {
-	case "", SymmetricAlgorithmAES128:
+	case SymmetricAlgorithmAES128:
 		symmetricKeySize = 128
 	case SymmetricAlgorithmAES256:
 		symmetricKeySize = 256
@@ -661,7 +623,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 	hmacSize := 32
 
 	switch hmacAlgorithm {
-	case "", HMACAlgorithmSHA256:
+	case HMACAlgorithmSHA256:
 		hmacAlg = tpm2.TPMAlgSHA256
 		hmacSize = 32
 	case HMACAlgorithmSHA384:
@@ -823,7 +785,6 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		hmacKeyPrivate:   hmacPrivate,
 		hmacKeyPublic:    hmacPublic,
 		primaryName:      primaryName,
-		allowLegacy:      allowLegacy,
 		symmetricKeySize: symmetricKeySize,
 		hmacAlg:          hmacAlg,
 		hmacSize:         hmacSize,
@@ -926,47 +887,6 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	// Lock to prevent concurrent TPM access
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	// Check if this is a legacy ciphertext (48 bytes: 16 IV + 32 DEK)
-	// or if it doesn't match the new version format.
-	isLegacy := true
-	if len(ciphertext) > 16+32 && ciphertext[0] == EncryptedDataVersion1 {
-		isLegacy = false
-	}
-
-	if isLegacy {
-		if !t.allowLegacy {
-			return nil, fmt.Errorf("legacy decryption disabled")
-		}
-		// Legacy Mode: AES-CFB only, no integrity check
-		if len(ciphertext) < 16 {
-			return nil, fmt.Errorf("legacy ciphertext too short")
-		}
-		iv := ciphertext[0:16]
-		actualCiphertext := ciphertext[16:]
-
-		decryptCmd := tpm2.EncryptDecrypt2{
-			KeyHandle: tpm2.AuthHandle{
-				Handle: t.aesKeyHandle,
-				Name:   t.aesKeyName,
-				Auth:   tpm2.PasswordAuth([]byte("")),
-			},
-			Message: tpm2.TPM2BMaxBuffer{
-				Buffer: actualCiphertext,
-			},
-			Mode:    tpm2.TPMAlgCFB,
-			Decrypt: true,
-			IV: tpm2.TPM2BIV{
-				Buffer: iv,
-			},
-		}
-
-		decryptRsp, err := decryptCmd.Execute(t.tpmDevice)
-		if err != nil {
-			return nil, fmt.Errorf("TPM legacy decryption failed: %w", err)
-		}
-		return decryptRsp.OutData.Buffer, nil
-	}
 
 	// Authenticated Mode: [Version(1)] [IV(16)] [Ciphertext] [Tag(t.hmacSize)]
 	if len(ciphertext) < 1+16+t.hmacSize {
