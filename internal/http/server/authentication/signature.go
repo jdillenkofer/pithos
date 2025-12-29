@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"hash"
@@ -421,7 +422,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	}
 	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, *stringToSign)
-	isSignatureValid := signature == calculatedSignature
+	isSignatureValid := subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
 		slog.Debug("Signature does not match calculated signature")
 		slog.Debug("Expected signature: " + calculatedSignature)
@@ -484,7 +485,7 @@ func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, 
 func (r *awsChunkReadCloser) validateSignature() error {
 	stringToSign := generateStringToSignForChunk(r.timestamp, r.scope, r.previousSignature, r.chunkHasher)
 	calculatedSignature := createSignature(r.signingKey, stringToSign)
-	isSignatureValid := r.chunkSignature == calculatedSignature
+	isSignatureValid := subtle.ConstantTimeCompare([]byte(r.chunkSignature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
 		slog.Debug("Chunk signature does not match calculated chunk signature")
 		slog.Debug("Expected chunk signature: " + calculatedSignature)
@@ -543,7 +544,7 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 					slog.Debug("Trailing header signature: " + trailerSignature)
 					stringToSign := generateStringToSignForTrailerChunk(r.timestamp, r.scope, r.previousSignature, checksumHeader)
 					calculatedSignature := createSignature(r.signingKey, stringToSign)
-					isSignatureValid := trailerSignature == calculatedSignature
+					isSignatureValid := subtle.ConstantTimeCompare([]byte(trailerSignature), []byte(calculatedSignature)) == 1
 					if !isSignatureValid {
 						slog.Debug("Trailing header signature does not match calculated signature")
 						slog.Debug("Expected trailing header signature: " + calculatedSignature)
