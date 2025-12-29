@@ -16,8 +16,8 @@ import (
 
 // Key algorithm constants for TPM primary key types
 const (
-	// KeyAlgorithmRSA specifies RSA-2048 as the primary key algorithm (default, for backward compatibility)
-	KeyAlgorithmRSA = "rsa-2048"
+	// KeyAlgorithmRSA2048 specifies RSA-2048 as the primary key algorithm
+	KeyAlgorithmRSA2048 = "rsa-2048"
 	// KeyAlgorithmRSA4096 specifies RSA-4096 as the primary key algorithm
 	KeyAlgorithmRSA4096 = "rsa-4096"
 	// KeyAlgorithmECCP256 specifies ECC P-256 (NIST P-256) as the primary key algorithm
@@ -137,7 +137,7 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 
 	// Handle is free, create a new primary key based on algorithm
 	switch keyAlgorithm {
-	case KeyAlgorithmRSA:
+	case KeyAlgorithmRSA2048:
 		return createPersistentRSAKey(dev, persistentHandle, 2048, symmetricKeySize)
 	case KeyAlgorithmRSA4096:
 		return createPersistentRSAKey(dev, persistentHandle, 4096, symmetricKeySize)
@@ -178,7 +178,7 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 
 	// Verify the key algorithm matches
 	switch keyAlgorithm {
-	case KeyAlgorithmRSA, KeyAlgorithmRSA4096:
+	case KeyAlgorithmRSA2048, KeyAlgorithmRSA4096:
 		if publicArea.Type != tpm2.TPMAlgRSA {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but RSA was requested", persistentHandle, algName(publicArea.Type))
 		}
@@ -968,7 +968,7 @@ func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
 		name string
 		bits uint16
 	}{
-		{KeyAlgorithmRSA, 2048},
+		{KeyAlgorithmRSA2048, 2048},
 		{KeyAlgorithmRSA4096, 4096},
 	} {
 		createRSA := tpm2.Create{
