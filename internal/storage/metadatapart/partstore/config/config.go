@@ -64,8 +64,6 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMSymmetricAlgorithm internalConfig.StringProvider `json:"tpmSymmetricAlgorithm,omitempty"`
 	// HMAC algorithm ("sha256", "sha384", "sha512"). Default is "sha256".
 	TPMHMACAlgorithm internalConfig.StringProvider `json:"tpmHMACAlgorithm,omitempty"`
-	// If true, legacy unauthenticated decryption is disabled. Default is false (allowed).
-	TPMDisableLegacyDecryption internalConfig.BoolProvider `json:"tpmDisableLegacyDecryption,omitempty"`
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
@@ -187,10 +185,10 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		// Get key algorithm (default to "rsa-2048" for backward compatibility)
+		// Get key algorithm (default to "ecc-p256")
 		keyAlgorithm := t.TPMKeyAlgorithm.Value()
 		if keyAlgorithm == "" {
-			keyAlgorithm = "rsa-2048" // Default to RSA-2048
+			keyAlgorithm = "ecc-p256" // Default to ECC P-256
 		}
 		// Validate key algorithm
 		switch keyAlgorithm {
@@ -200,13 +198,10 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')", keyAlgorithm)
 		}
 
-		// Get symmetric key algorithm (default to aes-128 for backward compatibility)
+		// Get symmetric key algorithm (default to aes-256)
 		symmetricAlgorithm := t.TPMSymmetricAlgorithm.Value()
 		if symmetricAlgorithm == "" {
-			symmetricAlgorithm = "aes-128"
-		}
-		if symmetricAlgorithm != "aes-128" && symmetricAlgorithm != "aes-256" {
-			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s (must be 'aes-128' or 'aes-256')", symmetricAlgorithm)
+			symmetricAlgorithm = "aes-256"
 		}
 
 		// Get HMAC algorithm (default to sha256)
@@ -218,8 +213,11 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, fmt.Errorf("invalid tpmHMACAlgorithm: %s (must be 'sha256', 'sha384', or 'sha512')", hmacAlgorithm)
 		}
 
-		allowLegacy := !t.TPMDisableLegacyDecryption.Value()
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, symmetricAlgorithm, hmacAlgorithm, innerPartStore, mlkemKey)
+		if symmetricAlgorithm != "aes-128" && symmetricAlgorithm != "aes-256" {
+			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s (must be 'aes-128' or 'aes-256')", symmetricAlgorithm)
+		}
+
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}
