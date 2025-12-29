@@ -189,7 +189,7 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 
 		// Get key algorithm (default to "rsa-2048" for backward compatibility)
 		keyAlgorithm := t.TPMKeyAlgorithm.Value()
-		if keyAlgorithm == "" || keyAlgorithm == "rsa" {
+		if keyAlgorithm == "" {
 			keyAlgorithm = "rsa-2048" // Default to RSA-2048
 		}
 		// Validate key algorithm

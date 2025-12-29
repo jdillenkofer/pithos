@@ -55,22 +55,22 @@ type AESKeyMaterial struct {
 // AEAD implements tink.AEAD interface using TPM for key operations
 // The master key never leaves the TPM
 type AEAD struct {
-	mu             sync.Mutex // Protects concurrent access to TPM device
-	tpmDevice      transport.TPMCloser
-	primaryHandle  tpm2.TPMHandle    // Persistent RSA primary key handle
-	aesKeyHandle   tpm2.TPMHandle    // Transient AES key handle
-	aesKeyName     tpm2.TPM2BName    // The cryptographic name of the AES key
-	aesKeyPrivate  tpm2.TPM2BPrivate // Private portion of AES key
-	aesKeyPublic   tpm2.TPM2BPublic  // Public portion of AES key
-	hmacKeyHandle  tpm2.TPMHandle    // Transient HMAC key handle
-	hmacKeyName    tpm2.TPM2BName    // The cryptographic name of the HMAC key
-	hmacKeyPrivate tpm2.TPM2BPrivate // Private portion of HMAC key
-	hmacKeyPublic  tpm2.TPM2BPublic  // Public portion of HMAC key
-	primaryName    tpm2.TPM2BName    // The cryptographic name of the primary key
-	allowLegacy    bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
-	symmetricKeySize uint16          // The symmetric key size in bits (128 or 256)
-	hmacAlg        tpm2.TPMAlgID     // The HMAC algorithm
-	hmacSize       int               // The size of the HMAC tag
+	mu               sync.Mutex // Protects concurrent access to TPM device
+	tpmDevice        transport.TPMCloser
+	primaryHandle    tpm2.TPMHandle    // Persistent RSA primary key handle
+	aesKeyHandle     tpm2.TPMHandle    // Transient AES key handle
+	aesKeyName       tpm2.TPM2BName    // The cryptographic name of the AES key
+	aesKeyPrivate    tpm2.TPM2BPrivate // Private portion of AES key
+	aesKeyPublic     tpm2.TPM2BPublic  // Public portion of AES key
+	hmacKeyHandle    tpm2.TPMHandle    // Transient HMAC key handle
+	hmacKeyName      tpm2.TPM2BName    // The cryptographic name of the HMAC key
+	hmacKeyPrivate   tpm2.TPM2BPrivate // Private portion of HMAC key
+	hmacKeyPublic    tpm2.TPM2BPublic  // Public portion of HMAC key
+	primaryName      tpm2.TPM2BName    // The cryptographic name of the primary key
+	allowLegacy      bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
+	symmetricKeySize uint16            // The symmetric key size in bits (128 or 256)
+	hmacAlg          tpm2.TPMAlgID     // The HMAC algorithm
+	hmacSize         int               // The size of the HMAC tag
 }
 
 // isPersistentHandleFree checks if a persistent handle is available (not occupied).
@@ -118,11 +118,6 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 	// Validate that the handle is in the persistent range (0x81000000–0x81FFFFFF)
 	if persistentHandle < 0x81000000 || persistentHandle > 0x81FFFFFF {
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("handle 0x%08X not in persistent range (0x81000000-0x81FFFFFF)", persistentHandle)
-	}
-
-	// Default to RSA-2048 for backward compatibility
-	if keyAlgorithm == "" {
-		keyAlgorithm = KeyAlgorithmRSA
 	}
 
 	// Check if the handle is already occupied
@@ -215,7 +210,7 @@ func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAl
 		if err != nil {
 			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get ECC parameters: %w", err)
 		}
-		
+
 		var expectedCurve tpm2.TPMECCCurve
 		switch keyAlgorithm {
 		case KeyAlgorithmECCP256:
@@ -728,7 +723,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 				tpmDevice.Close()
 				return nil, fmt.Errorf("failed to get HMAC params: %w", err)
 			}
-			
+
 			hmacScheme, err := hmacParams.Scheme.Details.HMAC()
 			if err != nil {
 				tpmDevice.Close()
@@ -800,21 +795,21 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 	}
 
 	return &AEAD{
-		tpmDevice:      tpmDevice,
-		primaryHandle:  primaryHandle,
-		aesKeyHandle:   aesHandle,
-		aesKeyName:     aesName,
-		aesKeyPrivate:  aesPrivate,
-		aesKeyPublic:   aesPublic,
-		hmacKeyHandle:  hmacHandle,
-		hmacKeyName:    hmacName,
-		hmacKeyPrivate: hmacPrivate,
-		hmacKeyPublic:  hmacPublic,
-		primaryName:    primaryName,
-		allowLegacy:    allowLegacy,
+		tpmDevice:        tpmDevice,
+		primaryHandle:    primaryHandle,
+		aesKeyHandle:     aesHandle,
+		aesKeyName:       aesName,
+		aesKeyPrivate:    aesPrivate,
+		aesKeyPublic:     aesPublic,
+		hmacKeyHandle:    hmacHandle,
+		hmacKeyName:      hmacName,
+		hmacKeyPrivate:   hmacPrivate,
+		hmacKeyPublic:    hmacPublic,
+		primaryName:      primaryName,
+		allowLegacy:      allowLegacy,
 		symmetricKeySize: symmetricKeySize,
-		hmacAlg:        hmacAlg,
-		hmacSize:       hmacSize,
+		hmacAlg:          hmacAlg,
+		hmacSize:         hmacSize,
 	}, nil
 }
 
@@ -1017,10 +1012,10 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 
 // TPMFeatures represents the supported features of a TPM
 type TPMFeatures struct {
-	Algorithms  []string
-	ECCCurves   []string
-	RSABitness  []int
-	AESBitness  []int
+	Algorithms []string
+	ECCCurves  []string
+	RSABitness []int
+	AESBitness []int
 }
 
 // DetectFeatures queries the TPM for supported algorithms and ECC curves
