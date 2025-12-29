@@ -1,5 +1,8 @@
 # Pithos
 
+> [!WARNING]
+> **Beta Software**: Pithos follows semantic versioning and is currently below v1.0.0. Breaking changes to the API, configuration format, or storage layout may occur between minor versions. Please review the changelog before upgrading. Pithos is not recommended for production use with important data.
+
 Pithos is an S3-compatible object storage server designed for self-hosters, written in Go.
 
 ## Features
