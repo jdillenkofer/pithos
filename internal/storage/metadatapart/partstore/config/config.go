@@ -56,16 +56,23 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	// Local KMS specific (password for key derivation)
 	Password internalConfig.StringProvider `json:"password,omitempty"`
 	// TPM specific
-	TPMPath                    internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
-	TPMPersistentHandle        internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
-	TPMKeyFilePath             internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
+	TPMPath             internalConfig.StringProvider `json:"tpmPath,omitempty"`             // Path to TPM device (e.g., "/dev/tpmrm0")
+	TPMPersistentHandle internalConfig.StringProvider `json:"tpmPersistentHandle,omitempty"` // Persistent handle for TPM key (e.g., "0x81000001")
+	TPMKeyFilePath      internalConfig.StringProvider `json:"tpmKeyFilePath,omitempty"`      // Path to file for persisting AES key material (e.g., "./data/tpm-aes-key.json")
+	TPMKeyAlgorithm     internalConfig.StringProvider `json:"tpmKeyAlgorithm,omitempty"`     // Primary key algorithm: "rsa-2048" (default), "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521", "ecc-brainpool-p256", "ecc-brainpool-p384", "ecc-brainpool-p512"
+	// Symmetric key algorithm ("aes-128", "aes-256"). Default is "aes-128".
+	TPMSymmetricAlgorithm internalConfig.StringProvider `json:"tpmSymmetricAlgorithm,omitempty"`
+	// HMAC algorithm ("sha256", "sha384", "sha512"). Default is "sha256".
+	TPMHMACAlgorithm internalConfig.StringProvider `json:"tpmHMACAlgorithm,omitempty"`
+	// If true, legacy unauthenticated decryption is disabled. Default is false (allowed).
+	TPMDisableLegacyDecryption internalConfig.BoolProvider `json:"tpmDisableLegacyDecryption,omitempty"`
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
 	// previously encrypted data CANNOT be decrypted.
 	// To generate: openssl rand -hex 64
-	PQSeed internalConfig.StringProvider `json:"pqSeed,omitempty"`
-	InnerPartStoreInstantiator PartStoreInstantiator `json:"-"`
+	PQSeed                     internalConfig.StringProvider `json:"pqSeed,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
 }
@@ -180,7 +187,39 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get key file path (default to "./data/tpm-aes-key.json" if not specified)
 		keyFilePath := t.TPMKeyFilePath.Value()
 
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, innerPartStore, mlkemKey)
+		// Get key algorithm (default to "rsa-2048" for backward compatibility)
+		keyAlgorithm := t.TPMKeyAlgorithm.Value()
+		if keyAlgorithm == "" {
+			keyAlgorithm = "rsa-2048" // Default to RSA-2048
+		}
+		// Validate key algorithm
+		switch keyAlgorithm {
+		case "rsa-2048", "rsa-4096", "ecc-p256", "ecc-p384", "ecc-p521", "ecc-brainpool-p256", "ecc-brainpool-p384", "ecc-brainpool-p512":
+			// Valid
+		default:
+			return nil, fmt.Errorf("invalid tpmKeyAlgorithm: %s (must be 'rsa-2048', 'rsa-4096', 'ecc-p256', 'ecc-p384', 'ecc-p521', 'ecc-brainpool-p256', 'ecc-brainpool-p384', or 'ecc-brainpool-p512')", keyAlgorithm)
+		}
+
+		// Get symmetric key algorithm (default to aes-128 for backward compatibility)
+		symmetricAlgorithm := t.TPMSymmetricAlgorithm.Value()
+		if symmetricAlgorithm == "" {
+			symmetricAlgorithm = "aes-128"
+		}
+		if symmetricAlgorithm != "aes-128" && symmetricAlgorithm != "aes-256" {
+			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s (must be 'aes-128' or 'aes-256')", symmetricAlgorithm)
+		}
+
+		// Get HMAC algorithm (default to sha256)
+		hmacAlgorithm := t.TPMHMACAlgorithm.Value()
+		if hmacAlgorithm == "" {
+			hmacAlgorithm = "sha256"
+		}
+		if hmacAlgorithm != "sha256" && hmacAlgorithm != "sha384" && hmacAlgorithm != "sha512" {
+			return nil, fmt.Errorf("invalid tpmHMACAlgorithm: %s (must be 'sha256', 'sha384', or 'sha512')", hmacAlgorithm)
+		}
+
+		allowLegacy := !t.TPMDisableLegacyDecryption.Value()
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, allowLegacy, symmetricAlgorithm, hmacAlgorithm, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

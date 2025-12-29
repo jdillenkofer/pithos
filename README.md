@@ -162,6 +162,21 @@ The **private keys** must be kept secret and added to your `storage.json` config
 pithos audit-log verify -input-file ./data/audit.log -ed25519-public-key nHBi++... -ml-dsa-87-public-key v9A2s...
 ```
 
+#### `tpm-info`
+Queries TPM (Trusted Platform Module) hardware capabilities to detect supported features.
+```sh
+pithos tpm-info [-tpm-path <path>]
+```
+Available options:
+- `-tpm-path`: Path to the TPM device (default: `/dev/tpmrm0`)
+
+This command performs trial key creations to detect:
+- Supported asymmetric algorithms (RSA, ECC) for `tpmKeyAlgorithm`
+- Supported HMAC algorithms for `tpmHMACAlgorithm`
+- Supported symmetric algorithms (AES) for `tpmSymmetricAlgorithm`
+
+Useful for verifying TPM compatibility before configuring the `TinkEncryptionPartStoreMiddleware` with TPM support.
+
 ### Configuration
 
 The following environment variables are available:
@@ -256,9 +271,29 @@ The following storage backends and middlewares are available:
   - Automated grounding every 1,000 entries using Merkle Trees for high-integrity checkpoints
 
 ###### Part Store Middleware
-- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, and local KMS. 
+- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and **TPM 2.0 (Hardware Security Module)**. 
   - Features envelope encryption and key rotation capabilities.
   - Supports **Post-Quantum Hybrid Encryption** using **ML-KEM-1024** (FIPS 203). It enhances the envelope encryption by deriving the data encryption key from both a classical secret (protected by your chosen KMS) and a post-quantum shared secret via HKDF.
+
+  **Configuration Example (with TPM 2.0):**
+  ```json
+  {
+    "type": "TinkEncryptionPartStoreMiddleware",
+    "kmsType": "tpm",
+    "tpmPath": "/dev/tpmrm0",
+    "tpmPersistentHandle": "0x81000001",
+    "tpmKeyFilePath": "./data/tpm-key.json",
+    "tpmKeyAlgorithm": "ecc-p384",
+    "tpmSymmetricAlgorithm": "aes-256",
+    "tpmHMACAlgorithm": "sha256",
+    "tpmDisableLegacyDecryption": true,
+    "innerPartStore": {
+      "type": "FilesystemPartStore",
+      "root": "./data/parts"
+    }
+  }
+  ```
+  *Note: `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256`, `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` (default) or `aes-256` (NIST Level 5).*
 
   **Configuration Example (with PQ-Encryption):**
   ```json

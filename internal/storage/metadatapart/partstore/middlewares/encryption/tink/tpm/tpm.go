@@ -2,6 +2,7 @@ package tpm
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,23 +14,68 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 )
 
-// AESKeyMaterial represents the persistent AES key material
+// Key algorithm constants for TPM primary key types
+const (
+	// KeyAlgorithmRSA specifies RSA-2048 as the primary key algorithm (default, for backward compatibility)
+	KeyAlgorithmRSA = "rsa-2048"
+	// KeyAlgorithmRSA4096 specifies RSA-4096 as the primary key algorithm
+	KeyAlgorithmRSA4096 = "rsa-4096"
+	// KeyAlgorithmECCP256 specifies ECC P-256 (NIST P-256) as the primary key algorithm
+	KeyAlgorithmECCP256 = "ecc-p256"
+	// KeyAlgorithmECCP384 specifies ECC P-384 (NIST P-384) as the primary key algorithm
+	KeyAlgorithmECCP384 = "ecc-p384"
+	// KeyAlgorithmECCP521 specifies ECC P-521 (NIST P-521) as the primary key algorithm
+	KeyAlgorithmECCP521 = "ecc-p521"
+	// KeyAlgorithmECCBrainpoolP256 specifies Brainpool P256r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP256 = "ecc-brainpool-p256"
+	// KeyAlgorithmECCBrainpoolP384 specifies Brainpool P384r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP384 = "ecc-brainpool-p384"
+	// KeyAlgorithmECCBrainpoolP512 specifies Brainpool P512r1 as the primary key algorithm
+	KeyAlgorithmECCBrainpoolP512 = "ecc-brainpool-p512"
+
+	// HMACAlgorithmSHA256 specifies HMAC-SHA256
+	HMACAlgorithmSHA256 = "sha256"
+	// HMACAlgorithmSHA384 specifies HMAC-SHA384
+	HMACAlgorithmSHA384 = "sha384"
+	// HMACAlgorithmSHA512 specifies HMAC-SHA512
+	HMACAlgorithmSHA512 = "sha512"
+
+	// SymmetricAlgorithmAES128 specifies AES-128
+	SymmetricAlgorithmAES128 = "aes-128"
+	// SymmetricAlgorithmAES256 specifies AES-256
+	SymmetricAlgorithmAES256 = "aes-256"
+
+	// EncryptedDataVersion1 is the version byte for the authenticated encryption format
+	EncryptedDataVersion1 = byte(1)
+)
+
+// AESKeyMaterial represents the persistent AES key material and optional HMAC key material
 type AESKeyMaterial struct {
-	Private []byte `json:"private"` // TPM2BPrivate serialized
-	Public  []byte `json:"public"`  // TPM2BPublic serialized
+	Private     []byte `json:"private"`               // TPM2BPrivate serialized (AES)
+	Public      []byte `json:"public"`                // TPM2BPublic serialized (AES)
+	HMACPrivate []byte `json:"hmacPrivate,omitempty"` // TPM2BPrivate serialized (HMAC)
+	HMACPublic  []byte `json:"hmacPublic,omitempty"`  // TPM2BPublic serialized (HMAC)
 }
 
 // AEAD implements tink.AEAD interface using TPM for key operations
 // The master key never leaves the TPM
 type AEAD struct {
-	mu            sync.Mutex // Protects concurrent access to TPM device
-	tpmDevice     transport.TPMCloser
-	primaryHandle tpm2.TPMHandle    // Persistent RSA primary key handle
-	aesKeyHandle  tpm2.TPMHandle    // Transient AES key handle (loaded from primary)
-	aesKeyName    tpm2.TPM2BName    // The cryptographic name of the AES key
-	aesKeyPrivate tpm2.TPM2BPrivate // Private portion of AES key (to reload if needed)
-	aesKeyPublic  tpm2.TPM2BPublic  // Public portion of AES key
-	primaryName   tpm2.TPM2BName    // The cryptographic name of the primary key
+	mu               sync.Mutex // Protects concurrent access to TPM device
+	tpmDevice        transport.TPMCloser
+	primaryHandle    tpm2.TPMHandle    // Persistent RSA primary key handle
+	aesKeyHandle     tpm2.TPMHandle    // Transient AES key handle
+	aesKeyName       tpm2.TPM2BName    // The cryptographic name of the AES key
+	aesKeyPrivate    tpm2.TPM2BPrivate // Private portion of AES key
+	aesKeyPublic     tpm2.TPM2BPublic  // Public portion of AES key
+	hmacKeyHandle    tpm2.TPMHandle    // Transient HMAC key handle
+	hmacKeyName      tpm2.TPM2BName    // The cryptographic name of the HMAC key
+	hmacKeyPrivate   tpm2.TPM2BPrivate // Private portion of HMAC key
+	hmacKeyPublic    tpm2.TPM2BPublic  // Public portion of HMAC key
+	primaryName      tpm2.TPM2BName    // The cryptographic name of the primary key
+	allowLegacy      bool              // Whether to allow decryption of legacy (unauthenticated) ciphertexts
+	symmetricKeySize uint16            // The symmetric key size in bits (128 or 256)
+	hmacAlg          tpm2.TPMAlgID     // The HMAC algorithm
+	hmacSize         int               // The size of the HMAC tag
 }
 
 // isPersistentHandleFree checks if a persistent handle is available (not occupied).
@@ -69,11 +115,11 @@ func isPersistentHandleFree(dev transport.TPM, handle tpm2.TPMHandle) (bool, err
 	return false, fmt.Errorf("failed to check handle availability: %w", err)
 }
 
-// getOrCreatePersistentKey either loads an existing persistent RSA primary key or creates and persists a new one.
-// If the persistent handle is occupied, it loads and uses that key.
-// If the persistent handle is free, it creates a new RSA primary key and persists it.
+// getOrCreatePersistentKey dispatches to the appropriate key creation function based on the key algorithm.
+// If the persistent handle is occupied, it verifies the existing key matches the expected algorithm.
+// If the persistent handle is free, it creates a new primary key with the specified algorithm.
 // Returns the handle and the name of the primary key.
-func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	// Validate that the handle is in the persistent range (0x81000000–0x81FFFFFF)
 	if persistentHandle < 0x81000000 || persistentHandle > 0x81FFFFFF {
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("handle 0x%08X not in persistent range (0x81000000-0x81FFFFFF)", persistentHandle)
@@ -86,72 +132,355 @@ func getOrCreatePersistentKey(dev transport.TPM, persistentHandle tpm2.TPMHandle
 	}
 
 	if !isFree {
-		// Key already exists at this handle, verify it's an RSA key
-		read := tpm2.ReadPublic{ObjectHandle: persistentHandle}
-		pub, err := read.Execute(dev)
-		if err != nil {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to read public area of existing key: %w", err)
-		}
-
-		publicArea, err := pub.OutPublic.Contents()
-		if err != nil {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to parse public area: %w", err)
-		}
-
-		// Verify it's an RSA storage key (restricted decrypt key)
-		if publicArea.Type != tpm2.TPMAlgRSA {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not an RSA key", persistentHandle)
-		}
-
-		attrs := publicArea.ObjectAttributes
-		if !attrs.Decrypt || !attrs.Restricted {
-			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not a storage key (missing Decrypt or Restricted)", persistentHandle)
-		}
-
-		// Key exists and is valid, use it
-		return persistentHandle, pub.Name, nil
+		// Key already exists at this handle, verify it matches the expected algorithm
+		return verifyExistingKey(dev, persistentHandle, keyAlgorithm, symmetricKeySize)
 	}
 
-	// Handle is free, create a new RSA primary storage key (SRK)
+	// Handle is free, create a new primary key based on algorithm
+	switch keyAlgorithm {
+	case KeyAlgorithmRSA:
+		return createPersistentRSAKey(dev, persistentHandle, 2048, symmetricKeySize)
+	case KeyAlgorithmRSA4096:
+		return createPersistentRSAKey(dev, persistentHandle, 4096, symmetricKeySize)
+	case KeyAlgorithmECCP256:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP256, symmetricKeySize)
+	case KeyAlgorithmECCP384:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP384, symmetricKeySize)
+	case KeyAlgorithmECCP521:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCNistP521, symmetricKeySize)
+	case KeyAlgorithmECCBrainpoolP256:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP256R1, symmetricKeySize)
+	case KeyAlgorithmECCBrainpoolP384:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP384R1, symmetricKeySize)
+	case KeyAlgorithmECCBrainpoolP512:
+		return createPersistentECCKey(dev, persistentHandle, tpm2.TPMECCBrainpoolP512R1, symmetricKeySize)
+	default:
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
+	}
+}
+
+// verifyExistingKey verifies that an existing key at the handle matches the expected algorithm.
+func verifyExistingKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyAlgorithm string, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	read := tpm2.ReadPublic{ObjectHandle: persistentHandle}
+	pub, err := read.Execute(dev)
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to read public area of existing key: %w", err)
+	}
+
+	publicArea, err := pub.OutPublic.Contents()
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to parse public area: %w", err)
+	}
+
+	attrs := publicArea.ObjectAttributes
+	if !attrs.Decrypt || !attrs.Restricted {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is not a storage key (missing Decrypt or Restricted)", persistentHandle)
+	}
+
+	// Verify the key algorithm matches
+	switch keyAlgorithm {
+	case KeyAlgorithmRSA, KeyAlgorithmRSA4096:
+		if publicArea.Type != tpm2.TPMAlgRSA {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but RSA was requested", persistentHandle, algName(publicArea.Type))
+		}
+		// Verify RSA key size
+		rsaParams, err := publicArea.Parameters.RSADetail()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get RSA parameters: %w", err)
+		}
+		expectedBits := tpm2.TPMKeyBits(2048)
+		if keyAlgorithm == KeyAlgorithmRSA4096 {
+			expectedBits = 4096
+		}
+		if rsaParams.KeyBits != expectedBits {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X is %d bits, but %d was requested", persistentHandle, rsaParams.KeyBits, expectedBits)
+		}
+		// Verify symmetric protection size
+		if rsaParams.Symmetric.Algorithm != tpm2.TPMAlgAES {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X uses %s for symmetric protection, but AES was requested", persistentHandle, algName(rsaParams.Symmetric.Algorithm))
+		}
+		keyBits, err := rsaParams.Symmetric.KeyBits.AES()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get AES key bits: %w", err)
+		}
+		if *keyBits != tpm2.TPMKeyBits(symmetricKeySize) {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing RSA key at 0x%08X uses %d-bit AES, but %d-bit was requested", persistentHandle, *keyBits, symmetricKeySize)
+		}
+	case KeyAlgorithmECCP256, KeyAlgorithmECCP384, KeyAlgorithmECCP521, KeyAlgorithmECCBrainpoolP256, KeyAlgorithmECCBrainpoolP384, KeyAlgorithmECCBrainpoolP512:
+		if publicArea.Type != tpm2.TPMAlgECC {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing key at 0x%08X is %s, but ECC was requested", persistentHandle, algName(publicArea.Type))
+		}
+		// Verify ECC curve
+		eccParams, err := publicArea.Parameters.ECCDetail()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get ECC parameters: %w", err)
+		}
+
+		var expectedCurve tpm2.TPMECCCurve
+		switch keyAlgorithm {
+		case KeyAlgorithmECCP256:
+			expectedCurve = tpm2.TPMECCNistP256
+		case KeyAlgorithmECCP384:
+			expectedCurve = tpm2.TPMECCNistP384
+		case KeyAlgorithmECCP521:
+			expectedCurve = tpm2.TPMECCNistP521
+		case KeyAlgorithmECCBrainpoolP256:
+			expectedCurve = tpm2.TPMECCBrainpoolP256R1
+		case KeyAlgorithmECCBrainpoolP384:
+			expectedCurve = tpm2.TPMECCBrainpoolP384R1
+		case KeyAlgorithmECCBrainpoolP512:
+			expectedCurve = tpm2.TPMECCBrainpoolP512R1
+		}
+
+		if eccParams.CurveID != expectedCurve {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses curve %d, but curve %d was requested", persistentHandle, eccParams.CurveID, expectedCurve)
+		}
+
+		// Verify symmetric protection size
+		if eccParams.Symmetric.Algorithm != tpm2.TPMAlgAES {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses %s for symmetric protection, but AES was requested", persistentHandle, algName(eccParams.Symmetric.Algorithm))
+		}
+		keyBits, err := eccParams.Symmetric.KeyBits.AES()
+		if err != nil {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to get AES key bits: %w", err)
+		}
+		if *keyBits != tpm2.TPMKeyBits(symmetricKeySize) {
+			return 0, tpm2.TPM2BName{}, fmt.Errorf("existing ECC key at 0x%08X uses %d-bit AES, but %d-bit was requested", persistentHandle, *keyBits, symmetricKeySize)
+		}
+	default:
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("unsupported key algorithm: %s", keyAlgorithm)
+	}
+
+	// Key exists and is valid, use it
+	return persistentHandle, pub.Name, nil
+}
+
+// algName returns a human-readable name for a TPM algorithm
+func algName(alg tpm2.TPMAlgID) string {
+	switch alg {
+	case tpm2.TPMAlgRSA:
+		return "RSA"
+	case tpm2.TPMAlgTDES:
+		return "TDES"
+	case tpm2.TPMAlgSHA1:
+		return "SHA1"
+	case tpm2.TPMAlgHMAC:
+		return "HMAC"
+	case tpm2.TPMAlgAES:
+		return "AES"
+	case tpm2.TPMAlgMGF1:
+		return "MGF1"
+	case tpm2.TPMAlgKeyedHash:
+		return "KeyedHash"
+	case tpm2.TPMAlgXOR:
+		return "XOR"
+	case tpm2.TPMAlgSHA256:
+		return "SHA256"
+	case tpm2.TPMAlgSHA384:
+		return "SHA384"
+	case tpm2.TPMAlgSHA512:
+		return "SHA512"
+	case tpm2.TPMAlgNull:
+		return "Null"
+	case tpm2.TPMAlgSM4:
+		return "SM4"
+	case tpm2.TPMAlgRSASSA:
+		return "RSASSA"
+	case tpm2.TPMAlgRSAES:
+		return "RSAES"
+	case tpm2.TPMAlgRSAPSS:
+		return "RSAPSS"
+	case tpm2.TPMAlgOAEP:
+		return "OAEP"
+	case tpm2.TPMAlgECDSA:
+		return "ECDSA"
+	case tpm2.TPMAlgECDH:
+		return "ECDH"
+	case tpm2.TPMAlgECDAA:
+		return "ECDAA"
+	case tpm2.TPMAlgSM2:
+		return "SM2"
+	case tpm2.TPMAlgECSchnorr:
+		return "ECSchnorr"
+	case tpm2.TPMAlgKDF1SP80056A:
+		return "KDF1_SP800_56A"
+	case tpm2.TPMAlgKDF2:
+		return "KDF2"
+	case tpm2.TPMAlgKDF1SP800108:
+		return "KDF1_SP800_108"
+	case tpm2.TPMAlgECC:
+		return "ECC"
+	case tpm2.TPMAlgSymCipher:
+		return "SymCipher"
+	case tpm2.TPMAlgCamellia:
+		return "Camellia"
+	case tpm2.TPMAlgCMAC:
+		return "CMAC"
+	case tpm2.TPMAlgCTR:
+		return "CTR"
+	case tpm2.TPMAlgOFB:
+		return "OFB"
+	case tpm2.TPMAlgCBC:
+		return "CBC"
+	case tpm2.TPMAlgCFB:
+		return "CFB"
+	case tpm2.TPMAlgECB:
+		return "ECB"
+	case tpm2.TPMAlgCCM:
+		return "CCM"
+	default:
+		return fmt.Sprintf("unknown(0x%04X)", alg)
+	}
+}
+
+// curveName returns a human-readable name for a TPM ECC curve
+func curveName(curve tpm2.TPMECCCurve) string {
+	switch curve {
+	case tpm2.TPMECCNone:
+		return "None"
+	case tpm2.TPMECCNistP192:
+		return "NIST P-192"
+	case tpm2.TPMECCNistP224:
+		return "NIST P-224"
+	case tpm2.TPMECCNistP256:
+		return "NIST P-256"
+	case tpm2.TPMECCNistP384:
+		return "NIST P-384"
+	case tpm2.TPMECCNistP521:
+		return "NIST P-521"
+	case tpm2.TPMECCBNP256:
+		return "BN P-256"
+	case tpm2.TPMECCBNP638:
+		return "BN P-638"
+	case tpm2.TPMECCSM2P256:
+		return "SM2 P-256"
+	case tpm2.TPMECCBrainpoolP256R1:
+		return "Brainpool P-256"
+	case tpm2.TPMECCBrainpoolP384R1:
+		return "Brainpool P-384"
+	case tpm2.TPMECCBrainpoolP512R1:
+		return "Brainpool P-512"
+	case tpm2.TPMECCCurve25519:
+		return "Curve25519"
+	case tpm2.TPMECCCurve448:
+		return "Curve448"
+	default:
+		return fmt.Sprintf("unknown(0x%04X)", curve)
+	}
+}
+
+// createPersistentRSAKey creates a new RSA primary storage key (SRK) and persists it.
+func createPersistentRSAKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, keyBits uint16, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	// RSA Storage Root Key template with AES symmetric protection
+	rsaSRKTemplate := tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgRSA,
+		NameAlg: tpm2.TPMAlgSHA256,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			UserWithAuth:        true,
+			NoDA:                true,
+			Restricted:          true,
+			Decrypt:             true,
+		},
+		Parameters: tpm2.NewTPMUPublicParms(
+			tpm2.TPMAlgRSA,
+			&tpm2.TPMSRSAParms{
+				Symmetric: tpm2.TPMTSymDefObject{
+					Algorithm: tpm2.TPMAlgAES,
+					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
+					Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+				},
+				KeyBits: tpm2.TPMKeyBits(keyBits),
+			},
+		),
+	}
+
 	createPrimaryCmd := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
+		InPublic:      tpm2.New2B(rsaSRKTemplate),
 	}
 
 	createPrimaryRsp, err := createPrimaryCmd.Execute(dev)
 	if err != nil {
-		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create primary key: %w", err)
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create RSA primary key: %w", err)
 	}
 
-	// Persist the key to the persistent handle
+	return persistKey(dev, persistentHandle, createPrimaryRsp.ObjectHandle, createPrimaryRsp.Name)
+}
+
+// createPersistentECCKey creates a new ECC primary storage key and persists it.
+func createPersistentECCKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, curveID tpm2.TPMECCCurve, symmetricKeySize uint16) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	// ECC Storage Root Key template
+	eccSRKTemplate := tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgECC,
+		NameAlg: tpm2.TPMAlgSHA256,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			UserWithAuth:        true,
+			NoDA:                true,
+			Restricted:          true,
+			Decrypt:             true,
+		},
+		Parameters: tpm2.NewTPMUPublicParms(
+			tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				Symmetric: tpm2.TPMTSymDefObject{
+					Algorithm: tpm2.TPMAlgAES,
+					KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
+					Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+				},
+				CurveID: curveID,
+			},
+		),
+	}
+
+	createPrimaryCmd := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(eccSRKTemplate),
+	}
+
+	createPrimaryRsp, err := createPrimaryCmd.Execute(dev)
+	if err != nil {
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to create ECC primary key: %w", err)
+	}
+
+	return persistKey(dev, persistentHandle, createPrimaryRsp.ObjectHandle, createPrimaryRsp.Name)
+}
+
+// persistKey persists a transient key to a persistent handle.
+func persistKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, transientHandle tpm2.TPMHandle, name tpm2.TPM2BName) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
 	evictCmd := tpm2.EvictControl{
 		Auth: tpm2.AuthHandle{
 			Handle: tpm2.TPMRHOwner,
 			Auth:   tpm2.PasswordAuth(nil),
 		},
 		ObjectHandle: &tpm2.NamedHandle{
-			Handle: createPrimaryRsp.ObjectHandle,
-			Name:   createPrimaryRsp.Name,
+			Handle: transientHandle,
+			Name:   name,
 		},
 		PersistentHandle: persistentHandle,
 	}
 
-	_, err = evictCmd.Execute(dev)
+	_, err := evictCmd.Execute(dev)
 	if err != nil {
 		// Try to flush the transient key before returning error
-		flushCmd := tpm2.FlushContext{FlushHandle: createPrimaryRsp.ObjectHandle}
+		flushCmd := tpm2.FlushContext{FlushHandle: transientHandle}
 		flushCmd.Execute(dev)
 		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to persist key: %w", err)
 	}
 
 	// After EvictControl, the transient handle is automatically flushed by the TPM
 	// and the key is now available at the persistent handle
-	return persistentHandle, createPrimaryRsp.Name, nil
+	return persistentHandle, name, nil
 }
 
 // createAESKey creates a new AES symmetric cipher key as a child of the primary RSA key.
 // Returns the private and public portions of the key for later loading.
-func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, symmetricKeySize uint16) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
 	createAES := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
@@ -174,7 +503,7 @@ func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName t
 					Sym: tpm2.TPMTSymDefObject{
 						Algorithm: tpm2.TPMAlgAES,
 						Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
-						KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(128)),
+						KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(symmetricKeySize)),
 					},
 				},
 			),
@@ -189,9 +518,51 @@ func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName t
 	return createRsp.OutPrivate, createRsp.OutPublic, nil
 }
 
-// loadAESKey loads an AES key into the TPM and returns its handle and name.
-func loadAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, private tpm2.TPM2BPrivate, public tpm2.TPM2BPublic) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
-	loadAES := tpm2.Load{
+// createHMACKey creates a new HMAC key as a child of the primary key.
+func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, alg tpm2.TPMAlgID) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+	createHMAC := tpm2.Create{
+		ParentHandle: tpm2.NamedHandle{
+			Handle: primaryHandle,
+			Name:   primaryName,
+		},
+		InPublic: tpm2.New2B(tpm2.TPMTPublic{
+			Type:    tpm2.TPMAlgKeyedHash,
+			NameAlg: tpm2.TPMAlgSHA256, // Name algorithm for the key itself
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM:            true,
+				FixedParent:         true,
+				UserWithAuth:        true,
+				SensitiveDataOrigin: true,
+				SignEncrypt:         true, // Required for HMAC operations
+			},
+			Parameters: tpm2.NewTPMUPublicParms(
+				tpm2.TPMAlgKeyedHash,
+				&tpm2.TPMSKeyedHashParms{
+					Scheme: tpm2.TPMTKeyedHashScheme{
+						Scheme: tpm2.TPMAlgHMAC,
+						Details: tpm2.NewTPMUSchemeKeyedHash(
+							tpm2.TPMAlgHMAC,
+							&tpm2.TPMSSchemeHMAC{
+								HashAlg: alg,
+							},
+						),
+					},
+				},
+			),
+		}),
+	}
+
+	createRsp, err := createHMAC.Execute(dev)
+	if err != nil {
+		return tpm2.TPM2BPrivate{}, tpm2.TPM2BPublic{}, fmt.Errorf("failed to create HMAC key: %w", err)
+	}
+
+	return createRsp.OutPrivate, createRsp.OutPublic, nil
+}
+
+// loadKey loads a key into the TPM and returns its handle and name.
+func loadKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, private tpm2.TPM2BPrivate, public tpm2.TPM2BPublic) (tpm2.TPMHandle, tpm2.TPM2BName, error) {
+	load := tpm2.Load{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
 			Name:   primaryName,
@@ -200,23 +571,27 @@ func loadAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm
 		InPublic:  public,
 	}
 
-	loadRsp, err := loadAES.Execute(dev)
+	loadRsp, err := load.Execute(dev)
 	if err != nil {
-		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to load AES key: %w", err)
+		return 0, tpm2.TPM2BName{}, fmt.Errorf("failed to load key: %w", err)
 	}
 
 	return loadRsp.ObjectHandle, loadRsp.Name, nil
 }
 
-// saveAESKeyMaterial saves the AES key material to a file
-func saveAESKeyMaterial(keyFilePath string, private tpm2.TPM2BPrivate, public tpm2.TPM2BPublic) error {
+// saveAESKeyMaterial saves the AES and HMAC key material to a file
+func saveAESKeyMaterial(keyFilePath string, privateAES, privateHMAC tpm2.TPM2BPrivate, publicAES, publicHMAC tpm2.TPM2BPublic) error {
 	// Serialize the key material using TPM marshaling
-	privateBytes := tpm2.Marshal(private)
-	publicBytes := tpm2.Marshal(public)
+	privateAESBytes := tpm2.Marshal(privateAES)
+	publicAESBytes := tpm2.Marshal(publicAES)
+	privateHMACBytes := tpm2.Marshal(privateHMAC)
+	publicHMACBytes := tpm2.Marshal(publicHMAC)
 
 	keyMaterial := AESKeyMaterial{
-		Private: privateBytes,
-		Public:  publicBytes,
+		Private:     privateAESBytes,
+		Public:      publicAESBytes,
+		HMACPrivate: privateHMACBytes,
+		HMACPublic:  publicHMACBytes,
 	}
 
 	// Marshal to JSON
@@ -257,21 +632,51 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 	return &keyMaterial, nil
 }
 
-// NewAEAD creates a new AEAD primitive that uses TPM for encryption/decryption
-// The key is created and sealed in the TPM and never exposed
-// On Linux: tpmPath should be "/dev/tpmrm0" or "/dev/tpm0"
-// On Windows: tpmPath can be empty or "default"
-// persistentHandle: the persistent handle to use (0x81000000–0x81FFFFFF range)
-// keyFilePath: path to file where AES key material will be persisted (e.g., "./data/tpm-aes-key.json")
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string) (*AEAD, error) {
+// keyAlgorithm: the primary key algorithm (tpm.KeyAlgorithmRSA or tpm.KeyAlgorithmECCP256), defaults to RSA if empty
+// allowLegacy: whether to allow decryption of legacy (unauthenticated) ciphertexts
+// symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
+// hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, allowLegacy bool, symmetricAlgorithm string, hmacAlgorithm string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open TPM: %w", err)
 	}
 
-	// Get or create the persistent RSA primary key
-	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle))
+	// Map symmetric algorithm to key size
+	var symmetricKeySize uint16
+	switch symmetricAlgorithm {
+	case "", SymmetricAlgorithmAES128:
+		symmetricKeySize = 128
+	case SymmetricAlgorithmAES256:
+		symmetricKeySize = 256
+	default:
+		tpmDevice.Close()
+		return nil, fmt.Errorf("unsupported symmetric algorithm: %s", symmetricAlgorithm)
+	}
+
+	// Determine HMAC algorithm and size from configuration
+	// Default to SHA256
+	hmacAlg := tpm2.TPMAlgSHA256
+	hmacSize := 32
+
+	switch hmacAlgorithm {
+	case "", HMACAlgorithmSHA256:
+		hmacAlg = tpm2.TPMAlgSHA256
+		hmacSize = 32
+	case HMACAlgorithmSHA384:
+		hmacAlg = tpm2.TPMAlgSHA384
+		hmacSize = 48
+	case HMACAlgorithmSHA512:
+		hmacAlg = tpm2.TPMAlgSHA512
+		hmacSize = 64
+	default:
+		tpmDevice.Close()
+		return nil, fmt.Errorf("unsupported HMAC algorithm: %s", hmacAlgorithm)
+	}
+
+	// Get or create the persistent primary key with the specified algorithm
+	primaryHandle, primaryName, err := getOrCreatePersistentKey(tpmDevice, tpm2.TPMHandle(persistentHandle), keyAlgorithm, symmetricKeySize)
 	if err != nil {
 		tpmDevice.Close()
 		return nil, fmt.Errorf("failed to get or create persistent primary key: %w", err)
@@ -279,6 +684,9 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string) (*AEAD
 
 	var aesPrivate tpm2.TPM2BPrivate
 	var aesPublic tpm2.TPM2BPublic
+	var hmacPrivate tpm2.TPM2BPrivate
+	var hmacPublic tpm2.TPM2BPublic
+	var dirty bool
 
 	// Try to load existing AES key material from file
 	keyMaterial, err := loadAESKeyMaterial(keyFilePath)
@@ -302,53 +710,168 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string) (*AEAD
 			return nil, fmt.Errorf("failed to unmarshal public key: %w", err)
 		}
 		aesPublic = *publicPtr
+
+		// Load HMAC keys if available
+		if len(keyMaterial.HMACPrivate) > 0 {
+			privHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPrivate](keyMaterial.HMACPrivate)
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to unmarshal HMAC private key: %w", err)
+			}
+			hmacPrivate = *privHMAC
+
+			pubHMAC, err := tpm2.Unmarshal[tpm2.TPM2BPublic](keyMaterial.HMACPublic)
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to unmarshal HMAC public key: %w", err)
+			}
+			hmacPublic = *pubHMAC
+
+			hmacPublicArea, err := pubHMAC.Contents()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to parse HMAC public area: %w", err)
+			}
+
+			// Inspect the existing HMAC key to set the algorithm and size correctly
+			// This ensures we can read data even if the config changed (as long as the key wasn't rotated)
+			hmacParams, err := hmacPublicArea.Parameters.KeyedHashDetail()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to get HMAC params: %w", err)
+			}
+
+			hmacScheme, err := hmacParams.Scheme.Details.HMAC()
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to get HMAC scheme details: %w", err)
+			}
+
+			hmacAlg = hmacScheme.HashAlg
+			switch hmacAlg {
+			case tpm2.TPMAlgSHA256:
+				hmacSize = 32
+			case tpm2.TPMAlgSHA384:
+				hmacSize = 48
+			case tpm2.TPMAlgSHA512:
+				hmacSize = 64
+			default:
+				// Fallback or error? Let's assume standard sizes for now or error out.
+				// For robustness, we could query the hash algorithm info, but hardcoding known supported ones is safer.
+				tpmDevice.Close()
+				return nil, fmt.Errorf("loaded HMAC key uses unsupported hash algorithm: 0x%x", hmacAlg)
+			}
+
+		} else {
+			// Upgrade: Create HMAC key if missing (existing file, no HMAC key)
+			hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
+			if err != nil {
+				tpmDevice.Close()
+				return nil, fmt.Errorf("failed to create HMAC key: %w", err)
+			}
+			dirty = true
+		}
 	} else {
 		// No existing key, create a new AES key
-		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName)
+		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName, symmetricKeySize)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create AES key: %w", err)
 		}
+		// And create new HMAC key
+		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
+		if err != nil {
+			tpmDevice.Close()
+			return nil, fmt.Errorf("failed to create HMAC key: %w", err)
+		}
+		dirty = true
+	}
 
+	if dirty {
 		// Save the key material for future use
-		if err := saveAESKeyMaterial(keyFilePath, aesPrivate, aesPublic); err != nil {
+		if err := saveAESKeyMaterial(keyFilePath, aesPrivate, hmacPrivate, aesPublic, hmacPublic); err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to save AES key material: %w", err)
 		}
 	}
 
 	// Load the AES key into the TPM
-	aesHandle, aesName, err := loadAESKey(tpmDevice, primaryHandle, primaryName, aesPrivate, aesPublic)
+	aesHandle, aesName, err := loadKey(tpmDevice, primaryHandle, primaryName, aesPrivate, aesPublic)
 	if err != nil {
 		tpmDevice.Close()
 		return nil, fmt.Errorf("failed to load AES key: %w", err)
 	}
 
+	// Load the HMAC key into the TPM
+	hmacHandle, hmacName, err := loadKey(tpmDevice, primaryHandle, primaryName, hmacPrivate, hmacPublic)
+	if err != nil {
+		tpmDevice.Close()
+		// Cleanup AES handle
+		tpm2.FlushContext{FlushHandle: aesHandle}.Execute(tpmDevice)
+		return nil, fmt.Errorf("failed to load HMAC key: %w", err)
+	}
+
 	return &AEAD{
-		tpmDevice:     tpmDevice,
-		primaryHandle: primaryHandle,
-		aesKeyHandle:  aesHandle,
-		aesKeyName:    aesName,
-		aesKeyPrivate: aesPrivate,
-		aesKeyPublic:  aesPublic,
-		primaryName:   primaryName,
+		tpmDevice:        tpmDevice,
+		primaryHandle:    primaryHandle,
+		aesKeyHandle:     aesHandle,
+		aesKeyName:       aesName,
+		aesKeyPrivate:    aesPrivate,
+		aesKeyPublic:     aesPublic,
+		hmacKeyHandle:    hmacHandle,
+		hmacKeyName:      hmacName,
+		hmacKeyPrivate:   hmacPrivate,
+		hmacKeyPublic:    hmacPublic,
+		primaryName:      primaryName,
+		allowLegacy:      allowLegacy,
+		symmetricKeySize: symmetricKeySize,
+		hmacAlg:          hmacAlg,
+		hmacSize:         hmacSize,
 	}, nil
 }
 
+// computeHMAC computes the HMAC for the given data using the TPM
+func (t *AEAD) computeHMAC(data []byte) ([]byte, error) {
+	// TPM2_HMAC can handle up to 1024 bytes (MAX_BUFFER) usually.
+	// For larger data, we would need to use HMAC_Start/Update/Complete.
+	// Here, we are signing (version || IV || ciphertext).
+	// IV=16, Version=1, Ciphertext=32 (for DEK). Total = 49 bytes.
+	// This fits easily in a single TPM2_HMAC call.
+
+	hmacCmd := tpm2.Hmac{
+		Handle: tpm2.AuthHandle{
+			Handle: t.hmacKeyHandle,
+			Name:   t.hmacKeyName,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		Buffer: tpm2.TPM2BMaxBuffer{
+			Buffer: data,
+		},
+		HashAlg: t.hmacAlg,
+	}
+
+	hmacRsp, err := hmacCmd.Execute(t.tpmDevice)
+	if err != nil {
+		return nil, fmt.Errorf("TPM HMAC failed: %w", err)
+	}
+
+	return hmacRsp.OutHMAC.Buffer, nil
+}
+
 // Encrypt encrypts plaintext with associatedData using TPM
-// This implements the tink.AEAD interface
+// This implements the tink.AEAD interface with Encrypt-then-MAC
 func (t *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 	// Lock to prevent concurrent TPM access
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Generate a random IV for this encryption
+	// 1. Generate IV
 	iv := make([]byte, 16)
 	if _, err := rand.Read(iv); err != nil {
 		return nil, fmt.Errorf("failed to generate IV: %w", err)
 	}
 
-	// Prepare encryption parameters
+	// 2. Encrypt with AES-CFB
 	encryptCmd := tpm2.EncryptDecrypt2{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: t.aesKeyHandle,
@@ -369,12 +892,30 @@ func (t *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("TPM encryption failed: %w", err)
 	}
+	ciphertext := encryptRsp.OutData.Buffer
 
-	// Combine IV + ciphertext
-	// Format: [IV (16 bytes)][Ciphertext]
-	result := make([]byte, 16+len(encryptRsp.OutData.Buffer))
-	copy(result[0:16], iv)
-	copy(result[16:], encryptRsp.OutData.Buffer)
+	// 3. Compute HMAC over (associatedData || version || IV || ciphertext)
+	// Format: [version(1)] [IV(16)] [ciphertext]
+	// We authenticate the AAD and the encrypted blob
+	versionByte := []byte{EncryptedDataVersion1}
+
+	hmacInput := make([]byte, 0, len(associatedData)+len(versionByte)+len(iv)+len(ciphertext))
+	hmacInput = append(hmacInput, associatedData...)
+	hmacInput = append(hmacInput, versionByte...)
+	hmacInput = append(hmacInput, iv...)
+	hmacInput = append(hmacInput, ciphertext...)
+
+	tag, err := t.computeHMAC(hmacInput)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Construct result: [version(1)] [IV(16)] [ciphertext] [tag]
+	result := make([]byte, 0, len(versionByte)+len(iv)+len(ciphertext)+len(tag))
+	result = append(result, versionByte...)
+	result = append(result, iv...)
+	result = append(result, ciphertext...)
+	result = append(result, tag...)
 
 	return result, nil
 }
@@ -386,16 +927,82 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if len(ciphertext) < 16 {
+	// Check if this is a legacy ciphertext (48 bytes: 16 IV + 32 DEK)
+	// or if it doesn't match the new version format.
+	isLegacy := true
+	if len(ciphertext) > 16+32 && ciphertext[0] == EncryptedDataVersion1 {
+		isLegacy = false
+	}
+
+	if isLegacy {
+		if !t.allowLegacy {
+			return nil, fmt.Errorf("legacy decryption disabled")
+		}
+		// Legacy Mode: AES-CFB only, no integrity check
+		if len(ciphertext) < 16 {
+			return nil, fmt.Errorf("legacy ciphertext too short")
+		}
+		iv := ciphertext[0:16]
+		actualCiphertext := ciphertext[16:]
+
+		decryptCmd := tpm2.EncryptDecrypt2{
+			KeyHandle: tpm2.AuthHandle{
+				Handle: t.aesKeyHandle,
+				Name:   t.aesKeyName,
+				Auth:   tpm2.PasswordAuth([]byte("")),
+			},
+			Message: tpm2.TPM2BMaxBuffer{
+				Buffer: actualCiphertext,
+			},
+			Mode:    tpm2.TPMAlgCFB,
+			Decrypt: true,
+			IV: tpm2.TPM2BIV{
+				Buffer: iv,
+			},
+		}
+
+		decryptRsp, err := decryptCmd.Execute(t.tpmDevice)
+		if err != nil {
+			return nil, fmt.Errorf("TPM legacy decryption failed: %w", err)
+		}
+		return decryptRsp.OutData.Buffer, nil
+	}
+
+	// Authenticated Mode: [Version(1)] [IV(16)] [Ciphertext] [Tag(t.hmacSize)]
+	if len(ciphertext) < 1+16+t.hmacSize {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 
-	// Extract IV and actual ciphertext
-	// Format: [IV (16 bytes)][Ciphertext]
-	iv := ciphertext[0:16]
-	actualCiphertext := ciphertext[16:]
+	if ciphertext[0] != EncryptedDataVersion1 {
+		return nil, fmt.Errorf("unsupported ciphertext version: %d", ciphertext[0])
+	}
 
-	// Decrypt using TPM
+	// Parse components
+	// Version is at index 0
+	iv := ciphertext[1 : 1+16]
+	tagOffset := len(ciphertext) - t.hmacSize
+	actualCiphertext := ciphertext[1+16 : tagOffset]
+	tag := ciphertext[tagOffset:]
+
+	// 1. Verify HMAC
+	// Reconstruct input: associatedData || version || iv || ciphertext
+	versionByte := []byte{EncryptedDataVersion1}
+	hmacInput := make([]byte, 0, len(associatedData)+len(versionByte)+len(iv)+len(actualCiphertext))
+	hmacInput = append(hmacInput, associatedData...)
+	hmacInput = append(hmacInput, versionByte...)
+	hmacInput = append(hmacInput, iv...)
+	hmacInput = append(hmacInput, actualCiphertext...)
+
+	computedTag, err := t.computeHMAC(hmacInput)
+	if err != nil {
+		return nil, err
+	}
+
+	if subtle.ConstantTimeCompare(tag, computedTag) != 1 {
+		return nil, fmt.Errorf("HMAC verification failed")
+	}
+
+	// 2. Decrypt
 	decryptCmd := tpm2.EncryptDecrypt2{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: t.aesKeyHandle,
@@ -420,17 +1027,227 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	return decryptRsp.OutData.Buffer, nil
 }
 
+// TPMFeatures represents the supported features of a TPM as supported by Pithos
+type TPMFeatures struct {
+	PrimaryAlgorithms   []string
+	HMACAlgorithms      []string
+	SymmetricAlgorithms []string
+}
+
+// DetectFeatures queries the TPM for supported features and filters them to those supported by Pithos
+func DetectFeatures(tpmPath string) (*TPMFeatures, error) {
+	tpmDevice, err := openTPMDevice(tpmPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open TPM: %w", err)
+	}
+	defer tpmDevice.Close()
+
+	features := &TPMFeatures{}
+
+	// We create a transient primary key to test child creation
+	createPrimaryCmd := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(tpm2.RSASRKTemplate),
+	}
+	createPrimaryRsp, err := createPrimaryCmd.Execute(tpmDevice)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create test primary key: %w", err)
+	}
+	primaryHandle := createPrimaryRsp.ObjectHandle
+	primaryName := createPrimaryRsp.Name
+	defer tpm2.FlushContext{FlushHandle: primaryHandle}.Execute(tpmDevice)
+
+	// Detect supported Primary Algorithms (RSA)
+	for _, alg := range []struct {
+		name string
+		bits uint16
+	}{
+		{KeyAlgorithmRSA, 2048},
+		{KeyAlgorithmRSA4096, 4096},
+	} {
+		createRSA := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgRSA,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgRSA,
+					&tpm2.TPMSRSAParms{
+						Symmetric: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgNull,
+						},
+						KeyBits: tpm2.TPMKeyBits(alg.bits),
+					},
+				),
+			}),
+		}
+		_, err = createRSA.Execute(tpmDevice)
+		if err == nil {
+			features.PrimaryAlgorithms = append(features.PrimaryAlgorithms, alg.name)
+		}
+	}
+
+	// Detect supported Primary Algorithms (ECC)
+	for _, alg := range []struct {
+		name  string
+		curve tpm2.TPMECCCurve
+	}{
+		{KeyAlgorithmECCP256, tpm2.TPMECCNistP256},
+		{KeyAlgorithmECCP384, tpm2.TPMECCNistP384},
+		{KeyAlgorithmECCP521, tpm2.TPMECCNistP521},
+		{KeyAlgorithmECCBrainpoolP256, tpm2.TPMECCBrainpoolP256R1},
+		{KeyAlgorithmECCBrainpoolP384, tpm2.TPMECCBrainpoolP384R1},
+		{KeyAlgorithmECCBrainpoolP512, tpm2.TPMECCBrainpoolP512R1},
+	} {
+		createECC := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgECC,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgECC,
+					&tpm2.TPMSECCParms{
+						Symmetric: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgNull,
+						},
+						CurveID: alg.curve,
+					},
+				),
+			}),
+		}
+		_, err = createECC.Execute(tpmDevice)
+		if err == nil {
+			features.PrimaryAlgorithms = append(features.PrimaryAlgorithms, alg.name)
+		}
+	}
+
+	// Detect supported HMAC algorithms
+	for _, alg := range []struct {
+		name string
+		alg  tpm2.TPMAlgID
+	}{
+		{HMACAlgorithmSHA256, tpm2.TPMAlgSHA256},
+		{HMACAlgorithmSHA384, tpm2.TPMAlgSHA384},
+		{HMACAlgorithmSHA512, tpm2.TPMAlgSHA512},
+	} {
+		createHMAC := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgKeyedHash,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					UserWithAuth:        true,
+					SensitiveDataOrigin: true,
+					SignEncrypt:         true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgKeyedHash,
+					&tpm2.TPMSKeyedHashParms{
+						Scheme: tpm2.TPMTKeyedHashScheme{
+							Scheme: tpm2.TPMAlgHMAC,
+							Details: tpm2.NewTPMUSchemeKeyedHash(
+								tpm2.TPMAlgHMAC,
+								&tpm2.TPMSSchemeHMAC{
+									HashAlg: alg.alg,
+								},
+							),
+						},
+					},
+				),
+			}),
+		}
+		_, err = createHMAC.Execute(tpmDevice)
+		if err == nil {
+			features.HMACAlgorithms = append(features.HMACAlgorithms, alg.name)
+		}
+	}
+
+	// Detect supported Symmetric Algorithms
+	for _, alg := range []struct {
+		name string
+		bits uint16
+	}{
+		{SymmetricAlgorithmAES128, 128},
+		{SymmetricAlgorithmAES256, 256},
+	} {
+		createAES := tpm2.Create{
+			ParentHandle: tpm2.NamedHandle{
+				Handle: primaryHandle,
+				Name:   primaryName,
+			},
+			InPublic: tpm2.New2B(tpm2.TPMTPublic{
+				Type:    tpm2.TPMAlgSymCipher,
+				NameAlg: tpm2.TPMAlgSHA256,
+				ObjectAttributes: tpm2.TPMAObject{
+					FixedTPM:            true,
+					FixedParent:         true,
+					SensitiveDataOrigin: true,
+					UserWithAuth:        true,
+					Decrypt:             true,
+					SignEncrypt:         true,
+				},
+				Parameters: tpm2.NewTPMUPublicParms(
+					tpm2.TPMAlgSymCipher,
+					&tpm2.TPMSSymCipherParms{
+						Sym: tpm2.TPMTSymDefObject{
+							Algorithm: tpm2.TPMAlgAES,
+							Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+							KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(alg.bits)),
+						},
+					},
+				),
+			}),
+		}
+		_, err = createAES.Execute(tpmDevice)
+		if err == nil {
+			features.SymmetricAlgorithms = append(features.SymmetricAlgorithms, alg.name)
+		}
+	}
+
+	return features, nil
+}
+
 // Close closes the TPM device
-// Note: We flush the transient AES key handle but not the persistent primary key
+// Note: We flush the transient AES and HMAC key handles but not the persistent primary key
 func (t *AEAD) Close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// Flush the AES key handle (transient)
 	if t.aesKeyHandle != 0 {
-		flushCmd := tpm2.FlushContext{FlushHandle: t.aesKeyHandle}
-		flushCmd.Execute(t.tpmDevice)
-		t.aesKeyHandle = 0 // Mark as flushed
+		tpm2.FlushContext{FlushHandle: t.aesKeyHandle}.Execute(t.tpmDevice)
+		t.aesKeyHandle = 0
 	}
+	// Flush the HMAC key handle (transient)
+	if t.hmacKeyHandle != 0 {
+		tpm2.FlushContext{FlushHandle: t.hmacKeyHandle}.Execute(t.tpmDevice)
+		t.hmacKeyHandle = 0
+	}
+
 	return t.tpmDevice.Close()
 }

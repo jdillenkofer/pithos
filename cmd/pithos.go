@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -10,9 +11,10 @@ import (
 	"net/http"
 	"os"
 	"reflect"
-	"bufio"
 	"strings"
 
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
@@ -22,12 +24,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
-	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
 )
 
 const defaultStorageConfig = `
@@ -69,11 +70,12 @@ const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
 const subcommandAuditLog = "audit-log"
+const subcommandTPMInfo = "tpm-info"
 
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
 		os.Exit(1)
 	}
 
@@ -91,8 +93,10 @@ func main() {
 		validateStorage(ctx)
 	case subcommandAuditLog:
 		auditLogTool()
+	case subcommandTPMInfo:
+		tpmInfo()
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
 		os.Exit(1)
 	}
 }
@@ -549,7 +553,7 @@ func auditLogTool() {
 	}
 
 	fs := flag.NewFlagSet(subcommandAuditLog+" "+sub, flag.ExitOnError)
-	
+
 	inputFilePath := fs.String("input-file", "", "Path to the audit log file")
 	inputFormat := fs.String("input-format", "bin", "Input format (bin, json)")
 	ed25519PubKeyStr := fs.String("ed25519-public-key", "", "Base64 encoded Ed25519 public key or path to key file")
@@ -624,5 +628,44 @@ func auditLogTool() {
 	if err != nil {
 		slog.Error(fmt.Sprintf("Audit log operation failed: %v", err))
 		os.Exit(1)
+	}
+}
+
+func tpmInfo() {
+	fs := flag.NewFlagSet(subcommandTPMInfo, flag.ExitOnError)
+	tpmPath := fs.String("tpm-path", "/dev/tpmrm0", "Path to TPM device")
+	fs.Parse(os.Args[2:])
+
+	features, err := tpm.DetectFeatures(*tpmPath)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to detect TPM features: %v", err))
+		os.Exit(1)
+	}
+
+	fmt.Printf("TPM Device: %s\n", *tpmPath)
+	fmt.Println("\nSupported Pithos Configuration Options:")
+
+	fmt.Println("\nPrimary Key Algorithms (tpmKeyAlgorithm):")
+	if len(features.PrimaryAlgorithms) == 0 {
+		fmt.Println("  - None")
+	}
+	for _, alg := range features.PrimaryAlgorithms {
+		fmt.Printf("  - %s\n", alg)
+	}
+
+	fmt.Println("\nHMAC Algorithms (tpmHMACAlgorithm):")
+	if len(features.HMACAlgorithms) == 0 {
+		fmt.Println("  - None")
+	}
+	for _, alg := range features.HMACAlgorithms {
+		fmt.Printf("  - %s\n", alg)
+	}
+
+	fmt.Println("\nSymmetric Algorithms (tpmSymmetricAlgorithm):")
+	if len(features.SymmetricAlgorithms) == 0 {
+		fmt.Println("  - None")
+	}
+	for _, alg := range features.SymmetricAlgorithms {
+		fmt.Printf("  - %s\n", alg)
 	}
 }
