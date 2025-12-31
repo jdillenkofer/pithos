@@ -75,6 +75,7 @@ type AEAD struct {
 	symmetricKeySize uint16            // The symmetric key size in bits (128 or 256)
 	hmacAlg          tpm2.TPMAlgID     // The HMAC algorithm
 	hmacSize         int               // The size of the HMAC tag
+	password         string            // Optional password for key authorization
 }
 
 // isPersistentHandleFree checks if a persistent handle is available (not occupied).
@@ -443,11 +444,18 @@ func persistKey(dev transport.TPM, persistentHandle tpm2.TPMHandle, transientHan
 
 // createAESKey creates a new AES symmetric cipher key as a child of the primary RSA key.
 // Returns the private and public portions of the key for later loading.
-func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, symmetricKeySize uint16) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, symmetricKeySize uint16, password string) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
 	createAES := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
 			Name:   primaryName,
+		},
+		InSensitive: tpm2.TPM2BSensitiveCreate{
+			Sensitive: &tpm2.TPMSSensitiveCreate{
+				UserAuth: tpm2.TPM2BAuth{
+					Buffer: []byte(password),
+				},
+			},
 		},
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type:    tpm2.TPMAlgSymCipher,
@@ -482,11 +490,18 @@ func createAESKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName t
 }
 
 // createHMACKey creates a new HMAC key as a child of the primary key.
-func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, alg tpm2.TPMAlgID) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
+func createHMACKey(dev transport.TPM, primaryHandle tpm2.TPMHandle, primaryName tpm2.TPM2BName, alg tpm2.TPMAlgID, password string) (tpm2.TPM2BPrivate, tpm2.TPM2BPublic, error) {
 	createHMAC := tpm2.Create{
 		ParentHandle: tpm2.NamedHandle{
 			Handle: primaryHandle,
 			Name:   primaryName,
+		},
+		InSensitive: tpm2.TPM2BSensitiveCreate{
+			Sensitive: &tpm2.TPMSSensitiveCreate{
+				UserAuth: tpm2.TPM2BAuth{
+					Buffer: []byte(password),
+				},
+			},
 		},
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type:    tpm2.TPMAlgKeyedHash,
@@ -595,10 +610,12 @@ func loadAESKeyMaterial(keyFilePath string) (*AESKeyMaterial, error) {
 	return &keyMaterial, nil
 }
 
+// NewAEAD creates a new AEAD instance that uses TPM for key operations.
 // keyAlgorithm: the primary key algorithm
 // symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
 // hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512")
-func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string) (*AEAD, error) {
+// password: optional password for key authorization (empty string for no password)
+func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string, password string) (*AEAD, error) {
 	// Open TPM device based on OS (implemented in platform-specific files)
 	tpmDevice, err := openTPMDevice(tpmPath)
 	if err != nil {
@@ -725,12 +742,12 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		}
 	} else {
 		// No existing key, create new AES and HMAC keys
-		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName, symmetricKeySize)
+		aesPrivate, aesPublic, err = createAESKey(tpmDevice, primaryHandle, primaryName, symmetricKeySize, password)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create AES key: %w", err)
 		}
-		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg)
+		hmacPrivate, hmacPublic, err = createHMACKey(tpmDevice, primaryHandle, primaryName, hmacAlg, password)
 		if err != nil {
 			tpmDevice.Close()
 			return nil, fmt.Errorf("failed to create HMAC key: %w", err)
@@ -774,6 +791,7 @@ func NewAEAD(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlg
 		symmetricKeySize: symmetricKeySize,
 		hmacAlg:          hmacAlg,
 		hmacSize:         hmacSize,
+		password:         password,
 	}, nil
 }
 
@@ -789,7 +807,7 @@ func (t *AEAD) computeHMAC(data []byte) ([]byte, error) {
 		Handle: tpm2.AuthHandle{
 			Handle: t.hmacKeyHandle,
 			Name:   t.hmacKeyName,
-			Auth:   tpm2.PasswordAuth(nil),
+			Auth:   tpm2.PasswordAuth([]byte(t.password)),
 		},
 		Buffer: tpm2.TPM2BMaxBuffer{
 			Buffer: data,
@@ -823,7 +841,7 @@ func (t *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 		KeyHandle: tpm2.AuthHandle{
 			Handle: t.aesKeyHandle,
 			Name:   t.aesKeyName,
-			Auth:   tpm2.PasswordAuth([]byte("")),
+			Auth:   tpm2.PasswordAuth([]byte(t.password)),
 		},
 		Message: tpm2.TPM2BMaxBuffer{
 			Buffer: plaintext,
@@ -913,7 +931,7 @@ func (t *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 		KeyHandle: tpm2.AuthHandle{
 			Handle: t.aesKeyHandle,
 			Name:   t.aesKeyName,
-			Auth:   tpm2.PasswordAuth([]byte("")),
+			Auth:   tpm2.PasswordAuth([]byte(t.password)),
 		},
 		Message: tpm2.TPM2BMaxBuffer{
 			Buffer: actualCiphertext,
