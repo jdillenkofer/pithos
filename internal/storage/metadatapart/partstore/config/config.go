@@ -65,6 +65,8 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	TPMSymmetricAlgorithm internalConfig.StringProvider `json:"tpmSymmetricAlgorithm,omitempty"`
 	// HMAC algorithm ("sha256", "sha384", "sha512"). Default is "sha256".
 	TPMHMACAlgorithm internalConfig.StringProvider `json:"tpmHMACAlgorithm,omitempty"`
+	// TPM Password for key authorization (optional, empty string for no password)
+	TPMPassword internalConfig.StringProvider `json:"tpmPassword,omitempty"`
 	// PQ-safe specific
 	// PQSeed is the 64-byte hex-encoded seed for ML-KEM-1024.
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
@@ -218,7 +220,10 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 			return nil, fmt.Errorf("invalid tpmSymmetricAlgorithm: %s", symmetricAlgorithm)
 		}
 
-		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, innerPartStore, mlkemKey)
+		// Get TPM password (optional, defaults to empty string for backwards compatibility)
+		tpmPassword := t.TPMPassword.Value()
+
+		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, tpmPassword, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

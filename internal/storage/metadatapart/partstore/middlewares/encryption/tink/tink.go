@@ -349,9 +349,10 @@ func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, ml
 // keyAlgorithm: the primary key algorithm, defaults to ECC P-256 if empty
 // symmetricAlgorithm: the symmetric key algorithm (e.g. "aes-128", "aes-256")
 // hmacAlgorithm: the HMAC algorithm ("sha256", "sha384", "sha512"), defaults to "sha256"
-func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+// password: optional password for key authorization (empty string for no password)
+func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, keyAlgorithm string, symmetricAlgorithm string, hmacAlgorithm string, password string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	// Create TPM AEAD
-	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm)
+	tpmAEAD, err := tpm.NewAEAD(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, password)
 	if err != nil {
 		return nil, err
 	}
