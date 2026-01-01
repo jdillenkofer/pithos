@@ -223,6 +223,17 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		// Get TPM password (optional, defaults to empty string for backwards compatibility)
 		tpmPassword := t.TPMPassword.Value()
 
+		// Validate TPM password: must be ASCII-only and max 32 characters
+		const maxTPMPasswordLength = 32
+		if len(tpmPassword) > maxTPMPasswordLength {
+			return nil, fmt.Errorf("tpmPassword exceeds maximum length of %d characters", maxTPMPasswordLength)
+		}
+		for _, c := range []byte(tpmPassword) {
+			if c < 32 || c > 126 {
+				return nil, fmt.Errorf("tpmPassword contains non-printable ASCII characters")
+			}
+		}
+
 		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, tpmPassword, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
