@@ -1,13 +1,18 @@
 package config
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"syscall"
 
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"golang.org/x/term"
 )
 
 type DynamicJsonType struct {
@@ -49,10 +54,17 @@ func CreateTempDir() (tempDir *string, cleanup func(), err error) {
 
 const (
 	envKeyType = "EnvKey"
+	stdinType  = "Stdin"
 )
 
 type envKeyProvider struct {
 	EnvKey string `json:"envKey"`
+	DynamicJsonType
+}
+
+type stdinProvider struct {
+	Prompt string `json:"prompt"`
+	Hidden bool   `json:"hidden"`
 	DynamicJsonType
 }
 
@@ -71,16 +83,56 @@ func (s *StringProvider) UnmarshalJSON(b []byte) error {
 		s.value = rawString
 		return nil
 	}
-	ekp := envKeyProvider{}
-	err = json.Unmarshal(b, &ekp)
-	if err != nil {
+
+	// Try to unmarshal as a generic type to determine which provider to use
+	var dt DynamicJsonType
+	if err = json.Unmarshal(b, &dt); err != nil {
 		return err
 	}
-	if ekp.Type != envKeyType {
+
+	switch dt.Type {
+	case envKeyType:
+		ekp := envKeyProvider{}
+		if err = json.Unmarshal(b, &ekp); err != nil {
+			return err
+		}
+		s.value = os.Getenv(ekp.EnvKey)
+		return nil
+	case stdinType:
+		sp := stdinProvider{}
+		if err = json.Unmarshal(b, &sp); err != nil {
+			return err
+		}
+		s.value, err = readFromStdin(sp.Prompt, sp.Hidden)
+		return err
+	default:
 		return errors.New("invalid stringProvider type")
 	}
-	s.value = os.Getenv(ekp.EnvKey)
-	return nil
+}
+
+func readFromStdin(prompt string, hidden bool) (string, error) {
+	if prompt != "" {
+		fmt.Print(prompt)
+	}
+
+	if hidden {
+		// Read password without echoing to terminal
+		byteValue, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return "", err
+		}
+		// Print newline since ReadPassword doesn't echo the Enter key
+		fmt.Println()
+		return string(byteValue), nil
+	}
+
+	// Read regular input
+	reader := bufio.NewReader(os.Stdin)
+	value, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(value, "\n"), nil
 }
 
 type Int64Provider struct {
