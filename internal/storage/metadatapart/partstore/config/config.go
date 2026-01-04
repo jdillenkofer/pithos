@@ -72,7 +72,12 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	// WARNING: This seed is used to derive the private key. If this seed is lost or changed,
 	// previously encrypted data CANNOT be decrypted.
 	// To generate: openssl rand -hex 64
-	PQSeed                     internalConfig.StringProvider `json:"pqSeed,omitempty"`
+	PQSeed internalConfig.StringProvider `json:"pqSeed,omitempty"`
+	// PKCS#11 specific
+	PKCS11ModulePath           internalConfig.StringProvider `json:"pkcs11ModulePath,omitempty"` // Path to PKCS#11 library (e.g., "/usr/lib64/pkcs11/libsofthsm2.so")
+	PKCS11TokenLabel           internalConfig.StringProvider `json:"pkcs11TokenLabel,omitempty"` // Token label
+	PKCS11Pin                  internalConfig.StringProvider `json:"pkcs11Pin,omitempty"`        // PIN for token access
+	PKCS11KeyLabel             internalConfig.StringProvider `json:"pkcs11KeyLabel,omitempty"`   // Label of the key to use
 	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
@@ -235,6 +240,26 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 		}
 
 		return tink.NewWithTPM(tpmPath, persistentHandle, keyFilePath, keyAlgorithm, symmetricAlgorithm, hmacAlgorithm, tpmPassword, innerPartStore, mlkemKey)
+	case "pkcs11":
+		modulePath := t.PKCS11ModulePath.Value()
+		tokenLabel := t.PKCS11TokenLabel.Value()
+		pin := t.PKCS11Pin.Value()
+		keyLabel := t.PKCS11KeyLabel.Value()
+
+		if modulePath == "" {
+			return nil, errors.New("pkcs11ModulePath is required for PKCS#11 KMS")
+		}
+		if tokenLabel == "" {
+			return nil, errors.New("pkcs11TokenLabel is required for PKCS#11 KMS")
+		}
+		if pin == "" {
+			return nil, errors.New("pkcs11Pin is required for PKCS#11 KMS")
+		}
+		if keyLabel == "" {
+			return nil, errors.New("pkcs11KeyLabel is required for PKCS#11 KMS")
+		}
+
+		return tink.NewWithPKCS11(modulePath, tokenLabel, pin, keyLabel, innerPartStore, mlkemKey)
 	default:
 		return nil, fmt.Errorf("unsupported KMS type: %s", kmsType)
 	}

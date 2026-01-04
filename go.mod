@@ -18,6 +18,7 @@ require (
 	github.com/google/tink/go v1.7.0
 	github.com/hashicorp/vault/api v1.22.0
 	github.com/mattn/go-sqlite3 v1.14.33
+	github.com/miekg/pkcs11 v1.1.1
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2

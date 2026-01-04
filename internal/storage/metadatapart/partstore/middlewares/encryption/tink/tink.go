@@ -21,6 +21,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/pkg/vault"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/pkcs11"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
@@ -37,10 +38,11 @@ const (
 	PartHeaderVersion = 3
 
 	// Key types for different KMS providers
-	KeyTypeAWS   = "aws"
-	KeyTypeVault = "vault"
-	KeyTypeLocal = "local"
-	KeyTypeTPM   = "tpm"
+	KeyTypeAWS    = "aws"
+	KeyTypeVault  = "vault"
+	KeyTypeLocal  = "local"
+	KeyTypeTPM    = "tpm"
+	KeyTypePKCS11 = "pkcs11"
 
 	// DefaultSegmentSize is the ciphertext segment size for new parts (128KB)
 	DefaultSegmentSize = 128 * 1024
@@ -373,6 +375,36 @@ func NewWithTPM(tpmPath string, persistentHandle uint32, keyFilePath string, key
 	}, nil
 }
 
+// NewWithPKCS11 creates a new TinkEncryptionPartStoreMiddleware using PKCS#11 for key management.
+// Uses envelope encryption where each part has its own DEK encrypted with the PKCS#11 master key.
+// The master key never leaves the HSM.
+// modulePath: path to the PKCS#11 library (e.g., "/usr/lib64/pkcs11/libsofthsm2.so")
+// tokenLabel: label of the token containing the key
+// pin: PIN to access the token
+// keyLabel: label of the AES key to use for encryption/decryption
+func NewWithPKCS11(modulePath, tokenLabel, pin, keyLabel string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+	// Create PKCS#11 AEAD
+	pkcs11AEAD, err := pkcs11.NewAEAD(modulePath, tokenLabel, pin, keyLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	// Test key availability
+	if err := testKeyAvailability(pkcs11AEAD, KeyTypePKCS11); err != nil {
+		pkcs11AEAD.Close()
+		return nil, err
+	}
+
+	return &TinkEncryptionPartStoreMiddleware{
+		masterAEAD:     pkcs11AEAD,
+		innerPartStore: innerPartStore,
+		keyType:        KeyTypePKCS11,
+		keyURI:         fmt.Sprintf("pkcs11://%s/%s", tokenLabel, keyLabel),
+		mlkemKey:       mlkemKey,
+		tracer:         otel.Tracer("internal/storage/metadatapart/partstore/middlewares/encryption/tink"),
+	}, nil
+}
+
 func (mw *TinkEncryptionPartStoreMiddleware) Start(ctx context.Context) error {
 	return mw.innerPartStore.Start(ctx)
 }
@@ -390,6 +422,16 @@ func (mw *TinkEncryptionPartStoreMiddleware) Stop(ctx context.Context) error {
 			if err := tpmAEAD.Close(); err != nil {
 				// Log error but continue with stopping inner part store
 				fmt.Printf("Warning: failed to close TPM AEAD: %v\n", err)
+			}
+		}
+	}
+
+	// If using PKCS#11, close the PKCS#11 resources
+	if mw.keyType == KeyTypePKCS11 {
+		if pkcs11AEAD, ok := mw.masterAEAD.(*pkcs11.AEAD); ok {
+			if err := pkcs11AEAD.Close(); err != nil {
+				// Log error but continue with stopping inner part store
+				fmt.Printf("Warning: failed to close PKCS#11 AEAD: %v\n", err)
 			}
 		}
 	}
