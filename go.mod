@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.21.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.95.1
 	github.com/aws/smithy-go v1.24.0
-	github.com/cloudflare/circl v1.6.2
+	github.com/cloudflare/circl v1.6.3
 	github.com/docker/go-connections v0.6.0
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/go-tpm v0.9.8
