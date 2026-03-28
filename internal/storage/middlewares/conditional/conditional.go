@@ -210,3 +210,27 @@ func (csm *conditionalStorageMiddleware) ListParts(ctx context.Context, bucketNa
 	storage := csm.lookupStorage(bucketName)
 	return storage.ListParts(ctx, bucketName, key, uploadId, opts)
 }
+
+func (csm *conditionalStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketWebsiteConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+}

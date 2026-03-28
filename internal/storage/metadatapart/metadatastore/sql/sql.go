@@ -12,11 +12,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -139,6 +139,64 @@ func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketN
 	}
 
 	return &bucket, nil
+}
+
+func (sms *sqlMetadataStore) GetBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.WebsiteConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	if bucketEntity.WebsiteIndexDocumentSuffix == nil {
+		return nil, metadatastore.ErrNoSuchWebsiteConfiguration
+	}
+
+	return &metadatastore.WebsiteConfiguration{
+		IndexDocumentSuffix: *bucketEntity.WebsiteIndexDocumentSuffix,
+		ErrorDocumentKey:    bucketEntity.WebsiteErrorDocumentKey,
+	}, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.WebsiteConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.WebsiteIndexDocumentSuffix = &config.IndexDocumentSuffix
+	bucketEntity.WebsiteErrorDocumentKey = config.ErrorDocumentKey
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.WebsiteIndexDocumentSuffix = nil
+	bucketEntity.WebsiteErrorDocumentKey = nil
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
 func determineCommonPrefix(prefix, key, delimiter string) *string {

@@ -35,11 +35,11 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 		lastHash:    lastHash,
 		hashBuffer:  initialHashBuffer,
 	}
-	
+
 	if m.hashBuffer == nil {
 		m.hashBuffer = make([][]byte, 0, auditlog.GroundingBlockSize)
 	}
-	
+
 	isZero := true
 	for _, b := range lastHash {
 		if b != 0 {
@@ -47,7 +47,7 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 			break
 		}
 	}
-	
+
 	if isZero {
 		pithosHash := sha512.Sum512([]byte("pithos"))
 		genesis := &auditlog.Entry{
@@ -62,7 +62,7 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 			m.lastHash = genesis.Hash
 		}
 	}
-	
+
 	return m
 }
 
@@ -97,14 +97,14 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	entry.PreviousHash = m.lastHash
 	_ = entry.Sign(m.signer)
 
 	if err := m.sink.WriteEntry(entry); err == nil {
 		m.lastHash = entry.Hash
 		m.hashBuffer = append(m.hashBuffer, entry.Hash)
-		
+
 		if len(m.hashBuffer) >= auditlog.GroundingBlockSize {
 			m.emitGrounding()
 		}
@@ -113,10 +113,10 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 
 func (m *AuditLogMiddleware) emitGrounding() {
 	root := auditlog.CalculateMerkleRoot(m.hashBuffer)
-	
+
 	sigEd, _ := m.signer.Sign(root)
 	sigMl, _ := m.mlDsaSigner.Sign(root)
-	
+
 	grounding := &auditlog.Entry{
 		Version:   auditlog.CurrentVersion,
 		Timestamp: time.Now().UTC(),
@@ -124,11 +124,11 @@ func (m *AuditLogMiddleware) emitGrounding() {
 		Details: &auditlog.GroundingDetails{
 			MerkleRootHash:   root,
 			SignatureEd25519: sigEd,
-			SignatureMlDsa87:   sigMl,
+			SignatureMlDsa87: sigMl,
 		},
 		PreviousHash: m.lastHash,
 	}
-	
+
 	_ = grounding.Sign(m.signer)
 	if err := m.sink.WriteEntry(grounding); err == nil {
 		m.lastHash = grounding.Hash
@@ -171,6 +171,27 @@ func (m *AuditLogMiddleware) HeadBucket(ctx context.Context, bucketName storage.
 	bucket, err := m.next.HeadBucket(ctx, bucketName)
 	m.log(ctx, auditlog.OpHeadBucket, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
 	return bucket, err
+}
+
+func (m *AuditLogMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	m.log(ctx, auditlog.OpGetBucketWebsite, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	config, err := m.next.GetBucketWebsiteConfiguration(ctx, bucketName)
+	m.log(ctx, auditlog.OpGetBucketWebsite, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return config, err
+}
+
+func (m *AuditLogMiddleware) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	m.log(ctx, auditlog.OpPutBucketWebsite, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	err := m.next.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+	m.log(ctx, auditlog.OpPutBucketWebsite, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return err
+}
+
+func (m *AuditLogMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	m.log(ctx, auditlog.OpDeleteBucketWebsite, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	err := m.next.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	m.log(ctx, auditlog.OpDeleteBucketWebsite, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return err
 }
 
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {

@@ -18,8 +18,10 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id        *ulid.ULID
-	Name      storage.BucketName
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Id                         *ulid.ULID
+	Name                       storage.BucketName
+	WebsiteIndexDocumentSuffix *string
+	WebsiteErrorDocumentKey    *string
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }

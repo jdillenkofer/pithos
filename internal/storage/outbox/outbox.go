@@ -545,3 +545,24 @@ func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.Bucke
 
 	return os.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }
+
+func (os *outboxStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	return os.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	return os.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+}
+
+func (os *outboxStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	return os.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+}

@@ -175,6 +175,7 @@ var ErrBadDigest error = errors.New("BadDigest")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
+var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
 
 type ListObjectsOptions struct {
 	Prefix        *string
@@ -208,6 +209,17 @@ type BucketStore interface {
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
 }
 
+type WebsiteConfiguration struct {
+	IndexDocumentSuffix string
+	ErrorDocumentKey    *string
+}
+
+type BucketWebsiteStore interface {
+	GetBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*WebsiteConfiguration, error)
+	PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *WebsiteConfiguration) error
+	DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
 type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
@@ -228,6 +240,7 @@ type MetadataStore interface {
 	lifecycle.Manager
 	MaintenanceStore
 	BucketStore
+	BucketWebsiteStore
 	ObjectStore
 	MultipartStore
 }

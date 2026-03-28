@@ -255,6 +255,51 @@ func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketNa
 	return mBucket, err
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	config, err := psm.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketWebsite"}).Inc()
+		return nil, err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketWebsite"}).Inc()
+
+	return config, nil
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	err := psm.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketWebsite"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketWebsite"}).Inc()
+
+	return nil
+}
+
+func (psm *prometheusStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	err := psm.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketWebsite"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketWebsite"}).Inc()
+
+	return nil
+}
+
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjects")
 	defer span.End()

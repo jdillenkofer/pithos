@@ -22,6 +22,9 @@ const (
 	OperationPutObject               = "PutObject"
 	OperationAbortMultipartUpload    = "AbortMultipartUpload"
 	OperationDeleteObject            = "DeleteObject"
+	OperationGetBucketWebsite        = "GetBucketWebsite"
+	OperationPutBucketWebsite        = "PutBucketWebsite"
+	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"
 )
 
 type Request struct {

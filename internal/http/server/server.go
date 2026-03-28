@@ -47,9 +47,9 @@ func SetupServer(credentials []settings.Credentials, region string, baseEndpoint
 	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	mux.HandleFunc("GET /", server.listBucketsHandler)
 	mux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsHandler)
-	mux.HandleFunc("PUT /{bucket}", server.createBucketHandler)
-	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketHandler)
+	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
+	mux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteHandler)
+	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
@@ -114,6 +114,7 @@ const maxUploadsQuery = "max-uploads"
 const maxPartsQuery = "max-parts"
 const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
+const websiteQuery = "website"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -287,6 +288,38 @@ type ListPartsResult struct {
 	ChecksumType      *string `xml:"ChecksumType"`
 }
 
+type WebsiteConfigurationIndexDocument struct {
+	Suffix string `xml:"Suffix"`
+}
+
+type WebsiteConfigurationErrorDocument struct {
+	Key string `xml:"Key"`
+}
+
+type WebsiteConfigurationRedirectAllRequestsTo struct {
+	HostName string `xml:"HostName"`
+	Protocol string `xml:"Protocol,omitempty"`
+}
+
+type WebsiteConfigurationRoutingRule struct {
+	// We only need to detect presence, not parse contents
+}
+
+type WebsiteConfigurationRequest struct {
+	XMLName               xml.Name                                   `xml:"WebsiteConfiguration"`
+	IndexDocument         *WebsiteConfigurationIndexDocument         `xml:"IndexDocument"`
+	ErrorDocument         *WebsiteConfigurationErrorDocument         `xml:"ErrorDocument"`
+	RedirectAllRequestsTo *WebsiteConfigurationRedirectAllRequestsTo `xml:"RedirectAllRequestsTo"`
+	RoutingRules          []WebsiteConfigurationRoutingRule          `xml:"RoutingRules>RoutingRule"`
+}
+
+type WebsiteConfigurationResponse struct {
+	XMLName       xml.Name                           `xml:"WebsiteConfiguration"`
+	Xmlns         string                             `xml:"xmlns,attr"`
+	IndexDocument *WebsiteConfigurationIndexDocument `xml:"IndexDocument"`
+	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
+}
+
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"Error"`
 	Code      string   `xml:"Code"`
@@ -416,6 +449,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 409
 	case storage.ErrNoSuchKey:
 		statusCode = 404
+	case storage.ErrNoSuchWebsiteConfiguration:
+		statusCode = 404
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
 	default:
@@ -509,8 +544,12 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) listObjectsOrListMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(websiteQuery) {
+		s.getBucketWebsiteHandler(w, r)
+		return
+	}
 	if query.Has(uploadsQuery) {
 		s.listMultipartUploadsHandler(w, r)
 		return
@@ -767,6 +806,15 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
+func (s *Server) createBucketOrPutBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has(websiteQuery) {
+		s.putBucketWebsiteHandler(w, r)
+		return
+	}
+	s.createBucketHandler(w, r)
+}
+
 func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.createBucketHandler")
 	defer span.End()
@@ -791,6 +839,15 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders := w.Header()
 	responseHeaders.Set(locationHeader, bucketName.String())
 	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketOrDeleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has(websiteQuery) {
+		s.deleteBucketWebsiteHandler(w, r)
+		return
+	}
+	s.deleteBucketHandler(w, r)
 }
 
 func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
@@ -1525,4 +1582,129 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 
 	// DeleteObject
 	s.deleteObjectHandler(w, r)
+}
+
+func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketWebsiteHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketWebsite, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	slog.Info("Getting bucket website configuration", "bucket", bucketName.String())
+	config, err := s.storage.GetBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := WebsiteConfigurationResponse{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+		IndexDocument: &WebsiteConfigurationIndexDocument{
+			Suffix: config.IndexDocumentSuffix,
+		},
+	}
+	if config.ErrorDocumentKey != nil {
+		response.ErrorDocument = &WebsiteConfigurationErrorDocument{
+			Key: *config.ErrorDocumentKey,
+		}
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketWebsiteHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketWebsite, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request WebsiteConfigurationRequest
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// Reject unsupported features
+	if request.RedirectAllRequestsTo != nil {
+		handleError(storage.ErrNotImplemented, w, r)
+		return
+	}
+	if len(request.RoutingRules) > 0 {
+		handleError(storage.ErrNotImplemented, w, r)
+		return
+	}
+
+	// Validate IndexDocument is present
+	if request.IndexDocument == nil || request.IndexDocument.Suffix == "" {
+		handleError(fmt.Errorf("InvalidArgument"), w, r)
+		return
+	}
+
+	config := &storage.WebsiteConfiguration{
+		IndexDocumentSuffix: request.IndexDocument.Suffix,
+	}
+	if request.ErrorDocument != nil && request.ErrorDocument.Key != "" {
+		config.ErrorDocumentKey = &request.ErrorDocument.Key
+	}
+
+	slog.Info("Putting bucket website configuration", "bucket", bucketName.String())
+	err = s.storage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketWebsiteHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketWebsite, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	slog.Info("Deleting bucket website configuration", "bucket", bucketName.String())
+	err = s.storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
 }
