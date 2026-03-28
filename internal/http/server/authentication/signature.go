@@ -593,11 +593,38 @@ type Credentials struct {
 	SecretAccessKey string
 }
 
+type IsAuthenticatedContextKey struct{}
+
+func isAnonymousRequest(r *http.Request) bool {
+	authorizationHeader := r.Header.Get("Authorization")
+	if authorizationHeader != "" {
+		return false
+	}
+	query := r.URL.Query()
+	credential := query.Get("X-Amz-Credential")
+	if credential != "" {
+		return false
+	}
+	return true
+}
+
 func MakeSignatureMiddleware(validCredentials []Credentials, region string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// If the request has no authentication credentials at all,
+		// let it through as an anonymous request. The server handlers
+		// will check bucket policies to decide whether to allow access.
+		if isAnonymousRequest(r) {
+			ctx := context.WithValue(r.Context(), IsAuthenticatedContextKey{}, false)
+			r = r.Clone(ctx)
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		usedAccessKeyId, isAuthenticated := checkAuthentication(validCredentials, region, r)
 		if isAuthenticated {
-			r = r.Clone(context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId))
+			ctx := context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId)
+			ctx = context.WithValue(ctx, IsAuthenticatedContextKey{}, true)
+			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
 			w.WriteHeader(401)

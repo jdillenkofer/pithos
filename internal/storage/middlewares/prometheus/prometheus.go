@@ -300,6 +300,51 @@ func (psm *prometheusStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx con
 	return nil
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketPolicy")
+	defer span.End()
+
+	policy, err := psm.innerStorage.GetBucketPolicy(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketPolicy"}).Inc()
+		return "", err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketPolicy"}).Inc()
+
+	return policy, nil
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketPolicy")
+	defer span.End()
+
+	err := psm.innerStorage.PutBucketPolicy(ctx, bucketName, policy)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketPolicy"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketPolicy"}).Inc()
+
+	return nil
+}
+
+func (psm *prometheusStorageMiddleware) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucketPolicy")
+	defer span.End()
+
+	err := psm.innerStorage.DeleteBucketPolicy(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketPolicy"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketPolicy"}).Inc()
+
+	return nil
+}
+
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjects")
 	defer span.End()

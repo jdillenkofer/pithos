@@ -188,9 +188,9 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 func isReadOnly(operation string) bool {
 	var isReadOnly bool
 	switch operation {
-	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject:
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketPolicy:
 		isReadOnly = true
-	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject:
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketPolicy, authorization.OperationDeleteBucketPolicy:
 		isReadOnly = false
 	}
 	return isReadOnly

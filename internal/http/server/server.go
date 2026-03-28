@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -47,9 +48,9 @@ func SetupServer(credentials []settings.Credentials, region string, baseEndpoint
 	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	mux.HandleFunc("GET /", server.listBucketsHandler)
 	mux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
-	mux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteHandler)
-	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteHandler)
+	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteOrGetBucketPolicyHandler)
+	mux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteOrPutBucketPolicyHandler)
+	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteOrDeleteBucketPolicyHandler)
 	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
@@ -115,6 +116,7 @@ const maxPartsQuery = "max-parts"
 const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
+const policyQuery = "policy"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -320,6 +322,76 @@ type WebsiteConfigurationResponse struct {
 	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
 }
 
+// Bucket policy types for JSON parsing
+type bucketPolicyDocument struct {
+	Version   string                  `json:"Version"`
+	Statement []bucketPolicyStatement `json:"Statement"`
+}
+
+type bucketPolicyStatement struct {
+	Sid       string      `json:"Sid,omitempty"`
+	Effect    string      `json:"Effect"`
+	Principal interface{} `json:"Principal"`
+	Action    interface{} `json:"Action"`
+	Resource  interface{} `json:"Resource"`
+}
+
+var ErrMalformedPolicy = fmt.Errorf("MalformedPolicy")
+
+// validateBucketPolicy validates that the policy matches the public-read pattern only.
+// The only supported policy is:
+//
+//	{
+//	  "Version": "2012-10-17",
+//	  "Statement": [{
+//	    "Effect": "Allow",
+//	    "Principal": "*",
+//	    "Action": "s3:GetObject",
+//	    "Resource": "arn:aws:s3:::<bucket>/*"
+//	  }]
+//	}
+func validateBucketPolicy(policy string, bucketName string) error {
+	var doc bucketPolicyDocument
+	if err := json.Unmarshal([]byte(policy), &doc); err != nil {
+		return ErrMalformedPolicy
+	}
+
+	if doc.Version != "2012-10-17" {
+		return ErrMalformedPolicy
+	}
+
+	if len(doc.Statement) != 1 {
+		return storage.ErrNotImplemented
+	}
+
+	stmt := doc.Statement[0]
+
+	if stmt.Effect != "Allow" {
+		return storage.ErrNotImplemented
+	}
+
+	// Validate Principal is "*"
+	principalStr, ok := stmt.Principal.(string)
+	if !ok || principalStr != "*" {
+		return storage.ErrNotImplemented
+	}
+
+	// Validate Action is "s3:GetObject"
+	actionStr, ok := stmt.Action.(string)
+	if !ok || actionStr != "s3:GetObject" {
+		return storage.ErrNotImplemented
+	}
+
+	// Validate Resource is "arn:aws:s3:::<bucket>/*"
+	expectedResource := fmt.Sprintf("arn:aws:s3:::%s/*", bucketName)
+	resourceStr, ok := stmt.Resource.(string)
+	if !ok || resourceStr != expectedResource {
+		return storage.ErrNotImplemented
+	}
+
+	return nil
+}
+
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"Error"`
 	Code      string   `xml:"Code"`
@@ -451,6 +523,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 404
 	case storage.ErrNoSuchWebsiteConfiguration:
 		statusCode = 404
+	case storage.ErrNoSuchBucketPolicy:
+		statusCode = 404
+	case ErrMalformedPolicy:
+		statusCode = 400
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
 	default:
@@ -469,6 +545,30 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
+	// Check if this is an anonymous (unauthenticated) request
+	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
+	if !isAuthenticated {
+		// For anonymous requests, check if the bucket has a public-read policy
+		// that allows this operation
+		if bucket != nil && isPublicPolicyOperation(operation) {
+			bucketName, err := storage.NewBucketName(*bucket)
+			if err != nil {
+				handleError(err, w, r)
+				return true
+			}
+			_, err = s.storage.GetBucketPolicy(ctx, bucketName)
+			if err == nil {
+				// Bucket has a policy (which must be a valid public-read policy,
+				// since that's the only policy we accept in PutBucketPolicy).
+				// Allow the operation.
+				return false
+			}
+		}
+		// Anonymous request without a matching public-read policy: deny
+		w.WriteHeader(401)
+		return true
+	}
+
 	accessKeyId, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
 	request := &authorization.Request{
 		Operation: operation,
@@ -490,6 +590,17 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		return true
 	}
 	return false
+}
+
+// isPublicPolicyOperation returns true for operations that can be allowed
+// by a public-read bucket policy (s3:GetObject).
+func isPublicPolicyOperation(operation string) bool {
+	switch operation {
+	case authorization.OperationGetObject, authorization.OperationHeadObject:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
@@ -544,10 +655,14 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteOrGetBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(policyQuery) {
+		s.getBucketPolicyHandler(w, r)
 		return
 	}
 	if query.Has(uploadsQuery) {
@@ -806,10 +921,14 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
-func (s *Server) createBucketOrPutBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createBucketOrPutBucketWebsiteOrPutBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(websiteQuery) {
 		s.putBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(policyQuery) {
+		s.putBucketPolicyHandler(w, r)
 		return
 	}
 	s.createBucketHandler(w, r)
@@ -841,10 +960,14 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) deleteBucketOrDeleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) deleteBucketOrDeleteBucketWebsiteOrDeleteBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(websiteQuery) {
 		s.deleteBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(policyQuery) {
+		s.deleteBucketPolicyHandler(w, r)
 		return
 	}
 	s.deleteBucketHandler(w, r)
@@ -1702,6 +1825,97 @@ func (s *Server) deleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Reque
 
 	slog.Info("Deleting bucket website configuration", "bucket", bucketName.String())
 	err = s.storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) getBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketPolicyHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketPolicy, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	slog.Info("Getting bucket policy", "bucket", bucketName.String())
+	policy, err := s.storage.GetBucketPolicy(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, "application/json")
+	w.WriteHeader(200)
+	w.Write([]byte(policy))
+}
+
+func (s *Server) putBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketPolicyHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketPolicy, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	policy := string(data)
+
+	// Validate the policy: only accept the public-read pattern
+	err = validateBucketPolicy(policy, bucketName.String())
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	slog.Info("Putting bucket policy", "bucket", bucketName.String())
+	err = s.storage.PutBucketPolicy(ctx, bucketName, policy)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) deleteBucketPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketPolicyHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketPolicy, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	slog.Info("Deleting bucket policy", "bucket", bucketName.String())
+	err = s.storage.DeleteBucketPolicy(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return

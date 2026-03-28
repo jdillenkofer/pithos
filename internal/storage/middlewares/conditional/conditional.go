@@ -234,3 +234,27 @@ func (csm *conditionalStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx co
 	storage := csm.lookupStorage(bucketName)
 	return storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
+
+func (csm *conditionalStorageMiddleware) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketPolicy")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketPolicy(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketPolicy")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketPolicy(ctx, bucketName, policy)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteBucketPolicy")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.DeleteBucketPolicy(ctx, bucketName)
+}

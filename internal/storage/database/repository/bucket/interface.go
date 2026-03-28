@@ -22,6 +22,7 @@ type Entity struct {
 	Name                       storage.BucketName
 	WebsiteIndexDocumentSuffix *string
 	WebsiteErrorDocumentKey    *string
+	Policy                     *string
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }

@@ -194,6 +194,27 @@ func (m *AuditLogMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Contex
 	return err
 }
 
+func (m *AuditLogMiddleware) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	m.log(ctx, auditlog.OpGetBucketPolicy, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	policy, err := m.next.GetBucketPolicy(ctx, bucketName)
+	m.log(ctx, auditlog.OpGetBucketPolicy, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return policy, err
+}
+
+func (m *AuditLogMiddleware) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	m.log(ctx, auditlog.OpPutBucketPolicy, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	err := m.next.PutBucketPolicy(ctx, bucketName, policy)
+	m.log(ctx, auditlog.OpPutBucketPolicy, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return err
+}
+
+func (m *AuditLogMiddleware) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	m.log(ctx, auditlog.OpDeleteBucketPolicy, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	err := m.next.DeleteBucketPolicy(ctx, bucketName)
+	m.log(ctx, auditlog.OpDeleteBucketPolicy, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return err
+}
+
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	m.log(ctx, auditlog.OpListObjects, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
 	res, err := m.next.ListObjects(ctx, bucketName, opts)
