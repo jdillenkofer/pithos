@@ -60,6 +60,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
+	websiteDomainAccessor := registerStringFlag(serveCommand, "websiteDomain", defaultWebsiteDomain, "the domain for s3 website hosting (e.g. s3-website.localhost)")
 	bindAddressAccessor := registerStringFlag(serveCommand, "bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
@@ -81,6 +82,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		credentials:           nil, // Credentials are not set via command line args
 		region:                regionAccessor(),
 		domain:                domainAccessor(),
+		websiteDomain:         websiteDomainAccessor(),
 		bindAddress:           bindAddressAccessor(),
 		port:                  portAccessor(),
 		monitoringPort:        monitoringPortAccessor(),

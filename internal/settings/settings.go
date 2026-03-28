@@ -17,6 +17,7 @@ const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultOtelEnabled = false
+const defaultWebsiteDomain = "s3-website.localhost"
 const defaultOtelExporter = "otlp"
 const defaultOtelEndpoint = "localhost:4318"
 
@@ -32,6 +33,7 @@ type Settings struct {
 	credentials           []Credentials `mergable:""`
 	region                *string       `mergable:""`
 	domain                *string       `mergable:""`
+	websiteDomain         *string       `mergable:""`
 	bindAddress           *string       `mergable:""`
 	port                  *int          `mergable:""`
 	monitoringPort        *int          `mergable:""`
@@ -71,6 +73,10 @@ func (s *Settings) Region() string {
 
 func (s *Settings) Domain() string {
 	return valueOrDefault(s.domain, defaultDomain)
+}
+
+func (s *Settings) WebsiteDomain() string {
+	return valueOrDefault(s.websiteDomain, defaultWebsiteDomain)
 }
 
 func (s *Settings) BindAddress() string {

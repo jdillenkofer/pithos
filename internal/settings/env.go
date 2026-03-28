@@ -11,6 +11,7 @@ const envKeyPrefix = "PITHOS"
 const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
+const websiteDomainEnvKey = envKeyPrefix + "_WEBSITE_DOMAIN"
 const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
@@ -81,6 +82,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
+	websiteDomain := getStringFromEnv(websiteDomainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
 	port := getIntFromEnv(portEnvKey)
 	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
@@ -97,6 +99,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		credentials:           credentials,
 		region:                region,
 		domain:                domain,
+		websiteDomain:         websiteDomain,
 		bindAddress:           bindAddress,
 		port:                  port,
 		monitoringPort:        monitoringPort,

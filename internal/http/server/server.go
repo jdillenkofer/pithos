@@ -38,38 +38,64 @@ type Server struct {
 	tracer            trace.Tracer
 }
 
-func SetupServer(credentials []settings.Credentials, region string, baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
+func SetupServer(credentials []settings.Credentials, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
 		storage:           storage,
 		tracer:            otel.Tracer("internal/http/server"),
 	}
-	mux := http.NewServeMux()
+	apiMux := http.NewServeMux()
 	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
-	mux.HandleFunc("GET /", server.listBucketsHandler)
-	mux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	mux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteOrGetBucketPolicyHandler)
-	mux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteOrPutBucketPolicyHandler)
-	mux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteOrDeleteBucketPolicyHandler)
-	mux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
-	mux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
-	mux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
-	mux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
-	mux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
-	var rootHandler http.Handler = mux
-	rootHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(baseEndpoint, rootHandler)
+	apiMux.HandleFunc("GET /", server.listBucketsHandler)
+	apiMux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
+	apiMux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteOrGetBucketPolicyHandler)
+	apiMux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteOrPutBucketPolicyHandler)
+	apiMux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteOrDeleteBucketPolicyHandler)
+	apiMux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
+	apiMux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
+	apiMux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
+	apiMux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
+	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
+	var apiHandler http.Handler = apiMux
+	apiHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
+
+	websiteMux := http.NewServeMux()
+	websiteMux.HandleFunc("GET /{bucket}/{key...}", server.serveWebsiteGetObject)
+	websiteMux.HandleFunc("HEAD /{bucket}/{key...}", server.serveWebsiteHeadObject)
+	websiteMux.HandleFunc("GET /{bucket}", server.serveWebsiteGetObject)
+	websiteMux.HandleFunc("HEAD /{bucket}", server.serveWebsiteHeadObject)
+	var websiteHandler http.Handler = websiteMux
+
+	fallbackHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		// Strip port if present
+		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
+			if bracketIdx := strings.LastIndex(host, "]"); bracketIdx < colonIdx {
+				host = host[:colonIdx]
+			}
+		}
+		r.URL.Path = "/" + host + r.URL.Path
+		slog.Debug("Custom domain website request", "host", r.Host, "bucket", host, "path", r.URL.Path)
+		websiteHandler.ServeHTTP(w, r)
+	})
+
+	// Set up handler with hostname-based routing.
+	rootHandler := middlewares.MakeHostnameRoutingHandler(apiEndpoint, apiHandler, websiteEndpoint, websiteHandler, fallbackHandler)
+
+	var authCreds []authentication.Credentials
 	if credentials != nil {
 		slog.Info("Authentication is enabled")
-		authCredentials := sliceutils.Map(func(cred settings.Credentials) authentication.Credentials {
+		authCreds = sliceutils.Map(func(cred settings.Credentials) authentication.Credentials {
 			return authentication.Credentials{
 				AccessKeyId:     cred.AccessKeyId,
 				SecretAccessKey: cred.SecretAccessKey,
 			}
 		}, credentials)
-		rootHandler = authentication.MakeSignatureMiddleware(authCredentials, region, rootHandler)
+		rootHandler = authentication.MakeSignatureMiddleware(authCreds, region, rootHandler)
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
 	}
+
 	return rootHandler
 }
 
@@ -556,12 +582,12 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 				handleError(err, w, r)
 				return true
 			}
-			_, err = s.storage.GetBucketPolicy(ctx, bucketName)
+			policy, err := s.storage.GetBucketPolicy(ctx, bucketName)
 			if err == nil {
-				// Bucket has a policy (which must be a valid public-read policy,
-				// since that's the only policy we accept in PutBucketPolicy).
-				// Allow the operation.
-				return false
+				// Validate that the stored policy is actually a public-read policy.
+				if validateBucketPolicy(policy, bucketName.String()) == nil {
+					return false
+				}
 			}
 		}
 		// Anonymous request without a matching public-read policy: deny
@@ -1921,4 +1947,230 @@ func (s *Server) deleteBucketPolicyHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(204)
+}
+
+// websiteCheckBucket validates that the bucket has a website configuration and
+// a public-read policy. It returns the website configuration on success, or
+// writes an error response and returns nil on failure.
+func (s *Server) websiteCheckBucket(ctx context.Context, w http.ResponseWriter, bucketName storage.BucketName) *storage.WebsiteConfiguration {
+	websiteConfig, err := s.storage.GetBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchWebsiteConfiguration {
+			s.writeHTMLError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration",
+				fmt.Sprintf("The specified bucket does not have a website configuration: %s", bucketName.String()))
+			return nil
+		}
+		if err == storage.ErrNoSuchBucket {
+			s.writeHTMLError(w, http.StatusNotFound, "NoSuchBucket",
+				fmt.Sprintf("The specified bucket does not exist: %s", bucketName.String()))
+			return nil
+		}
+		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		return nil
+	}
+
+	// Check that the bucket has a public-read policy.
+	// Website hosting only serves content from buckets that are publicly accessible.
+	// On AWS, the website endpoint returns 403 Forbidden for buckets without a
+	// public-read policy (or equivalent ACL).
+	policy, err := s.storage.GetBucketPolicy(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchBucketPolicy {
+			s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+			return nil
+		}
+		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		return nil
+	}
+
+	// Validate that the stored policy is actually a public-read policy.
+	if err := validateBucketPolicy(policy, bucketName.String()); err != nil {
+		s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+		return nil
+	}
+
+	return websiteConfig
+}
+
+// websiteResolveKey resolves the object key for a website request,
+// appending the index document suffix when the key is empty or ends with "/".
+func websiteResolveKey(keyStr string, websiteConfig *storage.WebsiteConfiguration) string {
+	if keyStr == "" || strings.HasSuffix(keyStr, "/") {
+		return keyStr + websiteConfig.IndexDocumentSuffix
+	}
+	return keyStr
+}
+
+func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.serveWebsiteGetObject")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
+		return
+	}
+
+	websiteConfig := s.websiteCheckBucket(ctx, w, bucketName)
+	if websiteConfig == nil {
+		return
+	}
+
+	resolvedKey := websiteResolveKey(r.PathValue(keyPath), websiteConfig)
+	objectKey, err := storage.NewObjectKey(resolvedKey)
+	if err != nil {
+		s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
+			fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
+		return
+	}
+
+	slog.Info("Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
+
+	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil)
+	if err != nil {
+		if err == storage.ErrNoSuchKey {
+			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
+				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
+			return
+		}
+		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		return
+	}
+
+	defer func() {
+		for _, reader := range readers {
+			reader.Close()
+		}
+	}()
+
+	contentType := "application/octet-stream"
+	if object.ContentType != nil {
+		contentType = *object.ContentType
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, contentType)
+	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
+	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	w.WriteHeader(http.StatusOK)
+
+	writer := ioutils.NewTracingWriter(ctx, s.tracer, "WebsiteGetObject", w)
+	ioutils.CopyN(writer, readers[0], object.Size)
+}
+
+func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.serveWebsiteHeadObject")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
+		return
+	}
+
+	websiteConfig := s.websiteCheckBucket(ctx, w, bucketName)
+	if websiteConfig == nil {
+		return
+	}
+
+	resolvedKey := websiteResolveKey(r.PathValue(keyPath), websiteConfig)
+	objectKey, err := storage.NewObjectKey(resolvedKey)
+	if err != nil {
+		s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
+			fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
+		return
+	}
+
+	slog.Info("Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
+
+	object, err := s.storage.HeadObject(ctx, bucketName, objectKey)
+	if err != nil {
+		if err == storage.ErrNoSuchKey {
+			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
+				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
+			return
+		}
+		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		return
+	}
+
+	responseHeaders := w.Header()
+	contentType := "application/octet-stream"
+	if object.ContentType != nil {
+		contentType = *object.ContentType
+	}
+	responseHeaders.Set(contentTypeHeader, contentType)
+	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
+	gmtTimeLoc := time.FixedZone("GMT", 0)
+	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
+	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	w.WriteHeader(http.StatusOK)
+}
+
+// serveErrorDocument tries to serve the configured error document for the bucket.
+// If no error document is configured or the error document itself cannot be found,
+// it falls back to a default HTML error page.
+func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
+	bucketName storage.BucketName, config *storage.WebsiteConfiguration,
+	statusCode int, code string, message string) {
+
+	if config.ErrorDocumentKey == nil {
+		s.writeHTMLError(w, statusCode, code, message)
+		return
+	}
+
+	ctx := r.Context()
+	errorKey, err := storage.NewObjectKey(*config.ErrorDocumentKey)
+	if err != nil {
+		s.writeHTMLError(w, statusCode, code, message)
+		return
+	}
+
+	object, readers, err := s.storage.GetObject(ctx, bucketName, errorKey, nil)
+	if err != nil {
+		// Error document not found — fall back to default HTML error
+		s.writeHTMLError(w, statusCode, code, message)
+		return
+	}
+
+	defer func() {
+		for _, reader := range readers {
+			reader.Close()
+		}
+	}()
+
+	contentType := "text/html"
+	if object.ContentType != nil {
+		contentType = *object.ContentType
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, contentType)
+	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	w.WriteHeader(statusCode)
+
+	if r.Method == http.MethodHead {
+		return
+	}
+
+	io.Copy(w, readers[0])
+}
+
+// writeHTMLError writes a simple HTML error response, similar to how AWS S3
+// website hosting returns errors.
+func (s *Server) writeHTMLError(w http.ResponseWriter, statusCode int, code string, message string) {
+	w.Header().Set(contentTypeHeader, "text/html; charset=utf-8")
+	w.WriteHeader(statusCode)
+	body := fmt.Sprintf(`<html>
+<head><title>%d %s</title></head>
+<body>
+<h1>%d %s</h1>
+<ul>
+<li>Code: %s</li>
+<li>Message: %s</li>
+</ul>
+</body>
+</html>`, statusCode, http.StatusText(statusCode), statusCode, http.StatusText(statusCode), code, message)
+	w.Write([]byte(body))
 }
