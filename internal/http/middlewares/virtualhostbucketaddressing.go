@@ -6,12 +6,19 @@ import (
 )
 
 func MakeVirtualHostBucketAddressingMiddleware(baseEndpoint string, next http.Handler) http.Handler {
+	endpointSuffix := "." + baseEndpoint
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostname := r.Host
-		if hostname != baseEndpoint {
-			endpointSplit := strings.SplitN(hostname, ".", 2)
-			if len(endpointSplit) == 2 {
-				bucket := endpointSplit[0]
+		// Strip port if present (e.g. "test.s3.localhost:9000" → "test.s3.localhost")
+		if colonIdx := strings.LastIndex(hostname, ":"); colonIdx != -1 {
+			// Make sure it's not an IPv6 address
+			if bracketIdx := strings.LastIndex(hostname, "]"); bracketIdx < colonIdx {
+				hostname = hostname[:colonIdx]
+			}
+		}
+		if hostname != baseEndpoint && strings.HasSuffix(hostname, endpointSuffix) {
+			bucket := strings.TrimSuffix(hostname, endpointSuffix)
+			if bucket != "" {
 				r.URL.Path = strings.TrimSuffix("/"+bucket+r.URL.Path, "/")
 			}
 		}

@@ -166,7 +166,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
 	}
 
-	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), requestAuthorizer, store)
+	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
 		BaseContext: func(net.Listener) context.Context { return ctx },
