@@ -30,6 +30,9 @@ const (
 	OpAbortMultipartUpload    Operation = "AbortMultipartUpload"
 	OpListMultipartUploads    Operation = "ListMultipartUploads"
 	OpListParts               Operation = "ListParts"
+	OpGetBucketWebsite        Operation = "GetBucketWebsite"
+	OpPutBucketWebsite        Operation = "PutBucketWebsite"
+	OpDeleteBucketWebsite     Operation = "DeleteBucketWebsite"
 )
 
 type Phase string

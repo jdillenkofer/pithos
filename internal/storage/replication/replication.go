@@ -302,3 +302,44 @@ func (rs *replicationStorage) ListParts(ctx context.Context, bucketName storage.
 
 	return rs.primaryStorage.ListParts(ctx, bucketName, key, uploadId, opts)
 }
+
+func (rs *replicationStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	return rs.primaryStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	err := rs.primaryStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	err := rs.primaryStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -299,3 +299,24 @@ func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.Bucket
 	}
 	return listPartsResult, nil
 }
+
+func (cs *CacheStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
+}
+
+func (cs *CacheStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+}
+
+func (cs *CacheStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+}

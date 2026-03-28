@@ -17,9 +17,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
@@ -197,6 +197,75 @@ func (mbs *metadataPartStorage) HeadBucket(ctx context.Context, bucketName stora
 
 	b := convertBucket(*mBucket)
 	return &b, err
+}
+
+func (mbs *metadataPartStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := mbs.metadataStore.GetBucketWebsiteConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return err
+	}
+
+	err = mbs.metadataStore.PutBucketWebsiteConfiguration(ctx, tx, bucketName, config)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return err
+	}
+
+	err = mbs.metadataStore.DeleteBucketWebsiteConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func convertObject(mObject metadatastore.Object) storage.Object {

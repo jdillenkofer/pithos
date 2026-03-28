@@ -483,3 +483,77 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 		}, listPartsResult.Parts),
 	}, nil
 }
+
+func (rs *s3ClientStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketWebsiteConfiguration")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketWebsite(ctx, &s3.GetBucketWebsiteInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchWebsiteConfiguration" {
+		return nil, storage.ErrNoSuchWebsiteConfiguration
+	}
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	config := &storage.WebsiteConfiguration{}
+	if result.IndexDocument != nil && result.IndexDocument.Suffix != nil {
+		config.IndexDocumentSuffix = *result.IndexDocument.Suffix
+	}
+	if result.ErrorDocument != nil && result.ErrorDocument.Key != nil {
+		config.ErrorDocumentKey = result.ErrorDocument.Key
+	}
+	return config, nil
+}
+
+func (rs *s3ClientStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketWebsiteConfiguration")
+	defer span.End()
+
+	websiteConfig := &types.WebsiteConfiguration{
+		IndexDocument: &types.IndexDocument{
+			Suffix: aws.String(config.IndexDocumentSuffix),
+		},
+	}
+	if config.ErrorDocumentKey != nil {
+		websiteConfig.ErrorDocument = &types.ErrorDocument{
+			Key: config.ErrorDocumentKey,
+		}
+	}
+
+	_, err := rs.s3Client.PutBucketWebsite(ctx, &s3.PutBucketWebsiteInput{
+		Bucket:               aws.String(bucketName.String()),
+		WebsiteConfiguration: websiteConfig,
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteBucketWebsiteConfiguration")
+	defer span.End()
+
+	_, err := rs.s3Client.DeleteBucketWebsite(ctx, &s3.DeleteBucketWebsiteInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
