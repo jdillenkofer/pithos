@@ -343,3 +343,44 @@ func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Conte
 	}
 	return nil
 }
+
+func (rs *replicationStorage) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketPolicy")
+	defer span.End()
+
+	return rs.primaryStorage.GetBucketPolicy(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketPolicy")
+	defer span.End()
+
+	err := rs.primaryStorage.PutBucketPolicy(ctx, bucketName, policy)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.PutBucketPolicy(ctx, bucketName, policy)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rs *replicationStorage) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketPolicy")
+	defer span.End()
+
+	err := rs.primaryStorage.DeleteBucketPolicy(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.DeleteBucketPolicy(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -320,3 +320,24 @@ func (cs *CacheStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bu
 
 	return cs.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
+
+func (cs *CacheStorage) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetBucketPolicy")
+	defer span.End()
+
+	return cs.innerStorage.GetBucketPolicy(ctx, bucketName)
+}
+
+func (cs *CacheStorage) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutBucketPolicy")
+	defer span.End()
+
+	return cs.innerStorage.PutBucketPolicy(ctx, bucketName, policy)
+}
+
+func (cs *CacheStorage) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteBucketPolicy")
+	defer span.End()
+
+	return cs.innerStorage.DeleteBucketPolicy(ctx, bucketName)
+}

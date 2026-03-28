@@ -557,3 +557,62 @@ func (rs *s3ClientStorage) DeleteBucketWebsiteConfiguration(ctx context.Context,
 	}
 	return nil
 }
+
+func (rs *s3ClientStorage) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketPolicy")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketPolicy(ctx, &s3.GetBucketPolicyInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucketPolicy" {
+		return "", storage.ErrNoSuchBucketPolicy
+	}
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return "", storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if result.Policy == nil {
+		return "", storage.ErrNoSuchBucketPolicy
+	}
+	return *result.Policy, nil
+}
+
+func (rs *s3ClientStorage) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketPolicy")
+	defer span.End()
+
+	_, err := rs.s3Client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
+		Bucket: aws.String(bucketName.String()),
+		Policy: aws.String(policy),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteBucketPolicy")
+	defer span.End()
+
+	_, err := rs.s3Client.DeleteBucketPolicy(ctx, &s3.DeleteBucketPolicyInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}

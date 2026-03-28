@@ -25,6 +25,9 @@ const (
 	OperationGetBucketWebsite        = "GetBucketWebsite"
 	OperationPutBucketWebsite        = "PutBucketWebsite"
 	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"
+	OperationGetBucketPolicy         = "GetBucketPolicy"
+	OperationPutBucketPolicy         = "PutBucketPolicy"
+	OperationDeleteBucketPolicy      = "DeleteBucketPolicy"
 )
 
 type Request struct {

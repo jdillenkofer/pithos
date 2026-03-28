@@ -156,6 +156,7 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 var ErrNoSuchWebsiteConfiguration error = metadatastore.ErrNoSuchWebsiteConfiguration
+var ErrNoSuchBucketPolicy error = metadatastore.ErrNoSuchBucketPolicy
 
 var MaxEntitySize int64 = 5 * 1000 * 1000 * 1000 // 5 GB
 
@@ -209,6 +210,12 @@ type BucketWebsiteManager interface {
 	DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
+type BucketPolicyManager interface {
+	GetBucketPolicy(ctx context.Context, bucketName BucketName) (string, error)
+	PutBucketPolicy(ctx context.Context, bucketName BucketName, policy string) error
+	DeleteBucketPolicy(ctx context.Context, bucketName BucketName) error
+}
+
 // ObjectManager manages object operations
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
@@ -237,6 +244,7 @@ type Storage interface {
 	lifecycle.Manager
 	BucketManager
 	BucketWebsiteManager
+	BucketPolicyManager
 	ObjectManager
 	MultipartUploadManager
 }

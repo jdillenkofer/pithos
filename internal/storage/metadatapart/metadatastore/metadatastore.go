@@ -176,6 +176,7 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
+var ErrNoSuchBucketPolicy error = errors.New("NoSuchBucketPolicy")
 
 type ListObjectsOptions struct {
 	Prefix        *string
@@ -220,6 +221,12 @@ type BucketWebsiteStore interface {
 	DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 }
 
+type BucketPolicyStore interface {
+	GetBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName BucketName) (string, error)
+	PutBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName BucketName, policy string) error
+	DeleteBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
 type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
@@ -241,6 +248,7 @@ type MetadataStore interface {
 	MaintenanceStore
 	BucketStore
 	BucketWebsiteStore
+	BucketPolicyStore
 	ObjectStore
 	MultipartStore
 }
