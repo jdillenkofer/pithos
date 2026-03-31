@@ -550,12 +550,22 @@ func (os *outboxStorage) GetBucketWebsiteConfiguration(ctx context.Context, buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketWebsiteConfiguration")
 	defer span.End()
 
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
 	return os.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
 }
 
 func (os *outboxStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketWebsiteConfiguration")
 	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
 
 	return os.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
 }
@@ -564,12 +574,22 @@ func (os *outboxStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, b
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketWebsiteConfiguration")
 	defer span.End()
 
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
 	return os.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
 
 func (os *outboxStorage) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketPolicy")
 	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return "", err
+	}
 
 	return os.innerStorage.GetBucketPolicy(ctx, bucketName)
 }
@@ -578,12 +598,22 @@ func (os *outboxStorage) PutBucketPolicy(ctx context.Context, bucketName storage
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketPolicy")
 	defer span.End()
 
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
 	return os.innerStorage.PutBucketPolicy(ctx, bucketName, policy)
 }
 
 func (os *outboxStorage) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketPolicy")
 	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
 
 	return os.innerStorage.DeleteBucketPolicy(ctx, bucketName)
 }
