@@ -366,8 +366,17 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
+	cleanups := make([]func(), 0, 8)
+	addCleanup := func(fn func()) {
+		cleanups = append(cleanups, fn)
+	}
+
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	mustNoErr(err, "Could not create temp directory")
+	addCleanup(func() {
+		err := os.RemoveAll(storagePath)
+		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath))
+	})
 
 	baseEndpoint := "s3.localhost"
 
@@ -400,6 +409,15 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		db, dbCleanup, err = setupDatabase(ctx, dbType, storagePath)
 	}
 	mustNoErr(err, "Couldn't open database")
+
+	addCleanup(func() {
+		err := db.Close()
+		mustNoErr(err, "Couldn't close database")
+		if dbCleanup != nil {
+			dbCleanup()
+		}
+	})
+
 	encryptionPassword := ""
 	if encryptionType != storageFactory.EncryptionTypeNone {
 		encryptionPassword = partStoreEncryptionPassword
@@ -413,31 +431,41 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 	err = store.Start(ctx)
 	mustNoErr(err, "Couldn't start storage")
-	closeStorage := func() {
+	addCleanup(func() {
 		err := store.Stop(ctx)
 		mustNoErr(err, "Couldn't stop storage")
-	}
-	closeDatabase := func() {
-		err = db.Close()
-		mustNoErr(err, "Couldn't close database")
-		dbCleanup()
-	}
+	})
 
-	ts := newHTTPTestServer(baseEndpoint, requestAuthorizer, store)
+	primaryTS := newHTTPTestServer(baseEndpoint, requestAuthorizer, store)
+	ts := primaryTS
 
 	if useReplication {
-		originalTs := ts
-		originalCloseStorage := closeStorage
-		originalCloseDatabase := closeDatabase
+		addCleanup(func() {
+			primaryTS.Close()
+		})
+
 		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
 		mustNoErr(err, "Could not create temp directory")
+		addCleanup(func() {
+			err := os.RemoveAll(storagePath2)
+			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
+		})
+
 		if db2 == nil {
 			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
 			mustNoErr(err, "Couldn't open database")
 		}
+		addCleanup(func() {
+			err := db2.Close()
+			mustNoErr(err, "Couldn't close secondary database")
+			if dbCleanup2 != nil {
+				dbCleanup2()
+			}
+		})
+
 		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
-		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
+		s3Client = setupS3Client(baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle)
 		var s3ClientStorage storage.Storage
 		s3ClientStorage, err = s3client.NewStorage(s3Client)
 		mustNoErr(err, "Could not create s3ClientStorage")
@@ -459,31 +487,28 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 		err = store2.Start(ctx)
 		mustNoErr(err, "Couldn't start storage")
+		addCleanup(func() {
+			err := store2.Stop(ctx)
+			mustNoErr(err, "Couldn't stop replicated storage")
+		})
 
-		closeStorage = func() {
-			originalTs.Close()
-			originalCloseStorage()
-			store2.Stop(ctx)
-		}
-		closeDatabase = func() {
-			originalCloseDatabase()
-			db2.Close()
-			dbCleanup2()
-			err = os.RemoveAll(storagePath2)
-			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
-		}
 		ts = newHTTPTestServer(baseEndpoint, requestAuthorizer, store2)
+		addCleanup(func() {
+			ts.Close()
+		})
+	} else {
+		addCleanup(func() {
+			ts.Close()
+		})
 	}
 
 	listenerAddr = ts.Listener.Addr().String()
 	s3Client = setupS3Client(baseEndpoint, listenerAddr, usePathStyle)
 
 	cleanup = func() {
-		ts.Close()
-		closeStorage()
-		closeDatabase()
-		err = os.RemoveAll(storagePath)
-		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath))
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
 	}
 	return
 }
