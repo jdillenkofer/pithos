@@ -122,19 +122,20 @@ func buildWebsiteHttpClient(listenerAddr string) *http.Client {
 	return &client
 }
 
+func mustNoErr(err error, message string) {
+	if err != nil {
+		slog.Error(fmt.Sprintf("%s: %s", message, err))
+		os.Exit(1)
+	}
+}
+
 func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
 	httpClient := buildAwsHttpClient()
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
-	if err != nil {
-		slog.Error(fmt.Sprintf("Could not loadDefaultConfig: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Could not loadDefaultConfig")
 	addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
-	if err != nil {
-		slog.Error(fmt.Sprintf("Could not resolveTcpAddr: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Could not resolveTcpAddr")
 	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = usePathStyle
 		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s:%d", baseEndpoint, addr.Port))
@@ -354,10 +355,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
-	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Could not create temp directory")
 
 	baseEndpoint := "s3.localhost"
 
@@ -367,10 +365,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	end
 	`
 	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
-	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Could not create LuaAuthorizer")
 
 	var db database.Database
 	var dbCleanup func()
@@ -379,35 +374,20 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 	if dbType == database.DB_TYPE_POSTGRES && useReplication {
 		pgContainerPool, err = getPgContainerPool()
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't get postgres container pool: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't get postgres container pool")
 
 		containers, err := pgContainerPool.CheckoutN(ctx, 2)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't checkout postgres containers: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't checkout postgres containers")
 
 		db, dbCleanup, err = setupDatabaseFromPostgresContainer(ctx, containers[0])
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't open primary database: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't open primary database")
 
 		db2, dbCleanup2, err = setupDatabaseFromPostgresContainer(ctx, containers[1])
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't open secondary database: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't open secondary database")
 	} else {
 		db, dbCleanup, err = setupDatabase(ctx, dbType, storagePath)
 	}
-	if err != nil {
-		slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Couldn't open database")
 	encryptionPassword := ""
 	if encryptionType != storageFactory.EncryptionTypeNone {
 		encryptionPassword = partStoreEncryptionPassword
@@ -416,30 +396,18 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 	if !useReplication {
 		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create prometheusStorageMiddleware: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create prometheusStorageMiddleware")
 	}
 
 	err = store.Start(ctx)
-	if err != nil {
-		slog.Error(fmt.Sprintf("Couldn't start storage: %s", err))
-		os.Exit(1)
-	}
+	mustNoErr(err, "Couldn't start storage")
 	closeStorage := func() {
 		err := store.Stop(ctx)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't stop storage: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't stop storage")
 	}
 	closeDatabase := func() {
 		err = db.Close()
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't close database: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't close database")
 		dbCleanup()
 	}
 
@@ -457,59 +425,35 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		originalCloseStorage := closeStorage
 		originalCloseDatabase := closeDatabase
 		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create temp directory")
 		if db2 == nil {
 			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
-			if err != nil {
-				slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
-				os.Exit(1)
-			}
+			mustNoErr(err, "Couldn't open database")
 		}
 		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
 		s3Client = setupS3Client(baseEndpoint, originalTs.Listener.Addr().String(), usePathStyle)
 		var s3ClientStorage storage.Storage
 		s3ClientStorage, err = s3client.NewStorage(s3Client)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create s3ClientStorage: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create s3ClientStorage")
 
 		var outboxStorage storage.Storage
 
 		storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create StorageOutboxEntryRepository: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create StorageOutboxEntryRepository")
 
 		outboxStorage, err = outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create outboxStorage: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create outboxStorage")
 
 		var store2 storage.Storage
 		store2, err = replication.NewStorage(localStore, outboxStorage)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create replicationStorage: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create replicationStorage")
 
 		store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not create prometheusStorageMiddleware: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Could not create prometheusStorageMiddleware")
 
 		err = store2.Start(ctx)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't start storage: %s", err))
-			os.Exit(1)
-		}
+		mustNoErr(err, "Couldn't start storage")
 
 		closeStorage = func() {
 			originalTs.Close()
@@ -521,10 +465,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			db2.Close()
 			dbCleanup2()
 			err = os.RemoveAll(storagePath2)
-			if err != nil {
-				slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath2, err))
-				os.Exit(1)
-			}
+			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
 		}
 		ts = httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, websiteEndpoint, requestAuthorizer, store2))
 	}
@@ -537,10 +478,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		closeStorage()
 		closeDatabase()
 		err = os.RemoveAll(storagePath)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Could not remove storagePath %s: %s", storagePath, err))
-			os.Exit(1)
-		}
+		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath))
 	}
 	return
 }
