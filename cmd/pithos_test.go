@@ -291,65 +291,110 @@ func getPgContainerPool() (*PgContainerPool, error) {
 func cleanPublicDatabaseSchema(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
-		return nil
+		return err
 	}
 	_, err = tx.Exec("DROP SCHEMA public CASCADE")
 	if err != nil {
-		return nil
+		return err
 	}
 	_, err = tx.Exec("CREATE SCHEMA public AUTHORIZATION postgres")
 	if err != nil {
-		return nil
+		return err
 	}
 	_, err = tx.Exec("GRANT ALL ON SCHEMA public TO postgres")
 	if err != nil {
-		return nil
+		return err
 	}
 	_, err = tx.Exec("GRANT ALL ON SCHEMA public TO public")
 	if err != nil {
-		return nil
+		return err
 	}
 	_, err = tx.Exec("COMMENT ON SCHEMA public IS 'standard public schema'")
 	if err != nil {
-		return nil
+		return err
 	}
 	err = tx.Commit()
 	if err != nil {
-		return nil
+		return err
 	}
 	return nil
 }
 
-func setupDatabaseFromPostgresContainer(ctx context.Context, pgContainer *postgres.PostgresContainer) (db database.Database, cleanup func(), err error) {
-	cleanup = func() {
-		dbUrl, err := pgContainer.ConnectionString(ctx)
-		if err != nil {
-			slog.Error("Could not get connection string from pgContainer", slog.String("error", err.Error()))
-			return
-		}
-		db, err := sql.Open("pgx", dbUrl)
-		if err != nil {
-			slog.Error("Could not open db to clean public schema", slog.String("error", err.Error()))
-			return
-		}
-		err = cleanPublicDatabaseSchema(ctx, db)
-		if err != nil {
-			slog.Error("Could not clean public schema", slog.String("error", err.Error()))
-			return
-		}
-		err = db.Close()
+type postgresContainerLease struct {
+	pool      *PgContainerPool
+	container *postgres.PostgresContainer
+}
+
+func checkoutPostgresContainerLease(ctx context.Context) (*postgresContainerLease, error) {
+	pool, err := getPgContainerPool()
+	if err != nil {
+		return nil, err
+	}
+	container, err := pool.Checkout(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &postgresContainerLease{
+		pool:      pool,
+		container: container,
+	}, nil
+}
+
+func (l *postgresContainerLease) returnToPool() {
+	err := l.pool.Return(l.container)
+	if err != nil {
+		slog.Error("Could not return pgContainer to pool", slog.String("error", err.Error()))
+	}
+}
+
+func (l *postgresContainerLease) openDatabase(ctx context.Context) (database.Database, error) {
+	dbURL, err := l.container.ConnectionString(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.OpenDatabase(dbURL)
+}
+
+func (l *postgresContainerLease) cleanup(ctx context.Context) {
+	defer l.returnToPool()
+
+	dbURL, err := l.container.ConnectionString(ctx)
+	if err != nil {
+		slog.Error("Could not get connection string from pgContainer", slog.String("error", err.Error()))
+		return
+	}
+	db, err := sql.Open("pgx", dbURL)
+	if err != nil {
+		slog.Error("Could not open db to clean public schema", slog.String("error", err.Error()))
+		return
+	}
+	defer func() {
+		err := db.Close()
 		if err != nil {
 			slog.Error("Could not close db after cleaning public schema", slog.String("error", err.Error()))
-			return
 		}
-		pgContainerPool.Return(pgContainer)
+	}()
+
+	err = cleanPublicDatabaseSchema(ctx, db)
+	if err != nil {
+		slog.Error("Could not clean public schema", slog.String("error", err.Error()))
+	}
+}
+
+func setupDatabaseFromPostgresContainer(ctx context.Context, pgContainer *postgres.PostgresContainer) (db database.Database, cleanup func(), err error) {
+	lease := &postgresContainerLease{
+		pool:      pgContainerPool,
+		container: pgContainer,
 	}
 
-	dbUrl, err := pgContainer.ConnectionString(ctx)
+	db, err = lease.openDatabase(ctx)
 	if err != nil {
-		return nil, cleanup, err
+		lease.returnToPool()
+		return nil, func() {}, err
 	}
-	db, err = pgx.OpenDatabase(dbUrl)
+	cleanup = func() {
+		lease.cleanup(ctx)
+	}
 	return db, cleanup, err
 }
 
@@ -361,15 +406,19 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 		db, err = sqlite.OpenDatabase(dbPath)
 		return db, cleanup, err
 	case database.DB_TYPE_POSTGRES:
-		pgContainerPool, err = getPgContainerPool()
+		lease, err := checkoutPostgresContainerLease(ctx)
 		if err != nil {
 			return nil, cleanup, err
 		}
-		pgContainer, err := pgContainerPool.Checkout(ctx)
+		db, err = lease.openDatabase(ctx)
 		if err != nil {
+			lease.returnToPool()
 			return nil, cleanup, err
 		}
-		return setupDatabaseFromPostgresContainer(ctx, pgContainer)
+		cleanup = func() {
+			lease.cleanup(ctx)
+		}
+		return db, cleanup, nil
 	}
 	return nil, cleanup, errors.ErrUnsupported
 }
