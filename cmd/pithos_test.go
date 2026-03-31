@@ -382,6 +382,16 @@ func addDatabaseCleanup(add cleanupRegistrar, db database.Database, dbCleanup fu
 	})
 }
 
+func mustTempDir(add cleanupRegistrar, pattern string) string {
+	path, err := os.MkdirTemp("", pattern)
+	mustNoErr(err, "Could not create temp directory")
+	add(func() {
+		err := os.RemoveAll(path)
+		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", path))
+	})
+	return path
+}
+
 func setupTestDatabases(ctx context.Context, dbType database.DatabaseType, useReplication bool, storagePath string, storagePath2 string) (testDatabases, error) {
 	result := testDatabases{}
 
@@ -469,21 +479,11 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		cleanups = append(cleanups, fn)
 	}
 
-	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
-	mustNoErr(err, "Could not create temp directory")
-	addCleanup(func() {
-		err := os.RemoveAll(storagePath)
-		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath))
-	})
+	storagePath := mustTempDir(addCleanup, "pithos-test-data-")
 
 	storagePath2 := ""
 	if useReplication {
-		storagePath2, err = os.MkdirTemp("", "pithos-test-data-")
-		mustNoErr(err, "Could not create temp directory")
-		addCleanup(func() {
-			err := os.RemoveAll(storagePath2)
-			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
-		})
+		storagePath2 = mustTempDir(addCleanup, "pithos-test-data-")
 	}
 
 	baseEndpoint := "s3.localhost"
