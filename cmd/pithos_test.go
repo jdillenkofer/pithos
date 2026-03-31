@@ -547,14 +547,10 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		})
 
 		ts = newHTTPTestServer(baseEndpoint, requestAuthorizer, store2)
-		addCleanup(func() {
-			ts.Close()
-		})
-	} else {
-		addCleanup(func() {
-			ts.Close()
-		})
 	}
+	addCleanup(func() {
+		ts.Close()
+	})
 
 	listenerAddr = ts.Listener.Addr().String()
 	s3Client = setupS3Client(baseEndpoint, listenerAddr, usePathStyle)
