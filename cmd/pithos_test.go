@@ -370,6 +370,18 @@ type testDatabases struct {
 	secondaryCleanup func()
 }
 
+type cleanupRegistrar func(func())
+
+func addDatabaseCleanup(add cleanupRegistrar, db database.Database, dbCleanup func(), closeErrMessage string) {
+	add(func() {
+		err := db.Close()
+		mustNoErr(err, closeErrMessage)
+		if dbCleanup != nil {
+			dbCleanup()
+		}
+	})
+}
+
 func setupTestDatabases(ctx context.Context, dbType database.DatabaseType, useReplication bool, storagePath string, storagePath2 string) (testDatabases, error) {
 	result := testDatabases{}
 
@@ -492,13 +504,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	db2 := dbs.secondary
 	dbCleanup2 := dbs.secondaryCleanup
 
-	addCleanup(func() {
-		err := db.Close()
-		mustNoErr(err, "Couldn't close database")
-		if dbCleanup != nil {
-			dbCleanup()
-		}
-	})
+	addDatabaseCleanup(addCleanup, db, dbCleanup, "Couldn't close database")
 
 	encryptionPassword := ""
 	if encryptionType != storageFactory.EncryptionTypeNone {
@@ -526,13 +532,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			primaryTS.Close()
 		})
 
-		addCleanup(func() {
-			err := db2.Close()
-			mustNoErr(err, "Couldn't close secondary database")
-			if dbCleanup2 != nil {
-				dbCleanup2()
-			}
-		})
+		addDatabaseCleanup(addCleanup, db2, dbCleanup2, "Couldn't close secondary database")
 
 		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, db2, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 		mustNoErr(err, "Couldn't set up replicated storage")
