@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/settings"
@@ -141,6 +142,17 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 		o.BaseEndpoint = aws.String(fmt.Sprintf("http://%s:%d", baseEndpoint, addr.Port))
 	})
 	return s3Client
+}
+
+func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
+	credentials := []settings.Credentials{
+		{
+			AccessKeyId:     accessKeyId,
+			SecretAccessKey: secretAccessKey,
+		},
+	}
+	websiteEndpoint := "s3-website.localhost"
+	return httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, websiteEndpoint, requestAuthorizer, store))
 }
 
 func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, error) {
@@ -411,14 +423,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		dbCleanup()
 	}
 
-	credentials := []settings.Credentials{
-		{
-			AccessKeyId:     accessKeyId,
-			SecretAccessKey: secretAccessKey,
-		},
-	}
-	websiteEndpoint := "s3-website.localhost"
-	ts := httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, websiteEndpoint, requestAuthorizer, store))
+	ts := newHTTPTestServer(baseEndpoint, requestAuthorizer, store)
 
 	if useReplication {
 		originalTs := ts
@@ -467,7 +472,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			err = os.RemoveAll(storagePath2)
 			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
 		}
-		ts = httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, websiteEndpoint, requestAuthorizer, store2))
+		ts = newHTTPTestServer(baseEndpoint, requestAuthorizer, store2)
 	}
 
 	listenerAddr = ts.Listener.Addr().String()
