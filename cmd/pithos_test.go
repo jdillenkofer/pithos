@@ -415,6 +415,16 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath))
 	})
 
+	storagePath2 := ""
+	if useReplication {
+		storagePath2, err = os.MkdirTemp("", "pithos-test-data-")
+		mustNoErr(err, "Could not create temp directory")
+		addCleanup(func() {
+			err := os.RemoveAll(storagePath2)
+			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
+		})
+	}
+
 	baseEndpoint := "s3.localhost"
 
 	authorizationCode := `
@@ -444,8 +454,12 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		mustNoErr(err, "Couldn't open secondary database")
 	} else {
 		db, dbCleanup, err = setupDatabase(ctx, dbType, storagePath)
+		mustNoErr(err, "Couldn't open database")
+		if useReplication {
+			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
+			mustNoErr(err, "Couldn't open secondary database")
+		}
 	}
-	mustNoErr(err, "Couldn't open database")
 
 	addCleanup(func() {
 		err := db.Close()
@@ -481,17 +495,6 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			primaryTS.Close()
 		})
 
-		storagePath2, err := os.MkdirTemp("", "pithos-test-data-")
-		mustNoErr(err, "Could not create temp directory")
-		addCleanup(func() {
-			err := os.RemoveAll(storagePath2)
-			mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", storagePath2))
-		})
-
-		if db2 == nil {
-			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
-			mustNoErr(err, "Couldn't open database")
-		}
 		addCleanup(func() {
 			err := db2.Close()
 			mustNoErr(err, "Couldn't close secondary database")
