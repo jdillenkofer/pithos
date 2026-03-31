@@ -504,18 +504,13 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	dbs, err := setupTestDatabases(ctx, dbType, useReplication, storagePath, storagePath2)
 	mustNoErr(err, "Couldn't set up test databases")
 
-	db := dbs.primary
-	dbCleanup := dbs.primaryCleanup
-	db2 := dbs.secondary
-	dbCleanup2 := dbs.secondaryCleanup
-
-	addDatabaseCleanup(addCleanup, db, dbCleanup, "Couldn't close database")
+	addDatabaseCleanup(addCleanup, dbs.primary, dbs.primaryCleanup, "Couldn't close database")
 
 	encryptionPassword := ""
 	if encryptionType != storageFactory.EncryptionTypeNone {
 		encryptionPassword = partStoreEncryptionPassword
 	}
-	store := storageFactory.CreateStorage(storagePath, db, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
+	store := storageFactory.CreateStorage(storagePath, dbs.primary, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
 	if !useReplication {
 		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
@@ -537,9 +532,9 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			primaryTS.Close()
 		})
 
-		addDatabaseCleanup(addCleanup, db2, dbCleanup2, "Couldn't close secondary database")
+		addDatabaseCleanup(addCleanup, dbs.secondary, dbs.secondaryCleanup, "Couldn't close secondary database")
 
-		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, db2, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
+		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, dbs.secondary, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 		mustNoErr(err, "Couldn't set up replicated storage")
 		addCleanup(func() {
 			err := store2.Stop(ctx)
