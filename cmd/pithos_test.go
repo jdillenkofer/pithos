@@ -363,6 +363,43 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 	return nil, cleanup, errors.ErrUnsupported
 }
 
+func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool) (storage.Storage, error) {
+	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
+
+	primaryS3Client := setupS3Client(baseEndpoint, primaryListenerAddr, usePathStyle)
+	s3ClientStorage, err := s3client.NewStorage(primaryS3Client)
+	if err != nil {
+		return nil, err
+	}
+
+	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
+	if err != nil {
+		return nil, err
+	}
+
+	outboxStorage, err := outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
+	if err != nil {
+		return nil, err
+	}
+
+	store2, err := replication.NewStorage(localStore, outboxStorage)
+	if err != nil {
+		return nil, err
+	}
+
+	store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
+	if err != nil {
+		return nil, err
+	}
+
+	err = store2.Start(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return store2, nil
+}
+
 func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
@@ -463,30 +500,8 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			}
 		})
 
-		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
-
-		s3Client = setupS3Client(baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle)
-		var s3ClientStorage storage.Storage
-		s3ClientStorage, err = s3client.NewStorage(s3Client)
-		mustNoErr(err, "Could not create s3ClientStorage")
-
-		var outboxStorage storage.Storage
-
-		storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
-		mustNoErr(err, "Could not create StorageOutboxEntryRepository")
-
-		outboxStorage, err = outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository)
-		mustNoErr(err, "Could not create outboxStorage")
-
-		var store2 storage.Storage
-		store2, err = replication.NewStorage(localStore, outboxStorage)
-		mustNoErr(err, "Could not create replicationStorage")
-
-		store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
-		mustNoErr(err, "Could not create prometheusStorageMiddleware")
-
-		err = store2.Start(ctx)
-		mustNoErr(err, "Couldn't start storage")
+		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, db2, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
+		mustNoErr(err, "Couldn't set up replicated storage")
 		addCleanup(func() {
 			err := store2.Stop(ctx)
 			mustNoErr(err, "Couldn't stop replicated storage")
