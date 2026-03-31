@@ -56,6 +56,8 @@ const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 const region = "eu-central-1"
 const partStoreEncryptionPassword = "test"
 const defaultPgContainerPoolSize = 10
+const testAPIEndpoint = "s3.localhost"
+const testWebsiteEndpoint = "s3-website.localhost"
 
 var (
 	bucketName  = aws.String("test")
@@ -163,8 +165,7 @@ func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.Requ
 			SecretAccessKey: secretAccessKey,
 		},
 	}
-	websiteEndpoint := "s3-website.localhost"
-	return httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, websiteEndpoint, requestAuthorizer, store))
+	return httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
 }
 
 func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, error) {
@@ -547,7 +548,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		storagePath2 = mustTempDir(addCleanup, "pithos-test-data-")
 	}
 
-	baseEndpoint := "s3.localhost"
+	baseEndpoint := testAPIEndpoint
 
 	requestAuthorizer := mustRequestAuthorizer()
 
@@ -3487,7 +3488,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3506,7 +3507,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/subdir/", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/subdir/", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3524,7 +3525,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/style.css", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/style.css", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3543,7 +3544,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/nonexistent.html", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/nonexistent.html", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3592,7 +3593,7 @@ func TestWebsiteHosting(t *testing.T) {
 
 			httpClient := buildWebsiteHttpClient(addr)
 			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/nonexistent.html", *bucketName, tcpAddr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/nonexistent.html", *bucketName, testWebsiteEndpoint, tcpAddr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3646,7 +3647,7 @@ func TestWebsiteHosting(t *testing.T) {
 
 			httpClient := buildWebsiteHttpClient(addr)
 			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/", *bucketName, tcpAddr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, tcpAddr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3675,7 +3676,7 @@ func TestWebsiteHosting(t *testing.T) {
 
 			httpClient := buildWebsiteHttpClient(addr)
 			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/", *bucketName, tcpAddr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, tcpAddr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3694,7 +3695,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/index.html", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/index.html", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("HEAD", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3713,7 +3714,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
-			url := fmt.Sprintf("http://%s.s3-website.localhost:%d/", *bucketName, addr.Port)
+			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, addr.Port)
 			req, _ := http.NewRequest("POST", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
@@ -3753,7 +3754,7 @@ func TestWebsiteHosting(t *testing.T) {
 
 			httpClient := buildWebsiteHttpClient(addr)
 			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
-			url := fmt.Sprintf("http://nonexistent.s3-website.localhost:%d/", tcpAddr.Port)
+			url := fmt.Sprintf("http://nonexistent.%s:%d/", testWebsiteEndpoint, tcpAddr.Port)
 			req, _ := http.NewRequest("GET", url, nil)
 			resp, err := httpClient.Do(req)
 			if err != nil {
