@@ -55,6 +55,7 @@ const accessKeyId = "AKIAIOSFODNN7EXAMPLE"
 const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 const region = "eu-central-1"
 const partStoreEncryptionPassword = "test"
+const defaultPgContainerPoolSize = 10
 
 var (
 	bucketName  = aws.String("test")
@@ -283,7 +284,7 @@ var pgContainerPoolErr error
 
 func getPgContainerPool() (*PgContainerPool, error) {
 	pgContainerPoolOnce.Do(func() {
-		pgContainerPool, pgContainerPoolErr = NewPgContainerPool(context.Background(), 5)
+		pgContainerPool, pgContainerPoolErr = NewPgContainerPool(context.Background(), defaultPgContainerPoolSize)
 	})
 	return pgContainerPool, pgContainerPoolErr
 }
