@@ -130,6 +130,17 @@ func mustNoErr(err error, message string) {
 	}
 }
 
+func mustRequestAuthorizer() authorization.RequestAuthorizer {
+	authorizationCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+	`
+	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+	mustNoErr(err, "Could not create LuaAuthorizer")
+	return requestAuthorizer
+}
+
 func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
 	httpClient := buildAwsHttpClient()
 
@@ -488,13 +499,7 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 	baseEndpoint := "s3.localhost"
 
-	authorizationCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-	`
-	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
-	mustNoErr(err, "Could not create LuaAuthorizer")
+	requestAuthorizer := mustRequestAuthorizer()
 
 	dbs, err := setupTestDatabases(ctx, dbType, useReplication, storagePath, storagePath2)
 	mustNoErr(err, "Couldn't set up test databases")
