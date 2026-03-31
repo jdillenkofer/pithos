@@ -158,17 +158,19 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 }
 
 type PgContainerPool struct {
-	containers chan *postgres.PostgresContainer
-	all        []*postgres.PostgresContainer
-	mu         sync.Mutex
+	available []*postgres.PostgresContainer
+	all       []*postgres.PostgresContainer
+	mu        sync.Mutex
+	cond      *sync.Cond
 }
 
 // NewPgContainerPool starts n containers and returns a pool whose Checkout blocks until one is available.
 func NewPgContainerPool(ctx context.Context, n int) (*PgContainerPool, error) {
 	p := &PgContainerPool{
-		containers: make(chan *postgres.PostgresContainer, n),
-		all:        make([]*postgres.PostgresContainer, 0, n),
+		available: make([]*postgres.PostgresContainer, 0, n),
+		all:       make([]*postgres.PostgresContainer, 0, n),
 	}
+	p.cond = sync.NewCond(&p.mu)
 
 	for i := 0; i < n; i++ {
 		pc, err := setupPostgresContainer(ctx)
@@ -177,7 +179,7 @@ func NewPgContainerPool(ctx context.Context, n int) (*PgContainerPool, error) {
 			return nil, err
 		}
 		p.all = append(p.all, pc)
-		p.containers <- pc
+		p.available = append(p.available, pc)
 	}
 
 	return p, nil
@@ -185,12 +187,45 @@ func NewPgContainerPool(ctx context.Context, n int) (*PgContainerPool, error) {
 
 // Checkout blocks until a container is available or ctx is done.
 func (p *PgContainerPool) Checkout(ctx context.Context) (*postgres.PostgresContainer, error) {
-	select {
-	case pc := <-p.containers:
-		return pc, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	pcs, err := p.CheckoutN(ctx, 1)
+	if err != nil {
+		return nil, err
 	}
+	return pcs[0], nil
+}
+
+// CheckoutN atomically reserves n containers.
+// It avoids hold-and-wait deadlocks by reserving all requested containers
+// in one critical section.
+func (p *PgContainerPool) CheckoutN(ctx context.Context, n int) ([]*postgres.PostgresContainer, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	stopCancelWatcher := make(chan struct{})
+	defer close(stopCancelWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.cond.Broadcast()
+			p.mu.Unlock()
+		case <-stopCancelWatcher:
+		}
+	}()
+
+	for len(p.available) < n {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		p.cond.Wait()
+	}
+
+	reserved := append([]*postgres.PostgresContainer(nil), p.available[:n]...)
+	p.available = p.available[n:]
+	return reserved, nil
 }
 
 // Return puts a container back into the pool.
@@ -199,7 +234,10 @@ func (p *PgContainerPool) Return(pc *postgres.PostgresContainer) error {
 	if pc == nil {
 		return errors.New("nil container")
 	}
-	p.containers <- pc
+	p.mu.Lock()
+	p.available = append(p.available, pc)
+	p.mu.Unlock()
+	p.cond.Broadcast()
 	return nil
 }
 
@@ -210,15 +248,8 @@ func (p *PgContainerPool) TerminateAll(ctx context.Context) {
 	for _, pc := range p.all {
 		_ = pc.Container.Terminate(ctx)
 	}
-	// drain channel to allow GC
-loop:
-	for {
-		select {
-		case <-p.containers:
-		default:
-			break loop
-		}
-	}
+	p.available = nil
+	p.cond.Broadcast()
 }
 
 // create a db pool with max 5 connections
@@ -265,6 +296,39 @@ func cleanPublicDatabaseSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func setupDatabaseFromPostgresContainer(ctx context.Context, pgContainer *postgres.PostgresContainer) (db database.Database, cleanup func(), err error) {
+	cleanup = func() {
+		dbUrl, err := pgContainer.ConnectionString(ctx)
+		if err != nil {
+			slog.Error("Could not get connection string from pgContainer", slog.String("error", err.Error()))
+			return
+		}
+		db, err := sql.Open("pgx", dbUrl)
+		if err != nil {
+			slog.Error("Could not open db to clean public schema", slog.String("error", err.Error()))
+			return
+		}
+		err = cleanPublicDatabaseSchema(ctx, db)
+		if err != nil {
+			slog.Error("Could not clean public schema", slog.String("error", err.Error()))
+			return
+		}
+		err = db.Close()
+		if err != nil {
+			slog.Error("Could not close db after cleaning public schema", slog.String("error", err.Error()))
+			return
+		}
+		pgContainerPool.Return(pgContainer)
+	}
+
+	dbUrl, err := pgContainer.ConnectionString(ctx)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	db, err = pgx.OpenDatabase(dbUrl)
+	return db, cleanup, err
+}
+
 func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePath string) (db database.Database, cleanup func(), err error) {
 	switch dbType {
 	case database.DB_TYPE_SQLITE:
@@ -281,35 +345,7 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 		if err != nil {
 			return nil, cleanup, err
 		}
-		cleanup = func() {
-			dbUrl, err := pgContainer.ConnectionString(ctx)
-			if err != nil {
-				slog.Error("Could not get connection string from pgContainer", slog.String("error", err.Error()))
-				return
-			}
-			db, err := sql.Open("pgx", dbUrl)
-			if err != nil {
-				slog.Error("Could not open db to clean public schema", slog.String("error", err.Error()))
-				return
-			}
-			err = cleanPublicDatabaseSchema(ctx, db)
-			if err != nil {
-				slog.Error("Could not clean public schema", slog.String("error", err.Error()))
-				return
-			}
-			err = db.Close()
-			if err != nil {
-				slog.Error("Could not close db after cleaning public schema", slog.String("error", err.Error()))
-				return
-			}
-			pgContainerPool.Return(pgContainer)
-		}
-		dbUrl, err := pgContainer.ConnectionString(ctx)
-		if err != nil {
-			return nil, cleanup, err
-		}
-		db, err = pgx.OpenDatabase(dbUrl)
-		return db, cleanup, err
+		return setupDatabaseFromPostgresContainer(ctx, pgContainer)
 	}
 	return nil, cleanup, errors.ErrUnsupported
 }
@@ -336,7 +372,38 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 		os.Exit(1)
 	}
 
-	db, dbCleanup, err := setupDatabase(ctx, dbType, storagePath)
+	var db database.Database
+	var dbCleanup func()
+	var db2 database.Database
+	var dbCleanup2 func()
+
+	if dbType == database.DB_TYPE_POSTGRES && useReplication {
+		pgContainerPool, err = getPgContainerPool()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Couldn't get postgres container pool: %s", err))
+			os.Exit(1)
+		}
+
+		containers, err := pgContainerPool.CheckoutN(ctx, 2)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Couldn't checkout postgres containers: %s", err))
+			os.Exit(1)
+		}
+
+		db, dbCleanup, err = setupDatabaseFromPostgresContainer(ctx, containers[0])
+		if err != nil {
+			slog.Error(fmt.Sprintf("Couldn't open primary database: %s", err))
+			os.Exit(1)
+		}
+
+		db2, dbCleanup2, err = setupDatabaseFromPostgresContainer(ctx, containers[1])
+		if err != nil {
+			slog.Error(fmt.Sprintf("Couldn't open secondary database: %s", err))
+			os.Exit(1)
+		}
+	} else {
+		db, dbCleanup, err = setupDatabase(ctx, dbType, storagePath)
+	}
 	if err != nil {
 		slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
 		os.Exit(1)
@@ -394,10 +461,12 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 			slog.Error(fmt.Sprintf("Could not create temp directory: %s", err))
 			os.Exit(1)
 		}
-		db2, dbCleanup2, err := setupDatabase(ctx, dbType, storagePath2)
-		if err != nil {
-			slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
-			os.Exit(1)
+		if db2 == nil {
+			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Couldn't open database: %s", err))
+				os.Exit(1)
+			}
 		}
 		localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
