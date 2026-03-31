@@ -363,6 +363,55 @@ func setupDatabase(ctx context.Context, dbType database.DatabaseType, storagePat
 	return nil, cleanup, errors.ErrUnsupported
 }
 
+type testDatabases struct {
+	primary          database.Database
+	primaryCleanup   func()
+	secondary        database.Database
+	secondaryCleanup func()
+}
+
+func setupTestDatabases(ctx context.Context, dbType database.DatabaseType, useReplication bool, storagePath string, storagePath2 string) (testDatabases, error) {
+	result := testDatabases{}
+
+	if dbType == database.DB_TYPE_POSTGRES && useReplication {
+		pgContainerPool, err := getPgContainerPool()
+		if err != nil {
+			return result, err
+		}
+
+		containers, err := pgContainerPool.CheckoutN(ctx, 2)
+		if err != nil {
+			return result, err
+		}
+
+		result.primary, result.primaryCleanup, err = setupDatabaseFromPostgresContainer(ctx, containers[0])
+		if err != nil {
+			return result, err
+		}
+
+		result.secondary, result.secondaryCleanup, err = setupDatabaseFromPostgresContainer(ctx, containers[1])
+		if err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+
+	var err error
+	result.primary, result.primaryCleanup, err = setupDatabase(ctx, dbType, storagePath)
+	if err != nil {
+		return result, err
+	}
+
+	if useReplication {
+		result.secondary, result.secondaryCleanup, err = setupDatabase(ctx, dbType, storagePath2)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	return result, nil
+}
+
 func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool) (storage.Storage, error) {
 	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
@@ -435,31 +484,13 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
 	mustNoErr(err, "Could not create LuaAuthorizer")
 
-	var db database.Database
-	var dbCleanup func()
-	var db2 database.Database
-	var dbCleanup2 func()
+	dbs, err := setupTestDatabases(ctx, dbType, useReplication, storagePath, storagePath2)
+	mustNoErr(err, "Couldn't set up test databases")
 
-	if dbType == database.DB_TYPE_POSTGRES && useReplication {
-		pgContainerPool, err = getPgContainerPool()
-		mustNoErr(err, "Couldn't get postgres container pool")
-
-		containers, err := pgContainerPool.CheckoutN(ctx, 2)
-		mustNoErr(err, "Couldn't checkout postgres containers")
-
-		db, dbCleanup, err = setupDatabaseFromPostgresContainer(ctx, containers[0])
-		mustNoErr(err, "Couldn't open primary database")
-
-		db2, dbCleanup2, err = setupDatabaseFromPostgresContainer(ctx, containers[1])
-		mustNoErr(err, "Couldn't open secondary database")
-	} else {
-		db, dbCleanup, err = setupDatabase(ctx, dbType, storagePath)
-		mustNoErr(err, "Couldn't open database")
-		if useReplication {
-			db2, dbCleanup2, err = setupDatabase(ctx, dbType, storagePath2)
-			mustNoErr(err, "Couldn't open secondary database")
-		}
-	}
+	db := dbs.primary
+	dbCleanup := dbs.primaryCleanup
+	db2 := dbs.secondary
+	dbCleanup2 := dbs.secondaryCleanup
 
 	addCleanup(func() {
 		err := db.Close()
