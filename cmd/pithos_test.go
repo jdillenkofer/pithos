@@ -3397,8 +3397,9 @@ func TestWebsiteHosting(t *testing.T) {
 
 	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
 		// Helper: set up a bucket with website config, policy, and content for website tests.
-		setupWebsiteBucket := func(t *testing.T) (httpClient *http.Client, listenerAddr string, cleanupFn func()) {
+		setupWebsiteBucket := func(t *testing.T) (httpClient *http.Client, listenerAddr string) {
 			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
 
 			ctx := context.Background()
 
@@ -3480,12 +3481,11 @@ func TestWebsiteHosting(t *testing.T) {
 				t.Fatalf("PutObject (style.css) failed: %v", err)
 			}
 
-			return buildWebsiteHttpClient(addr), addr, cleanup
+			return buildWebsiteHttpClient(addr), addr
 		}
 
 		t.Run("it should serve index document at root"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3503,8 +3503,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should serve subdirectory index document"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/subdir/", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3521,8 +3520,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should serve direct object access"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/style.css", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3540,8 +3538,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should serve error document on 404"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/nonexistent.html", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3691,8 +3688,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should handle HEAD requests"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/index.html", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3710,8 +3706,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should reject POST requests"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
 			url := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, addr.Port)
@@ -3726,8 +3721,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should serve via custom domain fallback"+testSuffix, func(t *testing.T) {
-			httpClient, listenerAddr, cleanup := setupWebsiteBucket(t)
-			t.Cleanup(cleanup)
+			httpClient, listenerAddr := setupWebsiteBucket(t)
 
 			// Use a custom domain that matches the bucket name.
 			// Since our bucket is "test", we use "test" as the Host header.
