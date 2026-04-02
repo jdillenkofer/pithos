@@ -440,7 +440,32 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		Size:              obj.Size,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
-	if opts != nil && opts.IfNoneMatchStar {
+	if opts != nil && opts.IfMatchETag != nil {
+		oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+		if err != nil {
+			return err
+		}
+		if oldObjectEntity == nil || oldObjectEntity.ETag != *opts.IfMatchETag {
+			return metadatastore.ErrPreconditionFailed
+		}
+
+		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
+		if err != nil {
+			return err
+		}
+		deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, *opts.IfMatchETag)
+		if err != nil {
+			return err
+		}
+		if !*deleted {
+			return metadatastore.ErrPreconditionFailed
+		}
+
+		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
+		if err != nil {
+			return err
+		}
+	} else if opts != nil && opts.IfNoneMatchStar {
 		inserted, err := sms.objectRepository.InsertObjectIfAbsent(ctx, tx, &objectEntity)
 		if err != nil {
 			return err

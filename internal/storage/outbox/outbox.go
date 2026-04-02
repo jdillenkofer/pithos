@@ -392,7 +392,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
 
-	if opts != nil && opts.IfNoneMatchStar {
+	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil) {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err

@@ -149,6 +149,7 @@ const expectHeader = "Expect"
 const contentRangeHeader = "Content-Range"
 const contentLengthHeader = "Content-Length"
 const rangeHeader = "Range"
+const ifMatchHeader = "If-Match"
 const ifNoneMatchHeader = "If-None-Match"
 const etagHeader = "ETag"
 const lastModifiedHeader = "Last-Modified"
@@ -1615,14 +1616,25 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
+	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
 	var putObjectOptions *storage.PutObjectOptions
+	if ifMatch != nil {
+		putObjectOptions = &storage.PutObjectOptions{IfMatchETag: ifMatch}
+	}
 	if ifNoneMatch != nil {
 		if *ifNoneMatch != "*" {
 			handleError(ErrInvalidRequest, w, r)
 			return
 		}
-		putObjectOptions = &storage.PutObjectOptions{IfNoneMatchStar: true}
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.IfNoneMatchStar = true
+	}
+	if putObjectOptions != nil && putObjectOptions.IfMatchETag != nil && putObjectOptions.IfNoneMatchStar {
+		handleError(ErrInvalidRequest, w, r)
+		return
 	}
 
 	shouldReturn = validateMaxEntitySize(r, w)

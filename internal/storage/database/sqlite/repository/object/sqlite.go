@@ -26,6 +26,7 @@ const (
 	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4"
 	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5"
 	deleteObjectByIdStmt                                                                         = "DELETE FROM objects WHERE id = $1"
+	deleteObjectByIdAndETagStmt                                                                  = "DELETE FROM objects WHERE id = $1 AND etag = $2"
 )
 
 func NewRepository() (object.Repository, error) {
@@ -219,4 +220,17 @@ func (or *sqliteRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUplo
 func (or *sqliteRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
 	_, err := tx.ExecContext(ctx, deleteObjectByIdStmt, objectId.String())
 	return err
+}
+
+func (or *sqliteRepository) DeleteObjectByIdAndETag(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, etag string) (*bool, error) {
+	res, err := tx.ExecContext(ctx, deleteObjectByIdAndETagStmt, objectId.String(), etag)
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	deleted := rowsAffected > 0
+	return &deleted, nil
 }

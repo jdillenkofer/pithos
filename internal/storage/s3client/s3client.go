@@ -256,6 +256,12 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		Key:         aws.String(key.String()),
 		ContentType: contentType,
 		Body:        reader,
+		IfMatch: func() *string {
+			if opts != nil {
+				return opts.IfMatchETag
+			}
+			return nil
+		}(),
 		IfNoneMatch: func() *string {
 			if opts != nil && opts.IfNoneMatchStar {
 				return aws.String("*")

@@ -202,6 +202,7 @@ type ListPartsOptions struct {
 
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
+	IfMatchETag     *string
 }
 
 type MaintenanceStore interface {
