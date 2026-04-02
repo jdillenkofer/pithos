@@ -1082,8 +1082,9 @@ func generateContentRangeValue(br storage.ByteRange, objectSize int64) string {
 
 	end := objectSize - 1
 	if br.Start != nil && br.End != nil {
-		// Normal range with explicit end (exclusive, so subtract 1 for inclusive)
-		end = *br.End - 1
+		// Normal range with explicit end (exclusive, so subtract 1 for inclusive).
+		// Clamp to objectSize to match the storage layer's normalizeAndValidateRanges behavior.
+		end = min(*br.End, objectSize) - 1
 	} else if br.Start == nil && br.End != nil {
 		// Suffix range
 		end = objectSize - 1
@@ -1294,9 +1295,10 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 				size = min(suffixLength, object.Size)
 			} else if byteRange.Start != nil {
 				// Normal range (End is exclusive)
+				// Clamp end to object size to match what normalizeAndValidateRanges does in the storage layer.
 				var end int64 = object.Size
 				if byteRange.End != nil {
-					end = *byteRange.End
+					end = min(*byteRange.End, object.Size)
 				}
 				size = end - *byteRange.Start
 			}

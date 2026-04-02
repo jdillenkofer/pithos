@@ -437,8 +437,10 @@ func normalizeAndValidateRanges(ranges []storage.ByteRange, objectSize int64) ([
 		if byteRange.Start != nil && *byteRange.Start < 0 {
 			return nil, storage.ErrInvalidRange
 		}
+		// Per RFC 7233: if the range end exceeds the object size, clamp it to the object size.
 		if byteRange.End != nil && *byteRange.End > objectSize {
-			return nil, storage.ErrInvalidRange
+			clamped := objectSize
+			byteRange.End = &clamped
 		}
 		if byteRange.Start != nil && byteRange.End != nil && *byteRange.Start >= *byteRange.End {
 			return nil, storage.ErrInvalidRange

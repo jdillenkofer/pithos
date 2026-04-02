@@ -2299,6 +2299,45 @@ func TestGetObject(t *testing.T) {
 			assert.Equal(t, body[7:], objectBytes)
 		})
 
+		t.Run("it should return 206 and clamp range end when it exceeds object size"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			// Request a range whose end far exceeds the object size.
+			// Per RFC 7233 §2.1 the server must return 206 with the available bytes,
+			// not 416 Range Not Satisfiable.
+			getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Range:  aws.String("bytes=0-5242879"),
+			})
+			if err != nil {
+				assert.Fail(t, "GetObject failed", "err %v", err)
+			}
+			assert.NotNil(t, getObjectResult)
+			assert.NotNil(t, getObjectResult.Body)
+			objectBytes, err := io.ReadAll(getObjectResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+		})
+
 		t.Run("it should allow downloading the object with multi byte range"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
