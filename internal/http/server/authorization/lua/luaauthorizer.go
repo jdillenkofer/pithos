@@ -10,6 +10,7 @@ import (
 
 	"github.com/Shopify/go-lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -27,7 +28,7 @@ func (authorizer *LuaAuthorizer) dryRun() error {
 	_, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
-			AccessKeyId: "AKIAIOSFODNN7EXAMPLE",
+			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
 		},
 		Bucket: nil,
 		Key:    nil,
@@ -188,9 +189,9 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 func isReadOnly(operation string) bool {
 	var isReadOnly bool
 	switch operation {
-	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketPolicy:
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite:
 		isReadOnly = true
-	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketPolicy, authorization.OperationDeleteBucketPolicy:
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite:
 		isReadOnly = false
 	}
 	return isReadOnly
@@ -206,4 +207,12 @@ func pushRequest(L *lua.State, request *authorization.Request) {
 		return 1
 	})
 	L.SetField(-2, "isReadOnly")
+	L.PushGoFunction(func(L *lua.State) int {
+		L.Field(1, "authorization")
+		L.Field(-1, "accessKeyId")
+		isAnonymous := L.IsNil(-1)
+		L.PushBoolean(isAnonymous)
+		return 1
+	})
+	L.SetField(-2, "isAnonymous")
 }

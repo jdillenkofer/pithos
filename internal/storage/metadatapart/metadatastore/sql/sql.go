@@ -199,59 +199,6 @@ func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Contex
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
-func (sms *sqlMetadataStore) GetBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (string, error) {
-	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketPolicy")
-	defer span.End()
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
-	if err != nil {
-		return "", err
-	}
-	if bucketEntity == nil {
-		return "", metadatastore.ErrNoSuchBucket
-	}
-
-	if bucketEntity.Policy == nil {
-		return "", metadatastore.ErrNoSuchBucketPolicy
-	}
-
-	return *bucketEntity.Policy, nil
-}
-
-func (sms *sqlMetadataStore) PutBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, policy string) error {
-	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketPolicy")
-	defer span.End()
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
-	if err != nil {
-		return err
-	}
-	if bucketEntity == nil {
-		return metadatastore.ErrNoSuchBucket
-	}
-
-	bucketEntity.Policy = &policy
-
-	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
-}
-
-func (sms *sqlMetadataStore) DeleteBucketPolicy(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
-	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketPolicy")
-	defer span.End()
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
-	if err != nil {
-		return err
-	}
-	if bucketEntity == nil {
-		return metadatastore.ErrNoSuchBucket
-	}
-
-	bucketEntity.Policy = nil
-
-	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
-}
-
 func determineCommonPrefix(prefix, key, delimiter string) *string {
 	prefixSegments := strings.Split(prefix, delimiter)
 	keySegments := strings.Split(key, delimiter)
