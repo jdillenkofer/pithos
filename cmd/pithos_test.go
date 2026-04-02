@@ -973,6 +973,147 @@ func TestPutObject(t *testing.T) {
 			assert.NotNil(t, putObjectResult)
 		})
 
+		t.Run("it should allow uploads with if-none-match when object is absent"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:      bucketName,
+				Body:        bytes.NewReader([]byte("Hello, first object!")),
+				Key:         key,
+				IfNoneMatch: aws.String("*"),
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+		})
+
+		t.Run("it should reject uploads with if-none-match when object already exists"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			putObjectResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Body:   bytes.NewReader(body),
+				Key:    key,
+			})
+			if err != nil {
+				assert.Fail(t, "PutObject failed", "err %v", err)
+			}
+			assert.NotNil(t, putObjectResult)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:      bucketName,
+				Body:        bytes.NewReader([]byte("Hello, first object!")),
+				Key:         key,
+				IfNoneMatch: aws.String("*"),
+			})
+
+			if err == nil {
+				assert.Fail(t, "PutObject should fail when If-None-Match is set and object exists")
+			}
+
+			var apiErr smithy.APIError
+			if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "PreconditionFailed" {
+				assert.Fail(t, "Expected aws error PreconditionFailed", "err %v", err)
+			}
+		})
+
+		t.Run("it should reject non-star if-none-match values"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:      bucketName,
+				Body:        bytes.NewReader(body),
+				Key:         key,
+				IfNoneMatch: aws.String("\"invalid-etag\""),
+			})
+
+			if err == nil {
+				assert.Fail(t, "PutObject should fail when If-None-Match is not '*'")
+			}
+
+			var apiErr smithy.APIError
+			if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "InvalidRequest" {
+				assert.Fail(t, "Expected aws error InvalidRequest", "err %v", err)
+			}
+		})
+
+		t.Run("it should allow at most one concurrent create-if-absent upload"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+			assert.NotNil(t, createBucketResult)
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			results := make([]*s3.PutObjectOutput, 2)
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					results[i], errs[i] = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+						Bucket:      bucketName,
+						Body:        bytes.NewReader(body),
+						Key:         key,
+						IfNoneMatch: aws.String("*"),
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					assert.NotNil(t, results[i])
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent create-if-absent upload may succeed")
+		})
+
 		t.Run("it should hit the upload limit when uploading an object that is too large"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)

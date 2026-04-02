@@ -397,7 +397,7 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 	return object, readers, nil
 }
 
-func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutObject")
 	defer span.End()
 
@@ -405,7 +405,7 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
-	putObjectResult, err := psm.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput)
+	putObjectResult, err := psm.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return nil, err

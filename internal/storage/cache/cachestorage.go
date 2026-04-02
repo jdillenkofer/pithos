@@ -193,7 +193,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 	return object, readers, nil
 }
 
-func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutObject")
 	defer span.End()
 
@@ -203,7 +203,7 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.Bucket
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	putObjectResult, err := cs.innerStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput)
+	putObjectResult, err := cs.innerStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}

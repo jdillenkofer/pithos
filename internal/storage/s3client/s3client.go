@@ -247,7 +247,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	return object, readers, nil
 }
 
-func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutObject")
 	defer span.End()
 
@@ -256,6 +256,12 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		Key:         aws.String(key.String()),
 		ContentType: contentType,
 		Body:        reader,
+		IfNoneMatch: func() *string {
+			if opts != nil && opts.IfNoneMatchStar {
+				return aws.String("*")
+			}
+			return nil
+		}(),
 		// @TODO: Use checksumInput
 	})
 	var notFoundError *types.NotFound
@@ -263,6 +269,10 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		return nil, storage.ErrNoSuchBucket
 	}
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
+			return nil, storage.ErrPreconditionFailed
+		}
 		return nil, err
 	}
 
