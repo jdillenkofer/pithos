@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -2006,6 +2007,6 @@ func (s *Server) writeHTMLError(w http.ResponseWriter, statusCode int, code stri
 <li>Message: %s</li>
 </ul>
 </body>
-</html>`, statusCode, http.StatusText(statusCode), statusCode, http.StatusText(statusCode), code, message)
+</html>`, statusCode, http.StatusText(statusCode), statusCode, http.StatusText(statusCode), html.EscapeString(code), html.EscapeString(message))
 	w.Write([]byte(body))
 }
