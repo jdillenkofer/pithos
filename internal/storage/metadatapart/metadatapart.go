@@ -559,7 +559,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	return &storageObject, readers, nil
 }
 
-func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObject")
 	defer span.End()
 
@@ -569,20 +569,23 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	if err != nil {
 		return nil, err
 	}
+	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
-	// if we already have such an object,
-	// remove all previous parts
-	previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
-	if err != nil && err != storage.ErrNoSuchKey {
-		tx.Rollback()
-		return nil, err
-	}
-	if previousObject != nil {
-		for _, part := range previousObject.Parts {
-			err = mbs.partStore.DeletePart(ctx, tx, part.Id)
-			if err != nil {
-				tx.Rollback()
-				return nil, err
+	if !ifNoneMatchStar {
+		// if we already have such an object,
+		// remove all previous parts
+		previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+		if err != nil && err != storage.ErrNoSuchKey {
+			tx.Rollback()
+			return nil, err
+		}
+		if previousObject != nil {
+			for _, part := range previousObject.Parts {
+				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+				if err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 			}
 		}
 	}
@@ -633,7 +636,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		},
 	}
 
-	err = mbs.metadataStore.PutObject(ctx, tx, bucketName, &object)
+	err = mbs.metadataStore.PutObject(ctx, tx, bucketName, &object, &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar})
 	if err != nil {
 		tx.Rollback()
 		return nil, err

@@ -236,9 +236,9 @@ func (m *AuditLogMiddleware) GetObject(ctx context.Context, bucketName storage.B
 	return obj, readers, err
 }
 
-func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	m.log(ctx, auditlog.OpPutObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
-	res, err := m.next.PutObject(ctx, bucketName, key, contentType, data, checksumInput)
+	res, err := m.next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
 	m.log(ctx, auditlog.OpPutObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err)
 	return res, err
 }

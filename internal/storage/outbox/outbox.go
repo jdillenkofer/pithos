@@ -97,7 +97,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			for i, chunk := range chunks {
 				readers[i] = bytes.NewReader(chunk.Content)
 			}
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil)
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -388,9 +388,17 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
+
+	if opts != nil && opts.IfNoneMatchStar {
+		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		return os.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
+	}
 
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {

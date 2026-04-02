@@ -414,7 +414,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, nil
 }
 
-func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object) error {
+func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObject")
 	defer span.End()
 
@@ -426,21 +426,6 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		return metadatastore.ErrNoSuchBucket
 	}
 
-	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
-	if err != nil {
-		return err
-	}
-	if oldObjectEntity != nil {
-		// object already exists
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
-		if err != nil {
-			return err
-		}
-		err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
-		if err != nil {
-			return err
-		}
-	}
 	objectEntity := object.Entity{
 		BucketName:        bucketName,
 		Key:               obj.Key,
@@ -455,11 +440,38 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		Size:              obj.Size,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
-	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
-	objectId := objectEntity.Id
-	if err != nil {
-		return err
+	if opts != nil && opts.IfNoneMatchStar {
+		inserted, err := sms.objectRepository.InsertObjectIfAbsent(ctx, tx, &objectEntity)
+		if err != nil {
+			return err
+		}
+		if !*inserted {
+			return metadatastore.ErrPreconditionFailed
+		}
+	} else {
+		oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+		if err != nil {
+			return err
+		}
+		if oldObjectEntity != nil {
+			// object already exists
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
+			if err != nil {
+				return err
+			}
+			err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
+		if err != nil {
+			return err
+		}
 	}
+
+	objectId := objectEntity.Id
 	sequenceNumber := 0
 	for _, partStruc := range obj.Parts {
 		partEntity := part.Entity{

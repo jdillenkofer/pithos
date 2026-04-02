@@ -16,6 +16,7 @@ type pgxRepository struct {
 
 const (
 	insertObjectStmt                                                                             = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"
+	insertObjectIfAbsentStmt                                                                     = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT DO NOTHING"
 	updateObjectByIdStmt                                                                         = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, etag = $4, checksum_crc32 = $5, checksum_crc32c = $6, checksum_crc64nvme = $7, checksum_sha1 = $8, checksum_sha256 = $9, checksum_type = $10, size = $11, upload_status = $12, upload_id = $13, updated_at = $14 WHERE id = $15"
 	containsBucketObjectsByBucketNameStmt                                                        = "SELECT id FROM objects WHERE bucket_name = $1"
 	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                               = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC"
@@ -89,6 +90,32 @@ func (or *pgxRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *obj
 	object.UpdatedAt = time.Now().UTC()
 	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.UpdatedAt, object.Id.String())
 	return err
+}
+
+func (or *pgxRepository) InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, object *object.Entity) (*bool, error) {
+	mapUploadIdToString := func(uploadId storage.UploadId) string {
+		return uploadId.String()
+	}
+	if object.Id == nil {
+		id := ulid.Make()
+		object.Id = &id
+	}
+	if object.CreatedAt.IsZero() {
+		object.CreatedAt = time.Now().UTC()
+	}
+	object.UpdatedAt = object.CreatedAt
+
+	res, err := tx.ExecContext(ctx, insertObjectIfAbsentStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.CreatedAt, object.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	inserted := rowsAffected > 0
+	return &inserted, nil
 }
 
 func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error) {

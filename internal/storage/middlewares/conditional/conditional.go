@@ -147,12 +147,12 @@ func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucketNa
 	return storage.GetObject(ctx, bucketName, key, ranges)
 }
 
-func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutObject")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput)
+	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 }
 
 func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {

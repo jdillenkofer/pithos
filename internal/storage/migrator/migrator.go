@@ -217,7 +217,7 @@ func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Con
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, input.Body, nil)
+	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, input.Body, nil, nil)
 	if err != nil {
 		return nil, err
 	}

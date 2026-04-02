@@ -145,7 +145,7 @@ func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.
 	return rs.primaryStorage.GetObject(ctx, bucketName, key, ranges)
 }
 
-func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
 	defer span.End()
 
@@ -156,7 +156,7 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	}
 	defer readSeekCloser.Close()
 
-	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput)
+	putObjectResult, err := rs.primaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput)
+		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, opts)
 		if err != nil {
 			return nil, err
 		}

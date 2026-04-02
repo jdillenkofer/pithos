@@ -149,6 +149,7 @@ const expectHeader = "Expect"
 const contentRangeHeader = "Content-Range"
 const contentLengthHeader = "Content-Length"
 const rangeHeader = "Range"
+const ifNoneMatchHeader = "If-None-Match"
 const etagHeader = "ETag"
 const lastModifiedHeader = "Last-Modified"
 const contentTypeHeader = "Content-Type"
@@ -363,6 +364,7 @@ type bucketPolicyStatement struct {
 }
 
 var ErrMalformedPolicy = fmt.Errorf("MalformedPolicy")
+var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
 
 // validateBucketPolicy validates that the policy matches the public-read pattern only.
 // The only supported policy is:
@@ -553,8 +555,12 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 404
 	case ErrMalformedPolicy:
 		statusCode = 400
+	case ErrInvalidRequest:
+		statusCode = 400
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
+	case storage.ErrPreconditionFailed:
+		statusCode = 412
 	default:
 		slog.Error(fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
@@ -1607,6 +1613,15 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
+	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
+	var putObjectOptions *storage.PutObjectOptions
+	if ifNoneMatch != nil {
+		if *ifNoneMatch != "*" {
+			handleError(ErrInvalidRequest, w, r)
+			return
+		}
+		putObjectOptions = &storage.PutObjectOptions{IfNoneMatchStar: true}
+	}
 
 	shouldReturn = validateMaxEntitySize(r, w)
 	if shouldReturn {
@@ -1623,7 +1638,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
-	putObjectResult, err := s.storage.PutObject(ctx, bucketName, key, contentType, r.Body, checksumInput)
+	putObjectResult, err := s.storage.PutObject(ctx, bucketName, key, contentType, r.Body, checksumInput, putObjectOptions)
 	if err != nil {
 		if _, ok := err.(*http.MaxBytesError); ok {
 			err = storage.ErrEntityTooLarge

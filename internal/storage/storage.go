@@ -60,6 +60,10 @@ type PutObjectResult struct {
 	ChecksumSHA256    *string
 }
 
+type PutObjectOptions struct {
+	IfNoneMatchStar bool
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId UploadId
 }
@@ -151,6 +155,7 @@ var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
+var ErrPreconditionFailed error = metadatastore.ErrPreconditionFailed
 var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
 var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
@@ -225,7 +230,7 @@ type ObjectManager interface {
 	// All operations are performed in a single transaction to ensure consistency.
 	// Returns the object metadata, a list of readers (one per range), and an error.
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange) (*Object, []io.ReadCloser, error)
-	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput) (*PutObjectResult, error)
+	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey) error
 }
 
@@ -308,7 +313,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return errors.New("invalid bucketName")
 		}
 
-		_, err = storage.PutObject(ctx, bucketName, key, nil, data, nil)
+		_, err = storage.PutObject(ctx, bucketName, key, nil, data, nil, nil)
 		if err != nil {
 			return err
 		}

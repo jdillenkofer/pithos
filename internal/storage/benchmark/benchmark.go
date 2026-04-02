@@ -120,7 +120,7 @@ func benchmarkUploadSpeedForSize(ctx context.Context, st storage.Storage, bucket
 		}
 		reader := ioutils.NewByteReadSeekCloser(testData)
 
-		_, err = st.PutObject(ctx, bucketName, key, nil, reader, nil)
+		_, err = st.PutObject(ctx, bucketName, key, nil, reader, nil, nil)
 		if err != nil {
 			return 0, err
 		}

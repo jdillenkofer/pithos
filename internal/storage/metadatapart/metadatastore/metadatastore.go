@@ -175,6 +175,7 @@ var ErrBadDigest error = errors.New("BadDigest")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
+var ErrPreconditionFailed error = errors.New("PreconditionFailed")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
 var ErrNoSuchBucketPolicy error = errors.New("NoSuchBucketPolicy")
 
@@ -197,6 +198,10 @@ type ListMultipartUploadsOptions struct {
 type ListPartsOptions struct {
 	PartNumberMarker *string
 	MaxParts         int32
+}
+
+type PutObjectOptions struct {
+	IfNoneMatchStar bool
 }
 
 type MaintenanceStore interface {
@@ -230,7 +235,7 @@ type BucketPolicyStore interface {
 type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
-	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object) error
+	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
 }
 
@@ -319,7 +324,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		ETag:         "",
 		Size:         0,
 		Parts:        []Part{},
-	})
+	}, nil)
 	if err != nil {
 		tx.Rollback()
 		return err

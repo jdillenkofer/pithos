@@ -27,7 +27,7 @@ func (m *mockStorage) CreateBucket(ctx context.Context, bucketName storage.Bucke
 	return nil
 }
 
-func (m *mockStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.PutObjectResult, error) {
+func (m *mockStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	return &storage.PutObjectResult{}, nil
 }
 
