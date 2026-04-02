@@ -165,7 +165,10 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, opts)
+		// Do not forward conditional opts (If-Match / If-None-Match) to secondary
+		// storages. The precondition was already enforced on the primary; the
+		// secondary must replicate the write unconditionally.
+		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, nil)
 		if err != nil {
 			return nil, err
 		}
