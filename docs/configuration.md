@@ -9,6 +9,7 @@
 | `PITHOS_BIND_ADDRESS` | IP address to bind the server to | `0.0.0.0` |
 | `PITHOS_PORT` | Port to run the server on | `9000` |
 | `PITHOS_DOMAIN` | Domain name of the server | `localhost` |
+| `PITHOS_WEBSITE_DOMAIN` | Domain name of the website | `s3-website.localhost` |
 | `PITHOS_REGION` | AWS region for authentication | `eu-central-1` |
 
 ### Authentication and Authorization
