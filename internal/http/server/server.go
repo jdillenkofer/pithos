@@ -1821,31 +1821,25 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
 	if err != nil {
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		w.WriteHeader(http.StatusInternalServerError)
 		return nil, storage.ObjectKey{}, "", false
 	}
 	if !allowed {
 		if !isAuthenticated {
-			s.writeHTMLError(w, http.StatusUnauthorized, "AccessDenied", "Access Denied")
+			w.WriteHeader(http.StatusUnauthorized)
 		} else {
-			s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+			w.WriteHeader(http.StatusForbidden)
 		}
 		return nil, storage.ObjectKey{}, "", false
 	}
 
 	// Auth passed — now it is safe to reveal specific error codes.
 	if configErr != nil {
-		if configErr == storage.ErrNoSuchWebsiteConfiguration {
-			s.writeHTMLError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration",
-				fmt.Sprintf("The specified bucket does not have a website configuration: %s", bucketName.String()))
-			return nil, storage.ObjectKey{}, "", false
+		if configErr == storage.ErrNoSuchWebsiteConfiguration || configErr == storage.ErrNoSuchBucket {
+			w.WriteHeader(http.StatusNotFound)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
 		}
-		if configErr == storage.ErrNoSuchBucket {
-			s.writeHTMLError(w, http.StatusNotFound, "NoSuchBucket",
-				fmt.Sprintf("The specified bucket does not exist: %s", bucketName.String()))
-			return nil, storage.ObjectKey{}, "", false
-		}
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
 		return nil, storage.ObjectKey{}, "", false
 	}
 
@@ -1864,7 +1858,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
-		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -1882,7 +1876,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return
 		}
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
@@ -1914,7 +1908,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
-		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -1932,7 +1926,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return
 		}
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 

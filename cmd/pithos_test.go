@@ -3893,9 +3893,6 @@ func TestWebsiteHosting(t *testing.T) {
 
 			// Anonymous request denied by authorizer must return 401
 			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			bodyStr := string(bodyBytes)
-			assert.Contains(t, bodyStr, "AccessDenied")
 		})
 
 		t.Run("it should return error for bucket without website config"+testSuffix, func(t *testing.T) {
@@ -3922,9 +3919,6 @@ func TestWebsiteHosting(t *testing.T) {
 			defer resp.Body.Close()
 
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			bodyStr := string(bodyBytes)
-			assert.Contains(t, bodyStr, "NoSuchWebsiteConfiguration")
 		})
 
 		t.Run("it should handle HEAD requests"+testSuffix, func(t *testing.T) {
@@ -3997,9 +3991,6 @@ func TestWebsiteHosting(t *testing.T) {
 			defer resp.Body.Close()
 
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			bodyStr := string(bodyBytes)
-			assert.Contains(t, bodyStr, "NoSuchBucket")
 		})
 	})
 }
