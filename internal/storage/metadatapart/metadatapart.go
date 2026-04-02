@@ -636,7 +636,11 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		},
 	}
 
-	err = mbs.metadataStore.PutObject(ctx, tx, bucketName, &object, &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar})
+	metadataPutObjectOptions := &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar}
+	if opts != nil {
+		metadataPutObjectOptions.IfMatchETag = opts.IfMatchETag
+	}
+	err = mbs.metadataStore.PutObject(ctx, tx, bucketName, &object, metadataPutObjectOptions)
 	if err != nil {
 		tx.Rollback()
 		return nil, err

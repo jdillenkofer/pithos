@@ -62,6 +62,7 @@ type PutObjectResult struct {
 
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
+	IfMatchETag     *string
 }
 
 type InitiateMultipartUploadResult struct {

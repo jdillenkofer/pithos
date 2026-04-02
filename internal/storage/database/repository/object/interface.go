@@ -20,6 +20,7 @@ type Repository interface {
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error)
 	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
+	DeleteObjectByIdAndETag(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, etag string) (*bool, error)
 }
 
 type Entity struct {
