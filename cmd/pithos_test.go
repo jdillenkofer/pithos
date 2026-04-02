@@ -3835,7 +3835,7 @@ func TestWebsiteHosting(t *testing.T) {
 			assert.Contains(t, resp.Header.Get("Content-Type"), "text/html")
 		})
 
-		t.Run("it should return 403 for bucket without public-read policy"+testSuffix, func(t *testing.T) {
+		t.Run("it should return 401 for anonymous request denied by authorizer"+testSuffix, func(t *testing.T) {
 			// Use a deny-anonymous authorizer: anonymous requests are always denied,
 			// authenticated requests are always allowed. This simulates a private bucket.
 			denyAnonAuthorizer, err := lua.NewLuaAuthorizer(`
@@ -3850,7 +3850,7 @@ func TestWebsiteHosting(t *testing.T) {
 			t.Cleanup(cleanup)
 			ctx := context.Background()
 
-			// Create bucket with website config but NO policy
+			// Create bucket with website config
 			_, err = s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 				Bucket: bucketName,
 			})
@@ -3870,7 +3870,7 @@ func TestWebsiteHosting(t *testing.T) {
 				t.Fatalf("PutBucketWebsite failed: %v", err)
 			}
 
-			// Upload an object so we can verify the 403 isn't just a 404
+			// Upload an object so we can verify the 401 isn't just a 404
 			_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
 				Bucket:      bucketName,
 				Key:         aws.String("index.html"),
@@ -3891,7 +3891,8 @@ func TestWebsiteHosting(t *testing.T) {
 			}
 			defer resp.Body.Close()
 
-			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+			// Anonymous request denied by authorizer must return 401
+			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			bodyStr := string(bodyBytes)
 			assert.Contains(t, bodyStr, "AccessDenied")
