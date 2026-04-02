@@ -1785,23 +1785,16 @@ func websiteResolveKey(keyStr string, websiteConfig *storage.WebsiteConfiguratio
 	return keyStr
 }
 
-func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
-	ctx, span := s.tracer.Start(r.Context(), "Server.serveWebsiteGetObject")
-	defer span.End()
-
-	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
-	if err != nil {
-		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
-		return
-	}
-
+// websitePrepare fetches the website configuration, resolves the request key,
+// and authorizes the request. It writes an error response and returns false if
+// any step fails; on success it returns the resolved config, object key, and
+// resolved key string.
+func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *http.Request, operation string, bucketName storage.BucketName) (websiteConfig *storage.WebsiteConfiguration, objectKey storage.ObjectKey, resolvedKey string, ok bool) {
 	websiteConfig, configErr := s.storage.GetBucketWebsiteConfiguration(ctx, bucketName)
 
 	// Resolve key and authorize with it when possible, fall back to nil key
 	// when the config is unavailable (key resolution requires the index suffix).
 	// Auth always runs before any existence information is revealed.
-	var resolvedKey string
-	var objectKey storage.ObjectKey
 	var keyStr *string
 	if configErr == nil {
 		resolvedKey = websiteResolveKey(r.PathValue(keyPath), websiteConfig)
@@ -1821,7 +1814,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	bucketStr := bucketName.String()
 	authRequest := &authorization.Request{
-		Operation:     authorization.OperationGetObject,
+		Operation:     operation,
 		Authorization: authorization.Authorization{AccessKeyId: accessKeyId},
 		Bucket:        &bucketStr,
 		Key:           keyStr,
@@ -1829,7 +1822,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
 	if err != nil {
 		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
-		return
+		return nil, storage.ObjectKey{}, "", false
 	}
 	if !allowed {
 		if !isAuthenticated {
@@ -1837,7 +1830,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		} else {
 			s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
 		}
-		return
+		return nil, storage.ObjectKey{}, "", false
 	}
 
 	// Auth passed — now it is safe to reveal specific error codes.
@@ -1845,20 +1838,38 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		if configErr == storage.ErrNoSuchWebsiteConfiguration {
 			s.writeHTMLError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration",
 				fmt.Sprintf("The specified bucket does not have a website configuration: %s", bucketName.String()))
-			return
+			return nil, storage.ObjectKey{}, "", false
 		}
 		if configErr == storage.ErrNoSuchBucket {
 			s.writeHTMLError(w, http.StatusNotFound, "NoSuchBucket",
 				fmt.Sprintf("The specified bucket does not exist: %s", bucketName.String()))
-			return
+			return nil, storage.ObjectKey{}, "", false
 		}
 		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
-		return
+		return nil, storage.ObjectKey{}, "", false
 	}
 
 	if keyStr == nil {
 		s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
 			fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
+		return nil, storage.ObjectKey{}, "", false
+	}
+
+	return websiteConfig, objectKey, resolvedKey, true
+}
+
+func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.serveWebsiteGetObject")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		s.writeHTMLError(w, http.StatusBadRequest, "InvalidBucketName", "The specified bucket is not valid.")
+		return
+	}
+
+	websiteConfig, objectKey, resolvedKey, ok := s.websitePrepare(ctx, w, r, authorization.OperationGetObject, bucketName)
+	if !ok {
 		return
 	}
 
@@ -1907,70 +1918,12 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	websiteConfig, configErr := s.storage.GetBucketWebsiteConfiguration(ctx, bucketName)
-
-	var resolvedKey string
-	var objectKey storage.ObjectKey
-	var keyStr *string
-	if configErr == nil {
-		resolvedKey = websiteResolveKey(r.PathValue(keyPath), websiteConfig)
-		if k, err := storage.NewObjectKey(resolvedKey); err == nil {
-			objectKey = k
-			s := k.String()
-			keyStr = &s
-		}
-	}
-
-	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
-	var accessKeyId *string
-	if isAuthenticated {
-		keyIdStr, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
-		accessKeyId = &keyIdStr
-	}
-
-	bucketStr := bucketName.String()
-	authRequest := &authorization.Request{
-		Operation:     authorization.OperationHeadObject,
-		Authorization: authorization.Authorization{AccessKeyId: accessKeyId},
-		Bucket:        &bucketStr,
-		Key:           keyStr,
-	}
-	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
-	if err != nil {
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
-		return
-	}
-	if !allowed {
-		if !isAuthenticated {
-			s.writeHTMLError(w, http.StatusUnauthorized, "AccessDenied", "Access Denied")
-		} else {
-			s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
-		}
+	websiteConfig, objectKey, resolvedKey, ok := s.websitePrepare(ctx, w, r, authorization.OperationHeadObject, bucketName)
+	if !ok {
 		return
 	}
 
-	if configErr != nil {
-		if configErr == storage.ErrNoSuchWebsiteConfiguration {
-			s.writeHTMLError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration",
-				fmt.Sprintf("The specified bucket does not have a website configuration: %s", bucketName.String()))
-			return
-		}
-		if configErr == storage.ErrNoSuchBucket {
-			s.writeHTMLError(w, http.StatusNotFound, "NoSuchBucket",
-				fmt.Sprintf("The specified bucket does not exist: %s", bucketName.String()))
-			return
-		}
-		s.writeHTMLError(w, http.StatusInternalServerError, "InternalError", "We encountered an internal error. Please try again.")
-		return
-	}
-
-	if keyStr == nil {
-		s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
-			fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
-		return
-	}
-
-	slog.Info("Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
+	slog.Info("Website: head object", "bucket", bucketName.String(), "key", resolvedKey)
 
 	object, err := s.storage.HeadObject(ctx, bucketName, objectKey)
 	if err != nil {
