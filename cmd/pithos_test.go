@@ -534,6 +534,10 @@ func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, 
 }
 
 func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
+	return setupTestServerWithAuthorizer(mustRequestAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+}
+
+func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthorizer, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
 	cleanups := make([]func(), 0, 8)
@@ -549,8 +553,6 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 	}
 
 	baseEndpoint := testAPIEndpoint
-
-	requestAuthorizer := mustRequestAuthorizer()
 
 	dbs, err := setupTestDatabases(ctx, dbType, useReplication, storagePath, storagePath2)
 	mustNoErr(err, "Couldn't set up test databases")
@@ -3636,131 +3638,6 @@ func TestBucketWebsite(t *testing.T) {
 	})
 }
 
-func TestBucketPolicy(t *testing.T) {
-	testutils.SkipIfNotIntegration(t)
-
-	t.Parallel()
-
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
-		t.Run("it should put and get bucket policy"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
-			t.Cleanup(cleanup)
-
-			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-
-			policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::%s/*"}]}`, *bucketName)
-
-			_, err = s3Client.PutBucketPolicy(context.Background(), &s3.PutBucketPolicyInput{
-				Bucket: bucketName,
-				Policy: aws.String(policy),
-			})
-			if err != nil {
-				assert.Fail(t, "PutBucketPolicy failed", "err %v", err)
-			}
-
-			getResult, err := s3Client.GetBucketPolicy(context.Background(), &s3.GetBucketPolicyInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "GetBucketPolicy failed", "err %v", err)
-			}
-			assert.NotNil(t, getResult.Policy)
-			assert.Contains(t, *getResult.Policy, "s3:GetObject")
-			assert.Contains(t, *getResult.Policy, *bucketName)
-		})
-
-		t.Run("it should delete bucket policy"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
-			t.Cleanup(cleanup)
-
-			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-
-			policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::%s/*"}]}`, *bucketName)
-
-			_, err = s3Client.PutBucketPolicy(context.Background(), &s3.PutBucketPolicyInput{
-				Bucket: bucketName,
-				Policy: aws.String(policy),
-			})
-			if err != nil {
-				assert.Fail(t, "PutBucketPolicy failed", "err %v", err)
-			}
-
-			_, err = s3Client.DeleteBucketPolicy(context.Background(), &s3.DeleteBucketPolicyInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "DeleteBucketPolicy failed", "err %v", err)
-			}
-
-			// Get should fail with NoSuchBucketPolicy
-			_, err = s3Client.GetBucketPolicy(context.Background(), &s3.GetBucketPolicyInput{
-				Bucket: bucketName,
-			})
-			assert.Error(t, err, "GetBucketPolicy should fail after deletion")
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) {
-				assert.Equal(t, "NoSuchBucketPolicy", apiErr.ErrorCode())
-			} else {
-				assert.Fail(t, "Expected API error", "err %v", err)
-			}
-		})
-
-		t.Run("it should reject non-public-read policies"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
-			t.Cleanup(cleanup)
-
-			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-
-			// Try a policy with a non-public-read action
-			badPolicy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:PutObject","Resource":"arn:aws:s3:::%s/*"}]}`, *bucketName)
-
-			_, err = s3Client.PutBucketPolicy(context.Background(), &s3.PutBucketPolicyInput{
-				Bucket: bucketName,
-				Policy: aws.String(badPolicy),
-			})
-			assert.Error(t, err, "PutBucketPolicy should reject non-public-read policies")
-		})
-
-		t.Run("it should return error getting policy for bucket without one"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
-			t.Cleanup(cleanup)
-
-			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
-				Bucket: bucketName,
-			})
-			if err != nil {
-				assert.Fail(t, "CreateBucket failed", "err %v", err)
-			}
-
-			_, err = s3Client.GetBucketPolicy(context.Background(), &s3.GetBucketPolicyInput{
-				Bucket: bucketName,
-			})
-			assert.Error(t, err, "GetBucketPolicy should fail for bucket without policy")
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) {
-				assert.Equal(t, "NoSuchBucketPolicy", apiErr.ErrorCode())
-			} else {
-				assert.Fail(t, "Expected API error", "err %v", err)
-			}
-		})
-	})
-}
-
 func TestWebsiteHosting(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 
@@ -3796,16 +3673,6 @@ func TestWebsiteHosting(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatalf("PutBucketWebsite failed: %v", err)
-			}
-
-			// Set public-read policy
-			policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::%s/*"}]}`, *bucketName)
-			_, err = s3Client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
-				Bucket: bucketName,
-				Policy: aws.String(policy),
-			})
-			if err != nil {
-				t.Fatalf("PutBucketPolicy failed: %v", err)
 			}
 
 			// Upload index.html
@@ -3950,15 +3817,6 @@ func TestWebsiteHosting(t *testing.T) {
 				t.Fatalf("PutBucketWebsite failed: %v", err)
 			}
 
-			policy := fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::%s/*"}]}`, *bucketName)
-			_, err = s3Client.PutBucketPolicy(ctx, &s3.PutBucketPolicyInput{
-				Bucket: bucketName,
-				Policy: aws.String(policy),
-			})
-			if err != nil {
-				t.Fatalf("PutBucketPolicy failed: %v", err)
-			}
-
 			httpClient := buildWebsiteHttpClient(addr)
 			tcpAddr, _ := net.ResolveTCPAddr("tcp", addr)
 			url := fmt.Sprintf("http://%s.%s:%d/nonexistent.html", *bucketName, testWebsiteEndpoint, tcpAddr.Port)
@@ -3978,12 +3836,22 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should return 403 for bucket without public-read policy"+testSuffix, func(t *testing.T) {
-			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			// Use a deny-anonymous authorizer: anonymous requests are always denied,
+			// authenticated requests are always allowed. This simulates a private bucket.
+			denyAnonAuthorizer, err := lua.NewLuaAuthorizer(`
+			function authorizeRequest(request)
+			  return not request:isAnonymous()
+			end
+			`)
+			if err != nil {
+				t.Fatalf("Could not create deny-anon authorizer: %v", err)
+			}
+			s3Client, addr, cleanup := setupTestServerWithAuthorizer(denyAnonAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
 			ctx := context.Background()
 
 			// Create bucket with website config but NO policy
-			_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+			_, err = s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 				Bucket: bucketName,
 			})
 			if err != nil {

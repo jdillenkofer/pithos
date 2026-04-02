@@ -589,39 +589,3 @@ func (os *outboxStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, b
 
 	return os.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
-
-func (os *outboxStorage) GetBucketPolicy(ctx context.Context, bucketName storage.BucketName) (string, error) {
-	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketPolicy")
-	defer span.End()
-
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
-	if err != nil {
-		return "", err
-	}
-
-	return os.innerStorage.GetBucketPolicy(ctx, bucketName)
-}
-
-func (os *outboxStorage) PutBucketPolicy(ctx context.Context, bucketName storage.BucketName, policy string) error {
-	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketPolicy")
-	defer span.End()
-
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-
-	return os.innerStorage.PutBucketPolicy(ctx, bucketName, policy)
-}
-
-func (os *outboxStorage) DeleteBucketPolicy(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketPolicy")
-	defer span.End()
-
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-
-	return os.innerStorage.DeleteBucketPolicy(ctx, bucketName)
-}
