@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -352,4 +356,220 @@ func TestConditionalDeleteObject_WildcardMatchMissingObject(t *testing.T) {
 	// Delete with If-Match: * on a non-existent object — should return PreconditionFailed.
 	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+}
+
+// --- AppendObject tests ---
+
+func TestAppendObject_CreateOnMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// Append to a non-existent key — should behave like PutObject.
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.ETag)
+	assert.Equal(t, int64(5), result.Size)
+
+	obj, err := st.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), obj.Size)
+}
+
+func TestAppendObject_AppendsToExisting(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(11), result.Size)
+
+	// Read back and verify the concatenated content.
+	_, readers, err := st.GetObject(ctx, bucket, key, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	defer readers[0].Close()
+	content, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", string(content))
+}
+
+func TestAppendObject_ETagIsMultipartStyle(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part1")), nil, nil)
+	require.NoError(t, err)
+
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part2")), nil, nil)
+	require.NoError(t, err)
+
+	// After two appends the object has 2 parts, so ETag must end in "-2".
+	// ETags are stored with surrounding double-quotes, e.g. `"abc123-2"`.
+	assert.True(t, len(result.ETag) > 3 && result.ETag[len(result.ETag)-3:] == "-2\"",
+		"expected multipart ETag ending in -2\", got %q", result.ETag)
+}
+
+func TestAppendObject_CorrectWriteOffset(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	first, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	// Append with the correct write offset (== current size) — should succeed.
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil,
+		&storage.AppendObjectOptions{WriteOffset: &first.Size})
+	require.NoError(t, err)
+}
+
+func TestAppendObject_WrongWriteOffset(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	// Append with a wrong write offset — should return ErrInvalidWriteOffset.
+	wrongOffset := int64(999)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil,
+		&storage.AppendObjectOptions{WriteOffset: &wrongOffset})
+	assert.ErrorIs(t, err, storage.ErrInvalidWriteOffset)
+}
+
+func TestAppendObject_WriteOffsetZeroOnMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// WriteOffset == 0 on a non-existent object should succeed (create new object).
+	zero := int64(0)
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil,
+		&storage.AppendObjectOptions{WriteOffset: &zero})
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), result.Size)
+}
+
+func TestAppendObject_WriteOffsetNonZeroOnMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// WriteOffset != 0 on a non-existent object should return ErrInvalidWriteOffset.
+	nonZero := int64(5)
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil,
+		&storage.AppendObjectOptions{WriteOffset: &nonZero})
+	assert.ErrorIs(t, err, storage.ErrInvalidWriteOffset)
+}
+
+func TestAppendObject_NoSuchBucket(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("nonexistent")
+	key := storage.MustNewObjectKey("obj")
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("data")), nil, nil)
+	assert.ErrorIs(t, err, storage.ErrNoSuchBucket)
+}
+
+func TestAppendObject_TooManyParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("stress")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// Seed an object with exactly 10,000 parts directly via the metadata store
+	// so we don't have to perform 10,000 real appends (which would be O(n²) in
+	// SQLite and cause CI timeouts).
+	const maxParts = 10_000
+	parts := make([]metadatastore.Part, maxParts)
+	partChecksumsList := make([]checksumutils.PartChecksums, maxParts)
+
+	// ETag of a single byte "x", as produced by CalculateChecksumsStreaming.
+	partData := []byte("x")
+	_, partChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, bytes.NewReader(partData), func(r io.Reader) error { return nil })
+	require.NoError(t, err)
+	partETag := *partChecksums.ETag
+
+	for i := range parts {
+		pid, err := partstore.NewRandomPartId()
+		require.NoError(t, err)
+		parts[i] = metadatastore.Part{
+			Id:   *pid,
+			ETag: partETag,
+			Size: int64(len(partData)),
+		}
+		partChecksumsList[i] = checksumutils.PartChecksums{ETag: partETag, Size: int64(len(partData))}
+	}
+
+	objectChecksums, err := checksumutils.CalculateMultipartChecksums(partChecksumsList, checksumutils.ChecksumTypeFullObject)
+	require.NoError(t, err)
+
+	tx, err := st.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	for _, p := range parts {
+		require.NoError(t, st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)))
+	}
+	err = st.metadataStore.PutObject(ctx, tx, bucket, &metadatastore.Object{
+		Key:   key,
+		ETag:  *objectChecksums.ETag,
+		Size:  int64(maxParts) * int64(len(partData)),
+		Parts: parts,
+	}, nil)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, err)
+
+	// The next append must fail with ErrTooManyParts.
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("x")), nil, nil)
+	assert.ErrorIs(t, err, storage.ErrTooManyParts)
 }

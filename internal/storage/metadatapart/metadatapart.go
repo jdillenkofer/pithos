@@ -622,6 +622,145 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	}, nil
 }
 
+func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AppendObject")
+	defer span.End()
+
+	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
+	defer unblockGC()
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch the existing object (if any).
+	existingObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	if err != nil && err != storage.ErrNoSuchKey {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Validate WriteOffset condition.
+	if opts != nil && opts.WriteOffset != nil {
+		if existingObject == nil {
+			// Object does not exist — only allowed when offset == 0.
+			if *opts.WriteOffset != 0 {
+				tx.Rollback()
+				return nil, storage.ErrInvalidWriteOffset
+			}
+		} else {
+			// Object exists — offset must equal current size.
+			if *opts.WriteOffset != existingObject.Size {
+				tx.Rollback()
+				return nil, storage.ErrInvalidWriteOffset
+			}
+		}
+	}
+
+	// Write the new part's bytes.
+	newPartId, err := partstore.NewRandomPartId()
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	newPartSize, newPartChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
+		return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+	})
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Validate checksums for the new data chunk (if provided by the caller).
+	if err = metadatastore.ValidateChecksums(checksumInput, *newPartChecksums); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	newPart := metadatastore.Part{
+		Id:                *newPartId,
+		ETag:              *newPartChecksums.ETag,
+		ChecksumCRC32:     newPartChecksums.ChecksumCRC32,
+		ChecksumCRC32C:    newPartChecksums.ChecksumCRC32C,
+		ChecksumCRC64NVME: newPartChecksums.ChecksumCRC64NVME,
+		ChecksumSHA1:      newPartChecksums.ChecksumSHA1,
+		ChecksumSHA256:    newPartChecksums.ChecksumSHA256,
+		Size:              *newPartSize,
+	}
+
+	// Build the combined part list (existing parts first, then new part).
+	var allParts []metadatastore.Part
+	var totalSize int64
+	if existingObject != nil {
+		allParts = append(allParts, existingObject.Parts...)
+		totalSize = existingObject.Size
+	}
+
+	// S3 enforces a maximum of 10,000 parts per object.
+	const maxAppendParts = 10_000
+	if len(allParts)+1 > maxAppendParts {
+		tx.Rollback()
+		return nil, storage.ErrTooManyParts
+	}
+
+	allParts = append(allParts, newPart)
+	totalSize += *newPartSize
+
+	// Compute the whole-object ETag as MD5-of-part-ETags (multipart-style).
+	partChecksums := make([]checksumutils.PartChecksums, len(allParts))
+	for i, p := range allParts {
+		partChecksums[i] = checksumutils.PartChecksums{
+			ETag: p.ETag,
+			Size: p.Size,
+		}
+	}
+	combinedChecksums, err := checksumutils.CalculateMultipartChecksums(partChecksums, checksumutils.ChecksumTypeFullObject)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	// Determine content type: preserve existing or fall back to nil (unchanged).
+	var contentType *string
+	if existingObject != nil {
+		contentType = existingObject.ContentType
+	}
+
+	updatedObject := &metadatastore.Object{
+		Key:          key,
+		ContentType:  contentType,
+		LastModified: time.Now(),
+		ETag:         *combinedChecksums.ETag,
+		ChecksumType: ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject),
+		Size:         totalSize,
+		Parts:        allParts,
+	}
+
+	metaOpts := &metadatastore.AppendObjectOptions{}
+	if err = mbs.metadataStore.AppendObject(ctx, tx, bucketName, updatedObject, metaOpts); err != nil {
+		tx.Rollback()
+		// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a
+		// concurrent write that changed the object between our HeadObject read
+		// and this update. It surfaces that as ErrCASFailure. From the caller's
+		// perspective the object size moved under them, so we normalise the
+		// error to ErrInvalidWriteOffset (HTTP 400).
+		if err == storage.ErrCASFailure {
+			return nil, storage.ErrInvalidWriteOffset
+		}
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &storage.AppendObjectResult{
+		ETag: *combinedChecksums.ETag,
+		Size: totalSize,
+	}, nil
+}
+
 func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObject")
 	defer span.End()

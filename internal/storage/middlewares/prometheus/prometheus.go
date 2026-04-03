@@ -371,6 +371,25 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 	return putObjectResult, nil
 }
 
+func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.AppendObject")
+	defer span.End()
+
+	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
+		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
+	})
+
+	appendObjectResult, err := psm.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AppendObject"}).Inc()
+		return nil, err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "AppendObject"}).Inc()
+
+	return appendObjectResult, nil
+}
+
 func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObject")
 	defer span.End()

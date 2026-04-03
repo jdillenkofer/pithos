@@ -487,6 +487,118 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	return nil
 }
 
+func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.AppendObjectOptions) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AppendObject")
+	defer span.End()
+
+	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*existsBucket {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	// Check whether an object already exists at this key.
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+	if err != nil {
+		return err
+	}
+
+	if oldObjectEntity != nil {
+		// Delete old parts metadata rows (the new part list is supplied in obj.Parts).
+		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
+		if err != nil {
+			return err
+		}
+
+		// Use a conditional delete (WHERE id=X AND etag=Y) as the CAS step so
+		// that a concurrent append or put that already changed the ETag causes
+		// this transaction to fail rather than silently overwriting.
+		deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, oldObjectEntity.ETag)
+		if err != nil {
+			return err
+		}
+		if !*deleted {
+			return metadatastore.ErrCASFailure
+		}
+
+		// Re-insert to get a fresh row (same approach as PutObject).
+		newEntity := object.Entity{
+			BucketName:   bucketName,
+			Key:          obj.Key,
+			ContentType:  oldObjectEntity.ContentType,
+			ETag:         obj.ETag,
+			ChecksumType: obj.ChecksumType,
+			Size:         obj.Size,
+			UploadStatus: object.UploadStatusCompleted,
+		}
+		err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
+		if err != nil {
+			return err
+		}
+
+		sequenceNumber := 0
+		for _, partStruc := range obj.Parts {
+			partEntity := part.Entity{
+				PartId:            partStruc.Id,
+				ObjectId:          *newEntity.Id,
+				ETag:              partStruc.ETag,
+				ChecksumCRC32:     partStruc.ChecksumCRC32,
+				ChecksumCRC32C:    partStruc.ChecksumCRC32C,
+				ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
+				ChecksumSHA1:      partStruc.ChecksumSHA1,
+				ChecksumSHA256:    partStruc.ChecksumSHA256,
+				Size:              partStruc.Size,
+				SequenceNumber:    sequenceNumber,
+			}
+			err = sms.partRepository.SavePart(ctx, tx, &partEntity)
+			if err != nil {
+				return err
+			}
+			sequenceNumber++
+		}
+		return nil
+	}
+
+	// No existing object — create a new one (same semantics as PutObject).
+	newEntity := object.Entity{
+		BucketName:   bucketName,
+		Key:          obj.Key,
+		ContentType:  obj.ContentType,
+		ETag:         obj.ETag,
+		ChecksumType: obj.ChecksumType,
+		Size:         obj.Size,
+		UploadStatus: object.UploadStatusCompleted,
+	}
+	err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
+	if err != nil {
+		return err
+	}
+
+	sequenceNumber := 0
+	for _, partStruc := range obj.Parts {
+		partEntity := part.Entity{
+			PartId:            partStruc.Id,
+			ObjectId:          *newEntity.Id,
+			ETag:              partStruc.ETag,
+			ChecksumCRC32:     partStruc.ChecksumCRC32,
+			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
+			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
+			ChecksumSHA1:      partStruc.ChecksumSHA1,
+			ChecksumSHA256:    partStruc.ChecksumSHA256,
+			Size:              partStruc.Size,
+			SequenceNumber:    sequenceNumber,
+		}
+		err = sms.partRepository.SavePart(ctx, tx, &partEntity)
+		if err != nil {
+			return err
+		}
+		sequenceNumber++
+	}
+	return nil
+}
+
 func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
@@ -537,9 +649,10 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			if err != nil {
 				return err
 			}
-			if !*deleted {
-				return metadatastore.ErrPreconditionFailed
-			}
+			// 0 rows affected means a concurrent writer already deleted the object.
+			// Since there was no client-supplied condition, the desired outcome
+			// (object gone) is already achieved — treat it as success.
+			_ = deleted
 		}
 	}
 

@@ -217,6 +217,22 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.Bucket
 	return putObjectResult, nil
 }
 
+func (cs *CacheStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.AppendObject")
+	defer span.End()
+
+	appendObjectResult, err := cs.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invalidate the cached object so subsequent reads see the new content.
+	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
+	_ = cs.cache.Remove(cacheKey)
+
+	return appendObjectResult, nil
+}
+
 func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObject")
 	defer span.End()
