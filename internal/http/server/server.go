@@ -1822,14 +1822,14 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 	}
 	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		writePlainError(w, http.StatusInternalServerError)
 		return nil, storage.ObjectKey{}, "", false
 	}
 	if !allowed {
 		if !isAuthenticated {
-			w.WriteHeader(http.StatusUnauthorized)
+			writePlainError(w, http.StatusUnauthorized)
 		} else {
-			w.WriteHeader(http.StatusForbidden)
+			writePlainError(w, http.StatusForbidden)
 		}
 		return nil, storage.ObjectKey{}, "", false
 	}
@@ -1837,9 +1837,9 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 	// Auth passed — now it is safe to reveal specific error codes.
 	if configErr != nil {
 		if configErr == storage.ErrNoSuchWebsiteConfiguration || configErr == storage.ErrNoSuchBucket {
-			w.WriteHeader(http.StatusNotFound)
+			writePlainError(w, http.StatusNotFound)
 		} else {
-			w.WriteHeader(http.StatusInternalServerError)
+			writePlainError(w, http.StatusInternalServerError)
 		}
 		return nil, storage.ObjectKey{}, "", false
 	}
@@ -1859,7 +1859,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writePlainError(w, http.StatusBadRequest)
 		return
 	}
 
@@ -1877,7 +1877,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return
 		}
-		w.WriteHeader(http.StatusInternalServerError)
+		writePlainError(w, http.StatusInternalServerError)
 		return
 	}
 
@@ -1909,7 +1909,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writePlainError(w, http.StatusBadRequest)
 		return
 	}
 
@@ -1927,7 +1927,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return
 		}
-		w.WriteHeader(http.StatusInternalServerError)
+		writePlainError(w, http.StatusInternalServerError)
 		return
 	}
 
@@ -1991,6 +1991,17 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 	}
 
 	io.Copy(w, readers[0])
+}
+
+// writePlainError writes a plain-text error response for the website endpoint.
+// Using a body prevents browsers (notably Safari) from treating bodyless
+// responses as file downloads.
+func writePlainError(w http.ResponseWriter, statusCode int) {
+	w.Header().Set(contentTypeHeader, "text/plain; charset=utf-8")
+	body := fmt.Sprintf("%d %s\n", statusCode, http.StatusText(statusCode))
+	w.Header().Set(contentLengthHeader, fmt.Sprintf("%d", len(body)))
+	w.WriteHeader(statusCode)
+	w.Write([]byte(body))
 }
 
 // writeHTMLError writes a simple HTML error response, similar to how AWS S3
