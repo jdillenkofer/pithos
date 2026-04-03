@@ -234,6 +234,25 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.Buc
 	return nil
 }
 
+func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObjects")
+	defer span.End()
+
+	result, err := cs.innerStorage.DeleteObjects(ctx, bucketName, keys)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range result.Entries {
+		if entry.Deleted {
+			cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, entry.Key)
+			_ = cs.cache.Remove(cacheKey) // best-effort cache eviction
+		}
+	}
+
+	return result, nil
+}
+
 func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.CreateMultipartUpload")
 	defer span.End()

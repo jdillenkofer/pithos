@@ -386,6 +386,21 @@ func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket
 	return nil
 }
 
+func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObjects")
+	defer span.End()
+
+	result, err := psm.innerStorage.DeleteObjects(ctx, bucketName, keys)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObjects"}).Inc()
+		return nil, err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteObjects"}).Inc()
+
+	return result, nil
+}
+
 func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CreateMultipartUpload")
 	defer span.End()

@@ -24,6 +24,7 @@ const (
 	OpGetObject               Operation = "GetObject"
 	OpPutObject               Operation = "PutObject"
 	OpDeleteObject            Operation = "DeleteObject"
+	OpDeleteObjects           Operation = "DeleteObjects"
 	OpCreateMultipartUpload   Operation = "CreateMultipartUpload"
 	OpUploadPart              Operation = "UploadPart"
 	OpCompleteMultipartUpload Operation = "CompleteMultipartUpload"

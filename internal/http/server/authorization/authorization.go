@@ -22,6 +22,7 @@ const (
 	OperationPutObject               = "PutObject"
 	OperationAbortMultipartUpload    = "AbortMultipartUpload"
 	OperationDeleteObject            = "DeleteObject"
+	OperationDeleteObjects           = "DeleteObjects"
 	OperationGetBucketWebsite        = "GetBucketWebsite"
 	OperationPutBucketWebsite        = "PutBucketWebsite"
 	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"

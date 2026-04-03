@@ -310,6 +310,59 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 	return nil
 }
 
+func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObjects")
+	defer span.End()
+
+	identifiers := make([]types.ObjectIdentifier, len(keys))
+	for i, key := range keys {
+		k := key.String()
+		identifiers[i] = types.ObjectIdentifier{Key: &k}
+	}
+
+	deleteResult, err := rs.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucketName.String()),
+		Delete: &types.Delete{
+			Objects: identifiers,
+			Quiet:   aws.Bool(false),
+		},
+	})
+	var notFoundError *types.NotFound
+	if err != nil && errors.As(err, &notFoundError) {
+		return nil, storage.ErrNoSuchBucket
+	}
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	result := &storage.DeleteObjectsResult{
+		Entries: make([]storage.DeleteObjectsEntry, 0, len(keys)),
+	}
+
+	for _, deleted := range deleteResult.Deleted {
+		key := storage.MustNewObjectKey(*deleted.Key)
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+	}
+	for _, errEntry := range deleteResult.Errors {
+		key := storage.MustNewObjectKey(*errEntry.Key)
+		code := ""
+		msg := ""
+		if errEntry.Code != nil {
+			code = *errEntry.Code
+		}
+		if errEntry.Message != nil {
+			msg = *errEntry.Message
+		}
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: false, ErrCode: code, ErrMsg: msg})
+	}
+
+	return result, nil
+}
+
 func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateMultipartUpload")
 	defer span.End()
