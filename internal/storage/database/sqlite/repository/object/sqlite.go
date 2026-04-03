@@ -217,9 +217,17 @@ func (or *sqliteRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUplo
 	return &keyCount, nil
 }
 
-func (or *sqliteRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deleteObjectByIdStmt, objectId.String())
-	return err
+func (or *sqliteRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*bool, error) {
+	res, err := tx.ExecContext(ctx, deleteObjectByIdStmt, objectId.String())
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	deleted := rowsAffected > 0
+	return &deleted, nil
 }
 
 func (or *sqliteRepository) DeleteObjectByIdAndETag(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, etag string) (*bool, error) {

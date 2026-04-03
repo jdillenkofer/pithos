@@ -176,16 +176,16 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	return putObjectResult, nil
 }
 
-func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
 	defer span.End()
 
-	err := rs.primaryStorage.DeleteObject(ctx, bucketName, key)
+	err := rs.primaryStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObject(ctx, bucketName, key)
+		err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
 		if err != nil {
 			return err
 		}
@@ -193,16 +193,16 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName stora
 	return nil
 }
 
-func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjects")
 	defer span.End()
 
-	result, err := rs.primaryStorage.DeleteObjects(ctx, bucketName, keys)
+	result, err := rs.primaryStorage.DeleteObjects(ctx, bucketName, entries)
 	if err != nil {
 		return nil, err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		_, err = secondaryStorage.DeleteObjects(ctx, bucketName, keys)
+		_, err = secondaryStorage.DeleteObjects(ctx, bucketName, entries)
 		if err != nil {
 			return nil, err
 		}

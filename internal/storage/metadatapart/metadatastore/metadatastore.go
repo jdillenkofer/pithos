@@ -199,9 +199,21 @@ type ListPartsOptions struct {
 	MaxParts         int32
 }
 
+// ETagWildcard is the special If-Match / If-None-Match value that matches any
+// object, as defined by the HTTP spec and used by S3.
+const ETagWildcard = "*"
+
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
 	IfMatchETag     *string
+}
+
+type DeleteObjectOptions struct {
+	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
+	// value before deleting; otherwise ErrPreconditionFailed is returned.
+	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
+	// returning ErrPreconditionFailed only when the object does not exist.
+	IfMatchETag *string
 }
 
 type MaintenanceStore interface {
@@ -230,7 +242,7 @@ type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
-	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
+	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
 }
 
 type MultipartStore interface {
@@ -365,7 +377,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key)
+	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -418,7 +430,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key)
+	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
 	if err != nil {
 		tx.Rollback()
 		return err
