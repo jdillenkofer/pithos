@@ -131,20 +131,20 @@ func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucket
 	return storage.ListObjects(ctx, bucketName, opts)
 }
 
-func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.HeadObject")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.HeadObject(ctx, bucketName, key)
+	return storage.HeadObject(ctx, bucketName, key, opts)
 }
 
-func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (csm *conditionalStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetObject")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.GetObject(ctx, bucketName, key, ranges)
+	return storage.GetObject(ctx, bucketName, key, ranges, opts)
 }
 
 func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

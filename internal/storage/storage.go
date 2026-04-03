@@ -73,6 +73,32 @@ type DeleteObjectOptions struct {
 	IfMatchETag *string
 }
 
+// HeadObjectOptions holds conditional request options for HeadObject.
+// ETag values must be bare hex strings (without surrounding quotes).
+type HeadObjectOptions struct {
+	// IfMatchETag, when non-nil, requires the stored object's ETag to match;
+	// otherwise ErrPreconditionFailed is returned.
+	// The special value "*" matches any existing object.
+	IfMatchETag *string
+	// IfNoneMatchETag, when non-nil, requires the stored object's ETag to differ;
+	// otherwise ErrNotModified is returned.
+	// The special value "*" matches any existing object.
+	IfNoneMatchETag *string
+}
+
+// GetObjectOptions holds conditional request options for GetObject.
+// ETag values must be bare hex strings (without surrounding quotes).
+type GetObjectOptions struct {
+	// IfMatchETag, when non-nil, requires the stored object's ETag to match;
+	// otherwise ErrPreconditionFailed is returned.
+	// The special value "*" matches any existing object.
+	IfMatchETag *string
+	// IfNoneMatchETag, when non-nil, requires the stored object's ETag to differ;
+	// otherwise ErrNotModified is returned.
+	// The special value "*" matches any existing object.
+	IfNoneMatchETag *string
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId UploadId
 }
@@ -186,6 +212,7 @@ var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrPreconditionFailed error = metadatastore.ErrPreconditionFailed
+var ErrNotModified error = metadatastore.ErrNotModified
 var ErrInvalidBucketName error = metadatastore.ErrInvalidBucketName
 var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
@@ -247,12 +274,12 @@ type BucketWebsiteManager interface {
 // ObjectManager manages object operations
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
-	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey) (*Object, error)
+	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *HeadObjectOptions) (*Object, error)
 	// GetObject retrieves an object with optional byte ranges.
 	// If ranges is empty or nil, returns the entire object as a single reader.
 	// All operations are performed in a single transaction to ensure consistency.
 	// Returns the object metadata, a list of readers (one per range), and an error.
-	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange) (*Object, []io.ReadCloser, error)
+	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange, opts *GetObjectOptions) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
@@ -341,7 +368,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		object, err := storage.HeadObject(ctx, bucketName, key)
+		object, err := storage.HeadObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return err
 		}

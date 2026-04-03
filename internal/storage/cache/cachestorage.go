@@ -109,18 +109,18 @@ func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.Buck
 	return objects, nil
 }
 
-func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.HeadObject")
 	defer span.End()
 
-	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key)
+	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, opts)
 	if err != nil {
 		return nil, err
 	}
 	return object, nil
 }
 
-func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetObject")
 	defer span.End()
 
@@ -130,7 +130,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 	}
 
 	// Get object metadata
-	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key)
+	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -143,7 +143,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 
 	if err == ErrCacheMiss {
 		// @TODO: only cache byteRange that was requested
-		_, readers, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil)
+		_, readers, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil, opts)
 		if err != nil {
 			return nil, nil, err
 		}

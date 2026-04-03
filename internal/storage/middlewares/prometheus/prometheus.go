@@ -315,11 +315,11 @@ func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketN
 	return mListBucketResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.HeadObject")
 	defer span.End()
 
-	mObject, err := psm.innerStorage.HeadObject(ctx, bucketName, key)
+	mObject, err := psm.innerStorage.HeadObject(ctx, bucketName, key, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadObject"}).Inc()
 		return nil, err
@@ -330,11 +330,11 @@ func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketNa
 	return mObject, nil
 }
 
-func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetObject")
 	defer span.End()
 
-	object, readers, err := psm.innerStorage.GetObject(ctx, bucketName, key, ranges)
+	object, readers, err := psm.innerStorage.GetObject(ctx, bucketName, key, ranges, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 		return nil, nil, err

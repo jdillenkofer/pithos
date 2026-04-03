@@ -176,6 +176,7 @@ var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequ
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 var ErrPreconditionFailed error = errors.New("PreconditionFailed")
+var ErrNotModified error = errors.New("NotModified")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
 
 type ListObjectsOptions struct {

@@ -106,7 +106,7 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 }
 
 func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName, sourceObject storage.Object) error {
-	_, readers, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil)
+	_, readers, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
 	if err != nil {
 		return err
 	}
