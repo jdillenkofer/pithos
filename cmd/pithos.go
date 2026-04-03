@@ -65,6 +65,12 @@ function authorizeRequest(request)
 end
 `
 
+const defaultAuthorizationCodeWithCredentials = `
+function authorizeRequest(request)
+  return not request:isAnonymous()
+end
+`
+
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
@@ -161,7 +167,8 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 		}
 	}()
 
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath())
+	hasCredentials := len(settings.Credentials()) > 0
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
 	}
@@ -196,12 +203,17 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}
 }
 
-func loadRequestAuthorizer(authorizerPath string) (*lua.LuaAuthorizer, error) {
+func loadRequestAuthorizer(authorizerPath string, hasCredentials bool) (*lua.LuaAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
-		slog.Warn("Using defaultAuthorizationCode (which allows every operation) as fallback")
-		authorizerCode = []byte(defaultAuthorizationCode)
+		if hasCredentials {
+			slog.Warn("No authorizer.lua found but credentials are configured — using default authorizer (anonymous requests will be denied)")
+			authorizerCode = []byte(defaultAuthorizationCodeWithCredentials)
+		} else {
+			slog.Warn("No authorizer.lua found and no credentials configured — using permissive default authorizer (all requests will be allowed)")
+			authorizerCode = []byte(defaultAuthorizationCode)
+		}
 	}
 	return lua.NewLuaAuthorizer(string(authorizerCode))
 }

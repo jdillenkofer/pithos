@@ -59,6 +59,17 @@ export PITHOS_CREDENTIALS_3_SECRET_ACCESS_KEY="my-bucket-readonly-secret-access-
 
 The Lua authorizer script controls access to all operations, including anonymous requests from the website endpoint. The `authorizeRequest` function receives a `request` object and must return `true` to allow or `false` to deny.
 
+### Default Behaviour (no authorizer.lua)
+
+When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether credentials are configured:
+
+| Credentials configured | Default behaviour |
+|------------------------|-------------------|
+| No | All requests are allowed (permissive mode, suitable for local development) |
+| Yes | Anonymous requests are denied; authenticated requests are allowed |
+
+To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
+
 ### Request Object
 
 | Field | Type | Description |
