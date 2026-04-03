@@ -431,7 +431,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 			if err != nil {
 				return err
 			}
-			err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
+			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
 			if err != nil {
 				return err
 			}
@@ -468,7 +468,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
 
@@ -485,15 +485,42 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 
+	if opts != nil && opts.IfMatchETag != nil {
+		if *opts.IfMatchETag == metadatastore.ETagWildcard {
+			// If-Match: * — object must exist (any ETag); 412 if absent.
+			if objectEntity == nil {
+				return metadatastore.ErrPreconditionFailed
+			}
+		} else {
+			// Conditional delete: object must exist and ETag must match exactly.
+			if objectEntity == nil || objectEntity.ETag != *opts.IfMatchETag {
+				return metadatastore.ErrPreconditionFailed
+			}
+		}
+	}
+
 	if objectEntity != nil {
 		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
 		if err != nil {
 			return err
 		}
 
-		err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
-		if err != nil {
-			return err
+		if opts != nil && opts.IfMatchETag != nil && *opts.IfMatchETag != metadatastore.ETagWildcard {
+			deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *objectEntity.Id, *opts.IfMatchETag)
+			if err != nil {
+				return err
+			}
+			if !*deleted {
+				return metadatastore.ErrPreconditionFailed
+			}
+		} else {
+			deleted, err := sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return err
+			}
+			if !*deleted {
+				return metadatastore.ErrPreconditionFailed
+			}
 		}
 	}
 
@@ -668,7 +695,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			}
 		}, oldPartEntities)
 
-		err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
+		_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -744,7 +771,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		}
 	}, partEntities)
 
-	err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}

@@ -18,10 +18,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
 type Validator struct {
@@ -111,7 +111,7 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 				report.FailedObjects++
 				if v.deleteCorrupted {
 					if v.confirmDeletion(result) {
-						err := v.storage.DeleteObject(ctx, bucket.Name, object.Key)
+						err := v.storage.DeleteObject(ctx, bucket.Name, object.Key, nil)
 						if err != nil {
 							result.ActionTaken = fmt.Sprintf("Failed to delete: %v", err)
 						} else {

@@ -65,6 +65,14 @@ type PutObjectOptions struct {
 	IfMatchETag     *string
 }
 
+type DeleteObjectOptions struct {
+	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
+	// value before deleting; otherwise ErrPreconditionFailed is returned.
+	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
+	// returning ErrPreconditionFailed only when the object does not exist.
+	IfMatchETag *string
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId UploadId
 }
@@ -145,11 +153,19 @@ type DeleteObjectsResult struct {
 	Entries []DeleteObjectsEntry
 }
 
+// DeleteObjectsInputEntry represents a single entry in a bulk DeleteObjects request, optionally with a conditional ETag.
+type DeleteObjectsInputEntry struct {
+	Key         ObjectKey
+	IfMatchETag *string
+}
+
 type ChecksumInput = metadatastore.ChecksumInput
 type ChecksumValues = metadatastore.ChecksumValues
 type BucketName = metadatastore.BucketName
 type ObjectKey = metadatastore.ObjectKey
 type UploadId = metadatastore.UploadId
+
+const ETagWildcard = metadatastore.ETagWildcard
 
 var NewBucketName = metadatastore.NewBucketName
 var MustNewBucketName = metadatastore.MustNewBucketName
@@ -238,8 +254,8 @@ type ObjectManager interface {
 	// Returns the object metadata, a list of readers (one per range), and an error.
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
-	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey) error
-	DeleteObjects(ctx context.Context, bucketName BucketName, keys []ObjectKey) (*DeleteObjectsResult, error)
+	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
+	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
 }
 
 // MultipartUploadManager manages multipart upload operations
@@ -349,7 +365,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return errors.New("invalid object key")
 		}
 
-		err = storage.DeleteObject(ctx, bucketName, key)
+		err = storage.DeleteObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return err
 		}
@@ -374,7 +390,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		err = storage.DeleteObject(ctx, bucketName, key)
+		err = storage.DeleteObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return err
 		}

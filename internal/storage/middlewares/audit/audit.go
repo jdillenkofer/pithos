@@ -222,16 +222,16 @@ func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.B
 	return res, err
 }
 
-func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	m.log(ctx, auditlog.OpDeleteObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
-	err := m.next.DeleteObject(ctx, bucketName, key)
+	err := m.next.DeleteObject(ctx, bucketName, key, opts)
 	m.log(ctx, auditlog.OpDeleteObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err)
 	return err
 }
 
-func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
-	result, err := m.next.DeleteObjects(ctx, bucketName, keys)
+	result, err := m.next.DeleteObjects(ctx, bucketName, entries)
 	m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
 	return result, err
 }

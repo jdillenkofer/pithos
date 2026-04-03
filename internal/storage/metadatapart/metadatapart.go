@@ -594,7 +594,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	}, nil
 }
 
-func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObject")
 	defer span.End()
 
@@ -607,6 +607,16 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 
 	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
 	if err != nil {
+		if err == storage.ErrNoSuchKey {
+			tx.Rollback()
+			// Object does not exist.
+			if opts != nil && opts.IfMatchETag != nil {
+				// Conditional delete: object must exist.
+				return storage.ErrPreconditionFailed
+			}
+			// No condition: silently succeed per S3 semantics.
+			return nil
+		}
 		tx.Rollback()
 		return err
 	}
@@ -619,7 +629,13 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 		}
 	}
 
-	err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key)
+	var metaOpts *metadatastore.DeleteObjectOptions
+	if opts != nil {
+		metaOpts = &metadatastore.DeleteObjectOptions{
+			IfMatchETag: opts.IfMatchETag,
+		}
+	}
+	err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key, metaOpts)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -633,7 +649,7 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	return nil
 }
 
-func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjects")
 	defer span.End()
 
@@ -645,35 +661,62 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 	}
 
 	result := &storage.DeleteObjectsResult{
-		Entries: make([]storage.DeleteObjectsEntry, 0, len(keys)),
+		Entries: make([]storage.DeleteObjectsEntry, 0, len(entries)),
 	}
 
-	for _, key := range keys {
-		object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	for _, entry := range entries {
+		object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, entry.Key)
 		if err != nil {
 			if err == storage.ErrNoSuchKey {
-				result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+				if entry.IfMatchETag != nil {
+					// Object does not exist but ETag condition set → precondition failed for this entry.
+					result.Entries = append(result.Entries, storage.DeleteObjectsEntry{
+						Key:     entry.Key,
+						Deleted: false,
+						ErrCode: "PreconditionFailed",
+						ErrMsg:  "At least one of the pre-conditions you specified did not hold",
+					})
+				} else {
+					result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
+				}
 				continue
 			}
 			tx.Rollback()
 			return nil, err
 		}
 
-		for _, part := range object.Parts {
-			err = mbs.partStore.DeletePart(ctx, tx, part.Id)
-			if err != nil {
-				tx.Rollback()
-				return nil, err
+		// Object exists — check conditional ETag if specified.
+		if entry.IfMatchETag != nil && (object == nil || object.ETag != *entry.IfMatchETag) {
+			result.Entries = append(result.Entries, storage.DeleteObjectsEntry{
+				Key:     entry.Key,
+				Deleted: false,
+				ErrCode: "PreconditionFailed",
+				ErrMsg:  "At least one of the pre-conditions you specified did not hold",
+			})
+			continue
+		}
+
+		if object != nil {
+			for _, part := range object.Parts {
+				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+				if err != nil {
+					tx.Rollback()
+					return nil, err
+				}
 			}
 		}
 
-		err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key)
+		var metaOpts *metadatastore.DeleteObjectOptions
+		if entry.IfMatchETag != nil {
+			metaOpts = &metadatastore.DeleteObjectOptions{IfMatchETag: entry.IfMatchETag}
+		}
+		err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, entry.Key, metaOpts)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 
-		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
 	}
 
 	err = tx.Commit()

@@ -371,11 +371,11 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 	return putObjectResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObject")
 	defer span.End()
 
-	err := psm.innerStorage.DeleteObject(ctx, bucketName, key)
+	err := psm.innerStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
 		return err
@@ -386,11 +386,11 @@ func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucket
 	return nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObjects")
 	defer span.End()
 
-	result, err := psm.innerStorage.DeleteObjects(ctx, bucketName, keys)
+	result, err := psm.innerStorage.DeleteObjects(ctx, bucketName, entries)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObjects"}).Inc()
 		return nil, err
