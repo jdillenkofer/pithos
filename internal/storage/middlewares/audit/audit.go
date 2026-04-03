@@ -229,6 +229,13 @@ func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storag
 	return err
 }
 
+func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil)
+	result, err := m.next.DeleteObjects(ctx, bucketName, keys)
+	m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err)
+	return result, err
+}
+
 func (m *AuditLogMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
 	res, err := m.next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)

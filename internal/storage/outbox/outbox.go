@@ -483,6 +483,37 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	return nil
 }
 
+func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
+	defer span.End()
+
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, key := range keys {
+		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	result := &storage.DeleteObjectsResult{
+		Entries: make([]storage.DeleteObjectsEntry, len(keys)),
+	}
+	for i, key := range keys {
+		result.Entries[i] = storage.DeleteObjectsEntry{Key: key, Deleted: true}
+	}
+	return result, nil
+}
+
 func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateMultipartUpload")
 	defer span.End()

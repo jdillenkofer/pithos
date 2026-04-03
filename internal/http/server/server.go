@@ -51,6 +51,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	apiMux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
 	apiMux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteHandler)
 	apiMux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteHandler)
+	apiMux.HandleFunc("POST /{bucket}", server.postBucketHandler)
 	apiMux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	apiMux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	apiMux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
@@ -347,6 +348,33 @@ type WebsiteConfigurationResponse struct {
 	Xmlns         string                             `xml:"xmlns,attr"`
 	IndexDocument *WebsiteConfigurationIndexDocument `xml:"IndexDocument"`
 	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
+}
+
+type DeleteObjectEntry struct {
+	Key       string  `xml:"Key"`
+	VersionId *string `xml:"VersionId"`
+}
+
+type DeleteObjectsRequest struct {
+	XMLName xml.Name             `xml:"Delete"`
+	Quiet   bool                 `xml:"Quiet"`
+	Objects []*DeleteObjectEntry `xml:"Object"`
+}
+
+type DeletedEntry struct {
+	Key string `xml:"Key"`
+}
+
+type DeleteErrorEntry struct {
+	Key     string `xml:"Key"`
+	Code    string `xml:"Code"`
+	Message string `xml:"Message"`
+}
+
+type DeleteObjectsResult struct {
+	XMLName xml.Name            `xml:"DeleteResult"`
+	Deleted []*DeletedEntry     `xml:"Deleted"`
+	Errors  []*DeleteErrorEntry `xml:"Error"`
 }
 
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
@@ -1650,6 +1678,133 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 
 	// DeleteObject
 	s.deleteObjectHandler(w, r)
+}
+
+func (s *Server) postBucketHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if query.Has("delete") {
+		s.deleteObjectsHandler(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+const maxDeleteObjects = 1000
+
+func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectsHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var req DeleteObjectsRequest
+	if err := xml.Unmarshal(data, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Objects) > maxDeleteObjects {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	result := DeleteObjectsResult{
+		Deleted: []*DeletedEntry{},
+		Errors:  []*DeleteErrorEntry{},
+	}
+
+	// First pass: validate entries and collect valid keys for bulk delete.
+	// We track the original string key alongside the parsed ObjectKey so we can
+	// build the response even when validation fails.
+	type validEntry struct {
+		rawKey string
+		key    storage.ObjectKey
+	}
+	validEntries := make([]validEntry, 0, len(req.Objects))
+
+	for _, obj := range req.Objects {
+		if obj.VersionId != nil {
+			result.Errors = append(result.Errors, &DeleteErrorEntry{
+				Key:     obj.Key,
+				Code:    "NotImplemented",
+				Message: "versioning is not supported",
+			})
+			continue
+		}
+
+		key, err := storage.NewObjectKey(obj.Key)
+		if err != nil {
+			result.Errors = append(result.Errors, &DeleteErrorEntry{
+				Key:     obj.Key,
+				Code:    "InvalidArgument",
+				Message: err.Error(),
+			})
+			continue
+		}
+
+		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key})
+	}
+
+	// Second pass: bulk delete all valid keys in one storage call.
+	if len(validEntries) > 0 {
+		keys := make([]storage.ObjectKey, len(validEntries))
+		for i, ve := range validEntries {
+			keys[i] = ve.key
+		}
+
+		slog.Info("DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(keys))
+		deleteResult, err := s.storage.DeleteObjects(ctx, bucketName, keys)
+		if err != nil {
+			if err == storage.ErrNoSuchBucket {
+				handleError(err, w, r)
+				return
+			}
+			handleError(err, w, r)
+			return
+		}
+
+		// Build a map from key string → entry for result lookup.
+		resultByKey := make(map[string]storage.DeleteObjectsEntry, len(deleteResult.Entries))
+		for _, entry := range deleteResult.Entries {
+			resultByKey[entry.Key.String()] = entry
+		}
+
+		for _, ve := range validEntries {
+			entry, ok := resultByKey[ve.key.String()]
+			if !ok || entry.Deleted {
+				if !req.Quiet {
+					result.Deleted = append(result.Deleted, &DeletedEntry{Key: ve.rawKey})
+				}
+			} else {
+				result.Errors = append(result.Errors, &DeleteErrorEntry{
+					Key:     ve.rawKey,
+					Code:    entry.ErrCode,
+					Message: entry.ErrMsg,
+				})
+			}
+		}
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusOK)
+	out, _ := xmlMarshalWithDocType(result)
+	w.Write(out)
 }
 
 func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {

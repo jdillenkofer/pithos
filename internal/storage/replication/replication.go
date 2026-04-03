@@ -193,6 +193,23 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName stora
 	return nil
 }
 
+func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjects")
+	defer span.End()
+
+	result, err := rs.primaryStorage.DeleteObjects(ctx, bucketName, keys)
+	if err != nil {
+		return nil, err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		_, err = secondaryStorage.DeleteObjects(ctx, bucketName, keys)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateMultipartUpload")
 	defer span.End()

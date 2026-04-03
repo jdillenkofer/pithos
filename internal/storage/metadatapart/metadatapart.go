@@ -633,6 +633,57 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	return nil
 }
 
+func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjects")
+	defer span.End()
+
+	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
+	defer unblockGC()
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return nil, err
+	}
+
+	result := &storage.DeleteObjectsResult{
+		Entries: make([]storage.DeleteObjectsEntry, 0, len(keys)),
+	}
+
+	for _, key := range keys {
+		object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+		if err != nil {
+			if err == storage.ErrNoSuchKey {
+				result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+				continue
+			}
+			tx.Rollback()
+			return nil, err
+		}
+
+		for _, part := range object.Parts {
+			err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+		}
+
+		err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipartUploadResult) storage.InitiateMultipartUploadResult {
 	return storage.InitiateMultipartUploadResult{
 		UploadId: result.UploadId,

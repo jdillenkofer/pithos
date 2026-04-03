@@ -3994,3 +3994,201 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 	})
 }
+
+func TestDeleteObjects(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+		t.Run("it should delete multiple existing objects"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key2, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key},
+						{Key: key2},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 2)
+			assert.Len(t, result.Errors, 0)
+
+			// Objects must no longer exist
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key2})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("it should treat a missing key as successfully deleted"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			nonExistentKey := aws.String("does/not/exist.txt")
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: nonExistentKey},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 0)
+		})
+
+		t.Run("it should suppress deleted entries in quiet mode"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			quiet := true
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key},
+					},
+					Quiet: &quiet,
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 0)
+			assert.Len(t, result.Errors, 0)
+
+			// Object must still have been deleted
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("it should return an error entry for objects with a VersionId"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key, VersionId: aws.String("some-version-id")},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 0)
+			assert.Len(t, result.Errors, 1)
+			assert.Equal(t, *key, *result.Errors[0].Key)
+			assert.Equal(t, "NotImplemented", *result.Errors[0].Code)
+		})
+
+		t.Run("it should return 404 when the bucket does not exist"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key},
+					},
+				},
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			assert.True(t, errors.As(err, &apiErr))
+			assert.Equal(t, "NoSuchBucket", apiErr.ErrorCode())
+		})
+
+		t.Run("it should handle an empty delete list"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 0)
+			assert.Len(t, result.Errors, 0)
+		})
+
+		t.Run("it should partially succeed when some keys exist and some do not"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			nonExistentKey := aws.String("does/not/exist.txt")
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key},
+						{Key: nonExistentKey},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 2)
+			assert.Len(t, result.Errors, 0)
+
+			// Existing object must be gone
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+		})
+	})
+}

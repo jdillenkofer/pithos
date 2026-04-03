@@ -132,6 +132,19 @@ type ListPartsResult struct {
 	Parts                []*MultipartPart
 }
 
+// DeleteObjectsEntry represents the result for a single key in a DeleteObjects operation.
+type DeleteObjectsEntry struct {
+	Key     ObjectKey
+	Deleted bool
+	ErrCode string
+	ErrMsg  string
+}
+
+// DeleteObjectsResult is the per-key result of a bulk DeleteObjects operation.
+type DeleteObjectsResult struct {
+	Entries []DeleteObjectsEntry
+}
+
 type ChecksumInput = metadatastore.ChecksumInput
 type ChecksumValues = metadatastore.ChecksumValues
 type BucketName = metadatastore.BucketName
@@ -226,6 +239,7 @@ type ObjectManager interface {
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey) error
+	DeleteObjects(ctx context.Context, bucketName BucketName, keys []ObjectKey) (*DeleteObjectsResult, error)
 }
 
 // MultipartUploadManager manages multipart upload operations
