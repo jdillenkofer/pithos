@@ -292,6 +292,10 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 	}, nil
 }
 
+func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, _ io.Reader, _ *storage.ChecksumInput, _ *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	return nil, storage.ErrNotImplemented
+}
+
 func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObject")
 	defer span.End()

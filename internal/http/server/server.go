@@ -143,6 +143,7 @@ const maxPartsQuery = "max-parts"
 const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
+const appendQuery = "append"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -163,6 +164,7 @@ const checksumCRC32CHeader = "x-amz-checksum-crc32c"
 const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
 const checksumSHA1Header = "x-amz-checksum-sha1"
 const checksumSHA256Header = "x-amz-checksum-sha256"
+const writeOffsetBytesHeader = "x-amz-write-offset-bytes"
 
 const applicationXmlContentType = "application/xml"
 
@@ -515,6 +517,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 400
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
+	case storage.ErrTooManyParts:
+		statusCode = 400
+	case storage.ErrInvalidWriteOffset:
+		statusCode = 400
 	case storage.ErrPreconditionFailed:
 		statusCode = 412
 	case storage.ErrNotModified:
@@ -1661,12 +1667,74 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.appendObjectHandler")
+	defer span.End()
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationAppendObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	var appendObjectOptions *storage.AppendObjectOptions
+	if writeOffsetStr := r.Header.Get(writeOffsetBytesHeader); writeOffsetStr != "" {
+		writeOffset, parseErr := strconv.ParseInt(writeOffsetStr, 10, 64)
+		if parseErr != nil {
+			handleError(ErrInvalidRequest, w, r)
+			return
+		}
+		appendObjectOptions = &storage.AppendObjectOptions{WriteOffset: &writeOffset}
+	}
+
+	shouldReturn = validateMaxEntitySize(r, w)
+
+	checksumInput, err := extractChecksumInput(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	slog.Info("Appending to object", "bucket", bucketName.String(), "key", key.String())
+	if r.Header.Get(expectHeader) == "100-continue" {
+		w.WriteHeader(100)
+	}
+	appendObjectResult, err := s.storage.AppendObject(ctx, bucketName, key, r.Body, checksumInput, appendObjectOptions)
+	if err != nil {
+		if _, ok := err.(*http.MaxBytesError); ok {
+			err = storage.ErrEntityTooLarge
+		}
+		handleError(err, w, r)
+		return
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(etagHeader, appendObjectResult.ETag)
+	responseHeaders.Set("x-amz-object-size", strconv.FormatInt(appendObjectResult.Size, 10))
+	w.WriteHeader(200)
+}
+
 func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	// UploadPart
 	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
 		s.uploadPartHandler(w, r)
+		return
+	}
+
+	// AppendObject
+	if query.Has(appendQuery) {
+		s.appendObjectHandler(w, r)
 		return
 	}
 

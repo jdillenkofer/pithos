@@ -463,6 +463,20 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	}, nil
 }
 
+func (os *outboxStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.AppendObject")
+	defer span.End()
+
+	// Append is always conditional (requires the object to be consistent), so
+	// flush all pending outbox entries for the bucket before delegating.
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+}
+
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()

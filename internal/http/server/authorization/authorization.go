@@ -20,6 +20,7 @@ const (
 	OperationCompleteMultipartUpload = "CompleteMultipartUpload"
 	OperationUploadPart              = "UploadPart"
 	OperationPutObject               = "PutObject"
+	OperationAppendObject            = "AppendObject"
 	OperationAbortMultipartUpload    = "AbortMultipartUpload"
 	OperationDeleteObject            = "DeleteObject"
 	OperationDeleteObjects           = "DeleteObjects"

@@ -178,6 +178,14 @@ var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 var ErrPreconditionFailed error = errors.New("PreconditionFailed")
 var ErrNotModified error = errors.New("NotModified")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
+var ErrTooManyParts error = errors.New("TooManyParts")
+var ErrInvalidWriteOffset error = errors.New("InvalidWriteOffset")
+
+// ErrCASFailure is returned by the storage layer when a compare-and-swap
+// (optimistic lock) operation fails because a concurrent writer modified the
+// object between our read and our update. It is an internal error and should
+// be mapped to the appropriate public API error by the caller.
+var ErrCASFailure error = errors.New("CASFailure")
 
 type ListObjectsOptions struct {
 	Prefix        *string
@@ -207,6 +215,15 @@ const ETagWildcard = "*"
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
 	IfMatchETag     *string
+}
+
+// AppendObjectOptions holds options for an AppendObject operation.
+type AppendObjectOptions struct {
+	// WriteOffset, when non-nil, specifies the expected current size of the
+	// object in bytes. The append is only performed if the actual object size
+	// matches this value; otherwise ErrInvalidWriteOffset is returned.
+	// Set to 0 to create a new object (equivalent to x-amz-write-offset-bytes: 0).
+	WriteOffset *int64
 }
 
 type DeleteObjectOptions struct {
@@ -257,6 +274,12 @@ type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
+	// AppendObject appends a new part to an existing object's part list. The caller
+	// must supply the updated object metadata (including new ETag, size, and the
+	// full ordered part list). If no object exists at the key yet, a new object is
+	// created. If WriteOffset is set in opts and does not match the current object
+	// size, ErrInvalidWriteOffset is returned.
+	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
 }
 

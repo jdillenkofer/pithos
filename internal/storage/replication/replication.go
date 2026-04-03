@@ -176,6 +176,37 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	return putObjectResult, nil
 }
 
+func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.AppendObject")
+	defer span.End()
+
+	// Use smart cache (memory up to maxMemoryCacheSize, then disk) so we can
+	// replay the body to each secondary storage.
+	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
+	if err != nil {
+		return nil, err
+	}
+	defer readSeekCloser.Close()
+
+	appendObjectResult, err := rs.primaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, opts)
+	if err != nil {
+		return nil, err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		_, err = readSeekCloser.Seek(0, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		// Do not forward conditional opts (If-Match) to secondaries; the
+		// precondition was already enforced on the primary.
+		_, err = secondaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return appendObjectResult, nil
+}
+
 func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
 	defer span.End()

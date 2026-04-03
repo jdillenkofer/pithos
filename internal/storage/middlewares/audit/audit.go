@@ -222,6 +222,13 @@ func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.B
 	return res, err
 }
 
+func (m *AuditLogMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	m.log(ctx, auditlog.OpAppendObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
+	res, err := m.next.AppendObject(ctx, bucketName, key, data, checksumInput, opts)
+	m.log(ctx, auditlog.OpAppendObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err)
+	return res, err
+}
+
 func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	m.log(ctx, auditlog.OpDeleteObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
 	err := m.next.DeleteObject(ctx, bucketName, key, opts)

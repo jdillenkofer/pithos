@@ -65,6 +65,22 @@ type PutObjectOptions struct {
 	IfMatchETag     *string
 }
 
+// AppendObjectOptions holds options for an AppendObject operation.
+type AppendObjectOptions struct {
+	// WriteOffset, when non-nil, specifies the expected current size of the
+	// object in bytes. The append is only performed if the actual object size
+	// matches this value; otherwise ErrInvalidWriteOffset is returned.
+	// Set to 0 to create a new object (equivalent to x-amz-write-offset-bytes: 0).
+	WriteOffset *int64
+}
+
+// AppendObjectResult is returned by a successful AppendObject operation.
+type AppendObjectResult struct {
+	ETag string
+	// Size is the total size of the object after the append.
+	Size int64
+}
+
 type CompleteMultipartUploadOptions = metadatastore.CompleteMultipartUploadOptions
 
 type DeleteObjectOptions struct {
@@ -220,6 +236,9 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 var ErrNoSuchWebsiteConfiguration error = metadatastore.ErrNoSuchWebsiteConfiguration
+var ErrTooManyParts error = metadatastore.ErrTooManyParts
+var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
+var ErrCASFailure error = metadatastore.ErrCASFailure
 
 var MaxEntitySize int64 = 5 * 1000 * 1000 * 1000 // 5 GB
 
@@ -283,6 +302,10 @@ type ObjectManager interface {
 	// Returns the object metadata, a list of readers (one per range), and an error.
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange, opts *GetObjectOptions) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
+	// AppendObject appends data to an existing object. If the object does not exist,
+	// it behaves like PutObject and creates a new object with the provided data.
+	// The ETag in the result reflects the new whole-object ETag after the append.
+	AppendObject(ctx context.Context, bucketName BucketName, key ObjectKey, data io.Reader, checksumInput *ChecksumInput, opts *AppendObjectOptions) (*AppendObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
 }
