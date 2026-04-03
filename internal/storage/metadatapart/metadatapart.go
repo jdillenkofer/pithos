@@ -857,7 +857,7 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 	}
 }
 
-func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CompleteMultipartUpload")
 	defer span.End()
 
@@ -868,7 +868,7 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, uploadId, checksumInput)
+	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		tx.Rollback()
 		return nil, err

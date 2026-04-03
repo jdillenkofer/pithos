@@ -3,10 +3,13 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
@@ -17,9 +20,25 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// isUniqueConstraintViolation reports whether err is a unique-constraint
+// violation from either the PostgreSQL (pgconn.PgError / SQLSTATE 23505) or
+// SQLite (sqlite3.ErrConstraintUnique) driver.
+func isUniqueConstraintViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == pgerrcode.UniqueViolation
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
+	}
+	return false
+}
 
 type sqlMetadataStore struct {
 	*lifecycle.ValidatedLifecycle
@@ -603,7 +622,7 @@ func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	return nil
 }
 
-func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput) (*metadatastore.CompleteMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput, opts *metadatastore.CompleteMultipartUploadOptions) (*metadatastore.CompleteMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CompleteMultipartUpload")
 	defer span.End()
 
@@ -671,6 +690,32 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	if err != nil {
 		return nil, err
 	}
+
+	// Evaluate conditional headers (AWS S3 compatible behaviour):
+	//   If-Match:      the current object's ETag must match the supplied value.
+	//   If-None-Match: "*" means the operation must fail when any object exists.
+	if opts != nil {
+		if opts.IfMatchETag != nil {
+			// If-Match: * — any existing object satisfies the condition; fail when absent.
+			// If-Match: <etag> — existing ETag must match exactly; fail otherwise.
+			if *opts.IfMatchETag == metadatastore.ETagWildcard {
+				if oldObjectEntity == nil {
+					return nil, metadatastore.ErrPreconditionFailed
+				}
+			} else {
+				if oldObjectEntity == nil || oldObjectEntity.ETag != *opts.IfMatchETag {
+					return nil, metadatastore.ErrPreconditionFailed
+				}
+			}
+		}
+		if opts.IfNoneMatchStar {
+			// If-None-Match: * — fail when any object currently exists at the key.
+			if oldObjectEntity != nil {
+				return nil, metadatastore.ErrPreconditionFailed
+			}
+		}
+	}
+
 	if oldObjectEntity != nil {
 		oldPartEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
@@ -695,9 +740,23 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			}
 		}, oldPartEntities)
 
-		_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
-		if err != nil {
-			return nil, err
+		// Optimistic locking: when If-Match was supplied with an exact ETag,
+		// use an atomic DELETE WHERE id=$1 AND etag=$2 as the final guard.
+		// A zero rows-affected result means a concurrent writer already changed
+		// the object between our read and this delete, so we abort with 412.
+		if opts != nil && opts.IfMatchETag != nil && *opts.IfMatchETag != metadatastore.ETagWildcard {
+			deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, *opts.IfMatchETag)
+			if err != nil {
+				return nil, err
+			}
+			if !*deleted {
+				return nil, metadatastore.ErrPreconditionFailed
+			}
+		} else {
+			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -711,9 +770,27 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	objectEntity.ChecksumSHA1 = calculatedChecksums.ChecksumSHA1
 	objectEntity.ChecksumSHA256 = calculatedChecksums.ChecksumSHA256
 	objectEntity.ChecksumType = ptrutils.ToPtr(checksumType)
-	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
-	if err != nil {
-		return nil, err
+
+	if opts != nil && opts.IfNoneMatchStar {
+		// Optimistic locking: attempt to UPDATE the pending row to COMPLETED.
+		// If a concurrent transaction has already committed a completed object at
+		// this (bucket_name, key) the partial unique index
+		// objects_completed_unique will fire a unique-constraint violation, which
+		// we catch here and convert to ErrPreconditionFailed (412).
+		// This is atomic: the database enforces the constraint at write time
+		// regardless of the isolation level's snapshot visibility.
+		err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+		if err != nil {
+			if isUniqueConstraintViolation(err) {
+				return nil, metadatastore.ErrPreconditionFailed
+			}
+			return nil, err
+		}
+	} else {
+		err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &metadatastore.CompleteMultipartUploadResult{

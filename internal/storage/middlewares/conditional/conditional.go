@@ -187,12 +187,12 @@ func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketN
 	return storage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
 }
 
-func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CompleteMultipartUpload")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	return storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 }
 
 func (csm *conditionalStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {

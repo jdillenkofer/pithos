@@ -1405,6 +1405,33 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Conditional multipart upload: check If-Match and If-None-Match headers.
+	// AWS S3 compatible behaviour:
+	//   If-Match: <etag>  — the current object at the key must have this ETag, else 412.
+	//   If-Match: *       — any existing object satisfies the condition; fail (412) only when no object exists.
+	//   If-None-Match: *  — the operation must fail (412) when any object already exists at the key.
+	//   Both headers together are not allowed (400).
+	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
+	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
+	var completeOpts *storage.CompleteMultipartUploadOptions
+	if ifMatch != nil {
+		completeOpts = &storage.CompleteMultipartUploadOptions{IfMatchETag: ifMatch}
+	}
+	if ifNoneMatch != nil {
+		if *ifNoneMatch != "*" {
+			handleError(ErrInvalidRequest, w, r)
+			return
+		}
+		if completeOpts == nil {
+			completeOpts = &storage.CompleteMultipartUploadOptions{}
+		}
+		completeOpts.IfNoneMatchStar = true
+	}
+	if completeOpts != nil && completeOpts.IfMatchETag != nil && completeOpts.IfNoneMatchStar {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		handleError(err, w, r)
@@ -1421,7 +1448,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 	}
 
 	slog.Info("CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
-	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, completeOpts)
 	if err != nil {
 		handleError(err, w, r)
 		return

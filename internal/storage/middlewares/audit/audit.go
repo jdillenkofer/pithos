@@ -254,9 +254,9 @@ func (m *AuditLogMiddleware) UploadPart(ctx context.Context, bucketName storage.
 	return res, err
 }
 
-func (m *AuditLogMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (m *AuditLogMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	m.log(ctx, auditlog.OpCompleteMultipartUpload, auditlog.PhaseStart, bucketName.String(), key.String(), uploadId.String(), 0, nil)
-	res, err := m.next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	res, err := m.next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 	m.log(ctx, auditlog.OpCompleteMultipartUpload, auditlog.PhaseComplete, bucketName.String(), key.String(), uploadId.String(), 0, err)
 	return res, err
 }
