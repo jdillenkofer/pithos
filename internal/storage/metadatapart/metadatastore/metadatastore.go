@@ -217,6 +217,20 @@ type DeleteObjectOptions struct {
 	IfMatchETag *string
 }
 
+// CompleteMultipartUploadOptions holds conditional request options for CompleteMultipartUpload.
+// AWS S3 behaviour: If-Match is checked against the ETag of the *current* object at the key
+// (before it is replaced). If-None-Match "*" prevents the upload from completing when any
+// object already exists at the key.
+type CompleteMultipartUploadOptions struct {
+	// IfMatchETag, when non-nil, requires the currently stored object's ETag to equal
+	// this value; otherwise ErrPreconditionFailed is returned.
+	// The special value "*" matches any existing object.
+	IfMatchETag *string
+	// IfNoneMatchStar, when true, requires that no object currently exists at the key;
+	// otherwise ErrPreconditionFailed is returned (HTTP 412).
+	IfNoneMatchStar bool
+}
+
 type MaintenanceStore interface {
 	GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 }
@@ -249,7 +263,7 @@ type ObjectStore interface {
 type MultipartStore interface {
 	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
-	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
 	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
 	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, opts ListPartsOptions) (*ListPartsResult, error)
@@ -420,7 +434,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil)
+	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil, nil)
 	if err != nil {
 		tx.Rollback()
 		return err

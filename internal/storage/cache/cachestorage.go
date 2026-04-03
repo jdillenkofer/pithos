@@ -275,11 +275,11 @@ func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.Bucke
 	return uploadPartResult, nil
 }
 
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.CompleteMultipartUpload")
 	defer span.End()
 
-	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}

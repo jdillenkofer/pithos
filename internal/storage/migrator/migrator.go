@@ -190,7 +190,7 @@ func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, inpu
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
-	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), nil)
+	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), nil, nil)
 	if err != nil {
 		return nil, err
 	}

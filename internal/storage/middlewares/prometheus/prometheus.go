@@ -437,11 +437,11 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 	return uploadPartResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CompleteMultipartUpload")
 	defer span.End()
 
-	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CompleteMultipartUpload"}).Inc()
 		return nil, err

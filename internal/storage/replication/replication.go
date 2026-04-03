@@ -267,18 +267,18 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 	return uploadPartResult, nil
 }
 
-func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput) (*storage.CompleteMultipartUploadResult, error) {
+func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CompleteMultipartUpload")
 	defer span.End()
 
-	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput)
+	completeMultipartUploadResult, err := rs.primaryStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput)
+		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, nil)
 		if err != nil {
 			return nil, err
 		}
