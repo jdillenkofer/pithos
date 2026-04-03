@@ -131,18 +131,18 @@ func (rs *replicationStorage) ListObjects(ctx context.Context, bucketName storag
 	return rs.primaryStorage.ListObjects(ctx, bucketName, opts)
 }
 
-func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.HeadObject")
 	defer span.End()
 
-	return rs.primaryStorage.HeadObject(ctx, bucketName, key)
+	return rs.primaryStorage.HeadObject(ctx, bucketName, key, opts)
 }
 
-func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (rs *replicationStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetObject")
 	defer span.End()
 
-	return rs.primaryStorage.GetObject(ctx, bucketName, key, ranges)
+	return rs.primaryStorage.GetObject(ctx, bucketName, key, ranges, opts)
 }
 
 func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

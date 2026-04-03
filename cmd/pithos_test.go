@@ -2596,6 +2596,101 @@ func TestGetObject(t *testing.T) {
 			newContent = append(newContent, []byte("--\r\n")...)
 			assert.Equal(t, newContent, objectBytes)
 		})
+
+		t.Run("it should return 200 for GetObject with matching If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: putResult.ETag,
+			})
+			assert.Nil(t, err)
+		})
+
+		t.Run("it should return 412 for GetObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: aws.String("\"does-not-match\""),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should return an error for GetObject with matching If-None-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket:      bucketName,
+				Key:         key,
+				IfNoneMatch: putResult.ETag,
+			})
+			// 304 Not Modified surfaces as an error from the SDK (no body to deserialize).
+			assert.NotNil(t, err)
+			var httpErr *awshttp.ResponseError
+			if assert.ErrorAs(t, err, &httpErr) {
+				assert.Equal(t, 304, httpErr.Response.StatusCode)
+			}
+		})
+
+		t.Run("it should return 200 for GetObject with non-matching If-None-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket:      bucketName,
+				Key:         key,
+				IfNoneMatch: aws.String("\"does-not-match\""),
+			})
+			assert.Nil(t, err)
+		})
 	})
 }
 
@@ -2674,6 +2769,61 @@ func TestDeleteObject(t *testing.T) {
 			assert.NotNil(t, deleteObjectResult)
 			assert.Equal(t, 204, deleteObjectResult.StatusCode)
 		})
+
+		t.Run("it should return 204 for DeleteObject with matching If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			_, err = s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: putResult.ETag,
+			})
+			assert.Nil(t, err)
+
+			// Verify the object is gone.
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("it should return 412 for DeleteObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: aws.String("\"does-not-match\""),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			// Verify the object still exists.
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+		})
 	})
 }
 
@@ -2719,6 +2869,102 @@ func TestHeadObject(t *testing.T) {
 			assert.Equal(t, "lMCBYNtqPCnP3avKVUtqfrThqHo=", *headObjectResult.ChecksumSHA1)
 			assert.Equal(t, "sctyzI/H+7x/oVR7Gwt7NiQ7kop4Ua/7SrVraELVDpI=", *headObjectResult.ChecksumSHA256)
 			assert.Equal(t, types.ChecksumTypeFullObject, headObjectResult.ChecksumType)
+		})
+
+		t.Run("it should return 200 for HeadObject with matching If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: putResult.ETag,
+			})
+			assert.Nil(t, err)
+		})
+
+		t.Run("it should return 412 for HeadObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket:  bucketName,
+				Key:     key,
+				IfMatch: aws.String("\"does-not-match\""),
+			})
+			// HeadObject 412 has no XML body, so the SDK surfaces it as an HTTP response error only.
+			assert.NotNil(t, err)
+			var httpErr *awshttp.ResponseError
+			if assert.ErrorAs(t, err, &httpErr) {
+				assert.Equal(t, 412, httpErr.Response.StatusCode)
+			}
+		})
+
+		t.Run("it should return an error for HeadObject with matching If-None-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket:      bucketName,
+				Key:         key,
+				IfNoneMatch: putResult.ETag,
+			})
+			// 304 Not Modified surfaces as an error from the SDK (no body to deserialize).
+			assert.NotNil(t, err)
+			var httpErr *awshttp.ResponseError
+			if assert.ErrorAs(t, err, &httpErr) {
+				assert.Equal(t, 304, httpErr.Response.StatusCode)
+			}
+		})
+
+		t.Run("it should return 200 for HeadObject with non-matching If-None-Match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket:      bucketName,
+				Key:         key,
+				IfNoneMatch: aws.String("\"does-not-match\""),
+			})
+			assert.Nil(t, err)
 		})
 	})
 }
@@ -4189,6 +4435,69 @@ func TestDeleteObjects(t *testing.T) {
 			// Existing object must be gone
 			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
 			assert.NotNil(t, err)
+		})
+
+		t.Run("it should delete object when ETag matches in DeleteObjects"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key, ETag: putResult.ETag},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 0)
+
+			// Object must be gone.
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+		})
+
+		t.Run("it should return an error entry when ETag mismatches in DeleteObjects"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key, ETag: aws.String("\"does-not-match\"")},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 0)
+			assert.Len(t, result.Errors, 1)
+			assert.Equal(t, *key, *result.Errors[0].Key)
+			assert.Equal(t, "PreconditionFailed", *result.Errors[0].Code)
+
+			// Object must still exist.
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
 		})
 	})
 }

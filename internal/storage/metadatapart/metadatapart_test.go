@@ -209,7 +209,7 @@ func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Object should be gone.
-	_, err = st.HeadObject(ctx, bucket, key)
+	_, err = st.HeadObject(ctx, bucket, key, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
 
@@ -231,7 +231,7 @@ func TestConditionalDeleteObject_WrongETag(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 
 	// Object should still exist.
-	_, err = st.HeadObject(ctx, bucket, key)
+	_, err = st.HeadObject(ctx, bucket, key, nil)
 	require.NoError(t, err)
 }
 
@@ -309,11 +309,11 @@ func TestConditionalDeleteObjects_MixedConditions(t *testing.T) {
 	assert.True(t, byKey["obj3"].Deleted, "obj3 should be deleted (no condition)")
 
 	// Verify obj1 and obj3 are gone, obj2 still exists.
-	_, err = st.HeadObject(ctx, bucket, key1)
+	_, err = st.HeadObject(ctx, bucket, key1, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
-	_, err = st.HeadObject(ctx, bucket, key2)
+	_, err = st.HeadObject(ctx, bucket, key2, nil)
 	require.NoError(t, err)
-	_, err = st.HeadObject(ctx, bucket, key3)
+	_, err = st.HeadObject(ctx, bucket, key3, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
 
@@ -335,7 +335,7 @@ func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	require.NoError(t, err)
 
 	// Object should be gone.
-	_, err = st.HeadObject(ctx, bucket, key)
+	_, err = st.HeadObject(ctx, bucket, key, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
 

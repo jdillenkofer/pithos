@@ -353,7 +353,7 @@ type WebsiteConfigurationResponse struct {
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
-	IfMatch   *string `xml:"IfMatch"`
+	ETag      *string `xml:"ETag"`
 }
 
 type DeleteObjectsRequest struct {
@@ -517,6 +517,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 413
 	case storage.ErrPreconditionFailed:
 		statusCode = 412
+	case storage.ErrNotModified:
+		statusCode = 304
 	default:
 		slog.Error(fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
@@ -970,8 +972,30 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("Head object", "bucket", bucketName.String(), "key", key.String())
-	object, err := s.storage.HeadObject(ctx, bucketName, key)
+
+	var headOpts *storage.HeadObjectOptions
+	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
+	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
+	if ifMatch != nil || ifNoneMatch != nil {
+		headOpts = &storage.HeadObjectOptions{}
+		if ifMatch != nil {
+			headOpts.IfMatchETag = ifMatch
+		}
+		if ifNoneMatch != nil {
+			headOpts.IfNoneMatchETag = ifNoneMatch
+		}
+	}
+
+	object, err := s.storage.HeadObject(ctx, bucketName, key, headOpts)
 	if err != nil {
+		if err == storage.ErrNotModified {
+			w.WriteHeader(304)
+			return
+		}
+		if err == storage.ErrPreconditionFailed {
+			w.WriteHeader(412)
+			return
+		}
 		handleError(err, w, r)
 		return
 	}
@@ -1187,10 +1211,27 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var getOpts *storage.GetObjectOptions
+	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
+	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
+	if ifMatch != nil || ifNoneMatch != nil {
+		getOpts = &storage.GetObjectOptions{}
+		if ifMatch != nil {
+			getOpts.IfMatchETag = ifMatch
+		}
+		if ifNoneMatch != nil {
+			getOpts.IfNoneMatchETag = ifNoneMatch
+		}
+	}
+
 	// GetObject now returns metadata and readers in a single transaction
 	// It also validates the ranges and returns ErrInvalidRange if invalid
-	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges)
+	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges, getOpts)
 	if err != nil {
+		if err == storage.ErrNotModified {
+			w.WriteHeader(304)
+			return
+		}
 		handleError(err, w, r)
 		return
 	}
@@ -1738,9 +1779,9 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	// We track the original string key alongside the parsed ObjectKey so we can
 	// build the response even when validation fails.
 	type validEntry struct {
-		rawKey  string
-		key     storage.ObjectKey
-		ifMatch *string
+		rawKey string
+		key    storage.ObjectKey
+		etag   *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
 
@@ -1764,14 +1805,14 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, ifMatch: obj.IfMatch})
+		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, etag: obj.ETag})
 	}
 
 	// Second pass: bulk delete all valid entries in one storage call.
 	if len(validEntries) > 0 {
 		inputEntries := make([]storage.DeleteObjectsInputEntry, len(validEntries))
 		for i, ve := range validEntries {
-			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.ifMatch}
+			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.etag}
 		}
 
 		slog.Info("DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))
@@ -2032,7 +2073,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
 
-	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil)
+	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
 			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
@@ -2082,7 +2123,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 
 	slog.Info("Website: head object", "bucket", bucketName.String(), "key", resolvedKey)
 
-	object, err := s.storage.HeadObject(ctx, bucketName, objectKey)
+	object, err := s.storage.HeadObject(ctx, bucketName, objectKey, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
 			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
@@ -2125,7 +2166,7 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	object, readers, err := s.storage.GetObject(ctx, bucketName, errorKey, nil)
+	object, readers, err := s.storage.GetObject(ctx, bucketName, errorKey, nil, nil)
 	if err != nil {
 		// Error document not found — fall back to default HTML error
 		s.writeHTMLError(w, statusCode, code, message)

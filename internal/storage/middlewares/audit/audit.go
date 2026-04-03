@@ -201,16 +201,16 @@ func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage
 	return res, err
 }
 
-func (m *AuditLogMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (m *AuditLogMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	m.log(ctx, auditlog.OpHeadObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
-	obj, err := m.next.HeadObject(ctx, bucketName, key)
+	obj, err := m.next.HeadObject(ctx, bucketName, key, opts)
 	m.log(ctx, auditlog.OpHeadObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err)
 	return obj, err
 }
 
-func (m *AuditLogMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (m *AuditLogMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil)
-	obj, readers, err := m.next.GetObject(ctx, bucketName, key, ranges)
+	obj, readers, err := m.next.GetObject(ctx, bucketName, key, ranges, opts)
 	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err)
 	return obj, readers, err
 }

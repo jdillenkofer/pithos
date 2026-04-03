@@ -362,7 +362,7 @@ func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.Buc
 	return os.innerStorage.ListObjects(ctx, bucketName, opts)
 }
 
-func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadObject")
 	defer span.End()
 
@@ -371,10 +371,10 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.Buck
 		return nil, err
 	}
 
-	return os.innerStorage.HeadObject(ctx, bucketName, key)
+	return os.innerStorage.HeadObject(ctx, bucketName, key, opts)
 }
 
-func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObject")
 	defer span.End()
 
@@ -383,7 +383,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 		return nil, nil, err
 	}
 
-	return os.innerStorage.GetObject(ctx, bucketName, key, ranges)
+	return os.innerStorage.GetObject(ctx, bucketName, key, ranges, opts)
 }
 
 const chunkSize = 256 * 1000 * 1000 // 256MB

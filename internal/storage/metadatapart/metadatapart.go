@@ -322,7 +322,7 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 	return &listBucketResult, nil
 }
 
-func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.HeadObject")
 	defer span.End()
 
@@ -335,6 +335,21 @@ func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName stora
 	if err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+
+	if opts != nil {
+		if opts.IfMatchETag != nil {
+			if *opts.IfMatchETag != storage.ETagWildcard && mObject.ETag != *opts.IfMatchETag {
+				tx.Rollback()
+				return nil, storage.ErrPreconditionFailed
+			}
+		}
+		if opts.IfNoneMatchETag != nil {
+			if *opts.IfNoneMatchETag == storage.ETagWildcard || mObject.ETag == *opts.IfNoneMatchETag {
+				tx.Rollback()
+				return nil, storage.ErrNotModified
+			}
+		}
 	}
 
 	err = tx.Commit()
@@ -442,7 +457,7 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.T
 	return reader, nil
 }
 
-func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
@@ -455,6 +470,19 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if opts != nil {
+		if opts.IfMatchETag != nil {
+			if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
+				return nil, nil, storage.ErrPreconditionFailed
+			}
+		}
+		if opts.IfNoneMatchETag != nil {
+			if *opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag {
+				return nil, nil, storage.ErrNotModified
+			}
+		}
 	}
 
 	// Default to full object if no ranges specified

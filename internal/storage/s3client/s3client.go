@@ -160,7 +160,7 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 	}, nil
 }
 
-func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (*storage.Object, error) {
+func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.HeadObject")
 	defer span.End()
 
@@ -189,7 +189,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
-func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange) (*storage.Object, []io.ReadCloser, error) {
+func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObject")
 	defer span.End()
 
@@ -199,7 +199,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	}
 
 	// First, get object metadata
-	object, err := rs.HeadObject(ctx, bucketName, key)
+	object, err := rs.HeadObject(ctx, bucketName, key, nil)
 	if err != nil {
 		return nil, nil, err
 	}
