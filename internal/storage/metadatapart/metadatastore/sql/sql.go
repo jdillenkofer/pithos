@@ -468,7 +468,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
 
@@ -483,6 +483,13 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
 		return err
+	}
+
+	if opts != nil && opts.IfMatchETag != nil {
+		// Conditional delete: object must exist and ETag must match.
+		if objectEntity == nil || objectEntity.ETag != *opts.IfMatchETag {
+			return metadatastore.ErrPreconditionFailed
+		}
 	}
 
 	if objectEntity != nil {

@@ -292,14 +292,18 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 	}, nil
 }
 
-func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObject")
 	defer span.End()
 
-	_, err := rs.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	input := &s3.DeleteObjectInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
-	})
+	}
+	if opts != nil && opts.IfMatchETag != nil {
+		input.IfMatch = opts.IfMatchETag
+	}
+	_, err := rs.s3Client.DeleteObject(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return storage.ErrNoSuchBucket
@@ -310,13 +314,13 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 	return nil
 }
 
-func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObjects")
 	defer span.End()
 
-	identifiers := make([]types.ObjectIdentifier, len(keys))
-	for i, key := range keys {
-		k := key.String()
+	identifiers := make([]types.ObjectIdentifier, len(entries))
+	for i, entry := range entries {
+		k := entry.Key.String()
 		identifiers[i] = types.ObjectIdentifier{Key: &k}
 	}
 
@@ -340,7 +344,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 	}
 
 	result := &storage.DeleteObjectsResult{
-		Entries: make([]storage.DeleteObjectsEntry, 0, len(keys)),
+		Entries: make([]storage.DeleteObjectsEntry, 0, len(entries)),
 	}
 
 	for _, deleted := range deleteResult.Deleted {

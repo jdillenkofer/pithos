@@ -217,11 +217,11 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.Bucket
 	return putObjectResult, nil
 }
 
-func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObject")
 	defer span.End()
 
-	err := cs.innerStorage.DeleteObject(ctx, bucketName, key)
+	err := cs.innerStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}
@@ -234,11 +234,11 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.Buc
 	return nil
 }
 
-func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObjects")
 	defer span.End()
 
-	result, err := cs.innerStorage.DeleteObjects(ctx, bucketName, keys)
+	result, err := cs.innerStorage.DeleteObjects(ctx, bucketName, entries)
 	if err != nil {
 		return nil, err
 	}

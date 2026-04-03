@@ -1,20 +1,24 @@
 package metadatapart
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMetadataPartStorageWithSql(t *testing.T) {
@@ -146,4 +150,169 @@ func TestMetadataPartStorageWithFilesystem(t *testing.T) {
 	content := []byte("MetadataPartStorage")
 	err = storage.Tester(metadataPartStorage, []storage.BucketName{storage.MustNewBucketName("bucket")}, content)
 	assert.Nil(t, err)
+}
+
+// newTestStorage creates a fresh MetadataPartStorage backed by a temporary SQLite DB and SQL part store.
+// Returns the raw *metadataPartStorage (for access to internal methods) and a cleanup function.
+func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
+	t.Helper()
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	require.NoError(t, err)
+
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
+	require.NoError(t, err)
+	partStore, err := sqlPartStore.New(db, partContentRepository)
+	require.NoError(t, err)
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
+	require.NoError(t, err)
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
+	require.NoError(t, err)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
+	require.NoError(t, err)
+	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	require.NoError(t, err)
+	st, err := NewStorage(db, metaStore, partStore)
+	require.NoError(t, err)
+	mps := st.(*metadataPartStorage)
+
+	ctx := context.Background()
+	require.NoError(t, mps.Start(ctx))
+
+	cleanup := func() {
+		mps.Stop(ctx)
+		db.Close()
+		os.RemoveAll(storagePath)
+	}
+	return mps, cleanup
+}
+
+func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	result, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	etag := *result.ETag
+
+	// Delete with correct ETag — should succeed.
+	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(etag)})
+	require.NoError(t, err)
+
+	// Object should be gone.
+	_, err = st.HeadObject(ctx, bucket, key)
+	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+func TestConditionalDeleteObject_WrongETag(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	// Delete with wrong ETag — should return PreconditionFailed.
+	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("wrong-etag")})
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	// Object should still exist.
+	_, err = st.HeadObject(ctx, bucket, key)
+	require.NoError(t, err)
+}
+
+func TestConditionalDeleteObject_NoObjectWithCondition(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("nonexistent")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// Delete non-existent object with ETag condition — should return PreconditionFailed.
+	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("any-etag")})
+	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
+}
+
+func TestConditionalDeleteObject_NoObjectNoCondition(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("nonexistent")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// Delete non-existent object without condition — should silently succeed (S3 semantics).
+	err := st.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+}
+
+func TestConditionalDeleteObjects_MixedConditions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	key1 := storage.MustNewObjectKey("obj1")
+	key2 := storage.MustNewObjectKey("obj2")
+	key3 := storage.MustNewObjectKey("obj3")
+
+	res1, err := st.PutObject(ctx, bucket, key1, nil, bytes.NewReader([]byte("data1")), nil, nil)
+	require.NoError(t, err)
+	etag1 := *res1.ETag
+
+	_, err = st.PutObject(ctx, bucket, key2, nil, bytes.NewReader([]byte("data2")), nil, nil)
+	require.NoError(t, err)
+
+	_, err = st.PutObject(ctx, bucket, key3, nil, bytes.NewReader([]byte("data3")), nil, nil)
+	require.NoError(t, err)
+
+	entries := []storage.DeleteObjectsInputEntry{
+		{Key: key1, IfMatchETag: ptrutils.ToPtr(etag1)},        // correct etag → deleted
+		{Key: key2, IfMatchETag: ptrutils.ToPtr("wrong-etag")}, // wrong etag → error entry
+		{Key: key3}, // no condition → deleted
+	}
+	deleteResult, err := st.DeleteObjects(ctx, bucket, entries)
+	require.NoError(t, err)
+	require.Len(t, deleteResult.Entries, 3)
+
+	// Find entries by key.
+	byKey := make(map[string]storage.DeleteObjectsEntry)
+	for _, e := range deleteResult.Entries {
+		byKey[e.Key.String()] = e
+	}
+
+	assert.True(t, byKey["obj1"].Deleted, "obj1 should be deleted (correct etag)")
+	assert.False(t, byKey["obj2"].Deleted, "obj2 should NOT be deleted (wrong etag)")
+	assert.Equal(t, "PreconditionFailed", byKey["obj2"].ErrCode)
+	assert.True(t, byKey["obj3"].Deleted, "obj3 should be deleted (no condition)")
+
+	// Verify obj1 and obj3 are gone, obj2 still exists.
+	_, err = st.HeadObject(ctx, bucket, key1)
+	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+	_, err = st.HeadObject(ctx, bucket, key2)
+	require.NoError(t, err)
+	_, err = st.HeadObject(ctx, bucket, key3)
+	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }

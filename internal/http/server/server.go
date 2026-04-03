@@ -353,6 +353,7 @@ type WebsiteConfigurationResponse struct {
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
+	IfMatch   *string `xml:"IfMatch"`
 }
 
 type DeleteObjectsRequest struct {
@@ -1659,7 +1660,12 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("Deleting object", "bucket", bucketName.String(), "key", key.String())
-	err = s.storage.DeleteObject(ctx, bucketName, key)
+	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
+	var deleteOpts *storage.DeleteObjectOptions
+	if ifMatch != nil {
+		deleteOpts = &storage.DeleteObjectOptions{IfMatchETag: ifMatch}
+	}
+	err = s.storage.DeleteObject(ctx, bucketName, key, deleteOpts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -1732,8 +1738,9 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	// We track the original string key alongside the parsed ObjectKey so we can
 	// build the response even when validation fails.
 	type validEntry struct {
-		rawKey string
-		key    storage.ObjectKey
+		rawKey  string
+		key     storage.ObjectKey
+		ifMatch *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
 
@@ -1757,18 +1764,18 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key})
+		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, ifMatch: obj.IfMatch})
 	}
 
-	// Second pass: bulk delete all valid keys in one storage call.
+	// Second pass: bulk delete all valid entries in one storage call.
 	if len(validEntries) > 0 {
-		keys := make([]storage.ObjectKey, len(validEntries))
+		inputEntries := make([]storage.DeleteObjectsInputEntry, len(validEntries))
 		for i, ve := range validEntries {
-			keys[i] = ve.key
+			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.ifMatch}
 		}
 
-		slog.Info("DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(keys))
-		deleteResult, err := s.storage.DeleteObjects(ctx, bucketName, keys)
+		slog.Info("DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))
+		deleteResult, err := s.storage.DeleteObjects(ctx, bucketName, inputEntries)
 		if err != nil {
 			if err == storage.ErrNoSuchBucket {
 				handleError(err, w, r)

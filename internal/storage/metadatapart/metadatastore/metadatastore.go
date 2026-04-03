@@ -204,6 +204,10 @@ type PutObjectOptions struct {
 	IfMatchETag     *string
 }
 
+type DeleteObjectOptions struct {
+	IfMatchETag *string
+}
+
 type MaintenanceStore interface {
 	GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 }
@@ -230,7 +234,7 @@ type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
-	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
+	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
 }
 
 type MultipartStore interface {
@@ -365,7 +369,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key)
+	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -418,7 +422,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key)
+	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
 	if err != nil {
 		tx.Rollback()
 		return err

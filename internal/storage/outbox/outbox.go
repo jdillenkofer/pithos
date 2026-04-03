@@ -104,7 +104,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key))
+			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
 			if err != nil {
 				tx.Rollback()
 				time.Sleep(5 * time.Second)
@@ -463,7 +463,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	}, nil
 }
 
-func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
 
@@ -483,7 +483,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	return nil
 }
 
-func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, keys []storage.ObjectKey) (*storage.DeleteObjectsResult, error) {
+func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()
 
@@ -492,8 +492,8 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 		return nil, err
 	}
 
-	for _, key := range keys {
-		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
+	for _, entry := range entries {
+		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String())
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -506,10 +506,10 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	}
 
 	result := &storage.DeleteObjectsResult{
-		Entries: make([]storage.DeleteObjectsEntry, len(keys)),
+		Entries: make([]storage.DeleteObjectsEntry, len(entries)),
 	}
-	for i, key := range keys {
-		result.Entries[i] = storage.DeleteObjectsEntry{Key: key, Deleted: true}
+	for i, entry := range entries {
+		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true}
 	}
 	return result, nil
 }
