@@ -18,9 +18,70 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+type outboxMetrics struct {
+	pendingEntries     prometheus.Gauge
+	processedEntries   prometheus.Counter
+	processingDuration prometheus.Histogram
+	errorsCounter      prometheus.Counter
+}
+
+func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
+	m := &outboxMetrics{
+		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "pithos",
+			Subsystem: "outbox",
+			Name:      "pending_entries",
+			Help:      "Number of pending outbox entries",
+		}),
+		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "outbox",
+			Name:      "processed_entries_total",
+			Help:      "Total number of processed outbox entries",
+		}),
+		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "pithos",
+			Subsystem: "outbox",
+			Name:      "processing_duration_seconds",
+			Help:      "Duration of outbox processing in seconds",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+		}),
+		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "outbox",
+			Name:      "errors_total",
+			Help:      "Total number of outbox processing errors",
+		}),
+	}
+
+	if err := registerer.Register(m.pendingEntries); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register pendingEntries metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.processedEntries); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register processedEntries metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.processingDuration); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register processingDuration metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.errorsCounter); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register errorsCounter metric", "error", err)
+		}
+	}
+
+	return m
+}
 
 type outboxStorage struct {
 	*lifecycle.ValidatedLifecycle
@@ -31,12 +92,13 @@ type outboxStorage struct {
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
 	tracer                       trace.Tracer
+	metrics                      *outboxMetrics
 }
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
 var _ storage.Storage = (*outboxStorage)(nil)
 
-func NewStorage(db database.Database, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository) (storage.Storage, error) {
+func NewStorage(db database.Database, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
@@ -49,20 +111,43 @@ func NewStorage(db database.Database, innerStorage storage.Storage, storageOutbo
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		tracer:                       otel.Tracer("internal/storage/outbox"),
+		metrics:                      newOutboxMetrics(registerer),
 	}
 	return os, nil
 }
 
 func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
+	startTime := time.Now()
 	processedOutboxEntryCount := 0
+	defer func() {
+		os.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
+		if processedOutboxEntryCount > 0 {
+			os.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
+		}
+	}()
+
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return
+	}
+	pendingCount, err := os.storageOutboxEntryRepository.Count(ctx, tx)
+	if err != nil {
+		tx.Rollback()
+		return
+	}
+	os.metrics.pendingEntries.Set(float64(pendingCount))
+	tx.Commit()
+
 	for {
 		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
+			os.metrics.errorsCounter.Inc()
 			return
 		}
 		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryWithForUpdateLock(ctx, tx)
 		if err != nil {
 			tx.Rollback()
+			os.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
@@ -76,6 +161,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
 			if err != nil {
 				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -83,6 +169,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
 			if err != nil {
 				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -90,6 +177,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, *entry.Id)
 			if err != nil {
 				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -100,6 +188,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
 			if err != nil {
 				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -107,6 +196,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
 			if err != nil {
 				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}

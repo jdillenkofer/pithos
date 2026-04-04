@@ -8,10 +8,15 @@ import (
 	"log/slog"
 	"reflect"
 
+	"crypto/sha512"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
+	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
+	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	auditlogSinkConfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -22,18 +27,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/config"
 	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
+	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	"github.com/prometheus/client_golang/prometheus"
-	"crypto/sha512"
-	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
-	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
-	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
-	auditlogSinkConfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
-	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 )
 
 const (
@@ -475,7 +475,12 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository)
+	t := reflect.TypeOf((*prometheus.Registerer)(nil))
+	prometheusRegisterer, err := diProvider.LookupByType(t)
+	if err != nil {
+		return nil, err
+	}
+	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
 }
 
 type ReplicationStorageConfiguration struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/ssh"
 )
@@ -26,6 +27,10 @@ func createPartStoreFromJson(b []byte) (partstore.PartStore, error) {
 	}
 	dbContainer := config.NewDbContainer()
 	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
+	if err != nil {
+		return nil, err
+	}
+	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.NewRegistry())
 	if err != nil {
 		return nil, err
 	}

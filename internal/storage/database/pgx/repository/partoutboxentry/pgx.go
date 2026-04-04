@@ -14,6 +14,7 @@ type pgxRepository struct {
 }
 
 const (
+	countPartOutboxEntriesStmt                    = "SELECT COUNT(*) FROM part_outbox_entries"
 	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
 	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY part_id, id DESC"
 	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
@@ -27,6 +28,15 @@ const (
 
 func NewRepository() (partoutboxentry.Repository, error) {
 	return &pgxRepository{}, nil
+}
+
+func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry.Entity, error) {

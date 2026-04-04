@@ -14,6 +14,7 @@ type sqliteRepository struct {
 }
 
 const (
+	countPartOutboxEntriesStmt                 = "SELECT COUNT(*) FROM part_outbox_entries"
 	findLastPartOutboxEntryByPartIdStmt        = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
 	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT e.id, e.operation, e.part_id, e.created_at, e.updated_at FROM part_outbox_entries e INNER JOIN ( SELECT part_id, MAX(id) as max_id FROM part_outbox_entries GROUP BY part_id) m ON e.part_id = m.part_id AND e.id = m.max_id"
 	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
@@ -26,6 +27,15 @@ const (
 
 func NewRepository() (partoutboxentry.Repository, error) {
 	return &sqliteRepository{}, nil
+}
+
+func (bor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry.Entity, error) {
