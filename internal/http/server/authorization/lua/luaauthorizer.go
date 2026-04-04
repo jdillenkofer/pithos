@@ -147,6 +147,48 @@ func parseForwardedScheme(forwardedProto string) *string {
 	return nil
 }
 
+func stringInSlice(value string, values []string) bool {
+	for _, currentValue := range values {
+		if currentValue == value {
+			return true
+		}
+	}
+	return false
+}
+
+func luaStringSliceArg(L *lua.State, index int) ([]string, bool) {
+	if !L.IsTable(index) {
+		return nil, false
+	}
+	result := make([]string, 0)
+	for i := 1; ; i++ {
+		L.RawGetInt(index, i)
+		if L.IsNil(-1) {
+			L.Pop(1)
+			break
+		}
+		value, ok := L.ToString(-1)
+		L.Pop(1)
+		if !ok {
+			return nil, false
+		}
+		result = append(result, value)
+	}
+	return result, true
+}
+
+func ipInCIDR(ipStr string, cidr string) bool {
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if ip == nil {
+		return false
+	}
+	_, ipNet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil {
+		return false
+	}
+	return ipNet.Contains(ip)
+}
+
 func (authorizer *LuaAuthorizer) resolveClientIPAndScheme(httpRequest authorization.HTTPRequest) (*string, string) {
 	clientIP := httpRequest.RemoteIP
 	scheme := httpRequest.Scheme
@@ -361,6 +403,21 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		L.PushGoFunction(func(L *lua.State) int {
 			headerName, ok := L.ToString(2)
 			if !ok {
+				L.PushNil()
+				return 1
+			}
+			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
+			if len(headerValues) == 0 {
+				L.PushNil()
+				return 1
+			}
+			L.PushString(headerValues[0])
+			return 1
+		})
+		L.SetField(-2, "header")
+		L.PushGoFunction(func(L *lua.State) int {
+			headerName, ok := L.ToString(2)
+			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
@@ -394,6 +451,32 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		L.PushGoFunction(func(L *lua.State) int {
 			paramName, ok := L.ToString(2)
 			if !ok {
+				L.PushNil()
+				return 1
+			}
+			paramValues := request.HttpRequest.QueryParams[paramName]
+			if len(paramValues) == 0 {
+				L.PushNil()
+				return 1
+			}
+			L.PushString(paramValues[0])
+			return 1
+		})
+		L.SetField(-2, "queryParam")
+		L.PushGoFunction(func(L *lua.State) int {
+			paramName, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			paramValues := request.HttpRequest.QueryParams[paramName]
+			L.PushBoolean(len(paramValues) > 0)
+			return 1
+		})
+		L.SetField(-2, "hasQueryParam")
+		L.PushGoFunction(func(L *lua.State) int {
+			paramName, ok := L.ToString(2)
+			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
@@ -413,6 +496,102 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 			return 1
 		})
 		L.SetField(-2, "queryParamEquals")
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedPath, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(request.HttpRequest.Path == expectedPath)
+			return 1
+		})
+		L.SetField(-2, "pathEquals")
+		L.PushGoFunction(func(L *lua.State) int {
+			prefix, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(strings.HasPrefix(request.HttpRequest.Path, prefix))
+			return 1
+		})
+		L.SetField(-2, "pathHasPrefix")
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedHost, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(strings.EqualFold(request.HttpRequest.Host, expectedHost))
+			return 1
+		})
+		L.SetField(-2, "hostEquals")
+		L.PushGoFunction(func(L *lua.State) int {
+			suffix, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(strings.HasSuffix(strings.ToLower(request.HttpRequest.Host), strings.ToLower(suffix)))
+			return 1
+		})
+		L.SetField(-2, "hostHasSuffix")
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedScheme, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(strings.EqualFold(request.HttpRequest.Scheme, expectedScheme))
+			return 1
+		})
+		L.SetField(-2, "isScheme")
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedProto, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(strings.EqualFold(request.HttpRequest.Proto, expectedProto))
+			return 1
+		})
+		L.SetField(-2, "isProto")
+		L.PushGoFunction(func(L *lua.State) int {
+			cidr, ok := L.ToString(2)
+			if !ok || request.HttpRequest.ClientIP == nil {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(ipInCIDR(*request.HttpRequest.ClientIP, cidr))
+			return 1
+		})
+		L.SetField(-2, "clientIPInCIDR")
+		L.PushGoFunction(func(L *lua.State) int {
+			cidrs, ok := luaStringSliceArg(L, 2)
+			if !ok || request.HttpRequest.ClientIP == nil {
+				L.PushBoolean(false)
+				return 1
+			}
+			for _, cidr := range cidrs {
+				if ipInCIDR(*request.HttpRequest.ClientIP, cidr) {
+					L.PushBoolean(true)
+					return 1
+				}
+			}
+			L.PushBoolean(false)
+			return 1
+		})
+		L.SetField(-2, "clientIPInCIDRs")
+		L.PushGoFunction(func(L *lua.State) int {
+			cidr, ok := L.ToString(2)
+			if !ok || request.HttpRequest.RemoteIP == nil {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.PushBoolean(ipInCIDR(*request.HttpRequest.RemoteIP, cidr))
+			return 1
+		})
+		L.SetField(-2, "remoteIPInCIDR")
 		L.PushGoFunction(func(L *lua.State) int {
 			expectedApiKey, ok := L.ToString(2)
 			if !ok {
@@ -441,6 +620,13 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 	})
 	L.SetField(-2, "isReadOnly")
 	L.PushGoFunction(func(L *lua.State) int {
+		L.Field(1, "operation")
+		operation, _ := L.ToString(-1)
+		L.PushBoolean(!isReadOnly(operation))
+		return 1
+	})
+	L.SetField(-2, "isWriteOperation")
+	L.PushGoFunction(func(L *lua.State) int {
 		expectedOperation, ok := L.ToString(2)
 		if !ok {
 			L.PushBoolean(false)
@@ -453,6 +639,18 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 	})
 	L.SetField(-2, "isOperation")
 	L.PushGoFunction(func(L *lua.State) int {
+		expectedOperations, ok := luaStringSliceArg(L, 2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "operation")
+		operation, _ := L.ToString(-1)
+		L.PushBoolean(stringInSlice(operation, expectedOperations))
+		return 1
+	})
+	L.SetField(-2, "isOperationIn")
+	L.PushGoFunction(func(L *lua.State) int {
 		L.Field(1, "authorization")
 		L.Field(-1, "accessKeyId")
 		isAnonymous := L.IsNil(-1)
@@ -460,4 +658,76 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		return 1
 	})
 	L.SetField(-2, "isAnonymous")
+	L.PushGoFunction(func(L *lua.State) int {
+		L.Field(1, "authorization")
+		L.Field(-1, "accessKeyId")
+		hasAccessKeyId := !L.IsNil(-1)
+		L.PushBoolean(hasAccessKeyId)
+		return 1
+	})
+	L.SetField(-2, "hasAccessKeyId")
+	L.PushGoFunction(func(L *lua.State) int {
+		expectedAccessKeyId, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "authorization")
+		L.Field(-1, "accessKeyId")
+		accessKeyId, ok := L.ToString(-1)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.PushBoolean(accessKeyId == expectedAccessKeyId)
+		return 1
+	})
+	L.SetField(-2, "accessKeyIdEquals")
+	L.PushGoFunction(func(L *lua.State) int {
+		expectedAccessKeyIds, ok := luaStringSliceArg(L, 2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "authorization")
+		L.Field(-1, "accessKeyId")
+		accessKeyId, ok := L.ToString(-1)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.PushBoolean(stringInSlice(accessKeyId, expectedAccessKeyIds))
+		return 1
+	})
+	L.SetField(-2, "accessKeyIdIn")
+	L.PushGoFunction(func(L *lua.State) int {
+		expectedBucket, ok := L.ToString(2)
+		if !ok || request.Bucket == nil {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.PushBoolean(*request.Bucket == expectedBucket)
+		return 1
+	})
+	L.SetField(-2, "bucketEquals")
+	L.PushGoFunction(func(L *lua.State) int {
+		prefix, ok := L.ToString(2)
+		if !ok || request.Key == nil {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.PushBoolean(strings.HasPrefix(*request.Key, prefix))
+		return 1
+	})
+	L.SetField(-2, "keyHasPrefix")
+	L.PushGoFunction(func(L *lua.State) int {
+		suffix, ok := L.ToString(2)
+		if !ok || request.Key == nil {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.PushBoolean(strings.HasSuffix(*request.Key, suffix))
+		return 1
+	})
+	L.SetField(-2, "keyHasSuffix")
 }
