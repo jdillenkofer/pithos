@@ -56,7 +56,10 @@ type RequestAuthorizer interface {
 	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
 }
 
-type ListItemAuthorizer interface {
+type RequestResourceAuthorizer interface {
 	AuthorizeListBucket(ctx context.Context, request *Request, bucketName string) (bool, error)
 	AuthorizeListObject(ctx context.Context, request *Request, key string) (bool, error)
+	AuthorizeDeleteObjectEntry(ctx context.Context, request *Request, key string) (bool, error)
+	AuthorizeListMultipartUpload(ctx context.Context, request *Request, key string, uploadID string) (bool, error)
+	AuthorizeListPart(ctx context.Context, request *Request, partNumber int32) (bool, error)
 }

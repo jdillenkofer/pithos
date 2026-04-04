@@ -748,6 +748,73 @@ func TestAuthorizeListObjectUsesOptionalHook(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestAuthorizeDeleteObjectEntryFallsBackToAllowWhenHookMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{Operation: authorization.OperationDeleteObjects}
+	authorized, err := authorizer.AuthorizeDeleteObjectEntry(context.Background(), &request, "secret.txt")
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestAuthorizeListMultipartUploadUsesOptionalHook(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+
+	function authorizeListMultipartUpload(request, key, uploadId)
+	  return key == "allowed/file.txt" and uploadId == "upload-1"
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{Operation: authorization.OperationListMultipartUploads}
+	authorized, err := authorizer.AuthorizeListMultipartUpload(context.Background(), &request, "allowed/file.txt", "upload-1")
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+
+	authorized, err = authorizer.AuthorizeListMultipartUpload(context.Background(), &request, "allowed/file.txt", "upload-2")
+	assert.False(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestAuthorizeListPartUsesOptionalHook(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+
+	function authorizeListPart(request, partNumber)
+	  return partNumber == 1
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{Operation: authorization.OperationListParts}
+	authorized, err := authorizer.AuthorizeListPart(context.Background(), &request, 1)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+
+	authorized, err = authorizer.AuthorizeListPart(context.Background(), &request, 2)
+	assert.False(t, authorized)
+	assert.Nil(t, err)
+}
+
 func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

@@ -1611,6 +1611,38 @@ func TestMultipartUpload(t *testing.T) {
 			assert.NotNil(t, secondUpload.Initiated)
 		})
 
+		t.Run("it should filter listed multipart uploads via authorizer hook"+testSuffix, func(t *testing.T) {
+			authorizationCode := `
+			function authorizeRequest(request)
+			  return true
+			end
+
+			function authorizeListMultipartUpload(request, key, uploadId)
+			  return string.find(key, "allowed/") == 1
+			end
+			`
+			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: aws.String("allowed/file.txt")})
+			assert.Nil(t, err)
+			_, err = s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: aws.String("denied/file.txt")})
+			assert.Nil(t, err)
+
+			listMultipartUploadsResult, err := s3Client.ListMultipartUploads(context.Background(), &s3.ListMultipartUploadsInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Len(t, listMultipartUploadsResult.Uploads, 1)
+			assert.Equal(t, "allowed/file.txt", *listMultipartUploadsResult.Uploads[0].Key)
+		})
+
 		t.Run("it should allow multipart uploads with two parts"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -1886,6 +1918,43 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, "Iy5Z/rXq8uI=", *secondPart.ChecksumCRC64NVME)
 			assert.Equal(t, "h1jfWItGBQfcDNMMI6FANuZJam4=", *secondPart.ChecksumSHA1)
 			assert.Equal(t, "QzRXKSwYas0BDNnAMkDZMLlliJd9xDozckIiOuCoaao=", *secondPart.ChecksumSHA256)
+		})
+
+		t.Run("it should filter listed parts via authorizer hook"+testSuffix, func(t *testing.T) {
+			authorizationCode := `
+			function authorizeRequest(request)
+			  return true
+			end
+
+			function authorizeListPart(request, partNumber)
+			  return partNumber == 2
+			end
+			`
+			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			createMultipartUploadResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			uploadId := createMultipartUploadResult.UploadId
+			assert.NotNil(t, uploadId)
+
+			_, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{Bucket: bucketName, Key: key, UploadId: uploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader([]byte("part-1"))})
+			assert.Nil(t, err)
+			_, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{Bucket: bucketName, Key: key, UploadId: uploadId, PartNumber: aws.Int32(2), Body: bytes.NewReader([]byte("part-2"))})
+			assert.Nil(t, err)
+
+			listPartsResult, err := s3Client.ListParts(context.Background(), &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: uploadId})
+			assert.Nil(t, err)
+			assert.Len(t, listPartsResult.Parts, 1)
+			assert.Equal(t, int32(2), *listPartsResult.Parts[0].PartNumber)
 		})
 
 		t.Run("it should allow cancellation of multipart uploads"+testSuffix, func(t *testing.T) {
@@ -4368,6 +4437,51 @@ func TestDeleteObjects(t *testing.T) {
 			assert.NotNil(t, err)
 			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key2})
 			assert.NotNil(t, err)
+		})
+
+		t.Run("it should apply per-entry delete authorization hook"+testSuffix, func(t *testing.T) {
+			authorizationCode := `
+			function authorizeRequest(request)
+			  return true
+			end
+
+			function authorizeDeleteObjectEntry(request, key)
+			  return key ~= "blocked.txt"
+			end
+			`
+			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			allowedKey := aws.String("allowed.txt")
+			blockedKey := aws.String("blocked.txt")
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: allowedKey, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: blockedKey, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: allowedKey}, {Key: blockedKey}}},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 1)
+			assert.Equal(t, "blocked.txt", *result.Errors[0].Key)
+			assert.Equal(t, "AccessDenied", *result.Errors[0].Code)
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: allowedKey})
+			assert.NotNil(t, err)
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: blockedKey})
+			assert.Nil(t, err)
 		})
 
 		t.Run("it should treat a missing key as successfully deleted"+testSuffix, func(t *testing.T) {
