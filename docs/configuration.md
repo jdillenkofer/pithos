@@ -139,6 +139,21 @@ function authorizeListObject(request, key)
   -- Return true if this key (or common prefix) should be visible in ListObjects
   return true
 end
+
+function authorizeDeleteObjectEntry(request, key)
+  -- Return true if this key should be deleted in DeleteObjects
+  return true
+end
+
+function authorizeListMultipartUpload(request, key, uploadId)
+  -- Return true if this upload should be visible in ListMultipartUploads
+  return true
+end
+
+function authorizeListPart(request, partNumber)
+  -- Return true if this part should be visible in ListParts
+  return true
+end
 ```
 
 If a hook is not defined, items are allowed by default for backward compatibility.

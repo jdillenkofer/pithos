@@ -583,19 +583,43 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 }
 
 func (s *Server) authorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
-	listItemAuthorizer, ok := s.requestAuthorizer.(authorization.ListItemAuthorizer)
+	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
 	if !ok {
 		return true, nil
 	}
-	return listItemAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
+	return requestResourceAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
 }
 
 func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	listItemAuthorizer, ok := s.requestAuthorizer.(authorization.ListItemAuthorizer)
+	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
 	if !ok {
 		return true, nil
 	}
-	return listItemAuthorizer.AuthorizeListObject(ctx, request, key)
+	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
+}
+
+func (s *Server) authorizeDeleteObjectEntry(ctx context.Context, request *authorization.Request, key string) (bool, error) {
+	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
+	if !ok {
+		return true, nil
+	}
+	return requestResourceAuthorizer.AuthorizeDeleteObjectEntry(ctx, request, key)
+}
+
+func (s *Server) authorizeListMultipartUpload(ctx context.Context, request *authorization.Request, key string, uploadID string) (bool, error) {
+	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
+	if !ok {
+		return true, nil
+	}
+	return requestResourceAuthorizer.AuthorizeListMultipartUpload(ctx, request, key, uploadID)
+}
+
+func (s *Server) authorizeListPart(ctx context.Context, request *authorization.Request, partNumber int32) (bool, error) {
+	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
+	if !ok {
+		return true, nil
+	}
+	return requestResourceAuthorizer.AuthorizeListPart(ctx, request, partNumber)
 }
 
 func cloneStringSliceMap(input map[string][]string) map[string][]string {
@@ -780,14 +804,9 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	maxUploadsI32 := int32(maxUploadsI64)
 
+	opts := storage.ListMultipartUploadsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, UploadIdMarker: uploadIdMarker, MaxUploads: maxUploadsI32}
 	slog.Info("Listing MultipartUploads")
-	result, err := s.storage.ListMultipartUploads(ctx, bucketName, storage.ListMultipartUploadsOptions{
-		Prefix:         prefix,
-		Delimiter:      delimiter,
-		KeyMarker:      keyMarker,
-		UploadIdMarker: uploadIdMarker,
-		MaxUploads:     maxUploadsI32,
-	})
+	result, nextKeyMarker, nextUploadIDMarker, err := s.listAndFilterMultipartUploads(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -796,8 +815,8 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		Bucket:             result.BucketName.String(),
 		KeyMarker:          ptrutils.ToPtr(result.KeyMarker),
 		UploadIdMarker:     ptrutils.ToPtr(result.UploadIdMarker),
-		NextKeyMarker:      ptrutils.ToPtr(result.NextKeyMarker),
-		NextUploadIdMarker: ptrutils.ToPtr(result.NextUploadIdMarker),
+		NextKeyMarker:      nextKeyMarker,
+		NextUploadIdMarker: nextUploadIDMarker,
 		MaxUploads:         maxUploadsI32,
 		IsTruncated:        result.IsTruncated,
 		Delimiter:          ptrutils.ToPtr(result.Delimiter),
@@ -822,6 +841,90 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	out, _ := xmlMarshalWithDocType(listMultipartUploadsResult)
 	w.Write(out)
+}
+
+func (s *Server) listAndFilterMultipartUploads(ctx context.Context, r *http.Request, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, *string, *string, error) {
+	maxUploads := opts.MaxUploads
+	if maxUploads <= 0 {
+		maxUploads = 1000
+	}
+	collectedUploads := []storage.Upload{}
+	collectedPrefixes := []string{}
+	seenPrefixes := map[string]struct{}{}
+	keyMarker := opts.KeyMarker
+	uploadIDMarker := opts.UploadIdMarker
+	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListMultipartUploads, ptrutils.ToPtr(bucketName.String()), nil, r)
+	var nextKeyMarker *string
+	var nextUploadIDMarker *string
+
+	for {
+		result, err := s.storage.ListMultipartUploads(ctx, bucketName, storage.ListMultipartUploadsOptions{
+			Prefix:         opts.Prefix,
+			Delimiter:      opts.Delimiter,
+			KeyMarker:      keyMarker,
+			UploadIdMarker: uploadIDMarker,
+			MaxUploads:     maxUploads,
+		})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		lastKeyMarker := keyMarker
+		lastUploadIDMarker := uploadIDMarker
+		for uploadIndex, upload := range result.Uploads {
+			uploadKey := upload.Key.String()
+			uploadID := upload.UploadId.String()
+			lastKeyMarker = &uploadKey
+			lastUploadIDMarker = &uploadID
+			allowed, err := s.authorizeListMultipartUpload(ctx, baseRequest, uploadKey, uploadID)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+			collectedUploads = append(collectedUploads, upload)
+			if int32(len(collectedUploads)) >= maxUploads {
+				hasMore := uploadIndex < len(result.Uploads)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
+				if hasMore {
+					nextKeyMarker = lastKeyMarker
+					nextUploadIDMarker = lastUploadIDMarker
+					return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, NextKeyMarker: *lastKeyMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, NextUploadIdMarker: *lastUploadIDMarker, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: true}, nextKeyMarker, nextUploadIDMarker, nil
+				}
+				return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
+			}
+		}
+		for _, commonPrefix := range result.CommonPrefixes {
+			lastKeyMarker = &commonPrefix
+			lastUploadIDMarker = ptrutils.ToPtr("")
+			allowed, err := s.authorizeListMultipartUpload(ctx, baseRequest, commonPrefix, "")
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+			if _, exists := seenPrefixes[commonPrefix]; exists {
+				continue
+			}
+			seenPrefixes[commonPrefix] = struct{}{}
+			collectedPrefixes = append(collectedPrefixes, commonPrefix)
+		}
+
+		if !result.IsTruncated {
+			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
+		}
+		if lastKeyMarker == nil || lastUploadIDMarker == nil {
+			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
+		}
+		if keyMarker != nil && uploadIDMarker != nil && *keyMarker == *lastKeyMarker && *uploadIDMarker == *lastUploadIDMarker {
+			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
+		}
+		keyMarker = ptrutils.ToPtr(*lastKeyMarker)
+		uploadIDMarker = ptrutils.ToPtr(*lastUploadIDMarker)
+		nextKeyMarker = keyMarker
+		nextUploadIDMarker = uploadIDMarker
+	}
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
@@ -925,7 +1028,7 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		}
 
 		lastScanned := startAfter
-		for _, object := range result.Objects {
+		for objectIndex, object := range result.Objects {
 			key := object.Key.String()
 			lastScanned = &key
 			allowed, err := s.authorizeListObject(ctx, baseRequest, key)
@@ -937,8 +1040,12 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 			}
 			collectedObjects = append(collectedObjects, object)
 			if int32(len(collectedObjects)) >= maxKeys {
-				nextMarker = lastScanned
-				return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: true}, nextMarker, nil
+				hasMore := objectIndex < len(result.Objects)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
+				if hasMore {
+					nextMarker = lastScanned
+					return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: true}, nextMarker, nil
+				}
+				return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: false}, nil, nil
 			}
 		}
 		for _, commonPrefix := range result.CommonPrefixes {
@@ -1314,7 +1421,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxPartsI32 := int32(maxPartsI64)
 
-	result, err := s.storage.ListParts(ctx, bucketName, key, uploadId, storage.ListPartsOptions{
+	result, nextPartNumberMarker, err := s.listAndFilterParts(ctx, r, bucketName, key, uploadId, storage.ListPartsOptions{
 		PartNumberMarker: partNumberMarker,
 		MaxParts:         maxPartsI32,
 	})
@@ -1328,7 +1435,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		Key:                  result.Key.String(),
 		UploadId:             result.UploadId.String(),
 		PartNumberMarker:     ptrutils.ToPtr(result.PartNumberMarker),
-		NextPartNumberMarker: result.NextPartNumberMarker,
+		NextPartNumberMarker: nextPartNumberMarker,
 		MaxParts:             result.MaxParts,
 		IsTruncated:          result.IsTruncated,
 		Parts: sliceutils.Map(func(part *storage.MultipartPart) *PartResult {
@@ -1350,6 +1457,61 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(listPartsResult)
 	w.Write(out)
+}
+
+func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucketName storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, *string, error) {
+	maxParts := opts.MaxParts
+	if maxParts <= 0 {
+		maxParts = 1000
+	}
+	partNumberMarker := opts.PartNumberMarker
+	collectedParts := make([]*storage.MultipartPart, 0, maxParts)
+	var nextPartNumberMarker *string
+	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListParts, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), r)
+
+	for {
+		result, err := s.storage.ListParts(ctx, bucketName, key, uploadID, storage.ListPartsOptions{
+			PartNumberMarker: partNumberMarker,
+			MaxParts:         maxParts,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		lastPartNumberMarker := partNumberMarker
+		for partIndex, part := range result.Parts {
+			partNumberStr := strconv.Itoa(int(part.PartNumber))
+			lastPartNumberMarker = &partNumberStr
+			allowed, err := s.authorizeListPart(ctx, baseRequest, part.PartNumber)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+			collectedParts = append(collectedParts, part)
+			if int32(len(collectedParts)) >= maxParts {
+				hasMore := partIndex < len(result.Parts)-1 || result.IsTruncated
+				if hasMore {
+					nextPartNumberMarker = lastPartNumberMarker
+					return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nextPartNumberMarker, MaxParts: maxParts, IsTruncated: true, Parts: collectedParts}, nextPartNumberMarker, nil
+				}
+				return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+			}
+		}
+
+		if !result.IsTruncated {
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+		}
+		if lastPartNumberMarker == nil {
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+		}
+		if partNumberMarker != nil && *partNumberMarker == *lastPartNumberMarker {
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+		}
+		partNumberMarker = ptrutils.ToPtr(*lastPartNumberMarker)
+		nextPartNumberMarker = partNumberMarker
+	}
 }
 
 func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
@@ -2044,6 +2206,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		etag   *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
+	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
 
 	for _, obj := range req.Objects {
 		if obj.VersionId != nil {
@@ -2068,10 +2231,29 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, etag: obj.ETag})
 	}
 
-	// Second pass: bulk delete all valid entries in one storage call.
-	if len(validEntries) > 0 {
-		inputEntries := make([]storage.DeleteObjectsInputEntry, len(validEntries))
-		for i, ve := range validEntries {
+	// Second pass: authorize valid entries and collect entries to bulk-delete.
+	authorizedEntries := make([]validEntry, 0, len(validEntries))
+	for _, ve := range validEntries {
+		allowed, err := s.authorizeDeleteObjectEntry(ctx, baseRequest, ve.key.String())
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		if !allowed {
+			result.Errors = append(result.Errors, &DeleteErrorEntry{
+				Key:     ve.rawKey,
+				Code:    "AccessDenied",
+				Message: "Access Denied",
+			})
+			continue
+		}
+		authorizedEntries = append(authorizedEntries, ve)
+	}
+
+	// Third pass: bulk delete all authorized entries in one storage call.
+	if len(authorizedEntries) > 0 {
+		inputEntries := make([]storage.DeleteObjectsInputEntry, len(authorizedEntries))
+		for i, ve := range authorizedEntries {
 			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.etag}
 		}
 
@@ -2092,7 +2274,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			resultByKey[entry.Key.String()] = entry
 		}
 
-		for _, ve := range validEntries {
+		for _, ve := range authorizedEntries {
 			entry, ok := resultByKey[ve.key.String()]
 			if !ok || entry.Deleted {
 				if !req.Quiet {
