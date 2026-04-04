@@ -85,6 +85,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest.headers` | `table<string, string[]>` | HTTP headers as provided by Go's `net/http` (canonical header names) |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
+| `request:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
 
 ### Available Operations
 
