@@ -92,9 +92,14 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest.remoteIP` | `string\|nil` | The parsed IP/host portion extracted from `remoteAddr`, when available |
 | `request.httpRequest.clientIP` | `string\|nil` | Client IP used for policy checks; derived from trusted forwarding headers when enabled, otherwise `remoteIP` |
 | `request.httpRequest.scheme` | `string` | Request scheme (`"https"`/`"http"`); may use trusted `X-Forwarded-Proto` when enabled |
+| `request.httpRequest:isMethod(method)` | `boolean` | Returns `true` if the HTTP method matches `method` (case-insensitive) |
+| `request.httpRequest:hasHeader(name)` | `boolean` | Returns `true` if request header `name` is present (header name match is case-insensitive) |
+| `request.httpRequest:headerEquals(name, value)` | `boolean` | Returns `true` if request header `name` contains a value exactly matching `value` |
+| `request.httpRequest:queryParamEquals(name, value)` | `boolean` | Returns `true` if query parameter `name` contains a value exactly matching `value` |
+| `request.httpRequest:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
+| `request:isOperation(operation)` | `boolean` | Returns `true` if `request.operation` matches `operation` |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
-| `request:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
 
 ### Available Operations
 

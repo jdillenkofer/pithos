@@ -228,7 +228,7 @@ func TestHasXApiKeyReturnsTrueWhenHeaderMatches(t *testing.T) {
 
 	luaCode := `
 	function authorizeRequest(request)
-	  return request:hasXApiKey("my-fixed-api-key")
+	  return request.httpRequest:hasXApiKey("my-fixed-api-key")
 	end
 	`
 	authorizer, err := NewLuaAuthorizer(luaCode)
@@ -255,7 +255,7 @@ func TestHasXApiKeyReturnsFalseWhenHeaderMissingOrDifferent(t *testing.T) {
 
 	luaCode := `
 	function authorizeRequest(request)
-	  return request:hasXApiKey("my-fixed-api-key")
+	  return request.httpRequest:hasXApiKey("my-fixed-api-key")
 	end
 	`
 	authorizer, err := NewLuaAuthorizer(luaCode)
@@ -580,5 +580,126 @@ func TestForwardedHeadersIgnoredForUntrustedProxy(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestHTTPRequestIsMethodAndHasHeader(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest:isMethod("GET") and request.httpRequest:hasHeader("x-api-key")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{
+			Method: "GET",
+			Headers: map[string][]string{
+				"X-Api-Key": []string{"my-key"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestHTTPRequestHeaderEqualsAndQueryParamEquals(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest:headerEquals("x-api-key", "my-key") and
+	    request.httpRequest:queryParamEquals("uploadId", "upload-123")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{
+			Method: "GET",
+			QueryParams: map[string][]string{
+				"uploadId": []string{"upload-123", "upload-456"},
+			},
+			Headers: map[string][]string{
+				"X-Api-Key": []string{"my-key"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestHTTPRequestHeaderEqualsAndQueryParamEqualsReturnFalseWhenMissingOrDifferent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest:headerEquals("x-api-key", "my-key") and
+	    request.httpRequest:queryParamEquals("uploadId", "upload-123")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{
+			Method: "GET",
+			QueryParams: map[string][]string{
+				"uploadId": []string{"wrong"},
+			},
+			Headers: map[string][]string{
+				"X-Api-Key": []string{"wrong"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.False(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestIsOperationReturnsTrueWhenOperationMatches(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request:isOperation("GetObject")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestIsOperationReturnsFalseWhenOperationDoesNotMatch(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request:isOperation("PutObject")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.False(t, authorized)
 	assert.Nil(t, err)
 }
