@@ -482,7 +482,9 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 	    request.httpRequest.proto == "HTTP/1.1" and
 	    request.httpRequest.contentLength == 42 and
 	    request.httpRequest.remoteAddr == "203.0.113.42:58888" and
-	    request.httpRequest.remoteIP == "203.0.113.42"
+	    request.httpRequest.remoteIP == "203.0.113.42" and
+	    request.httpRequest.clientIP == "203.0.113.42" and
+	    request.httpRequest.scheme == "http"
 	end
 	`
 	authorizer, err := NewLuaAuthorizer(luaCode)
@@ -503,6 +505,8 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 			Proto:         "HTTP/1.1",
 			RemoteAddr:    "203.0.113.42:58888",
 			RemoteIP:      ptrutils.ToPtr("203.0.113.42"),
+			ClientIP:      ptrutils.ToPtr("203.0.113.42"),
+			Scheme:        "http",
 			ContentLength: ptrutils.ToPtr(42),
 			QueryParams: map[string][]string{
 				"partNumber": []string{"2"},
@@ -511,6 +515,66 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 			Headers: map[string][]string{
 				"X-Test":       []string{"first", "second"},
 				"Content-Type": []string{"application/octet-stream"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestTrustedForwardedHeadersAppliedForClientIPAndScheme(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest.clientIP == "198.51.100.7" and request.httpRequest.scheme == "https"
+	end
+	`
+	authorizer, err := NewLuaAuthorizerWithOptions(luaCode, Options{
+		TrustForwardedHeaders: true,
+		TrustedProxyCIDRs:     []string{"10.0.0.0/8"},
+	})
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{
+			RemoteIP: ptrutils.ToPtr("10.1.2.3"),
+			Scheme:   "http",
+			Headers: map[string][]string{
+				"CF-Connecting-IP":  []string{"198.51.100.7"},
+				"X-Forwarded-Proto": []string{"https"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestForwardedHeadersIgnoredForUntrustedProxy(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest.clientIP == "192.0.2.5" and request.httpRequest.scheme == "http"
+	end
+	`
+	authorizer, err := NewLuaAuthorizerWithOptions(luaCode, Options{
+		TrustForwardedHeaders: true,
+		TrustedProxyCIDRs:     []string{"10.0.0.0/8"},
+	})
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{
+			RemoteIP: ptrutils.ToPtr("192.0.2.5"),
+			Scheme:   "http",
+			Headers: map[string][]string{
+				"X-Forwarded-For":   []string{"198.51.100.7"},
+				"X-Forwarded-Proto": []string{"https"},
 			},
 		},
 	}

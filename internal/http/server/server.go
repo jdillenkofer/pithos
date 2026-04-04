@@ -612,8 +612,7 @@ func getRemoteIP(remoteAddr string) *string {
 			parsedIP := ip.String()
 			return &parsedIP
 		}
-		parsedHost := host
-		return &parsedHost
+		return nil
 	}
 
 	if ip := net.ParseIP(remoteAddr); ip != nil {
@@ -624,8 +623,18 @@ func getRemoteIP(remoteAddr string) *string {
 	return nil
 }
 
+func getRequestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
 func makeAuthorizationHTTPRequest(r *http.Request) authorization.HTTPRequest {
 	queryParams := r.URL.Query()
+	remoteIP := getRemoteIP(r.RemoteAddr)
+	scheme := getRequestScheme(r)
+
 	return authorization.HTTPRequest{
 		Method:        r.Method,
 		Path:          r.URL.Path,
@@ -636,7 +645,9 @@ func makeAuthorizationHTTPRequest(r *http.Request) authorization.HTTPRequest {
 		Proto:         r.Proto,
 		ContentLength: getContentLength(r.ContentLength),
 		RemoteAddr:    r.RemoteAddr,
-		RemoteIP:      getRemoteIP(r.RemoteAddr),
+		RemoteIP:      remoteIP,
+		ClientIP:      remoteIP,
+		Scheme:        scheme,
 	}
 }
 

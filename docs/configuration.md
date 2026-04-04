@@ -20,6 +20,8 @@
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
+| `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
+| `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
 
@@ -88,6 +90,8 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest.contentLength` | `number\|nil` | The request content length when known; `nil` if unknown |
 | `request.httpRequest.remoteAddr` | `string` | The raw peer network address from Go's `RemoteAddr` (`ip:port`) |
 | `request.httpRequest.remoteIP` | `string\|nil` | The parsed IP/host portion extracted from `remoteAddr`, when available |
+| `request.httpRequest.clientIP` | `string\|nil` | Client IP used for policy checks; derived from trusted forwarding headers when enabled, otherwise `remoteIP` |
+| `request.httpRequest.scheme` | `string` | Request scheme (`"https"`/`"http"`); may use trusted `X-Forwarded-Proto` when enabled |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
 | `request:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |

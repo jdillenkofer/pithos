@@ -2,6 +2,7 @@ package settings
 
 import (
 	"flag"
+	"strings"
 )
 
 func registerStringFlag(flagSet *flag.FlagSet, name string, defaultValue string, description string) func() *string {
@@ -67,6 +68,8 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
+	trustForwardedHeadersAccessor := registerBoolFlag(serveCommand, "trustForwardedHeaders", defaultTrustForwardedHeaders, "trust client forwarding headers (X-Forwarded-For, X-Forwarded-Proto, CF-Connecting-IP)")
+	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; empty means all proxies when trustForwardedHeaders is enabled")
 	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
 	otelEnabledAccessor := registerBoolFlag(serveCommand, "otelEnabled", defaultOtelEnabled, "determines if opentelemetry is enabled or not")
 	otelExporterAccessor := registerStringFlag(serveCommand, "otelExporter", defaultOtelExporter, "the exporter for opentelemetry (stdout, otlp)")
@@ -75,6 +78,19 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
 		return nil, err
+	}
+
+	var trustedProxyCIDRs []string
+	trustedProxyCIDRsRaw := trustedProxyCIDRsAccessor()
+	if trustedProxyCIDRsRaw != nil {
+		parts := strings.Split(*trustedProxyCIDRsRaw, ",")
+		trustedProxyCIDRs = make([]string, 0, len(parts))
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				trustedProxyCIDRs = append(trustedProxyCIDRs, trimmed)
+			}
+		}
 	}
 
 	return &Settings{
@@ -89,6 +105,8 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
 		authorizerPath:        authorizerPathAccessor(),
+		trustForwardedHeaders: trustForwardedHeadersAccessor(),
+		trustedProxyCIDRs:     trustedProxyCIDRs,
 		logLevel:              logLevelAccessor(),
 		otelEnabled:           otelEnabledAccessor(),
 		otelExporter:          otelExporterAccessor(),

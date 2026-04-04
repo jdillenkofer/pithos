@@ -18,6 +18,8 @@ const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
+const trustForwardedHeadersEnvKey = envKeyPrefix + "_TRUST_FORWARDED_HEADERS"
+const trustedProxyCIDRsEnvKey = envKeyPrefix + "_TRUSTED_PROXY_CIDRS"
 const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
 const otelEnabledEnvKey = envKeyPrefix + "_OTEL_ENABLED"
 const otelExporterEnvKey = envKeyPrefix + "_OTEL_EXPORTER"
@@ -77,6 +79,22 @@ func getBoolFromEnv(envKey string) *bool {
 	return &retval
 }
 
+func getStringSliceFromEnv(envKey string) []string {
+	val := os.Getenv(envKey)
+	if val == "" {
+		return nil
+	}
+	parts := strings.Split(val, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
 func loadSettingsFromEnv() (*Settings, error) {
 	credentials := getCredentialsFromEnv()
 	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
@@ -89,6 +107,8 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
+	trustForwardedHeaders := getBoolFromEnv(trustForwardedHeadersEnvKey)
+	trustedProxyCIDRs := getStringSliceFromEnv(trustedProxyCIDRsEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
 	otelEnabled := getBoolFromEnv(otelEnabledEnvKey)
 	otelExporter := getStringFromEnv(otelExporterEnvKey)
@@ -106,6 +126,8 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabled,
 		storageJsonPath:       storageJsonPath,
 		authorizerPath:        authorizerPath,
+		trustForwardedHeaders: trustForwardedHeaders,
+		trustedProxyCIDRs:     trustedProxyCIDRs,
 		logLevel:              logLevel,
 		otelEnabled:           otelEnabled,
 		otelExporter:          otelExporter,
