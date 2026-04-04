@@ -704,6 +704,48 @@ func TestIsOperationReturnsFalseWhenOperationDoesNotMatch(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestAuthorizeListBucketFallsBackToAllowWhenHookMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{Operation: authorization.OperationListBuckets}
+	authorized, err := authorizer.AuthorizeListBucket(context.Background(), &request, "my-bucket")
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
+
+func TestAuthorizeListObjectUsesOptionalHook(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return true
+	end
+
+	function authorizeListObject(request, key)
+	  return key == "public/readme.txt"
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{Operation: authorization.OperationListObjects}
+	authorized, err := authorizer.AuthorizeListObject(context.Background(), &request, "public/readme.txt")
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+
+	authorized, err = authorizer.AuthorizeListObject(context.Background(), &request, "private/secret.txt")
+	assert.False(t, authorized)
+	assert.Nil(t, err)
+}
+
 func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

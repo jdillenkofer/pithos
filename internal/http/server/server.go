@@ -542,6 +542,26 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
+	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
+	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Authorization error: %v", err))
+		handleError(err, w, r)
+		return true
+	}
+	if !authorized {
+		slog.Debug(fmt.Sprintf("Unauthorized request: %v", request))
+		if !isAuthenticated {
+			w.WriteHeader(401)
+		} else {
+			w.WriteHeader(403)
+		}
+		return true
+	}
+	return false
+}
+
+func makeAuthorizationRequest(ctx context.Context, operation string, bucket *string, key *string, r *http.Request) (*authorization.Request, bool) {
 	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
 
 	var accessKeyId *string
@@ -559,22 +579,23 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		Key:         key,
 		HttpRequest: makeAuthorizationHTTPRequest(r),
 	}
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
-	if err != nil {
-		slog.Error(fmt.Sprintf("Authorization error: %v", err))
-		handleError(err, w, r)
-		return true
+	return request, isAuthenticated
+}
+
+func (s *Server) authorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
+	listItemAuthorizer, ok := s.requestAuthorizer.(authorization.ListItemAuthorizer)
+	if !ok {
+		return true, nil
 	}
-	if !authorized {
-		slog.Debug(fmt.Sprintf("Unauthorized request: %v", request))
-		if !isAuthenticated {
-			w.WriteHeader(401)
-		} else {
-			w.WriteHeader(403)
-		}
-		return true
+	return listItemAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
+}
+
+func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
+	listItemAuthorizer, ok := s.requestAuthorizer.(authorization.ListItemAuthorizer)
+	if !ok {
+		return true, nil
 	}
-	return false
+	return listItemAuthorizer.AuthorizeListObject(ctx, request, key)
 }
 
 func cloneStringSliceMap(input map[string][]string) map[string][]string {
@@ -665,18 +686,27 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	responseHeaders := w.Header()
-	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
-	w.WriteHeader(200)
+	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListBuckets, nil, nil, r)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
 		Buckets: []*BucketResult{},
 	}
 	for _, bucket := range buckets {
+		allowed, err := s.authorizeListBucket(ctx, baseRequest, bucket.Name.String())
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		if !allowed {
+			continue
+		}
 		listAllMyBucketsResult.Buckets = append(listAllMyBucketsResult.Buckets, &BucketResult{
 			Name:         bucket.Name.String(),
 			CreationDate: bucket.CreationDate.UTC().Format(time.RFC3339),
 		})
 	}
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(listAllMyBucketsResult)
 	w.Write(out)
 }
@@ -816,7 +846,6 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	marker := httputils.GetQueryParam(query, markerQuery)
 	startAfter := httputils.GetQueryParam(query, startAfterQuery)
 
-	// In ListObjects V1, use marker as startAfter if provided
 	if marker != nil {
 		startAfter = marker
 	}
@@ -828,13 +857,9 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxKeysI32 := int32(maxKeysI64)
 
+	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
 	slog.Info("Listing objects", "bucket", bucketName.String())
-	result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
-		Prefix:     prefix,
-		Delimiter:  delimiter,
-		StartAfter: startAfter,
-		MaxKeys:    maxKeysI32,
-	})
+	result, nextMarker, err := s.listAndFilterObjects(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -853,9 +878,8 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set NextMarker if results are truncated and we have objects
-	if result.IsTruncated && len(result.Objects) > 0 {
-		// Use the last object's key as the next marker
-		listBucketResult.NextMarker = ptrutils.ToPtr(result.Objects[len(result.Objects)-1].Key.String())
+	if result.IsTruncated && nextMarker != nil {
+		listBucketResult.NextMarker = nextMarker
 	}
 
 	responseHeaders := w.Header()
@@ -875,6 +899,76 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	out, _ := xmlMarshalWithDocType(listBucketResult)
 	w.Write(out)
+}
+
+func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, *string, error) {
+	maxKeys := opts.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+	collectedObjects := []storage.Object{}
+	collectedPrefixes := []string{}
+	seenPrefixes := map[string]struct{}{}
+	startAfter := opts.StartAfter
+	var nextMarker *string
+	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
+
+	for {
+		result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
+			Prefix:     opts.Prefix,
+			Delimiter:  opts.Delimiter,
+			StartAfter: startAfter,
+			MaxKeys:    maxKeys,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		lastScanned := startAfter
+		for _, object := range result.Objects {
+			key := object.Key.String()
+			lastScanned = &key
+			allowed, err := s.authorizeListObject(ctx, baseRequest, key)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+			collectedObjects = append(collectedObjects, object)
+			if int32(len(collectedObjects)) >= maxKeys {
+				nextMarker = lastScanned
+				return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: true}, nextMarker, nil
+			}
+		}
+		for _, commonPrefix := range result.CommonPrefixes {
+			lastScanned = &commonPrefix
+			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !allowed {
+				continue
+			}
+			if _, exists := seenPrefixes[commonPrefix]; exists {
+				continue
+			}
+			seenPrefixes[commonPrefix] = struct{}{}
+			collectedPrefixes = append(collectedPrefixes, commonPrefix)
+		}
+
+		if !result.IsTruncated {
+			return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: false}, nil, nil
+		}
+		if lastScanned == nil {
+			return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: false}, nil, nil
+		}
+		if startAfter != nil && *startAfter == *lastScanned {
+			return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: false}, nil, nil
+		}
+		startAfter = ptrutils.ToPtr(*lastScanned)
+		nextMarker = startAfter
+	}
 }
 
 func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
@@ -910,13 +1004,9 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 	maxKeysI32 := int32(maxKeysI64)
 
+	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
 	slog.Info("Listing objects V2", "bucket", bucketName.String())
-	result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
-		Prefix:     prefix,
-		Delimiter:  delimiter,
-		StartAfter: startAfter,
-		MaxKeys:    maxKeysI32,
-	})
+	result, nextToken, err := s.listAndFilterObjects(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -936,9 +1026,8 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 		Contents:          []*ContentResult{},
 	}
 
-	if result.IsTruncated && len(result.Objects) > 0 {
-		// Use the last object's key as the next continuation token
-		listBucketV2Result.NextContinuationToken = ptrutils.ToPtr(result.Objects[len(result.Objects)-1].Key.String())
+	if result.IsTruncated && nextToken != nil {
+		listBucketV2Result.NextContinuationToken = nextToken
 	}
 
 	responseHeaders := w.Header()

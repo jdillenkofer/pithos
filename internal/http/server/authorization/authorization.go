@@ -55,3 +55,8 @@ type Request struct {
 type RequestAuthorizer interface {
 	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
 }
+
+type ListItemAuthorizer interface {
+	AuthorizeListBucket(ctx context.Context, request *Request, bucketName string) (bool, error)
+	AuthorizeListObject(ctx context.Context, request *Request, key string) (bool, error)
+}

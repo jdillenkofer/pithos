@@ -3375,6 +3375,91 @@ func TestListObjects(t *testing.T) {
 			assert.Len(t, allKeys, 3) // Should have 3 unique keys
 		})
 
+		t.Run("it should paginate filtered list objects via authorizer hook V2"+testSuffix, func(t *testing.T) {
+			authorizationCode := `
+			function authorizeRequest(request)
+			  return true
+			end
+
+			function authorizeListObject(request, key)
+			  return string.find(key, "allowed/") == 1
+			end
+			`
+			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			if err != nil {
+				assert.Fail(t, "CreateBucket failed", "err %v", err)
+			}
+
+			keys := []string{
+				"allowed/a.txt",
+				"denied/a.txt",
+				"allowed/b.txt",
+				"denied/b.txt",
+				"allowed/c.txt",
+				"denied/c.txt",
+			}
+			for i, keyName := range keys {
+				_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+					Bucket: bucketName,
+					Body:   bytes.NewReader([]byte(fmt.Sprintf("obj-%d", i))),
+					Key:    aws.String(keyName),
+				})
+				if err != nil {
+					assert.Fail(t, "PutObject failed", "err %v", err)
+				}
+			}
+
+			page1, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:  bucketName,
+				MaxKeys: aws.Int32(2),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 page1 failed", "err %v", err)
+			}
+			assert.Len(t, page1.Contents, 2)
+			assert.True(t, *page1.IsTruncated)
+			assert.NotNil(t, page1.NextContinuationToken)
+
+			for _, object := range page1.Contents {
+				assert.True(t, strings.HasPrefix(*object.Key, "allowed/"))
+			}
+
+			page2, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket:            bucketName,
+				ContinuationToken: page1.NextContinuationToken,
+				MaxKeys:           aws.Int32(2),
+			})
+			if err != nil {
+				assert.Fail(t, "ListObjects V2 page2 failed", "err %v", err)
+			}
+			assert.Len(t, page2.Contents, 1)
+			assert.False(t, *page2.IsTruncated)
+
+			for _, object := range page2.Contents {
+				assert.True(t, strings.HasPrefix(*object.Key, "allowed/"))
+			}
+
+			allKeys := map[string]bool{}
+			for _, object := range page1.Contents {
+				allKeys[*object.Key] = true
+			}
+			for _, object := range page2.Contents {
+				allKeys[*object.Key] = true
+			}
+			assert.Len(t, allKeys, 3)
+			assert.True(t, allKeys["allowed/a.txt"])
+			assert.True(t, allKeys["allowed/b.txt"])
+			assert.True(t, allKeys["allowed/c.txt"])
+		})
+
 		t.Run("it should handle StartAfter parameter V2"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
