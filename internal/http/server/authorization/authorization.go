@@ -6,6 +6,14 @@ type Authorization struct {
 	AccessKeyId *string
 }
 
+type HTTPRequest struct {
+	Method      string
+	Path        string
+	Query       string
+	QueryParams map[string][]string
+	Headers     map[string][]string
+}
+
 const (
 	OperationListBuckets             = "ListBuckets"
 	OperationHeadBucket              = "HeadBucket"
@@ -34,6 +42,7 @@ type Request struct {
 	Authorization Authorization
 	Bucket        *string
 	Key           *string
+	HttpRequest   HTTPRequest
 }
 
 type RequestAuthorizer interface {

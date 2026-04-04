@@ -554,8 +554,9 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		Authorization: authorization.Authorization{
 			AccessKeyId: accessKeyId,
 		},
-		Bucket: bucket,
-		Key:    key,
+		Bucket:      bucket,
+		Key:         key,
+		HttpRequest: makeAuthorizationHTTPRequest(r),
 	}
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
@@ -573,6 +574,27 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 		return true
 	}
 	return false
+}
+
+func cloneStringSliceMap(input map[string][]string) map[string][]string {
+	cloned := make(map[string][]string, len(input))
+	for key, values := range input {
+		clonedValues := make([]string, len(values))
+		copy(clonedValues, values)
+		cloned[key] = clonedValues
+	}
+	return cloned
+}
+
+func makeAuthorizationHTTPRequest(r *http.Request) authorization.HTTPRequest {
+	queryParams := r.URL.Query()
+	return authorization.HTTPRequest{
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		Query:       r.URL.RawQuery,
+		QueryParams: cloneStringSliceMap(queryParams),
+		Headers:     cloneStringSliceMap(r.Header),
+	}
 }
 
 func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
@@ -2117,6 +2139,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		Authorization: authorization.Authorization{AccessKeyId: accessKeyId},
 		Bucket:        &bucketStr,
 		Key:           keyStr,
+		HttpRequest:   makeAuthorizationHTTPRequest(r),
 	}
 	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
 	if err != nil {
