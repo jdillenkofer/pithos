@@ -18,7 +18,68 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+type partOutboxMetrics struct {
+	pendingEntries     prometheus.Gauge
+	processedEntries   prometheus.Counter
+	processingDuration prometheus.Histogram
+	errorsCounter      prometheus.Counter
+}
+
+func newPartOutboxMetrics(registerer prometheus.Registerer) *partOutboxMetrics {
+	m := &partOutboxMetrics{
+		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "pithos",
+			Subsystem: "part_outbox",
+			Name:      "pending_entries",
+			Help:      "Number of pending part outbox entries",
+		}),
+		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "part_outbox",
+			Name:      "processed_entries_total",
+			Help:      "Total number of processed part outbox entries",
+		}),
+		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: "pithos",
+			Subsystem: "part_outbox",
+			Name:      "processing_duration_seconds",
+			Help:      "Duration of part outbox processing in seconds",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+		}),
+		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "part_outbox",
+			Name:      "errors_total",
+			Help:      "Total number of part outbox processing errors",
+		}),
+	}
+
+	if err := registerer.Register(m.pendingEntries); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register pendingEntries metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.processedEntries); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register processedEntries metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.processingDuration); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register processingDuration metric", "error", err)
+		}
+	}
+	if err := registerer.Register(m.errorsCounter); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register errorsCounter metric", "error", err)
+		}
+	}
+
+	return m
+}
 
 type outboxPartStore struct {
 	db                         database.Database
@@ -28,36 +89,62 @@ type outboxPartStore struct {
 	innerPartStore             partstore.PartStore
 	partOutboxEntryRepository  partOutboxEntry.Repository
 	tracer                     trace.Tracer
+	metrics                    *partOutboxMetrics
 }
 
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*outboxPartStore)(nil)
 
-func New(db database.Database, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository) (partstore.PartStore, error) {
-	return &outboxPartStore{
+func New(db database.Database, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer) (partstore.PartStore, error) {
+	obs := &outboxPartStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
 		innerPartStore:            innerPartStore,
 		partOutboxEntryRepository: partOutboxEntryRepository,
 		tracer:                    otel.Tracer("internal/storage/metadatapart/partstore/outbox"),
-	}, nil
+		metrics:                   newPartOutboxMetrics(registerer),
+	}
+	return obs, nil
 }
 
 func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.maybeProcessOutboxEntries")
 	defer span.End()
 
+	startTime := time.Now()
 	processedOutboxEntryCount := 0
+	defer func() {
+		obs.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
+		if processedOutboxEntryCount > 0 {
+			obs.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
+		}
+	}()
+
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return
+	}
+
+	pendingCount, err := obs.partOutboxEntryRepository.Count(ctx, tx)
+	if err != nil {
+		tx.Rollback()
+		return
+	}
+	obs.metrics.pendingEntries.Set(float64(pendingCount))
+	tx.Commit()
+
 	for {
 		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 		if err != nil {
+			obs.metrics.errorsCounter.Inc()
 			return
 		}
 
 		entry, err := obs.partOutboxEntryRepository.FindFirstPartOutboxEntryWithForUpdateLock(ctx, tx)
 		if err != nil {
 			tx.Rollback()
+			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
@@ -71,6 +158,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *entry.Id)
 			if err != nil {
 				tx.Rollback()
+				obs.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -81,6 +169,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, io.MultiReader(readers...))
 			if err != nil {
 				tx.Rollback()
+				obs.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
@@ -88,12 +177,14 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			err = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
 			if err != nil {
 				tx.Rollback()
+				obs.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		default:
 			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
 			tx.Rollback()
+			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}

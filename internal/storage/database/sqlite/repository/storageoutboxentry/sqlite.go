@@ -14,6 +14,7 @@ type sqliteRepository struct {
 }
 
 const (
+	countStorageOutboxEntriesStmt            = "SELECT COUNT(*) FROM storage_outbox_entries"
 	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
 	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
 	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
@@ -27,6 +28,15 @@ const (
 
 func NewRepository() (storageoutboxentry.Repository, error) {
 	return &sqliteRepository{}, nil
+}
+
+func (sor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, countStorageOutboxEntriesStmt).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageoutboxentry.Entity, error) {

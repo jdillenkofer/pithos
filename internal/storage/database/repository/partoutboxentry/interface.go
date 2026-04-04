@@ -10,6 +10,7 @@ import (
 )
 
 type Repository interface {
+	Count(ctx context.Context, tx *sql.Tx) (int, error)
 	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*Entity, error)
 	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]Entity, error)
 	FindFirstPartOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*Entity, error)

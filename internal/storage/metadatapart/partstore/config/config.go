@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -19,6 +20,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -291,7 +293,12 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	return outbox.New(db, innerPartStore, partOutboxEntryRepository)
+	t := reflect.TypeOf((*prometheus.Registerer)(nil))
+	prometheusRegisterer, err := diProvider.LookupByType(t)
+	if err != nil {
+		return nil, err
+	}
+	return outbox.New(db, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
 }
 
 type SftpPartStoreConfiguration struct {

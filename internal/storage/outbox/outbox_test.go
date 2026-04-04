@@ -11,9 +11,10 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
-	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
+	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -111,7 +112,8 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 		os.Exit(1)
 
 	}
-	outboxStorage, err := NewStorage(db2, metadataPartStorage, storageOutboxEntryRepository)
+	reg := prometheus.NewRegistry()
+	outboxStorage, err := NewStorage(db2, metadataPartStorage, storageOutboxEntryRepository, reg)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
 		os.Exit(1)

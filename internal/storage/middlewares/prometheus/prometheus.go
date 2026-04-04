@@ -157,11 +157,31 @@ func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
 	if err := psm.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	psm.registerer.MustRegister(psm.failedApiOpsCounter)
-	psm.registerer.MustRegister(psm.successfulApiOpsCounter)
-	psm.registerer.MustRegister(psm.totalSizeByBucket)
-	psm.registerer.MustRegister(psm.totalBytesUploadedByBucket)
-	psm.registerer.MustRegister(psm.totalBytesDownloadedByBucket)
+	if err := psm.registerer.Register(psm.failedApiOpsCounter); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register failedApiOpsCounter metric", "error", err)
+		}
+	}
+	if err := psm.registerer.Register(psm.successfulApiOpsCounter); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register successfulApiOpsCounter metric", "error", err)
+		}
+	}
+	if err := psm.registerer.Register(psm.totalSizeByBucket); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register totalSizeByBucket metric", "error", err)
+		}
+	}
+	if err := psm.registerer.Register(psm.totalBytesUploadedByBucket); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register totalBytesUploadedByBucket metric", "error", err)
+		}
+	}
+	if err := psm.registerer.Register(psm.totalBytesDownloadedByBucket); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register totalBytesDownloadedByBucket metric", "error", err)
+		}
+	}
 
 	psm.metricsMeasuringTaskHandle = task.Start(func(cancelTask *atomic.Bool) {
 		psm.measureMetricsLoop(cancelTask)

@@ -10,6 +10,7 @@ import (
 )
 
 type Repository interface {
+	Count(ctx context.Context, tx *sql.Tx) (int, error)
 	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
