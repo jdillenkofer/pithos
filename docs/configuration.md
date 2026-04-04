@@ -123,7 +123,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 
 ### Available Operations
 
-`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `DeleteObject`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`
+`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`
 
 ### Optional List Filtering Hooks
 
