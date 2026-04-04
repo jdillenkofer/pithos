@@ -7,11 +7,16 @@ type Authorization struct {
 }
 
 type HTTPRequest struct {
-	Method      string
-	Path        string
-	Query       string
-	QueryParams map[string][]string
-	Headers     map[string][]string
+	Method        string
+	Path          string
+	Query         string
+	QueryParams   map[string][]string
+	Headers       map[string][]string
+	Host          string
+	Proto         string
+	ContentLength *int
+	RemoteAddr    string
+	RemoteIP      *string
 }
 
 const (

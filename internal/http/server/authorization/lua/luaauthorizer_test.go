@@ -477,7 +477,12 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 	    request.httpRequest.queryParams["uploadId"][1] == "abc" and
 	    request.httpRequest.headers["X-Test"][1] == "first" and
 	    request.httpRequest.headers["X-Test"][2] == "second" and
-	    request.httpRequest.headers["Content-Type"][1] == "application/octet-stream"
+	    request.httpRequest.headers["Content-Type"][1] == "application/octet-stream" and
+	    request.httpRequest.host == "s3.localhost:8080" and
+	    request.httpRequest.proto == "HTTP/1.1" and
+	    request.httpRequest.contentLength == 42 and
+	    request.httpRequest.remoteAddr == "203.0.113.42:58888" and
+	    request.httpRequest.remoteIP == "203.0.113.42"
 	end
 	`
 	authorizer, err := NewLuaAuthorizer(luaCode)
@@ -491,9 +496,14 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 		Bucket: ptrutils.ToPtr("my-bucket"),
 		Key:    ptrutils.ToPtr("my-key"),
 		HttpRequest: authorization.HTTPRequest{
-			Method: "GET",
-			Path:   "/my-bucket/my-key",
-			Query:  "partNumber=2&uploadId=abc",
+			Method:        "GET",
+			Path:          "/my-bucket/my-key",
+			Query:         "partNumber=2&uploadId=abc",
+			Host:          "s3.localhost:8080",
+			Proto:         "HTTP/1.1",
+			RemoteAddr:    "203.0.113.42:58888",
+			RemoteIP:      ptrutils.ToPtr("203.0.113.42"),
+			ContentLength: ptrutils.ToPtr(42),
 			QueryParams: map[string][]string{
 				"partNumber": []string{"2"},
 				"uploadId":   []string{"abc"},

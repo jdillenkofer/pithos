@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -586,14 +587,56 @@ func cloneStringSliceMap(input map[string][]string) map[string][]string {
 	return cloned
 }
 
+func getContentLength(contentLength int64) *int {
+	if contentLength < 0 {
+		return nil
+	}
+
+	maxInt := int64(^uint(0) >> 1)
+	if contentLength > maxInt {
+		return nil
+	}
+
+	value := int(contentLength)
+	return &value
+}
+
+func getRemoteIP(remoteAddr string) *string {
+	if remoteAddr == "" {
+		return nil
+	}
+
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			parsedIP := ip.String()
+			return &parsedIP
+		}
+		parsedHost := host
+		return &parsedHost
+	}
+
+	if ip := net.ParseIP(remoteAddr); ip != nil {
+		parsedIP := ip.String()
+		return &parsedIP
+	}
+
+	return nil
+}
+
 func makeAuthorizationHTTPRequest(r *http.Request) authorization.HTTPRequest {
 	queryParams := r.URL.Query()
 	return authorization.HTTPRequest{
-		Method:      r.Method,
-		Path:        r.URL.Path,
-		Query:       r.URL.RawQuery,
-		QueryParams: cloneStringSliceMap(queryParams),
-		Headers:     cloneStringSliceMap(r.Header),
+		Method:        r.Method,
+		Path:          r.URL.Path,
+		Query:         r.URL.RawQuery,
+		QueryParams:   cloneStringSliceMap(queryParams),
+		Headers:       cloneStringSliceMap(r.Header),
+		Host:          r.Host,
+		Proto:         r.Proto,
+		ContentLength: getContentLength(r.ContentLength),
+		RemoteAddr:    r.RemoteAddr,
+		RemoteIP:      getRemoteIP(r.RemoteAddr),
 	}
 }
 

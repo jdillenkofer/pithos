@@ -83,6 +83,11 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest.query` | `string` | The raw query string without the leading `?` |
 | `request.httpRequest.queryParams` | `table<string, string[]>` | Parsed query parameters as provided by Go's `net/url` (`map[string][]string`) |
 | `request.httpRequest.headers` | `table<string, string[]>` | HTTP headers as provided by Go's `net/http` (canonical header names) |
+| `request.httpRequest.host` | `string` | The incoming request host (from the HTTP Host header / request target host) |
+| `request.httpRequest.proto` | `string` | The HTTP protocol version (for example, `"HTTP/1.1"`, `"HTTP/2.0"`) |
+| `request.httpRequest.contentLength` | `number\|nil` | The request content length when known; `nil` if unknown |
+| `request.httpRequest.remoteAddr` | `string` | The raw peer network address from Go's `RemoteAddr` (`ip:port`) |
+| `request.httpRequest.remoteIP` | `string\|nil` | The parsed IP/host portion extracted from `remoteAddr`, when available |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
 | `request:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
