@@ -226,4 +226,24 @@ func pushRequest(L *lua.State, request *authorization.Request) {
 		return 1
 	})
 	L.SetField(-2, "isAnonymous")
+	L.PushGoFunction(func(L *lua.State) int {
+		expectedApiKey, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		for headerName, headerValues := range request.HttpRequest.Headers {
+			if strings.EqualFold(headerName, "X-Api-Key") {
+				for _, headerValue := range headerValues {
+					if headerValue == expectedApiKey {
+						L.PushBoolean(true)
+						return 1
+					}
+				}
+			}
+		}
+		L.PushBoolean(false)
+		return 1
+	})
+	L.SetField(-2, "hasXApiKey")
 }
