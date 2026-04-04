@@ -17,6 +17,8 @@ type HTTPRequest struct {
 	ContentLength *int
 	RemoteAddr    string
 	RemoteIP      *string
+	ClientIP      *string
+	Scheme        string
 }
 
 const (

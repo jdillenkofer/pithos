@@ -16,6 +16,7 @@ const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
+const defaultTrustForwardedHeaders = false
 const defaultOtelEnabled = false
 const defaultWebsiteDomain = "s3-website.localhost"
 const defaultOtelExporter = "otlp"
@@ -40,6 +41,8 @@ type Settings struct {
 	monitoringPortEnabled *bool         `mergable:""`
 	storageJsonPath       *string       `mergable:""`
 	authorizerPath        *string       `mergable:""`
+	trustForwardedHeaders *bool         `mergable:""`
+	trustedProxyCIDRs     []string      `mergable:""`
 	logLevel              *string       `mergable:""`
 	otelEnabled           *bool         `mergable:""`
 	otelExporter          *string       `mergable:""`
@@ -101,6 +104,17 @@ func (s *Settings) StorageJsonPath() string {
 
 func (s *Settings) AuthorizerPath() string {
 	return valueOrDefault(s.authorizerPath, defaultAuthorizerPath)
+}
+
+func (s *Settings) TrustForwardedHeaders() bool {
+	return valueOrDefault(s.trustForwardedHeaders, defaultTrustForwardedHeaders)
+}
+
+func (s *Settings) TrustedProxyCIDRs() []string {
+	if s.trustedProxyCIDRs == nil {
+		return []string{}
+	}
+	return s.trustedProxyCIDRs
 }
 
 func (s *Settings) LogLevel() slog.Level {

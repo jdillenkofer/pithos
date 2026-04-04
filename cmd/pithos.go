@@ -168,7 +168,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}()
 
 	hasCredentials := len(settings.Credentials()) > 0
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials)
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
 	}
@@ -203,7 +203,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}
 }
 
-func loadRequestAuthorizer(authorizerPath string, hasCredentials bool) (*lua.LuaAuthorizer, error) {
+func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
@@ -215,7 +215,10 @@ func loadRequestAuthorizer(authorizerPath string, hasCredentials bool) (*lua.Lua
 			authorizerCode = []byte(defaultAuthorizationCode)
 		}
 	}
-	return lua.NewLuaAuthorizer(string(authorizerCode))
+	return lua.NewLuaAuthorizerWithOptions(string(authorizerCode), lua.Options{
+		TrustForwardedHeaders: trustForwardedHeaders,
+		TrustedProxyCIDRs:     trustedProxyCIDRs,
+	})
 }
 
 func loadStorageConfiguration(storageJsonPath string, prometheusRegisterer prometheus.Registerer) (*config.DbContainer, storage.Storage) {
