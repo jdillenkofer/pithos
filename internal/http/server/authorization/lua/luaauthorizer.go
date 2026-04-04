@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/textproto"
 	"reflect"
 	"strings"
 	"time"
@@ -97,14 +98,27 @@ func isTrustedProxy(remoteIP *string, trustedProxyCIDRs []*net.IPNet) bool {
 	return false
 }
 
-func getHeaderIgnoreCase(headers map[string][]string, key string) *string {
+func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
+	canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
+	if values, ok := headers[canonicalKey]; ok {
+		return values
+	}
+
 	for headerName, values := range headers {
-		if strings.EqualFold(headerName, key) && len(values) > 0 {
-			value := values[0]
-			return &value
+		if strings.EqualFold(headerName, key) {
+			return values
 		}
 	}
 	return nil
+}
+
+func getHeaderIgnoreCase(headers map[string][]string, key string) *string {
+	values := getHeaderValuesCaseInsensitive(headers, key)
+	if len(values) == 0 {
+		return nil
+	}
+	value := values[0]
+	return &value
 }
 
 func parseForwardedClientIP(forwardedFor string) *string {
@@ -352,14 +366,11 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 			L.PushBoolean(false)
 			return 1
 		}
-		for headerName, headerValues := range request.HttpRequest.Headers {
-			if strings.EqualFold(headerName, "X-Api-Key") {
-				for _, headerValue := range headerValues {
-					if headerValue == expectedApiKey {
-						L.PushBoolean(true)
-						return 1
-					}
-				}
+		headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, "X-Api-Key")
+		for _, headerValue := range headerValues {
+			if headerValue == expectedApiKey {
+				L.PushBoolean(true)
+				return 1
 			}
 		}
 		L.PushBoolean(false)
