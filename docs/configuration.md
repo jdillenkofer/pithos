@@ -125,6 +125,24 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 
 `ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `DeleteObject`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`
 
+### Optional List Filtering Hooks
+
+In addition to `authorizeRequest(request)`, you can define optional hooks to filter list results item-by-item:
+
+```lua
+function authorizeListBucket(request, bucketName)
+  -- Return true if this bucket should be visible in ListBuckets
+  return true
+end
+
+function authorizeListObject(request, key)
+  -- Return true if this key (or common prefix) should be visible in ListObjects
+  return true
+end
+```
+
+If a hook is not defined, items are allowed by default for backward compatibility.
+
 ### Examples
 
 #### Multi-user access control

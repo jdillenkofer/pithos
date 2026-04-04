@@ -334,6 +334,18 @@ func pushGoType(L *lua.State, obj interface{}) {
 }
 
 func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
+	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request, nil)
+}
+
+func (authorizer *LuaAuthorizer) AuthorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
+	return authorizer.callAuthorizerFunction(ctx, "authorizeListBucket", request, &bucketName)
+}
+
+func (authorizer *LuaAuthorizer) AuthorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
+	return authorizer.callAuthorizerFunction(ctx, "authorizeListObject", request, &key)
+}
+
+func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, stringArg *string) (bool, error) {
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
 
@@ -352,13 +364,21 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 		slog.Error("Error while executing Lua code", "error", err)
 		return false, err
 	}
-	L.Global(authorizationFunctionName)
+	L.Global(functionName)
 	if !L.IsFunction(-1) {
-		slog.Error("Authorization function not found in Lua code", "functionName", authorizationFunctionName)
-		return false, errAuthorizationFunctionNotFound
+		if functionName == authorizationFunctionName {
+			slog.Error("Authorization function not found in Lua code", "functionName", authorizationFunctionName)
+			return false, errAuthorizationFunctionNotFound
+		}
+		return true, nil
 	}
 	authorizer.pushRequest(L, request)
-	err = L.ProtectedCall(1, 1, 0)
+	argCount := 1
+	if stringArg != nil {
+		L.PushString(*stringArg)
+		argCount = 2
+	}
+	err = L.ProtectedCall(argCount, 1, 0)
 	if err != nil {
 		slog.Error("Error while calling authorization function", "error", err)
 		return false, err
