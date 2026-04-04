@@ -78,6 +78,11 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
 | `request.bucket` | `string\|nil` | The bucket name, or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key, or `nil` for bucket-level operations |
+| `request.httpRequest.method` | `string` | The incoming HTTP method (for example, `"GET"`, `"PUT"`) |
+| `request.httpRequest.path` | `string` | The incoming HTTP path (without query string) |
+| `request.httpRequest.query` | `string` | The raw query string without the leading `?` |
+| `request.httpRequest.queryParams` | `table<string, string[]>` | Parsed query parameters as provided by Go's `net/url` (`map[string][]string`) |
+| `request.httpRequest.headers` | `table<string, string[]>` | HTTP headers as provided by Go's `net/http` (canonical header names) |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
 
@@ -126,6 +131,11 @@ To serve a bucket via the [website endpoint](configuration.md#pithos_website_dom
 PUBLIC_BUCKET="my-public-bucket"
 
 function authorizeRequest(request)
+  -- Allow CORS preflight through for browser uploads.
+  if request.httpRequest.method == "OPTIONS" then
+    return true
+  end
+
   -- Allow anonymous read access to the public bucket (required for website hosting)
   if request:isAnonymous() and request.operation == "GetObject" and request.bucket == PUBLIC_BUCKET then
     return true

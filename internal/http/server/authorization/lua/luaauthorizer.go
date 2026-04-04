@@ -129,6 +129,17 @@ func pushGoType(L *lua.State, obj interface{}) {
 			// Put the length of the array at index 0
 			L.PushInteger(val.Len())
 			L.RawSetInt(-2, 0)
+		} else if t.Kind() == reflect.Map {
+			L.NewTable()
+			val := reflect.ValueOf(v)
+			for _, key := range val.MapKeys() {
+				value := val.MapIndex(key)
+				if key.CanInterface() && value.CanInterface() {
+					pushGoType(L, key.Interface())
+					pushGoType(L, value.Interface())
+					L.SetTable(-3)
+				}
+			}
 		} else if t.Kind() == reflect.Struct {
 			L.NewTable()
 			val := reflect.ValueOf(v)

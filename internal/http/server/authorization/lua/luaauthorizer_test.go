@@ -397,3 +397,47 @@ func TestAnonymousGetObjectAllowedByAuthorizer(t *testing.T) {
 	assert.False(t, authorized)
 	assert.Nil(t, err)
 }
+
+func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.httpRequest.method == "GET" and
+	    request.httpRequest.path == "/my-bucket/my-key" and
+	    request.httpRequest.query == "partNumber=2&uploadId=abc" and
+	    request.httpRequest.queryParams["partNumber"][1] == "2" and
+	    request.httpRequest.queryParams["uploadId"][1] == "abc" and
+	    request.httpRequest.headers["X-Test"][1] == "first" and
+	    request.httpRequest.headers["X-Test"][2] == "second" and
+	    request.httpRequest.headers["Content-Type"][1] == "application/octet-stream"
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		Authorization: authorization.Authorization{
+			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+		},
+		Bucket: ptrutils.ToPtr("my-bucket"),
+		Key:    ptrutils.ToPtr("my-key"),
+		HttpRequest: authorization.HTTPRequest{
+			Method: "GET",
+			Path:   "/my-bucket/my-key",
+			Query:  "partNumber=2&uploadId=abc",
+			QueryParams: map[string][]string{
+				"partNumber": []string{"2"},
+				"uploadId":   []string{"abc"},
+			},
+			Headers: map[string][]string{
+				"X-Test":       []string{"first", "second"},
+				"Content-Type": []string{"application/octet-stream"},
+			},
+		},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
