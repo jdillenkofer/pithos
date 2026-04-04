@@ -342,8 +342,10 @@ func TestIsReadOnlyReturnsFalseForWriteOperations(t *testing.T) {
 		authorization.OperationCompleteMultipartUpload,
 		authorization.OperationUploadPart,
 		authorization.OperationPutObject,
+		authorization.OperationAppendObject,
 		authorization.OperationAbortMultipartUpload,
 		authorization.OperationDeleteObject,
+		authorization.OperationDeleteObjects,
 		authorization.OperationPutBucketWebsite,
 		authorization.OperationDeleteBucketWebsite,
 	}
