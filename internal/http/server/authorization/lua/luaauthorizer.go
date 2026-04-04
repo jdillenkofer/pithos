@@ -344,6 +344,94 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 	request.HttpRequest.Scheme = scheme
 
 	pushGoType(L, request)
+	L.Field(-1, "httpRequest")
+	if L.IsTable(-1) {
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedMethod, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			L.Field(1, "method")
+			method, _ := L.ToString(-1)
+			L.PushBoolean(strings.EqualFold(method, expectedMethod))
+			return 1
+		})
+		L.SetField(-2, "isMethod")
+		L.PushGoFunction(func(L *lua.State) int {
+			headerName, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
+			L.PushBoolean(len(headerValues) > 0)
+			return 1
+		})
+		L.SetField(-2, "hasHeader")
+		L.PushGoFunction(func(L *lua.State) int {
+			headerName, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			expectedValue, ok := L.ToString(3)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
+			for _, headerValue := range headerValues {
+				if headerValue == expectedValue {
+					L.PushBoolean(true)
+					return 1
+				}
+			}
+			L.PushBoolean(false)
+			return 1
+		})
+		L.SetField(-2, "headerEquals")
+		L.PushGoFunction(func(L *lua.State) int {
+			paramName, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			expectedValue, ok := L.ToString(3)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			queryParamValues := request.HttpRequest.QueryParams[paramName]
+			for _, queryParamValue := range queryParamValues {
+				if queryParamValue == expectedValue {
+					L.PushBoolean(true)
+					return 1
+				}
+			}
+			L.PushBoolean(false)
+			return 1
+		})
+		L.SetField(-2, "queryParamEquals")
+		L.PushGoFunction(func(L *lua.State) int {
+			expectedApiKey, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, "X-Api-Key")
+			for _, headerValue := range headerValues {
+				if headerValue == expectedApiKey {
+					L.PushBoolean(true)
+					return 1
+				}
+			}
+			L.PushBoolean(false)
+			return 1
+		})
+		L.SetField(-2, "hasXApiKey")
+	}
+	L.Pop(1)
 	L.PushGoFunction(func(L *lua.State) int {
 		L.Field(1, "operation")
 		operation, _ := L.ToString(-1)
@@ -353,6 +441,18 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 	})
 	L.SetField(-2, "isReadOnly")
 	L.PushGoFunction(func(L *lua.State) int {
+		expectedOperation, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "operation")
+		operation, _ := L.ToString(-1)
+		L.PushBoolean(operation == expectedOperation)
+		return 1
+	})
+	L.SetField(-2, "isOperation")
+	L.PushGoFunction(func(L *lua.State) int {
 		L.Field(1, "authorization")
 		L.Field(-1, "accessKeyId")
 		isAnonymous := L.IsNil(-1)
@@ -360,21 +460,4 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		return 1
 	})
 	L.SetField(-2, "isAnonymous")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedApiKey, ok := L.ToString(2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, "X-Api-Key")
-		for _, headerValue := range headerValues {
-			if headerValue == expectedApiKey {
-				L.PushBoolean(true)
-				return 1
-			}
-		}
-		L.PushBoolean(false)
-		return 1
-	})
-	L.SetField(-2, "hasXApiKey")
 }
