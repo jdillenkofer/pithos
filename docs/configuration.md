@@ -93,13 +93,33 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest.clientIP` | `string\|nil` | Client IP used for policy checks; derived from trusted forwarding headers when enabled, otherwise `remoteIP` |
 | `request.httpRequest.scheme` | `string` | Request scheme (`"https"`/`"http"`); may use trusted `X-Forwarded-Proto` when enabled |
 | `request.httpRequest:isMethod(method)` | `boolean` | Returns `true` if the HTTP method matches `method` (case-insensitive) |
+| `request.httpRequest:header(name)` | `string\|nil` | Returns the first value for header `name`, or `nil` if absent |
 | `request.httpRequest:hasHeader(name)` | `boolean` | Returns `true` if request header `name` is present (header name match is case-insensitive) |
 | `request.httpRequest:headerEquals(name, value)` | `boolean` | Returns `true` if request header `name` contains a value exactly matching `value` |
+| `request.httpRequest:queryParam(name)` | `string\|nil` | Returns the first value for query parameter `name`, or `nil` if absent |
+| `request.httpRequest:hasQueryParam(name)` | `boolean` | Returns `true` if query parameter `name` is present |
 | `request.httpRequest:queryParamEquals(name, value)` | `boolean` | Returns `true` if query parameter `name` contains a value exactly matching `value` |
+| `request.httpRequest:pathEquals(path)` | `boolean` | Returns `true` if the request path exactly matches `path` |
+| `request.httpRequest:pathHasPrefix(prefix)` | `boolean` | Returns `true` if the request path starts with `prefix` |
+| `request.httpRequest:hostEquals(host)` | `boolean` | Returns `true` if host exactly matches `host` (case-insensitive) |
+| `request.httpRequest:hostHasSuffix(suffix)` | `boolean` | Returns `true` if host ends with `suffix` (case-insensitive) |
+| `request.httpRequest:isScheme(scheme)` | `boolean` | Returns `true` if request scheme matches `scheme` (case-insensitive) |
+| `request.httpRequest:isProto(proto)` | `boolean` | Returns `true` if request protocol matches `proto` (case-insensitive) |
+| `request.httpRequest:clientIPInCIDR(cidr)` | `boolean` | Returns `true` if `clientIP` is inside CIDR `cidr` |
+| `request.httpRequest:clientIPInCIDRs(cidrs)` | `boolean` | Returns `true` if `clientIP` is inside any CIDR in `cidrs` |
+| `request.httpRequest:remoteIPInCIDR(cidr)` | `boolean` | Returns `true` if `remoteIP` is inside CIDR `cidr` |
 | `request.httpRequest:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
+| `request:isWriteOperation()` | `boolean` | Returns `true` if the operation is not read-only |
 | `request:isOperation(operation)` | `boolean` | Returns `true` if `request.operation` matches `operation` |
+| `request:isOperationIn(operations)` | `boolean` | Returns `true` if `request.operation` matches any value in `operations` |
 | `request:isAnonymous()` | `boolean` | Returns `true` if the request has no credentials (i.e. `accessKeyId` is `nil`) |
+| `request:hasAccessKeyId()` | `boolean` | Returns `true` if `request.authorization.accessKeyId` is present |
+| `request:accessKeyIdEquals(value)` | `boolean` | Returns `true` if `accessKeyId` exactly matches `value` |
+| `request:accessKeyIdIn(values)` | `boolean` | Returns `true` if `accessKeyId` matches any value in `values` |
+| `request:bucketEquals(bucket)` | `boolean` | Returns `true` if request bucket exactly matches `bucket` |
+| `request:keyHasPrefix(prefix)` | `boolean` | Returns `true` if request key starts with `prefix` |
+| `request:keyHasSuffix(suffix)` | `boolean` | Returns `true` if request key ends with `suffix` |
 
 ### Available Operations
 

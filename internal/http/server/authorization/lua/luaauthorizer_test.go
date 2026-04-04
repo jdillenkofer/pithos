@@ -703,3 +703,80 @@ func TestIsOperationReturnsFalseWhenOperationDoesNotMatch(t *testing.T) {
 	assert.False(t, authorized)
 	assert.Nil(t, err)
 }
+
+func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  if request.operation ~= "GetObject" then
+	    return true
+	  end
+	  assert(request:hasAccessKeyId(), "hasAccessKeyId")
+	  assert(request:accessKeyIdEquals("AKIAIOSFODNN7EXAMPLE"), "accessKeyIdEquals")
+	  assert(request:accessKeyIdIn({"AKIAIOSFODNN7EXAMPLE", "OTHER"}), "accessKeyIdIn")
+	  assert(request:isOperation("GetObject"), "isOperation")
+	  assert(request:isOperationIn({"PutObject", "GetObject"}), "isOperationIn")
+	  assert(request:isReadOnly(), "isReadOnly")
+	  assert(not request:isWriteOperation(), "isWriteOperation")
+	  assert(not request:isAnonymous(), "isAnonymous")
+	  assert(request:bucketEquals("my-bucket"), "bucketEquals")
+	  assert(request:keyHasPrefix("public/"), "keyHasPrefix")
+	  assert(request:keyHasSuffix(".txt"), "keyHasSuffix")
+	  assert(request.httpRequest:isMethod("get"), "httpRequest.isMethod")
+	  assert(request.httpRequest:hasHeader("X-Test"), "httpRequest.hasHeader")
+	  assert(request.httpRequest:header("X-Test") == "a", "httpRequest.header")
+	  assert(request.httpRequest:headerEquals("X-Test", "b"), "httpRequest.headerEquals")
+	  assert(request.httpRequest:hasXApiKey("my-key"), "httpRequest.hasXApiKey")
+	  assert(request.httpRequest:queryParam("uploadId") == "upload-123", "httpRequest.queryParam")
+	  assert(request.httpRequest:hasQueryParam("uploadId"), "httpRequest.hasQueryParam")
+	  assert(request.httpRequest:queryParamEquals("uploadId", "upload-456"), "httpRequest.queryParamEquals")
+	  assert(request.httpRequest:pathEquals("/my-bucket/public/file.txt"), "httpRequest.pathEquals")
+	  assert(request.httpRequest:pathHasPrefix("/my-bucket/public/"), "httpRequest.pathHasPrefix")
+	  assert(request.httpRequest:hostEquals("assets.example.com"), "httpRequest.hostEquals")
+	  assert(request.httpRequest:hostHasSuffix("example.com"), "httpRequest.hostHasSuffix")
+	  assert(request.httpRequest:isScheme("https"), "httpRequest.isScheme")
+	  assert(request.httpRequest:isProto("http/1.1"), "httpRequest.isProto")
+	  assert(request.httpRequest:clientIPInCIDR("198.51.100.0/24"), "httpRequest.clientIPInCIDR")
+	  assert(request.httpRequest:clientIPInCIDRs({"203.0.113.0/24", "198.51.100.0/24"}), "httpRequest.clientIPInCIDRs")
+	  assert(request.httpRequest:remoteIPInCIDR("10.0.0.0/8"), "httpRequest.remoteIPInCIDR")
+	  return true
+	end
+	`
+	authorizer, err := NewLuaAuthorizerWithOptions(luaCode, Options{
+		TrustForwardedHeaders: true,
+		TrustedProxyCIDRs:     []string{"10.0.0.0/8"},
+	})
+	assert.Nil(t, err)
+
+	request := authorization.Request{
+		Operation: authorization.OperationGetObject,
+		Authorization: authorization.Authorization{
+			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+		},
+		Bucket: ptrutils.ToPtr("my-bucket"),
+		Key:    ptrutils.ToPtr("public/file.txt"),
+		HttpRequest: authorization.HTTPRequest{
+			Method:        "GET",
+			Path:          "/my-bucket/public/file.txt",
+			Host:          "assets.example.com",
+			Proto:         "HTTP/1.1",
+			ContentLength: ptrutils.ToPtr(128),
+			RemoteIP:      ptrutils.ToPtr("10.1.2.3"),
+			ClientIP:      ptrutils.ToPtr("198.51.100.7"),
+			Scheme:        "https",
+			QueryParams: map[string][]string{
+				"uploadId": []string{"upload-123", "upload-456"},
+			},
+			Headers: map[string][]string{
+				"X-Test":           []string{"a", "b"},
+				"X-Api-Key":        []string{"my-key"},
+				"CF-Connecting-IP": []string{"198.51.100.7"},
+			},
+		},
+	}
+
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.True(t, authorized)
+	assert.Nil(t, err)
+}
