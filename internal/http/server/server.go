@@ -26,7 +26,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -1990,7 +1989,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	})
-	setChecksumType(responseHeaders, metadatastore.ChecksumTypeFullObject)
+	setChecksumType(responseHeaders, storage.ChecksumTypeFullObject)
 	w.WriteHeader(200)
 }
 
