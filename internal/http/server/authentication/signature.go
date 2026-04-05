@@ -84,17 +84,9 @@ func generateCanonicalURI(r *http.Request) string {
 
 func uriEncode(input string) string {
 	output := url.QueryEscape(input)
-	/* @TODO: make sure that the uriEncode follows AWS guidelines (non standard)
-	   if ("+".equals(replacement)) {
-	       replacement = "%20";
-	   } else if ("*".equals(replacement)) {
-	       replacement = "%2A";
-	   } else if ("%7E".equals(replacement)) {
-	       replacement = "~";
-	   } else if (path && "%2F".equals(replacement)) {
-	       replacement = "/";
-	   }
-	*/
+	output = strings.ReplaceAll(output, "+", "%20")
+	output = strings.ReplaceAll(output, "*", "%2A")
+	output = strings.ReplaceAll(output, "%7E", "~")
 	return output
 }
 
@@ -112,7 +104,11 @@ func generateCanonicalQueryString(r *http.Request) string {
 		}
 	}
 	slices.SortFunc(queryStrings, func(a, b pair) int {
-		return cmp.Compare(a.key, b.key)
+		byKey := cmp.Compare(a.key, b.key)
+		if byKey != 0 {
+			return byKey
+		}
+		return cmp.Compare(a.val, b.val)
 	})
 
 	canonicalQueryString := ""
@@ -126,10 +122,11 @@ func generateCanonicalQueryString(r *http.Request) string {
 }
 
 func includeInCanonicalHeaders(headerKey string, headersToInclude []string) bool {
-	if slices.Contains(headersToInclude, headerKey) {
-		return true
-	}
-	if headerKey == "content-type" {
+	return slices.Contains(headersToInclude, headerKey)
+}
+
+func mustBeSignedHeader(headerKey string) bool {
+	if headerKey == "content-md5" {
 		return true
 	}
 	if strings.HasPrefix(headerKey, "x-amz-") {
@@ -416,7 +413,25 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		return nil, false
 	}
 
-	signedHeadersArray := strings.Split(signedHeaders, ";")
+	rawSignedHeadersArray := strings.Split(signedHeaders, ";")
+	signedHeadersArray := make([]string, 0, len(rawSignedHeadersArray))
+	for _, signedHeader := range rawSignedHeadersArray {
+		signedHeader = strings.ToLower(strings.TrimSpace(signedHeader))
+		if signedHeader != "" {
+			signedHeadersArray = append(signedHeadersArray, signedHeader)
+		}
+	}
+	if !slices.Contains(signedHeadersArray, "host") {
+		slog.DebugContext(r.Context(), "Signed headers do not include host")
+		return nil, false
+	}
+	for headerKey := range r.Header {
+		headerKey = strings.ToLower(headerKey)
+		if mustBeSignedHeader(headerKey) && !slices.Contains(signedHeadersArray, headerKey) {
+			slog.DebugContext(r.Context(), "Request contains unsigned security-sensitive header", "header", headerKey)
+			return nil, false
+		}
+	}
 
 	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
 	if err != nil {
