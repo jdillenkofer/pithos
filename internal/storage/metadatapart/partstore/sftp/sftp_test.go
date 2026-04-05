@@ -68,6 +68,7 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 		},
 		WaitingFor: wait.ForAll(
 			wait.ForLog("sshd is listening on port"),
+			wait.ForLog("[ls.io-init] done."),
 			wait.ForListeningPort(internalSshPort),
 		),
 	}
