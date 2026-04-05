@@ -223,73 +223,6 @@ func TestAccessKeyIdIsSetInLuaWhenAuthenticated(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestHasXApiKeyReturnsTrueWhenHeaderMatches(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return request.httpRequest:hasXApiKey("my-fixed-api-key")
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{
-		Operation: authorization.OperationGetObject,
-		Authorization: authorization.Authorization{
-			AccessKeyId: nil,
-		},
-		HttpRequest: authorization.HTTPRequest{
-			Headers: map[string][]string{
-				"X-Api-Key": []string{"my-fixed-api-key"},
-			},
-		},
-	}
-	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-}
-
-func TestHasXApiKeyReturnsFalseWhenHeaderMissingOrDifferent(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return request.httpRequest:hasXApiKey("my-fixed-api-key")
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	missingHeader := authorization.Request{
-		Operation: authorization.OperationGetObject,
-		Authorization: authorization.Authorization{
-			AccessKeyId: nil,
-		},
-		HttpRequest: authorization.HTTPRequest{
-			Headers: map[string][]string{},
-		},
-	}
-	authorized, err := authorizer.AuthorizeRequest(context.Background(), &missingHeader)
-	assert.False(t, authorized)
-	assert.Nil(t, err)
-
-	wrongValue := authorization.Request{
-		Operation: authorization.OperationGetObject,
-		Authorization: authorization.Authorization{
-			AccessKeyId: nil,
-		},
-		HttpRequest: authorization.HTTPRequest{
-			Headers: map[string][]string{
-				"x-api-key": []string{"wrong-value"},
-			},
-		},
-	}
-	authorized, err = authorizer.AuthorizeRequest(context.Background(), &wrongValue)
-	assert.False(t, authorized)
-	assert.Nil(t, err)
-}
-
 func TestIsReadOnlyReturnsTrueForReadOperations(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
@@ -838,7 +771,6 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	  assert(request.httpRequest:hasHeader("X-Test"), "httpRequest.hasHeader")
 	  assert(request.httpRequest:header("X-Test") == "a", "httpRequest.header")
 	  assert(request.httpRequest:headerEquals("X-Test", "b"), "httpRequest.headerEquals")
-	  assert(request.httpRequest:hasXApiKey("my-key"), "httpRequest.hasXApiKey")
 	  assert(request.httpRequest:queryParam("uploadId") == "upload-123", "httpRequest.queryParam")
 	  assert(request.httpRequest:hasQueryParam("uploadId"), "httpRequest.hasQueryParam")
 	  assert(request.httpRequest:queryParamEquals("uploadId", "upload-456"), "httpRequest.queryParamEquals")
@@ -881,7 +813,6 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 			},
 			Headers: map[string][]string{
 				"X-Test":           []string{"a", "b"},
-				"X-Api-Key":        []string{"my-key"},
 				"CF-Connecting-IP": []string{"198.51.100.7"},
 			},
 		},

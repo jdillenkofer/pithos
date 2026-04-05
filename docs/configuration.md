@@ -108,7 +108,6 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.httpRequest:clientIPInCIDR(cidr)` | `boolean` | Returns `true` if `clientIP` is inside CIDR `cidr` |
 | `request.httpRequest:clientIPInCIDRs(cidrs)` | `boolean` | Returns `true` if `clientIP` is inside any CIDR in `cidrs` |
 | `request.httpRequest:remoteIPInCIDR(cidr)` | `boolean` | Returns `true` if `remoteIP` is inside CIDR `cidr` |
-| `request.httpRequest:hasXApiKey(value)` | `boolean` | Returns `true` if an `X-Api-Key` request header matches `value` (header name is matched case-insensitively) |
 | `request:isReadOnly()` | `boolean` | Returns `true` if the operation is read-only |
 | `request:isWriteOperation()` | `boolean` | Returns `true` if the operation is not read-only |
 | `request:isOperation(operation)` | `boolean` | Returns `true` if `request.operation` matches `operation` |
