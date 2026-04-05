@@ -209,3 +209,41 @@ func TestCreateSignatureFromPresignedRequest(t *testing.T) {
 	signature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", signature)
 }
+
+func TestGenerateCanonicalHeadersIncludesOnlySignedHeaders(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodPut, "http://examplebucket.s3.amazonaws.com/test.txt", nil)
+	assert.NoError(t, err)
+	r.Host = "examplebucket.s3.amazonaws.com"
+	r.Header.Add("Content-Type", "application/octet-stream")
+	r.Header.Add("X-Amz-Meta-Test", "meta-value")
+	r.Header.Add("X-Amz-Date", "20130524T000000Z")
+
+	headersToInclude := []string{"host", "x-amz-date"}
+	canonicalHeaders := generateCanonicalHeaders(r, headersToInclude)
+	signedHeaders := generateSignedHeaders(r, headersToInclude)
+
+	assert.Equal(t, "host:examplebucket.s3.amazonaws.com\nx-amz-date:20130524T000000Z\n", canonicalHeaders)
+	assert.Equal(t, "host;x-amz-date", signedHeaders)
+}
+
+func TestGenerateCanonicalQueryStringSortsByKeyThenValue(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/test.txt?b=2&a=2&a=1", nil)
+	assert.NoError(t, err)
+
+	queryString := generateCanonicalQueryString(r)
+	assert.Equal(t, "a=1&a=2&b=2", queryString)
+}
+
+func TestGenerateCanonicalQueryStringUsesAwsUriEncoding(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/test.txt?prefix=a b*~", nil)
+	assert.NoError(t, err)
+
+	queryString := generateCanonicalQueryString(r)
+	assert.Equal(t, "prefix=a%20b%2A~", queryString)
+}
