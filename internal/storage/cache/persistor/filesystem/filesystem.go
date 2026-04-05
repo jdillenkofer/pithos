@@ -41,11 +41,6 @@ func (fp *filesystemCachePersistor) getFilename(key string) string {
 	return filepath.Join(fp.root, filename)
 }
 
-func (fp *filesystemCachePersistor) getLegacyFilename(key string) string {
-	filename := base64.StdEncoding.EncodeToString([]byte(key)) + ".cache"
-	return filepath.Join(fp.root, filename)
-}
-
 func (fp *filesystemCachePersistor) Store(key string, val []byte) error {
 	filename := fp.getFilename(key)
 	{
@@ -63,36 +58,31 @@ func (fp *filesystemCachePersistor) Store(key string, val []byte) error {
 }
 
 func (fp *filesystemCachePersistor) Get(key string) ([]byte, error) {
-	filenames := []string{fp.getFilename(key), fp.getLegacyFilename(key)}
-	for _, filename := range filenames {
-		f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, err
+	filename := fp.getFilename(key)
+	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, persistor.ErrCacheMiss
 		}
-		defer f.Close()
-		data, err := io.ReadAll(f)
-		if err != nil {
-			return nil, err
-		}
-		return data, nil
+		return nil, err
 	}
-	return nil, persistor.ErrCacheMiss
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (fp *filesystemCachePersistor) Remove(key string) error {
-	filenames := []string{fp.getFilename(key), fp.getLegacyFilename(key)}
-	for _, filename := range filenames {
-		err := os.Remove(filename)
-		if err != nil {
-			e, ok := err.(*os.PathError)
-			if ok && e.Err == syscall.ENOENT {
-				// The file didn't exist
-			} else {
-				return err
-			}
+	filename := fp.getFilename(key)
+	err := os.Remove(filename)
+	if err != nil {
+		e, ok := err.(*os.PathError)
+		if ok && e.Err == syscall.ENOENT {
+			// The file didn't exist
+		} else {
+			return err
 		}
 	}
 	return nil
