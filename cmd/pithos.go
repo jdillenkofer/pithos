@@ -171,6 +171,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
+		os.Exit(1)
 	}
 
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
