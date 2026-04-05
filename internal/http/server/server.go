@@ -2035,6 +2035,9 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shouldReturn = validateMaxEntitySize(r, w)
+	if shouldReturn {
+		return
+	}
 
 	checksumInput, err := extractChecksumInput(r)
 	if err != nil {
