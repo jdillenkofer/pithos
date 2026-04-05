@@ -268,11 +268,62 @@ func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Con
 	return nil
 }
 
+func (mbs *metadataPartStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	if config.Status == nil {
+		return &storage.BucketVersioningConfiguration{}, nil
+	}
+	status := storage.BucketVersioningStatus(*config.Status)
+	return &storage.BucketVersioningConfiguration{Status: &status}, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return err
+	}
+
+	metaConfig := &metadatastore.BucketVersioningConfiguration{}
+	if config != nil && config.Status != nil {
+		status := metadatastore.BucketVersioningStatus(*config.Status)
+		metaConfig.Status = &status
+	}
+
+	err = mbs.metadataStore.PutBucketVersioningConfiguration(ctx, tx, bucketName, metaConfig)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
 		Key:               mObject.Key,
 		ContentType:       mObject.ContentType,
 		LastModified:      mObject.LastModified,
+		VersionID:         mObject.VersionID,
+		IsDeleteMarker:    mObject.IsDeleteMarker,
 		ETag:              mObject.ETag,
 		ChecksumCRC32:     mObject.ChecksumCRC32,
 		ChecksumCRC32C:    mObject.ChecksumCRC32C,
@@ -322,6 +373,43 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 	return &listBucketResult, nil
 }
 
+func (mbs *metadataPartStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.ListObjectVersions")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	metaResult, err := mbs.metadataStore.ListObjectVersions(ctx, tx, bucketName, metadatastore.ListObjectVersionsOptions{
+		Prefix:          opts.Prefix,
+		Delimiter:       opts.Delimiter,
+		KeyMarker:       opts.KeyMarker,
+		VersionIDMarker: opts.VersionIDMarker,
+		MaxKeys:         opts.MaxKeys,
+	})
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	versions := sliceutils.Map(func(v metadatastore.ObjectVersion) storage.ObjectVersion {
+		return storage.ObjectVersion{Key: v.Key, VersionID: v.VersionID, IsDeleteMarker: v.IsDeleteMarker, IsLatest: v.IsLatest, LastModified: v.LastModified, Size: v.Size, ETag: v.ETag}
+	}, metaResult.Versions)
+
+	return &storage.ListObjectVersionsResult{
+		Versions:            versions,
+		CommonPrefixes:      metaResult.CommonPrefixes,
+		IsTruncated:         metaResult.IsTruncated,
+		NextKeyMarker:       metaResult.NextKeyMarker,
+		NextVersionIDMarker: metaResult.NextVersionIDMarker,
+	}, nil
+}
+
 func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.HeadObject")
 	defer span.End()
@@ -331,10 +419,27 @@ func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName stora
 		return nil, err
 	}
 
-	mObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	var mObject *metadatastore.Object
+	if opts != nil && opts.VersionID != nil {
+		mObject, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, key, *opts.VersionID)
+	} else {
+		mObject, err = mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	}
 	if err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+
+	if mObject.IsDeleteMarker {
+		tx.Rollback()
+		versionID := ""
+		if mObject.VersionID != nil {
+			versionID = *mObject.VersionID
+		}
+		if opts != nil && opts.VersionID != nil {
+			return nil, &storage.VersionDeleteMarkerMethodNotAllowedError{VersionID: versionID, LastModified: mObject.LastModified}
+		}
+		return nil, &storage.CurrentDeleteMarkerError{VersionID: versionID}
 	}
 
 	if opts != nil {
@@ -467,9 +572,25 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	}
 	defer tx.Rollback() // Safe to call multiple times
 
-	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	var object *metadatastore.Object
+	if opts != nil && opts.VersionID != nil {
+		object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, key, *opts.VersionID)
+	} else {
+		object, err = mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	}
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if object.IsDeleteMarker {
+		versionID := ""
+		if object.VersionID != nil {
+			versionID = *object.VersionID
+		}
+		if opts != nil && opts.VersionID != nil {
+			return nil, nil, &storage.VersionDeleteMarkerMethodNotAllowedError{VersionID: versionID, LastModified: object.LastModified}
+		}
+		return nil, nil, &storage.CurrentDeleteMarkerError{VersionID: versionID}
 	}
 
 	if opts != nil {
@@ -533,19 +654,28 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 	if !ifNoneMatchStar {
-		// if we already have such an object,
-		// remove all previous parts
-		previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
-		if err != nil && err != storage.ErrNoSuchKey {
+		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx, bucketName)
+		if err != nil {
 			tx.Rollback()
 			return nil, err
 		}
-		if previousObject != nil {
-			for _, part := range previousObject.Parts {
-				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
-				if err != nil {
-					tx.Rollback()
-					return nil, err
+		versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
+
+		if !versioningEnabled {
+			// In unversioned/suspended mode, writes overwrite the null version.
+			// Remove its part content before metadata replacement.
+			previousObject, err := mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, key, "null")
+			if err != nil && err != storage.ErrNoSuchKey {
+				tx.Rollback()
+				return nil, err
+			}
+			if previousObject != nil {
+				for _, part := range previousObject.Parts {
+					err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+					if err != nil {
+						tx.Rollback()
+						return nil, err
+					}
 				}
 			}
 		}
@@ -613,6 +743,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	}
 
 	return &storage.PutObjectResult{
+		VersionID:         object.VersionID,
 		ETag:              &object.ETag,
 		ChecksumCRC32:     object.ChecksumCRC32,
 		ChecksumCRC32C:    object.ChecksumCRC32C,
@@ -761,7 +892,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	}, nil
 }
 
-func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObject")
 	defer span.End()
 
@@ -769,51 +900,89 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	defer unblockGC()
 	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx, bucketName)
 	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
+	versioningSuspended := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusSuspended
+
+	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	if opts != nil && opts.VersionID != nil {
+		object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, key, *opts.VersionID)
+	} else if versioningSuspended {
+		object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, key, "null")
+	}
+	if err != nil {
+		if err == storage.ErrNoSuchKey {
+			if opts == nil || opts.VersionID == nil {
+				if versioningEnabled {
+					object = nil
+					err = nil
+				} else if versioningSuspended {
+					// Suspended mode may have no null version; still create a delete marker.
+					object = nil
+					err = nil
+				}
+			}
+		}
 		if err == storage.ErrNoSuchKey {
 			tx.Rollback()
 			// Object does not exist.
 			if opts != nil && opts.IfMatchETag != nil {
 				// Conditional delete: object must exist.
-				return storage.ErrPreconditionFailed
+				return nil, storage.ErrPreconditionFailed
 			}
 			// No condition: silently succeed per S3 semantics.
-			return nil
+			return &storage.DeleteObjectResult{}, nil
 		}
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
-	for _, part := range object.Parts {
-		err = mbs.partStore.DeletePart(ctx, tx, part.Id)
-		if err != nil {
-			tx.Rollback()
-			return err
+	shouldDeleteParts := opts != nil && opts.VersionID != nil
+	if opts == nil || opts.VersionID == nil {
+		if versioningSuspended {
+			shouldDeleteParts = true // null version hard-delete on suspended key-only delete
+		} else if !versioningEnabled {
+			shouldDeleteParts = true // unversioned hard delete
+		}
+	}
+
+	if shouldDeleteParts && object != nil && !object.IsDeleteMarker {
+		for _, part := range object.Parts {
+			err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
 		}
 	}
 
 	var metaOpts *metadatastore.DeleteObjectOptions
 	if opts != nil {
 		metaOpts = &metadatastore.DeleteObjectOptions{
+			VersionID:   opts.VersionID,
 			IfMatchETag: opts.IfMatchETag,
 		}
 	}
-	err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key, metaOpts)
+	metaResult, err := mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key, metaOpts)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 
 	err = tx.Commit()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &storage.DeleteObjectResult{VersionID: metaResult.VersionID, IsDeleteMarker: metaResult.IsDeleteMarker}, nil
 }
 
 func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
@@ -831,8 +1000,21 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 		Entries: make([]storage.DeleteObjectsEntry, 0, len(entries)),
 	}
 
+	versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
+	versioningSuspended := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusSuspended
+
 	for _, entry := range entries {
 		object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, entry.Key)
+		if entry.VersionID != nil {
+			object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, entry.Key, *entry.VersionID)
+		} else if versioningSuspended {
+			object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx, bucketName, entry.Key, "null")
+		}
 		if err != nil {
 			if err == storage.ErrNoSuchKey {
 				if entry.IfMatchETag != nil {
@@ -843,13 +1025,16 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 						ErrCode: "PreconditionFailed",
 						ErrMsg:  "At least one of the pre-conditions you specified did not hold",
 					})
-				} else {
+				} else if !(entry.VersionID == nil && (versioningEnabled || versioningSuspended)) {
 					result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
+					continue
 				}
-				continue
+				object = nil
+				err = nil
+			} else {
+				tx.Rollback()
+				return nil, err
 			}
-			tx.Rollback()
-			return nil, err
 		}
 
 		// Object exists — check conditional ETag if specified.
@@ -863,7 +1048,16 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 			continue
 		}
 
-		if object != nil {
+		shouldDeleteParts := entry.VersionID != nil
+		if entry.VersionID == nil {
+			if versioningSuspended {
+				shouldDeleteParts = true
+			} else if !versioningEnabled {
+				shouldDeleteParts = true
+			}
+		}
+
+		if shouldDeleteParts && object != nil && !object.IsDeleteMarker {
 			for _, part := range object.Parts {
 				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
 				if err != nil {
@@ -874,16 +1068,16 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 		}
 
 		var metaOpts *metadatastore.DeleteObjectOptions
-		if entry.IfMatchETag != nil {
-			metaOpts = &metadatastore.DeleteObjectOptions{IfMatchETag: entry.IfMatchETag}
+		if entry.IfMatchETag != nil || entry.VersionID != nil {
+			metaOpts = &metadatastore.DeleteObjectOptions{VersionID: entry.VersionID, IfMatchETag: entry.IfMatchETag}
 		}
-		err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, entry.Key, metaOpts)
+		metaResult, err := mbs.metadataStore.DeleteObject(ctx, tx, bucketName, entry.Key, metaOpts)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 
-		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, VersionID: metaResult.VersionID, DeleteMarker: &metaResult.IsDeleteMarker, Deleted: true})
 	}
 
 	err = tx.Commit()

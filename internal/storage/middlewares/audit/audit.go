@@ -229,6 +229,20 @@ func (m *AuditLogMiddleware) HeadBucket(ctx context.Context, bucketName storage.
 	return bucket, err
 }
 
+func (m *AuditLogMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	start := time.Now()
+	config, err := m.next.GetBucketVersioningConfiguration(ctx, bucketName)
+	m.log(ctx, "GetBucketVersioning", auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return config, err
+}
+
+func (m *AuditLogMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	start := time.Now()
+	err := m.next.PutBucketVersioningConfiguration(ctx, bucketName, config)
+	m.log(ctx, "PutBucketVersioning", auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return err
+}
+
 func (m *AuditLogMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
 	start := time.Now()
 	m.log(ctx, auditlog.OpGetBucketWebsite, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)
@@ -258,6 +272,13 @@ func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage
 	m.log(ctx, auditlog.OpListObjects, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)
 	res, err := m.next.ListObjects(ctx, bucketName, opts)
 	m.log(ctx, auditlog.OpListObjects, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return res, err
+}
+
+func (m *AuditLogMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	start := time.Now()
+	res, err := m.next.ListObjectVersions(ctx, bucketName, opts)
+	m.log(ctx, "ListObjectVersions", auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return res, err
 }
 
@@ -293,12 +314,12 @@ func (m *AuditLogMiddleware) AppendObject(ctx context.Context, bucketName storag
 	return res, err
 }
 
-func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	start := time.Now()
 	m.log(ctx, auditlog.OpDeleteObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil, 0, 0)
-	err := m.next.DeleteObject(ctx, bucketName, key, opts)
+	res, err := m.next.DeleteObject(ctx, bucketName, key, opts)
 	m.log(ctx, auditlog.OpDeleteObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
-	return err
+	return res, err
 }
 
 func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

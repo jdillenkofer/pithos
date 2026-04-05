@@ -157,6 +157,9 @@ const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
 const appendQuery = "append"
+const versioningQuery = "versioning"
+const versionsQuery = "versions"
+const versionIDQuery = "versionId"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -178,6 +181,8 @@ const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
 const checksumSHA1Header = "x-amz-checksum-sha1"
 const checksumSHA256Header = "x-amz-checksum-sha256"
 const writeOffsetBytesHeader = "x-amz-write-offset-bytes"
+const versionIDHeader = "x-amz-version-id"
+const deleteMarkerHeader = "x-amz-delete-marker"
 
 const applicationXmlContentType = "application/xml"
 
@@ -365,6 +370,45 @@ type WebsiteConfigurationResponse struct {
 	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
 }
 
+type BucketVersioningConfiguration struct {
+	XMLName xml.Name `xml:"VersioningConfiguration"`
+	Xmlns   string   `xml:"xmlns,attr,omitempty"`
+	Status  *string  `xml:"Status,omitempty"`
+}
+
+type VersionEntry struct {
+	Key          string `xml:"Key"`
+	VersionID    string `xml:"VersionId"`
+	IsLatest     bool   `xml:"IsLatest"`
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag,omitempty"`
+	Size         int64  `xml:"Size,omitempty"`
+	StorageClass string `xml:"StorageClass,omitempty"`
+}
+
+type DeleteMarkerVersionEntry struct {
+	Key          string `xml:"Key"`
+	VersionID    string `xml:"VersionId"`
+	IsLatest     bool   `xml:"IsLatest"`
+	LastModified string `xml:"LastModified"`
+}
+
+type ListObjectVersionsResult struct {
+	XMLName             xml.Name                    `xml:"ListVersionsResult"`
+	Name                string                      `xml:"Name"`
+	Prefix              *string                     `xml:"Prefix"`
+	Delimiter           *string                     `xml:"Delimiter"`
+	KeyMarker           *string                     `xml:"KeyMarker"`
+	VersionIDMarker     *string                     `xml:"VersionIdMarker"`
+	NextKeyMarker       *string                     `xml:"NextKeyMarker,omitempty"`
+	NextVersionIDMarker *string                     `xml:"NextVersionIdMarker,omitempty"`
+	MaxKeys             int32                       `xml:"MaxKeys"`
+	IsTruncated         bool                        `xml:"IsTruncated"`
+	Versions            []*VersionEntry             `xml:"Version"`
+	DeleteMarkers       []*DeleteMarkerVersionEntry `xml:"DeleteMarker"`
+	CommonPrefixes      []*CommonPrefixResult       `xml:"CommonPrefixes"`
+}
+
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
@@ -378,13 +422,17 @@ type DeleteObjectsRequest struct {
 }
 
 type DeletedEntry struct {
-	Key string `xml:"Key"`
+	Key                   string  `xml:"Key"`
+	VersionId             *string `xml:"VersionId,omitempty"`
+	DeleteMarker          *bool   `xml:"DeleteMarker,omitempty"`
+	DeleteMarkerVersionId *string `xml:"DeleteMarkerVersionId,omitempty"`
 }
 
 type DeleteErrorEntry struct {
-	Key     string `xml:"Key"`
-	Code    string `xml:"Code"`
-	Message string `xml:"Message"`
+	Key       string  `xml:"Key"`
+	VersionId *string `xml:"VersionId,omitempty"`
+	Code      string  `xml:"Code"`
+	Message   string  `xml:"Message"`
 }
 
 type DeleteObjectsResult struct {
@@ -774,6 +822,14 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(versioningQuery) {
+		s.getBucketVersioningHandler(w, r)
+		return
+	}
+	if query.Has(versionsQuery) {
+		s.listObjectVersionsHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
 		return
@@ -1178,6 +1234,10 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createBucketOrPutBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(versioningQuery) {
+		s.putBucketVersioningHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.putBucketWebsiteHandler(w, r)
 		return
@@ -1259,7 +1319,12 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationHeadObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationHeadObject
+	if versionID != nil {
+		authOperation = authorization.OperationHeadObjectVersion
+	}
+	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
 	if shouldReturn {
 		return
 	}
@@ -1269,8 +1334,11 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	var headOpts *storage.HeadObjectOptions
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
-	if ifMatch != nil || ifNoneMatch != nil {
+	if ifMatch != nil || ifNoneMatch != nil || versionID != nil {
 		headOpts = &storage.HeadObjectOptions{}
+		if versionID != nil {
+			headOpts.VersionID = versionID
+		}
 		if ifMatch != nil {
 			headOpts.IfMatchETag = ifMatch
 		}
@@ -1281,6 +1349,25 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	object, err := s.storage.HeadObject(ctx, bucketName, key, headOpts)
 	if err != nil {
+		if currentDeleteMarkerErr, ok := err.(*storage.CurrentDeleteMarkerError); ok {
+			responseHeaders := w.Header()
+			responseHeaders.Set(deleteMarkerHeader, "true")
+			if currentDeleteMarkerErr.VersionID != "" {
+				responseHeaders.Set(versionIDHeader, currentDeleteMarkerErr.VersionID)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if versionDeleteMarkerErr, ok := err.(*storage.VersionDeleteMarkerMethodNotAllowedError); ok {
+			responseHeaders := w.Header()
+			responseHeaders.Set(deleteMarkerHeader, "true")
+			if versionDeleteMarkerErr.VersionID != "" {
+				responseHeaders.Set(versionIDHeader, versionDeleteMarkerErr.VersionID)
+			}
+			responseHeaders.Set(lastModifiedHeader, versionDeleteMarkerErr.LastModified.UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if err == storage.ErrNotModified {
 			w.WriteHeader(304)
 			return
@@ -1295,6 +1382,9 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders := w.Header()
 	setETagHeaderFromObject(responseHeaders, object)
 	setChecksumHeadersFromObject(responseHeaders, object)
+	if object.VersionID != nil {
+		responseHeaders.Set(versionIDHeader, *object.VersionID)
+	}
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -1544,7 +1634,12 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationGetObject
+	if versionID != nil {
+		authOperation = authorization.OperationGetObjectVersion
+	}
+	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
 	if shouldReturn {
 		return
 	}
@@ -1562,8 +1657,11 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	var getOpts *storage.GetObjectOptions
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
-	if ifMatch != nil || ifNoneMatch != nil {
+	if ifMatch != nil || ifNoneMatch != nil || versionID != nil {
 		getOpts = &storage.GetObjectOptions{}
+		if versionID != nil {
+			getOpts.VersionID = versionID
+		}
 		if ifMatch != nil {
 			getOpts.IfMatchETag = ifMatch
 		}
@@ -1576,6 +1674,25 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	// It also validates the ranges and returns ErrInvalidRange if invalid
 	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges, getOpts)
 	if err != nil {
+		if currentDeleteMarkerErr, ok := err.(*storage.CurrentDeleteMarkerError); ok {
+			responseHeaders := w.Header()
+			responseHeaders.Set(deleteMarkerHeader, "true")
+			if currentDeleteMarkerErr.VersionID != "" {
+				responseHeaders.Set(versionIDHeader, currentDeleteMarkerErr.VersionID)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if versionDeleteMarkerErr, ok := err.(*storage.VersionDeleteMarkerMethodNotAllowedError); ok {
+			responseHeaders := w.Header()
+			responseHeaders.Set(deleteMarkerHeader, "true")
+			if versionDeleteMarkerErr.VersionID != "" {
+				responseHeaders.Set(versionIDHeader, versionDeleteMarkerErr.VersionID)
+			}
+			responseHeaders.Set(lastModifiedHeader, versionDeleteMarkerErr.LastModified.UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if err == storage.ErrNotModified {
 			w.WriteHeader(304)
 			return
@@ -1591,6 +1708,9 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, contentType)
 	setETagHeaderFromObject(responseHeaders, object)
+	if object.VersionID != nil {
+		responseHeaders.Set(versionIDHeader, *object.VersionID)
+	}
 
 	// Calculate sizes for each range
 	var sizes []int64
@@ -2005,6 +2125,9 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	})
+	if putObjectResult.VersionID != nil {
+		responseHeaders.Set(versionIDHeader, *putObjectResult.VersionID)
+	}
 	setChecksumType(responseHeaders, storage.ChecksumTypeFullObject)
 	w.WriteHeader(200)
 }
@@ -2135,7 +2258,12 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObject, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationDeleteObject
+	if versionID != nil {
+		authOperation = authorization.OperationDeleteObjectVersion
+	}
+	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
 	if shouldReturn {
 		return
 	}
@@ -2143,13 +2271,21 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	slog.InfoContext(r.Context(), "Deleting object", "bucket", bucketName.String(), "key", key.String())
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	var deleteOpts *storage.DeleteObjectOptions
-	if ifMatch != nil {
-		deleteOpts = &storage.DeleteObjectOptions{IfMatchETag: ifMatch}
+	if ifMatch != nil || versionID != nil {
+		deleteOpts = &storage.DeleteObjectOptions{IfMatchETag: ifMatch, VersionID: versionID}
 	}
-	err = s.storage.DeleteObject(ctx, bucketName, key, deleteOpts)
+	deleteResult, err := s.storage.DeleteObject(ctx, bucketName, key, deleteOpts)
 	if err != nil {
 		handleError(err, w, r)
 		return
+	}
+	if deleteResult != nil {
+		if deleteResult.VersionID != nil {
+			w.Header().Set(versionIDHeader, *deleteResult.VersionID)
+		}
+		if deleteResult.IsDeleteMarker {
+			w.Header().Set(deleteMarkerHeader, "true")
+		}
 	}
 	w.WriteHeader(204)
 }
@@ -2181,6 +2317,7 @@ const maxDeleteObjects = 1000
 const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
 const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
 const maxPutBucketWebsiteBodySize int64 = 128 * 1024
+const maxPutBucketVersioningBodySize int64 = 16 * 1024
 
 func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -2235,23 +2372,15 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	// We track the original string key alongside the parsed ObjectKey so we can
 	// build the response even when validation fails.
 	type validEntry struct {
-		rawKey string
-		key    storage.ObjectKey
-		etag   *string
+		rawKey    string
+		key       storage.ObjectKey
+		versionID *string
+		etag      *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
 	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
 
 	for _, obj := range req.Objects {
-		if obj.VersionId != nil {
-			result.Errors = append(result.Errors, &DeleteErrorEntry{
-				Key:     obj.Key,
-				Code:    "NotImplemented",
-				Message: "versioning is not supported",
-			})
-			continue
-		}
-
 		key, err := storage.NewObjectKey(obj.Key)
 		if err != nil {
 			result.Errors = append(result.Errors, &DeleteErrorEntry{
@@ -2262,7 +2391,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, etag: obj.ETag})
+		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, versionID: obj.VersionId, etag: obj.ETag})
 	}
 
 	// Second pass: authorize valid entries and collect entries to bulk-delete.
@@ -2288,7 +2417,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if len(authorizedEntries) > 0 {
 		inputEntries := make([]storage.DeleteObjectsInputEntry, len(authorizedEntries))
 		for i, ve := range authorizedEntries {
-			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.etag}
+			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, VersionID: ve.versionID, IfMatchETag: ve.etag}
 		}
 
 		slog.InfoContext(r.Context(), "DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))
@@ -2302,23 +2431,40 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Build a map from key string → entry for result lookup.
-		resultByKey := make(map[string]storage.DeleteObjectsEntry, len(deleteResult.Entries))
+		// Build a map from key+versionId -> ordered entries for result lookup.
+		// Multiple request entries can share the same key (and version id), so we
+		// keep a slice and consume in request order.
+		resultByKeyVersion := make(map[string][]storage.DeleteObjectsEntry, len(deleteResult.Entries))
 		for _, entry := range deleteResult.Entries {
-			resultByKey[entry.Key.String()] = entry
+			k := entry.Key.String() + "\x00"
+			if entry.VersionID != nil {
+				k += *entry.VersionID
+			}
+			resultByKeyVersion[k] = append(resultByKeyVersion[k], entry)
 		}
 
 		for _, ve := range authorizedEntries {
-			entry, ok := resultByKey[ve.key.String()]
+			k := ve.key.String() + "\x00"
+			if ve.versionID != nil {
+				k += *ve.versionID
+			}
+			entriesForKey := resultByKeyVersion[k]
+			entry := storage.DeleteObjectsEntry{Key: ve.key, Deleted: true}
+			ok := len(entriesForKey) > 0
+			if ok {
+				entry = entriesForKey[0]
+				resultByKeyVersion[k] = entriesForKey[1:]
+			}
 			if !ok || entry.Deleted {
 				if !req.Quiet {
-					result.Deleted = append(result.Deleted, &DeletedEntry{Key: ve.rawKey})
+					result.Deleted = append(result.Deleted, &DeletedEntry{Key: ve.rawKey, VersionId: entry.VersionID, DeleteMarker: entry.DeleteMarker, DeleteMarkerVersionId: entry.DeleteMarkerVersionID})
 				}
 			} else {
 				result.Errors = append(result.Errors, &DeleteErrorEntry{
-					Key:     ve.rawKey,
-					Code:    entry.ErrCode,
-					Message: entry.ErrMsg,
+					Key:       ve.rawKey,
+					VersionId: entry.VersionID,
+					Code:      entry.ErrCode,
+					Message:   entry.ErrMsg,
 				})
 			}
 		}
@@ -2328,6 +2474,158 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(http.StatusOK)
 	out, _ := xmlMarshalWithDocType(result)
+	w.Write(out)
+}
+
+func (s *Server) getBucketVersioningHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketVersioningHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	if s.authorizeRequest(ctx, authorization.OperationGetBucketVersioning, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+
+	config, err := s.storage.GetBucketVersioningConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := BucketVersioningConfiguration{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
+	if config.Status != nil {
+		status := string(*config.Status)
+		response.Status = &status
+	}
+
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusOK)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketVersioningHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketVersioningHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	if s.authorizeRequest(ctx, authorization.OperationPutBucketVersioning, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutBucketVersioningBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request BucketVersioningConfiguration
+	if err := xml.Unmarshal(data, &request); err != nil {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	if request.Status == nil {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	var status storage.BucketVersioningStatus
+	switch *request.Status {
+	case string(storage.BucketVersioningStatusEnabled):
+		status = storage.BucketVersioningStatusEnabled
+	case string(storage.BucketVersioningStatusSuspended):
+		status = storage.BucketVersioningStatusSuspended
+	default:
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	err = s.storage.PutBucketVersioningConfiguration(ctx, bucketName, &storage.BucketVersioningConfiguration{Status: &status})
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.listObjectVersionsHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	if s.authorizeRequest(ctx, authorization.OperationListObjectVersions, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+
+	query := r.URL.Query()
+	prefix := httputils.GetQueryParam(query, prefixQuery)
+	delimiter := httputils.GetQueryParam(query, delimiterQuery)
+	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
+	versionIDMarker := httputils.GetQueryParam(query, "version-id-marker")
+
+	maxKeys := query.Get(maxKeysQuery)
+	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
+	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
+		maxKeysI64 = 1000
+	}
+	maxKeysI32 := int32(maxKeysI64)
+
+	result, err := s.storage.ListObjectVersions(ctx, bucketName, storage.ListObjectVersionsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, VersionIDMarker: versionIDMarker, MaxKeys: maxKeysI32})
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := ListObjectVersionsResult{
+		Name:                bucketName.String(),
+		Prefix:              prefix,
+		Delimiter:           delimiter,
+		KeyMarker:           keyMarker,
+		VersionIDMarker:     versionIDMarker,
+		NextKeyMarker:       result.NextKeyMarker,
+		NextVersionIDMarker: result.NextVersionIDMarker,
+		MaxKeys:             maxKeysI32,
+		IsTruncated:         result.IsTruncated,
+		Versions:            []*VersionEntry{},
+		DeleteMarkers:       []*DeleteMarkerVersionEntry{},
+		CommonPrefixes:      []*CommonPrefixResult{},
+	}
+
+	for _, version := range result.Versions {
+		if version.IsDeleteMarker {
+			response.DeleteMarkers = append(response.DeleteMarkers, &DeleteMarkerVersionEntry{Key: version.Key.String(), VersionID: version.VersionID, IsLatest: version.IsLatest, LastModified: version.LastModified.UTC().Format(time.RFC3339)})
+		} else {
+			etag := ""
+			if version.ETag != nil {
+				etag = *version.ETag
+			}
+			response.Versions = append(response.Versions, &VersionEntry{Key: version.Key.String(), VersionID: version.VersionID, IsLatest: version.IsLatest, LastModified: version.LastModified.UTC().Format(time.RFC3339), ETag: etag, Size: version.Size, StorageClass: storageClassStandard})
+		}
+	}
+	for _, commonPrefix := range result.CommonPrefixes {
+		response.CommonPrefixes = append(response.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
+	}
+
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusOK)
+	out, _ := xmlMarshalWithDocType(response)
 	w.Write(out)
 }
 

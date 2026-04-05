@@ -15,11 +15,17 @@ type Repository interface {
 	UpdateObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, object *Entity, optimisticLockVersion int64) (*bool, error)
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]Entity, error)
+	FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
 	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) (*Entity, error)
 	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*Entity, error)
+	FindObjectByBucketNameAndKeyAndVersionID(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, versionID string) (*Entity, error)
+	FindNullObjectVersionByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*Entity, error)
+	FindLatestObjectByBucketNameAndKeyExcludingID(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, excludedObjectID ulid.ULID) (*Entity, error)
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error)
+	CountObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) (*int, error)
 	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
+	ClearLatestObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) error
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*bool, error)
 	DeleteObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, optimisticLockVersion int64) (*bool, error)
 }
@@ -37,6 +43,9 @@ type Entity struct {
 	ChecksumSHA256        *string
 	ChecksumType          *string
 	Size                  int64
+	VersionID             *string
+	IsDeleteMarker        bool
+	IsLatest              bool
 	UploadStatus          string
 	UploadId              *storage.UploadId
 	OptimisticLockVersion int64

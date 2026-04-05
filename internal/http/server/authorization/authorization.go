@@ -29,8 +29,10 @@ const (
 	OperationCreateBucket            = "CreateBucket"
 	OperationDeleteBucket            = "DeleteBucket"
 	OperationHeadObject              = "HeadObject"
+	OperationHeadObjectVersion       = "HeadObjectVersion"
 	OperationListParts               = "ListParts"
 	OperationGetObject               = "GetObject"
+	OperationGetObjectVersion        = "GetObjectVersion"
 	OperationCreateMultipartUpload   = "CreateMultipartUpload"
 	OperationCompleteMultipartUpload = "CompleteMultipartUpload"
 	OperationUploadPart              = "UploadPart"
@@ -38,10 +40,14 @@ const (
 	OperationAppendObject            = "AppendObject"
 	OperationAbortMultipartUpload    = "AbortMultipartUpload"
 	OperationDeleteObject            = "DeleteObject"
+	OperationDeleteObjectVersion     = "DeleteObjectVersion"
 	OperationDeleteObjects           = "DeleteObjects"
 	OperationGetBucketWebsite        = "GetBucketWebsite"
 	OperationPutBucketWebsite        = "PutBucketWebsite"
 	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"
+	OperationGetBucketVersioning     = "GetBucketVersioning"
+	OperationPutBucketVersioning     = "PutBucketVersioning"
+	OperationListObjectVersions      = "ListObjectVersions"
 )
 
 type Request struct {

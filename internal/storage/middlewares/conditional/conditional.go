@@ -123,12 +123,36 @@ func (csm *conditionalStorageMiddleware) HeadBucket(ctx context.Context, bucketN
 	return storage.HeadBucket(ctx, bucketName)
 }
 
+func (csm *conditionalStorageMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.PutBucketVersioningConfiguration(ctx, bucketName, config)
+}
+
 func (csm *conditionalStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.ListObjects")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
 	return storage.ListObjects(ctx, bucketName, opts)
+}
+
+func (csm *conditionalStorageMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.ListObjectVersions")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.ListObjectVersions(ctx, bucketName, opts)
 }
 
 func (csm *conditionalStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -163,7 +187,7 @@ func (csm *conditionalStorageMiddleware) AppendObject(ctx context.Context, bucke
 	return s.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
 }
 
-func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (csm *conditionalStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteObject")
 	defer span.End()
 

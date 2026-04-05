@@ -209,7 +209,7 @@ func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
 	etag := *result.ETag
 
 	// Delete with correct ETag — should succeed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(etag)})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(etag)})
 	require.NoError(t, err)
 
 	// Object should be gone.
@@ -231,7 +231,7 @@ func TestConditionalDeleteObject_WrongETag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete with wrong ETag — should return PreconditionFailed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("wrong-etag")})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("wrong-etag")})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 
 	// Object should still exist.
@@ -250,7 +250,7 @@ func TestConditionalDeleteObject_NoObjectWithCondition(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete non-existent object with ETag condition — should return PreconditionFailed.
-	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("any-etag")})
+	_, err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("any-etag")})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 }
 
@@ -265,7 +265,7 @@ func TestConditionalDeleteObject_NoObjectNoCondition(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete non-existent object without condition — should silently succeed (S3 semantics).
-	err := st.DeleteObject(ctx, bucket, key, nil)
+	_, err := st.DeleteObject(ctx, bucket, key, nil)
 	require.NoError(t, err)
 }
 
@@ -335,7 +335,7 @@ func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete with If-Match: * on an existing object — should succeed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
 	require.NoError(t, err)
 
 	// Object should be gone.
@@ -354,7 +354,7 @@ func TestConditionalDeleteObject_WildcardMatchMissingObject(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete with If-Match: * on a non-existent object — should return PreconditionFailed.
-	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
+	_, err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 }
 
