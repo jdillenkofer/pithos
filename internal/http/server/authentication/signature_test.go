@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/url"
@@ -102,7 +103,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	hasTrailingHeader := false
 	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -162,7 +163,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	hasTrailingHeader := true
 	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)

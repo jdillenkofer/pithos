@@ -373,13 +373,13 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	L.Pop(1)
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
-		slog.Error("Error while executing Lua code", "error", err)
+		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
 		return false, err
 	}
 	L.Global(functionName)
 	if !L.IsFunction(-1) {
 		if functionName == authorizationFunctionName {
-			slog.Error("Authorization function not found in Lua code", "functionName", authorizationFunctionName)
+			slog.ErrorContext(ctx, "Authorization function not found in Lua code", "functionName", authorizationFunctionName)
 			return false, errAuthorizationFunctionNotFound
 		}
 		return true, nil
@@ -391,12 +391,12 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	}
 	err = L.ProtectedCall(argCount, 1, 0)
 	if err != nil {
-		slog.Error("Error while calling authorization function", "error", err)
+		slog.ErrorContext(ctx, "Error while calling authorization function", "error", err)
 		return false, err
 	}
 	res := L.ToBoolean(1)
 	L.Pop(1)
-	slog.Debug("Authorization result", "operation", request.Operation, "isAuthorized", res)
+	slog.DebugContext(ctx, "Authorization result", "operation", request.Operation, "isAuthorized", res)
 	return res, nil
 }
 

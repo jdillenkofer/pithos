@@ -18,7 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
-	"github.com/jdillenkofer/pithos/internal/http/middlewares"
+	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
@@ -58,7 +58,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	apiMux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	var apiHandler http.Handler = apiMux
-	apiHandler = middlewares.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
+	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
 
 	websiteMux := http.NewServeMux()
 	websiteMux.HandleFunc("GET /{bucket}/{key...}", server.serveWebsiteGetObject)
@@ -76,12 +76,12 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 			}
 		}
 		r.URL.Path = "/" + host + r.URL.Path
-		slog.Debug("Custom domain website request", "host", r.Host, "bucket", host, "path", r.URL.Path)
+		slog.DebugContext(r.Context(), "Custom domain website request", "host", r.Host, "bucket", host, "path", r.URL.Path)
 		websiteHandler.ServeHTTP(w, r)
 	})
 
 	// Set up handler with hostname-based routing.
-	rootHandler := middlewares.MakeHostnameRoutingHandler(apiEndpoint, apiHandler, websiteEndpoint, websiteHandler, fallbackHandler)
+	rootHandler := httpmiddleware.MakeHostnameRoutingHandler(apiEndpoint, apiHandler, websiteEndpoint, websiteHandler, fallbackHandler)
 	rootHandler = makeAuditRequestContextMiddleware(rootHandler)
 
 	var authCreds []authentication.Credentials
@@ -97,6 +97,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
 	}
+	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
 	return rootHandler
 }
@@ -110,7 +111,6 @@ func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-
 func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -509,6 +509,9 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	errResponse.Code = err.Error()
 	errResponse.Message = err.Error()
 	errResponse.Resource = r.URL.Path
+	if requestID, ok := httpmiddleware.RequestIDFromContext(r.Context()); ok {
+		errResponse.RequestId = requestID
+	}
 	switch err {
 	case storage.ErrInvalidBucketName:
 		statusCode = 400
@@ -539,14 +542,14 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrNotModified:
 		statusCode = 304
 	default:
-		slog.Error(fmt.Sprintf("Unhandled internal error: %v", err))
+		slog.ErrorContext(r.Context(), fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
 		errResponse.Code = "InternalError"
 		errResponse.Message = "InternalError"
 	}
 	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Error during handleError: %v", err))
+		slog.ErrorContext(r.Context(), fmt.Sprintf("Error during handleError: %v", err))
 		return
 	}
 	w.WriteHeader(statusCode)
@@ -557,12 +560,12 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
-		slog.Error(fmt.Sprintf("Authorization error: %v", err))
+		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
 		handleError(err, w, r)
 		return true
 	}
 	if !authorized {
-		slog.Debug(fmt.Sprintf("Unauthorized request: %v", request))
+		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
 		if !isAuthenticated {
 			w.WriteHeader(401)
 		} else {
@@ -716,7 +719,7 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 	if shouldReturn {
 		return
 	}
-	slog.Info("Listing Buckets")
+	slog.InfoContext(r.Context(), "Listing Buckets")
 	buckets, err := s.storage.ListBuckets(ctx)
 	if err != nil {
 		handleError(err, w, r)
@@ -760,7 +763,7 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	if shouldReturn {
 		return
 	}
-	slog.Info("Head bucket", "bucket", bucketName)
+	slog.InfoContext(r.Context(), "Head bucket", "bucket", bucketName)
 	_, err = s.storage.HeadBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -817,7 +820,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	maxUploadsI32 := int32(maxUploadsI64)
 
 	opts := storage.ListMultipartUploadsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, UploadIdMarker: uploadIdMarker, MaxUploads: maxUploadsI32}
-	slog.Info("Listing MultipartUploads")
+	slog.InfoContext(r.Context(), "Listing MultipartUploads")
 	result, nextKeyMarker, nextUploadIDMarker, err := s.listAndFilterMultipartUploads(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
@@ -973,7 +976,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	maxKeysI32 := int32(maxKeysI64)
 
 	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
-	slog.Info("Listing objects", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Listing objects", "bucket", bucketName.String())
 	result, nextMarker, err := s.listAndFilterObjects(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
@@ -1124,7 +1127,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	maxKeysI32 := int32(maxKeysI64)
 
 	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
-	slog.Info("Listing objects V2", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Listing objects V2", "bucket", bucketName.String())
 	result, nextToken, err := s.listAndFilterObjects(ctx, r, bucketName, opts)
 	if err != nil {
 		handleError(err, w, r)
@@ -1197,7 +1200,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Creating bucket", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Creating bucket", "bucket", bucketName.String())
 	err = s.storage.CreateBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -1232,7 +1235,7 @@ func (s *Server) deleteBucketHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Deleting bucket", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Deleting bucket", "bucket", bucketName.String())
 	err = s.storage.DeleteBucket(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -1261,7 +1264,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Head object", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "Head object", "bucket", bucketName.String(), "key", key.String())
 
 	var headOpts *storage.HeadObjectOptions
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
@@ -1547,7 +1550,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rangeHeaderValue := r.Header.Get(rangeHeader)
-	slog.Info("Getting object", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "Getting object", "bucket", bucketName.String(), "key", key.String())
 
 	// Parse range header and convert to storage.ByteRange (validation will be done in GetObject)
 	storageRanges, err := parseRangeHeader(rangeHeaderValue)
@@ -1700,7 +1703,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
-	slog.Info("CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
 	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		handleError(err, w, r)
@@ -1792,7 +1795,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	slog.Info("CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
+	slog.InfoContext(r.Context(), "CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, completeOpts)
 	if err != nil {
 		handleError(err, w, r)
@@ -1893,7 +1896,7 @@ func (s *Server) uploadPartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("UploadPart", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String(), "partNumber", partNumber)
+	slog.InfoContext(r.Context(), "UploadPart", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String(), "partNumber", partNumber)
 	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
 		w.WriteHeader(400)
 		return
@@ -1980,7 +1983,7 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Putting object", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "Putting object", "bucket", bucketName.String(), "key", key.String())
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
@@ -2046,7 +2049,7 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Appending to object", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "Appending to object", "bucket", bucketName.String(), "key", key.String())
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
 	}
@@ -2109,7 +2112,7 @@ func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Requ
 		handleError(err, w, r)
 		return
 	}
-	slog.Info("AbortMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
+	slog.InfoContext(r.Context(), "AbortMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	err = s.storage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
 	if err != nil {
 		handleError(err, w, r)
@@ -2137,7 +2140,7 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Deleting object", "bucket", bucketName.String(), "key", key.String())
+	slog.InfoContext(r.Context(), "Deleting object", "bucket", bucketName.String(), "key", key.String())
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	var deleteOpts *storage.DeleteObjectOptions
 	if ifMatch != nil {
@@ -2288,7 +2291,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, IfMatchETag: ve.etag}
 		}
 
-		slog.Info("DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))
+		slog.InfoContext(r.Context(), "DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))
 		deleteResult, err := s.storage.DeleteObjects(ctx, bucketName, inputEntries)
 		if err != nil {
 			if err == storage.ErrNoSuchBucket {
@@ -2343,7 +2346,7 @@ func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	slog.Info("Getting bucket website configuration", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Getting bucket website configuration", "bucket", bucketName.String())
 	config, err := s.storage.GetBucketWebsiteConfiguration(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -2420,7 +2423,7 @@ func (s *Server) putBucketWebsiteHandler(w http.ResponseWriter, r *http.Request)
 		config.ErrorDocumentKey = &request.ErrorDocument.Key
 	}
 
-	slog.Info("Putting bucket website configuration", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Putting bucket website configuration", "bucket", bucketName.String())
 	err = s.storage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
 	if err != nil {
 		handleError(err, w, r)
@@ -2444,7 +2447,7 @@ func (s *Server) deleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Info("Deleting bucket website configuration", "bucket", bucketName.String())
+	slog.InfoContext(r.Context(), "Deleting bucket website configuration", "bucket", bucketName.String())
 	err = s.storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
@@ -2545,7 +2548,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
+	slog.InfoContext(r.Context(), "Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
 
 	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil, nil)
 	if err != nil {
@@ -2595,7 +2598,7 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	slog.Info("Website: head object", "bucket", bucketName.String(), "key", resolvedKey)
+	slog.InfoContext(r.Context(), "Website: head object", "bucket", bucketName.String(), "key", resolvedKey)
 
 	object, err := s.storage.HeadObject(ctx, bucketName, objectKey, nil)
 	if err != nil {
