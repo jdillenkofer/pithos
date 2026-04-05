@@ -1777,7 +1777,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
+	data, err := readLimitedBody(r, w, maxCompleteMultipartUploadBodySize)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2175,6 +2175,22 @@ func (s *Server) postBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 const maxDeleteObjects = 1000
 
+const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
+const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
+const maxPutBucketWebsiteBodySize int64 = 128 * 1024
+
+func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		if _, ok := err.(*http.MaxBytesError); ok {
+			return nil, storage.ErrEntityTooLarge
+		}
+		return nil, err
+	}
+	return data, nil
+}
+
 func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectsHandler")
 	defer span.End()
@@ -2190,7 +2206,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
+	data, err := readLimitedBody(r, w, maxDeleteObjectsBodySize)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2368,7 +2384,7 @@ func (s *Server) putBucketWebsiteHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
+	data, err := readLimitedBody(r, w, maxPutBucketWebsiteBodySize)
 	if err != nil {
 		handleError(err, w, r)
 		return
