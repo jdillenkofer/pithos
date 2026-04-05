@@ -15,19 +15,21 @@ type sqliteRepository struct {
 }
 
 const (
-	insertObjectStmt                                                                             = "INSERT INTO objects (id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)"
-	insertObjectIfAbsentStmt                                                                     = "INSERT INTO objects (id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) ON CONFLICT DO NOTHING"
-	updateObjectByIdStmt                                                                         = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, cache_control = $4, content_disposition = $5, content_encoding = $6, content_language = $7, expires = $8, website_redirect_location = $9, etag = $10, checksum_crc32 = $11, checksum_crc32c = $12, checksum_crc64nvme = $13, checksum_sha1 = $14, checksum_sha256 = $15, checksum_type = $16, size = $17, upload_status = $18, upload_id = $19, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $20 WHERE id = $21"
-	updateObjectByIdAndOptimisticLockVersionStmt                                                 = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, cache_control = $4, content_disposition = $5, content_encoding = $6, content_language = $7, expires = $8, website_redirect_location = $9, etag = $10, checksum_crc32 = $11, checksum_crc32c = $12, checksum_crc64nvme = $13, checksum_sha1 = $14, checksum_sha256 = $15, checksum_type = $16, size = $17, upload_status = $18, upload_id = $19, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $20 WHERE id = $21 AND optimistic_lock_version = $22"
-	containsBucketObjectsByBucketNameStmt                                                        = "SELECT id FROM objects WHERE bucket_name = $1"
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                               = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC"
-	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5 ORDER BY key ASC, upload_id ASC"
-	findObjectByBucketNameAndKeyAndUploadIdStmt                                                  = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_id = $3 AND upload_status = $4"
-	findObjectByBucketNameAndKeyStmt                                                             = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3"
-	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4"
-	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5"
-	deleteObjectByIdStmt                                                                         = "DELETE FROM objects WHERE id = $1"
-	deleteObjectByIdAndOptimisticLockVersionStmt                                                 = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
+	insertObjectStmt                                                                                      = "INSERT INTO objects (id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)"
+	insertObjectIfAbsentStmt                                                                              = "INSERT INTO objects (id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) ON CONFLICT DO NOTHING"
+	updateObjectByIdStmt                                                                                  = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, cache_control = $4, content_disposition = $5, content_encoding = $6, content_language = $7, expires = $8, website_redirect_location = $9, etag = $10, checksum_crc32 = $11, checksum_crc32c = $12, checksum_crc64nvme = $13, checksum_sha1 = $14, checksum_sha256 = $15, checksum_type = $16, size = $17, upload_status = $18, upload_id = $19, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $20 WHERE id = $21"
+	updateObjectByIdAndOptimisticLockVersionStmt                                                          = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, cache_control = $4, content_disposition = $5, content_encoding = $6, content_language = $7, expires = $8, website_redirect_location = $9, etag = $10, checksum_crc32 = $11, checksum_crc32c = $12, checksum_crc64nvme = $13, checksum_sha1 = $14, checksum_sha256 = $15, checksum_type = $16, size = $17, upload_status = $18, upload_id = $19, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $20 WHERE id = $21 AND optimistic_lock_version = $22"
+	containsBucketObjectsByBucketNameStmt                                                                 = "SELECT id FROM objects WHERE bucket_name = $1"
+	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                                        = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC"
+	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimitStmt                               = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC LIMIT $5"
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt          = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5 ORDER BY key ASC, upload_id ASC"
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimitStmt = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5 ORDER BY key ASC, upload_id ASC LIMIT $6"
+	findObjectByBucketNameAndKeyAndUploadIdStmt                                                           = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_id = $3 AND upload_status = $4"
+	findObjectByBucketNameAndKeyStmt                                                                      = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3"
+	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                                    = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4"
+	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                                    = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5"
+	deleteObjectByIdStmt                                                                                  = "DELETE FROM objects WHERE id = $1"
+	deleteObjectByIdAndOptimisticLockVersionStmt                                                          = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
 )
 
 func NewRepository() (object.Repository, error) {
@@ -197,8 +199,42 @@ func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderBy
 	return objects, nil
 }
 
+func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string, limit int32) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimitStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer objectRows.Close()
+	objects := []object.Entity{}
+	for objectRows.Next() {
+		objectEntity, err := convertRowToObjectEntity(objectRows)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *objectEntity)
+	}
+	return objects, nil
+}
+
 func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt, bucketName.String(), prefix, keyMarker, uploadIdMarker, object.UploadStatusPending)
+	if err != nil {
+		return nil, err
+	}
+	defer objectRows.Close()
+	objects := []object.Entity{}
+	for objectRows.Next() {
+		objectEntity, err := convertRowToObjectEntity(objectRows)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *objectEntity)
+	}
+	return objects, nil
+}
+
+func (or *sqliteRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string, limit int32) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimitStmt, bucketName.String(), prefix, keyMarker, uploadIdMarker, object.UploadStatusPending, limit)
 	if err != nil {
 		return nil, err
 	}
