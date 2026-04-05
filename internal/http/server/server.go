@@ -128,6 +128,8 @@ func SetupMonitoringServer(dbs []database.Database) http.Handler {
 const bucketPath = "bucket"
 const keyPath = "key"
 
+const maxListLimit int64 = 1000
+
 const prefixQuery = "prefix"
 const delimiterQuery = "delimiter"
 const startAfterQuery = "start-after"
@@ -799,7 +801,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	uploadIdMarker := httputils.GetQueryParam(query, uploadIdMarkerQuery)
 	maxUploads := query.Get(maxUploadsQuery)
 	maxUploadsI64, err := strconv.ParseInt(maxUploads, 10, 32)
-	if err != nil || maxUploadsI64 < 0 {
+	if err != nil || maxUploadsI64 < 0 || maxUploadsI64 > maxListLimit {
 		maxUploadsI64 = 1000
 	}
 	maxUploadsI32 := int32(maxUploadsI64)
@@ -955,7 +957,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 
 	maxKeys := query.Get(maxKeysQuery)
 	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
-	if err != nil || maxKeysI64 < 0 {
+	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
 		maxKeysI64 = 1000
 	}
 	maxKeysI32 := int32(maxKeysI64)
@@ -1106,7 +1108,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
-	if err != nil || maxKeysI64 < 0 {
+	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
 		maxKeysI64 = 1000
 	}
 	maxKeysI32 := int32(maxKeysI64)
