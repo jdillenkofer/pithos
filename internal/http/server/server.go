@@ -83,6 +83,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 
 	// Set up handler with hostname-based routing.
 	rootHandler := middlewares.MakeHostnameRoutingHandler(apiEndpoint, apiHandler, websiteEndpoint, websiteHandler, fallbackHandler)
+	rootHandler = makeAuditRequestContextMiddleware(rootHandler)
 
 	var authCreds []authentication.Credentials
 	if credentials != nil {
@@ -99,6 +100,16 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	}
 
 	return rootHandler
+}
+
+func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), authentication.RequestIDContextKey{}, ulid.Make().String())
+		if ip := getRemoteIP(r.RemoteAddr); ip != nil {
+			ctx = context.WithValue(ctx, authentication.ClientIPContextKey{}, *ip)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {

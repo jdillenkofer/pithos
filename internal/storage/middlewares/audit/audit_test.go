@@ -116,8 +116,8 @@ func TestAuditLogMiddleware(t *testing.T) {
 	if dStart.Phase != auditlog.PhaseStart {
 		t.Errorf("expected START phase, got %s", dStart.Phase)
 	}
-	if dStart.Bucket != "test-bucket" {
-		t.Errorf("expected bucket test-bucket, got %s", dStart.Bucket)
+	if dStart.Resource.Bucket != "test-bucket" {
+		t.Errorf("expected bucket test-bucket, got %s", dStart.Resource.Bucket)
 	}
 	if !entryStart.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryStart signature verification failed")
@@ -137,6 +137,9 @@ func TestAuditLogMiddleware(t *testing.T) {
 	}
 	if dEnd.Phase != auditlog.PhaseComplete {
 		t.Errorf("expected COMPLETE phase, got %s", dEnd.Phase)
+	}
+	if dEnd.Outcome.Outcome != auditlog.OutcomeSuccess {
+		t.Errorf("expected success outcome, got %s", dEnd.Outcome.Outcome)
 	}
 	if !entryEnd.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryEnd signature verification failed")

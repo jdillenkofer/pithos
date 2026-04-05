@@ -120,15 +120,15 @@ func (t *AuditLogTool) Dump(inputFormat string, outputFormat string, out io.Writ
 }
 
 type LogStats struct {
-	TotalEntries    int
-	GenesisEntries  int
-	LogEntries      int
+	TotalEntries     int
+	GenesisEntries   int
+	LogEntries       int
 	GroundingEntries int
-	StartTime       time.Time
-	EndTime         time.Time
-	Operations      map[auditlog.Operation]int
-	Actors          map[string]int
-	Errors          int
+	StartTime        time.Time
+	EndTime          time.Time
+	Operations       map[auditlog.Operation]int
+	Actors           map[string]int
+	Errors           int
 }
 
 func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
@@ -178,8 +178,12 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 			stats.LogEntries++
 			details := entry.Details.(*auditlog.LogDetails)
 			stats.Operations[details.Operation]++
-			stats.Actors[details.Actor]++
-			if details.Error != "" {
+			actor := details.Actor.CredentialID
+			if actor == "" {
+				actor = "anonymous"
+			}
+			stats.Actors[actor]++
+			if details.Outcome.Error != "" || details.Outcome.Outcome == auditlog.OutcomeError {
 				stats.Errors++
 			}
 		case auditlog.EntryTypeGrounding:

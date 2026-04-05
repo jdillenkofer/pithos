@@ -54,7 +54,12 @@ func TestRunAuditLogTool(t *testing.T) {
 			Type:      auditlog.EntryTypeLog,
 			Details: &auditlog.LogDetails{
 				Operation: auditlog.OpPutObject,
-				Bucket:    "test",
+				Resource: auditlog.ResourceDetails{
+					Bucket: "test",
+				},
+				Actor: auditlog.ActorDetails{
+					CredentialID: "test",
+				},
 			},
 			PreviousHash: prevHash,
 		}
@@ -80,7 +85,7 @@ func TestRunAuditLogTool(t *testing.T) {
 		Details: &auditlog.GroundingDetails{
 			MerkleRootHash:   root,
 			SignatureEd25519: sigEd,
-			SignatureMlDsa87:   sigMl,
+			SignatureMlDsa87: sigMl,
 		},
 		PreviousHash: prevHash,
 	}
