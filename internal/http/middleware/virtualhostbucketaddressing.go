@@ -1,4 +1,4 @@
-package middlewares
+package middleware
 
 import (
 	"net/http"
@@ -9,9 +9,7 @@ func MakeVirtualHostBucketAddressingMiddleware(baseEndpoint string, next http.Ha
 	endpointSuffix := "." + baseEndpoint
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostname := r.Host
-		// Strip port if present (e.g. "test.s3.localhost:9000" → "test.s3.localhost")
 		if colonIdx := strings.LastIndex(hostname, ":"); colonIdx != -1 {
-			// Make sure it's not an IPv6 address
 			if bracketIdx := strings.LastIndex(hostname, "]"); bracketIdx < colonIdx {
 				hostname = hostname[:colonIdx]
 			}

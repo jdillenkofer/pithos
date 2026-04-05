@@ -301,43 +301,43 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
-		slog.Debug("Authorization header is missing checking for query parameters")
+		slog.DebugContext(r.Context(), "Authorization header is missing checking for query parameters")
 		isPresigned = true
 		query := r.URL.Query()
 		credential = query.Get("X-Amz-Credential")
 		timestamp = query.Get("X-Amz-Date")
 		expires := query.Get("X-Amz-Expires")
-		slog.Debug("Using presigned auth query parameters")
+		slog.DebugContext(r.Context(), "Using presigned auth query parameters")
 		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
 		if err != nil {
-			slog.Debug("Failed to parse X-Amz-Expires: " + err.Error())
+			slog.DebugContext(r.Context(), "Failed to parse X-Amz-Expires: "+err.Error())
 			return nil, false
 		}
 		if parsedExpired < 1 || parsedExpired > 604800 {
-			slog.Debug("X-Amz-Expires must be between 1 and 604800 seconds")
+			slog.DebugContext(r.Context(), "X-Amz-Expires must be between 1 and 604800 seconds")
 			return nil, false
 		}
 		expirationDuration = time.Duration(parsedExpired) * time.Second
 		signedHeaders = query.Get("X-Amz-SignedHeaders")
 		signature = query.Get("X-Amz-Signature")
 	} else {
-		slog.Debug("Authorization header is present")
+		slog.DebugContext(r.Context(), "Authorization header is present")
 		isPresigned = false
 		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
 		if !found {
-			slog.Debug("Authorization header does not start with " + signatureAlgorithm)
+			slog.DebugContext(r.Context(), "Authorization header does not start with "+signatureAlgorithm)
 			return nil, false
 		}
 		authFields := strings.Split(authorizationHeader, ",")
 		if len(authFields) != 3 {
-			slog.Debug("Authorization header does not contain exactly 3 fields")
+			slog.DebugContext(r.Context(), "Authorization header does not contain exactly 3 fields")
 			return nil, false
 		}
 
 		credential = strings.TrimSpace(authFields[0])
 		credential, found = strings.CutPrefix(credential, "Credential=")
 		if !found {
-			slog.Debug("Authorization header does not contain Credential field")
+			slog.DebugContext(r.Context(), "Authorization header does not contain Credential field")
 			return nil, false
 		}
 
@@ -353,21 +353,21 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		signedHeaders = strings.TrimSpace(authFields[1])
 		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
 		if !found {
-			slog.Debug("Authorization header does not contain SignedHeaders field")
+			slog.DebugContext(r.Context(), "Authorization header does not contain SignedHeaders field")
 			return nil, false
 		}
 
 		signature = strings.TrimSpace(authFields[2])
 		signature, found = strings.CutPrefix(signature, "Signature=")
 		if !found {
-			slog.Debug("Authorization header does not contain Signature field")
+			slog.DebugContext(r.Context(), "Authorization header does not contain Signature field")
 			return nil, false
 		}
 	}
 
 	accessKeyIdAndScope := strings.Split(credential, "/")
 	if len(accessKeyIdAndScope) != 5 {
-		slog.Debug("Credential field does not contain exactly 5 parts")
+		slog.DebugContext(r.Context(), "Credential field does not contain exactly 5 parts")
 		return nil, false
 	}
 	accessKeyId := accessKeyIdAndScope[0]
@@ -375,30 +375,30 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		return c.AccessKeyId == accessKeyId
 	})
 	if foundIndex < 0 {
-		slog.Debug("Access key ID not found in valid credentials")
+		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
 		return nil, false
 	}
 	expectedCredentials := validCredentials[foundIndex]
 	date := accessKeyIdAndScope[1]
 	if date != expectedDate {
-		slog.Debug("Date in credential does not match expected date")
+		slog.DebugContext(r.Context(), "Date in credential does not match expected date")
 		return nil, false
 	}
 	region := accessKeyIdAndScope[2]
 	if region != expectedRegion {
-		slog.Debug("Region in credential does not match expected region")
+		slog.DebugContext(r.Context(), "Region in credential does not match expected region")
 		return nil, false
 	}
 
 	service := accessKeyIdAndScope[3]
 	if service != expectedService {
-		slog.Debug("Service in credential does not match expected service")
+		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
 		return nil, false
 	}
 
 	request := accessKeyIdAndScope[4]
 	if request != expectedRequest {
-		slog.Debug("Request in credential does not match expected request")
+		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
 		return nil, false
 	}
 
@@ -406,13 +406,13 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
 	if err != nil {
-		slog.Debug("Failed to parse timestamp: " + err.Error())
+		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
 		return nil, false
 	}
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
-		slog.Debug("Timestamp is not within the valid range (" + beforeTimestamp.Format(time.RFC3339) + " - " + expiredTimestamp.Format(time.RFC3339) + ")")
+		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
 		return nil, false
 	}
 
@@ -420,19 +420,19 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
 	if err != nil {
-		slog.Debug("Failed to generate string to sign: " + err.Error())
+		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
 		return nil, false
 	}
 	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, expectedDate, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, *stringToSign)
 	isSignatureValid := subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
-		slog.Debug("Signature does not match calculated signature")
+		slog.DebugContext(r.Context(), "Signature does not match calculated signature")
 		return nil, false
 	}
 
 	if isAwsChunked {
-		slog.Debug("Request is using AWS Chunked Transfer Encoding")
+		slog.DebugContext(r.Context(), "Request is using AWS Chunked Transfer Encoding")
 		contentEncodingHeader, _ := strings.CutPrefix(contentEncodingHeader, contentEncodingAwsChunked+",")
 		if contentEncodingHeader != "" {
 			r.Header.Set("Content-Encoding", contentEncodingHeader)
@@ -445,13 +445,14 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing
 		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-		r.Body = newAwsChunkReadCloser(r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
 	}
 
 	return &accessKeyId, isSignatureValid
 }
 
 type awsChunkReadCloser struct {
+	ctx                            context.Context
 	innerCloser                    io.Closer
 	innerBuf                       *bufio.Reader
 	chunkBytesRemaining            int64
@@ -466,8 +467,9 @@ type awsChunkReadCloser struct {
 	skipChunkValidation            bool
 }
 
-func newAwsChunkReadCloser(inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool) *awsChunkReadCloser {
+func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool) *awsChunkReadCloser {
 	return &awsChunkReadCloser{
+		ctx:                            ctx,
 		innerCloser:                    inner,
 		innerBuf:                       bufio.NewReader(inner),
 		chunkBytesRemaining:            -1, // -1 indicates that we are not currently reading a chunk
@@ -488,7 +490,7 @@ func (r *awsChunkReadCloser) validateSignature() error {
 	calculatedSignature := createSignature(r.signingKey, stringToSign)
 	isSignatureValid := subtle.ConstantTimeCompare([]byte(r.chunkSignature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
-		slog.Debug("Chunk signature does not match calculated chunk signature")
+		slog.DebugContext(r.ctx, "Chunk signature does not match calculated chunk signature")
 		return ErrChunkSignatureMismatch
 	}
 
@@ -537,14 +539,14 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				checksumHeader = strings.TrimSpace(checksumHeader)
 				trailerSignature = strings.TrimSpace(trailerSignature)
 				trailerSignature = strings.TrimPrefix(trailerSignature, "x-amz-trailer-signature:")
-				slog.Debug("Validating trailing headers")
+				slog.DebugContext(r.ctx, "Validating trailing headers")
 
 				if r.hasTrailingHeaderWithSignature {
 					stringToSign := generateStringToSignForTrailerChunk(r.timestamp, r.scope, r.previousSignature, checksumHeader)
 					calculatedSignature := createSignature(r.signingKey, stringToSign)
 					isSignatureValid := subtle.ConstantTimeCompare([]byte(trailerSignature), []byte(calculatedSignature)) == 1
 					if !isSignatureValid {
-						slog.Debug("Trailing header signature does not match calculated signature")
+						slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
 						return 0, ErrChunkSignatureMismatch
 					}
 				}

@@ -20,6 +20,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/logging"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
@@ -116,10 +117,11 @@ func main() {
 
 func setupLogging() *slog.LevelVar {
 	var logLevelVar = new(slog.LevelVar)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+	baseHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     logLevelVar,
-	}))
+	})
+	logger := slog.New(logging.NewContextEnrichingHandler(baseHandler))
 	slog.SetDefault(logger)
 	return logLevelVar
 }
