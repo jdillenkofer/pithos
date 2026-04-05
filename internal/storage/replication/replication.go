@@ -308,12 +308,16 @@ func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucke
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	rs.mapMutex.Unlock()
+
 	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, nil)
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	rs.mapMutex.Lock()
 	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
 	rs.mapMutex.Unlock()
 	return completeMultipartUploadResult, nil
@@ -329,12 +333,16 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketNa
 	}
 	rs.mapMutex.Lock()
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	rs.mapMutex.Unlock()
+
 	for i, secondaryStorage := range rs.secondaryStorages {
 		err := secondaryStorage.AbortMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i])
 		if err != nil {
 			return err
 		}
 	}
+
+	rs.mapMutex.Lock()
 	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
 	rs.mapMutex.Unlock()
 	return nil
