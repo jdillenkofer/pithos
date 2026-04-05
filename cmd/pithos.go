@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
@@ -77,6 +78,12 @@ const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
 const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
+
+const readHeaderTimeout = 10 * time.Second
+const readTimeout = 30 * time.Second
+const writeTimeout = 5 * time.Minute
+const idleTimeout = 2 * time.Minute
+const maxHeaderBytes = 1 << 20
 
 func main() {
 	ctx := context.Background()
@@ -176,18 +183,28 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	httpServer := &http.Server{
-		BaseContext: func(net.Listener) context.Context { return ctx },
-		Addr:        addr,
-		Handler:     handler,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
 	if settings.MonitoringPortEnabled() {
 		monitoringHandler := server.SetupMonitoringServer(dbs)
 		monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
 		httpMonitoringServer := &http.Server{
-			BaseContext: func(net.Listener) context.Context { return ctx },
-			Addr:        monitoringAddr,
-			Handler:     monitoringHandler,
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+			Addr:              monitoringAddr,
+			Handler:           monitoringHandler,
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    maxHeaderBytes,
 		}
 		go (func() {
 			slog.Info(fmt.Sprintf("Listening with monitoring api on http://%v", monitoringAddr))
