@@ -15,18 +15,19 @@ type pgxRepository struct {
 }
 
 const (
-	insertObjectStmt                                                                             = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"
-	insertObjectIfAbsentStmt                                                                     = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT DO NOTHING"
-	updateObjectByIdStmt                                                                         = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, etag = $4, checksum_crc32 = $5, checksum_crc32c = $6, checksum_crc64nvme = $7, checksum_sha1 = $8, checksum_sha256 = $9, checksum_type = $10, size = $11, upload_status = $12, upload_id = $13, updated_at = $14 WHERE id = $15"
+	insertObjectStmt                                                                             = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
+	insertObjectIfAbsentStmt                                                                     = "INSERT INTO objects (id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) ON CONFLICT DO NOTHING"
+	updateObjectByIdStmt                                                                         = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, etag = $4, checksum_crc32 = $5, checksum_crc32c = $6, checksum_crc64nvme = $7, checksum_sha1 = $8, checksum_sha256 = $9, checksum_type = $10, size = $11, upload_status = $12, upload_id = $13, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $14 WHERE id = $15"
+	updateObjectByIdAndOptimisticLockVersionStmt                                                 = "UPDATE objects SET bucket_name = $1, key = $2, content_type = $3, etag = $4, checksum_crc32 = $5, checksum_crc32c = $6, checksum_crc64nvme = $7, checksum_sha1 = $8, checksum_sha256 = $9, checksum_type = $10, size = $11, upload_status = $12, upload_id = $13, optimistic_lock_version = optimistic_lock_version + 1, updated_at = $14 WHERE id = $15 AND optimistic_lock_version = $16"
 	containsBucketObjectsByBucketNameStmt                                                        = "SELECT id FROM objects WHERE bucket_name = $1"
-	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                               = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC"
-	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5 ORDER BY key ASC, upload_id ASC"
-	findObjectByBucketNameAndKeyAndUploadIdStmt                                                  = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_id = $3 AND upload_status = $4"
-	findObjectByBucketNameAndKeyStmt                                                             = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3"
+	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                               = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 ORDER BY key ASC"
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5 ORDER BY key ASC, upload_id ASC"
+	findObjectByBucketNameAndKeyAndUploadIdStmt                                                  = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_id = $3 AND upload_status = $4"
+	findObjectByBucketNameAndKeyStmt                                                             = "SELECT id, bucket_name, key, content_type, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3"
 	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4"
 	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                           = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_id > $4 AND upload_status = $5"
 	deleteObjectByIdStmt                                                                         = "DELETE FROM objects WHERE id = $1"
-	deleteObjectByIdAndETagStmt                                                                  = "DELETE FROM objects WHERE id = $1 AND etag = $2"
+	deleteObjectByIdAndOptimisticLockVersionStmt                                                 = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
 )
 
 func NewRepository() (object.Repository, error) {
@@ -48,30 +49,32 @@ func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
 	var size int64
 	var uploadStatus string
 	var uploadId *string
+	var optimisticLockVersion int64
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &checksumType, &size, &uploadStatus, &uploadId, &createdAt, &updatedAt)
+	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &checksumType, &size, &uploadStatus, &uploadId, &optimisticLockVersion, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
 	objectEntity := object.Entity{
-		Id:                &ulidId,
-		BucketName:        storage.MustNewBucketName(bucketName),
-		Key:               storage.MustNewObjectKey(key),
-		ContentType:       contentType,
-		ETag:              etag,
-		ChecksumCRC32:     checksumCRC32,
-		ChecksumCRC32C:    checksumCRC32C,
-		ChecksumCRC64NVME: checksumCRC64NVME,
-		ChecksumSHA1:      checksumSHA1,
-		ChecksumSHA256:    checksumSHA256,
-		ChecksumType:      checksumType,
-		Size:              size,
-		UploadStatus:      uploadStatus,
-		UploadId:          ptrutils.MapPtr(uploadId, storage.MustNewUploadId),
-		CreatedAt:         createdAt,
-		UpdatedAt:         updatedAt,
+		Id:                    &ulidId,
+		BucketName:            storage.MustNewBucketName(bucketName),
+		Key:                   storage.MustNewObjectKey(key),
+		ContentType:           contentType,
+		ETag:                  etag,
+		ChecksumCRC32:         checksumCRC32,
+		ChecksumCRC32C:        checksumCRC32C,
+		ChecksumCRC64NVME:     checksumCRC64NVME,
+		ChecksumSHA1:          checksumSHA1,
+		ChecksumSHA256:        checksumSHA256,
+		ChecksumType:          checksumType,
+		Size:                  size,
+		UploadStatus:          uploadStatus,
+		UploadId:              ptrutils.MapPtr(uploadId, storage.MustNewUploadId),
+		OptimisticLockVersion: optimisticLockVersion,
+		CreatedAt:             createdAt,
+		UpdatedAt:             updatedAt,
 	}
 	return &objectEntity, nil
 }
@@ -85,11 +88,24 @@ func (or *pgxRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *obj
 		object.Id = &id
 		object.CreatedAt = time.Now().UTC()
 		object.UpdatedAt = object.CreatedAt
-		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.CreatedAt, object.UpdatedAt)
+		if object.OptimisticLockVersion == 0 {
+			object.OptimisticLockVersion = 1
+		}
+		_, err := tx.ExecContext(ctx, insertObjectStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.OptimisticLockVersion, object.CreatedAt, object.UpdatedAt)
 		return err
 	}
 	object.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.UpdatedAt, object.Id.String())
+	res, err := tx.ExecContext(ctx, updateObjectByIdStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.UpdatedAt, object.Id.String())
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected > 0 {
+		object.OptimisticLockVersion++
+	}
 	return err
 }
 
@@ -104,9 +120,12 @@ func (or *pgxRepository) InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, o
 	if object.CreatedAt.IsZero() {
 		object.CreatedAt = time.Now().UTC()
 	}
+	if object.OptimisticLockVersion == 0 {
+		object.OptimisticLockVersion = 1
+	}
 	object.UpdatedAt = object.CreatedAt
 
-	res, err := tx.ExecContext(ctx, insertObjectIfAbsentStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.CreatedAt, object.UpdatedAt)
+	res, err := tx.ExecContext(ctx, insertObjectIfAbsentStmt, object.Id.String(), object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.OptimisticLockVersion, object.CreatedAt, object.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +136,26 @@ func (or *pgxRepository) InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, o
 	}
 	inserted := rowsAffected > 0
 	return &inserted, nil
+}
+
+func (or *pgxRepository) UpdateObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, object *object.Entity, optimisticLockVersion int64) (*bool, error) {
+	mapUploadIdToString := func(uploadId storage.UploadId) string {
+		return uploadId.String()
+	}
+	object.UpdatedAt = time.Now().UTC()
+	res, err := tx.ExecContext(ctx, updateObjectByIdAndOptimisticLockVersionStmt, object.BucketName.String(), object.Key.String(), object.ContentType, object.ETag, object.ChecksumCRC32, object.ChecksumCRC32C, object.ChecksumCRC64NVME, object.ChecksumSHA1, object.ChecksumSHA256, object.ChecksumType, object.Size, object.UploadStatus, ptrutils.MapPtr(object.UploadId, mapUploadIdToString), object.UpdatedAt, object.Id.String(), optimisticLockVersion)
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	updated := rowsAffected > 0
+	if updated {
+		object.OptimisticLockVersion = optimisticLockVersion + 1
+	}
+	return &updated, nil
 }
 
 func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error) {
@@ -230,8 +269,8 @@ func (or *pgxRepository) DeleteObjectById(ctx context.Context, tx *sql.Tx, objec
 	return &deleted, nil
 }
 
-func (or *pgxRepository) DeleteObjectByIdAndETag(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, etag string) (*bool, error) {
-	res, err := tx.ExecContext(ctx, deleteObjectByIdAndETagStmt, objectId.String(), etag)
+func (or *pgxRepository) DeleteObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, optimisticLockVersion int64) (*bool, error) {
+	res, err := tx.ExecContext(ctx, deleteObjectByIdAndOptimisticLockVersionStmt, objectId.String(), optimisticLockVersion)
 	if err != nil {
 		return nil, err
 	}

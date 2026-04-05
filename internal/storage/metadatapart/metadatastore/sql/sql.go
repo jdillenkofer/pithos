@@ -406,28 +406,27 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		Size:              obj.Size,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
+
+	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+	if err != nil {
+		return err
+	}
+
 	if opts != nil && opts.IfMatchETag != nil {
-		oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
-		if err != nil {
-			return err
-		}
 		if oldObjectEntity == nil || oldObjectEntity.ETag != *opts.IfMatchETag {
 			return metadatastore.ErrPreconditionFailed
 		}
 
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
+		objectEntity.Id = oldObjectEntity.Id
+		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &objectEntity, oldObjectEntity.OptimisticLockVersion)
 		if err != nil {
 			return err
 		}
-		deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, *opts.IfMatchETag)
-		if err != nil {
-			return err
-		}
-		if !*deleted {
+		if !*updated {
 			return metadatastore.ErrPreconditionFailed
 		}
 
-		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
+		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
 		if err != nil {
 			return err
 		}
@@ -439,23 +438,19 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		if !*inserted {
 			return metadatastore.ErrPreconditionFailed
 		}
-	} else {
-		oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+	} else if oldObjectEntity != nil {
+		objectEntity.Id = oldObjectEntity.Id
+		objectEntity.OptimisticLockVersion = oldObjectEntity.OptimisticLockVersion
+		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 		if err != nil {
 			return err
 		}
-		if oldObjectEntity != nil {
-			// object already exists
-			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
-			if err != nil {
-				return err
-			}
-			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
-			if err != nil {
-				return err
-			}
-		}
 
+		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+		if err != nil {
+			return err
+		}
+	} else {
 		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 		if err != nil {
 			return err
@@ -506,25 +501,8 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	}
 
 	if oldObjectEntity != nil {
-		// Delete old parts metadata rows (the new part list is supplied in obj.Parts).
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
-		if err != nil {
-			return err
-		}
-
-		// Use a conditional delete (WHERE id=X AND etag=Y) as the CAS step so
-		// that a concurrent append or put that already changed the ETag causes
-		// this transaction to fail rather than silently overwriting.
-		deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, oldObjectEntity.ETag)
-		if err != nil {
-			return err
-		}
-		if !*deleted {
-			return metadatastore.ErrCASFailure
-		}
-
-		// Re-insert to get a fresh row (same approach as PutObject).
-		newEntity := object.Entity{
+		updatedEntity := object.Entity{
+			Id:           oldObjectEntity.Id,
 			BucketName:   bucketName,
 			Key:          obj.Key,
 			ContentType:  oldObjectEntity.ContentType,
@@ -533,7 +511,15 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			Size:         obj.Size,
 			UploadStatus: object.UploadStatusCompleted,
 		}
-		err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
+		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &updatedEntity, oldObjectEntity.OptimisticLockVersion)
+		if err != nil {
+			return err
+		}
+		if !*updated {
+			return metadatastore.ErrCASFailure
+		}
+
+		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return err
 		}
@@ -542,7 +528,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		for _, partStruc := range obj.Parts {
 			partEntity := part.Entity{
 				PartId:            partStruc.Id,
-				ObjectId:          *newEntity.Id,
+				ObjectId:          *updatedEntity.Id,
 				ETag:              partStruc.ETag,
 				ChecksumCRC32:     partStruc.ChecksumCRC32,
 				ChecksumCRC32C:    partStruc.ChecksumCRC32C,
@@ -631,13 +617,22 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	}
 
 	if objectEntity != nil {
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
-		if err != nil {
-			return err
-		}
+		if opts != nil && opts.IfMatchETag != nil {
+			lockedObjectEntity := *objectEntity
+			locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, objectEntity.OptimisticLockVersion)
+			if err != nil {
+				return err
+			}
+			if !*locked {
+				return metadatastore.ErrPreconditionFailed
+			}
 
-		if opts != nil && opts.IfMatchETag != nil && *opts.IfMatchETag != metadatastore.ETagWildcard {
-			deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *objectEntity.Id, *opts.IfMatchETag)
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *lockedObjectEntity.Id)
+			if err != nil {
+				return err
+			}
+
+			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
 			if err != nil {
 				return err
 			}
@@ -645,14 +640,15 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return metadatastore.ErrPreconditionFailed
 			}
 		} else {
-			deleted, err := sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
 			if err != nil {
 				return err
 			}
-			// 0 rows affected means a concurrent writer already deleted the object.
-			// Since there was no client-supplied condition, the desired outcome
-			// (object gone) is already achieved — treat it as success.
-			_ = deleted
+
+			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -853,12 +849,8 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			}
 		}, oldPartEntities)
 
-		// Optimistic locking: when If-Match was supplied with an exact ETag,
-		// use an atomic DELETE WHERE id=$1 AND etag=$2 as the final guard.
-		// A zero rows-affected result means a concurrent writer already changed
-		// the object between our read and this delete, so we abort with 412.
-		if opts != nil && opts.IfMatchETag != nil && *opts.IfMatchETag != metadatastore.ETagWildcard {
-			deleted, err := sms.objectRepository.DeleteObjectByIdAndETag(ctx, tx, *oldObjectEntity.Id, *opts.IfMatchETag)
+		if opts != nil && opts.IfMatchETag != nil {
+			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *oldObjectEntity.Id, oldObjectEntity.OptimisticLockVersion)
 			if err != nil {
 				return nil, err
 			}
@@ -884,26 +876,12 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	objectEntity.ChecksumSHA256 = calculatedChecksums.ChecksumSHA256
 	objectEntity.ChecksumType = ptrutils.ToPtr(checksumType)
 
-	if opts != nil && opts.IfNoneMatchStar {
-		// Optimistic locking: attempt to UPDATE the pending row to COMPLETED.
-		// If a concurrent transaction has already committed a completed object at
-		// this (bucket_name, key) the partial unique index
-		// objects_completed_unique will fire a unique-constraint violation, which
-		// we catch here and convert to ErrPreconditionFailed (412).
-		// This is atomic: the database enforces the constraint at write time
-		// regardless of the isolation level's snapshot visibility.
-		err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
-		if err != nil {
-			if isUniqueConstraintViolation(err) {
-				return nil, metadatastore.ErrPreconditionFailed
-			}
-			return nil, err
+	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+	if err != nil {
+		if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
+			return nil, metadatastore.ErrPreconditionFailed
 		}
-	} else {
-		err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	return &metadatastore.CompleteMultipartUploadResult{

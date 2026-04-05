@@ -12,6 +12,7 @@ import (
 type Repository interface {
 	SaveObject(ctx context.Context, tx *sql.Tx, object *Entity) error
 	InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, object *Entity) (*bool, error)
+	UpdateObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, object *Entity, optimisticLockVersion int64) (*bool, error)
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
@@ -20,26 +21,27 @@ type Repository interface {
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error)
 	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*bool, error)
-	DeleteObjectByIdAndETag(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, etag string) (*bool, error)
+	DeleteObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, optimisticLockVersion int64) (*bool, error)
 }
 
 type Entity struct {
-	Id                *ulid.ULID
-	BucketName        storage.BucketName
-	Key               storage.ObjectKey
-	ContentType       *string
-	ETag              string
-	ChecksumCRC32     *string
-	ChecksumCRC32C    *string
-	ChecksumCRC64NVME *string
-	ChecksumSHA1      *string
-	ChecksumSHA256    *string
-	ChecksumType      *string
-	Size              int64
-	UploadStatus      string
-	UploadId          *storage.UploadId
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	Id                    *ulid.ULID
+	BucketName            storage.BucketName
+	Key                   storage.ObjectKey
+	ContentType           *string
+	ETag                  string
+	ChecksumCRC32         *string
+	ChecksumCRC32C        *string
+	ChecksumCRC64NVME     *string
+	ChecksumSHA1          *string
+	ChecksumSHA256        *string
+	ChecksumType          *string
+	Size                  int64
+	UploadStatus          string
+	UploadId              *storage.UploadId
+	OptimisticLockVersion int64
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 const (
