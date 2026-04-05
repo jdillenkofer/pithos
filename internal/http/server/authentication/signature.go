@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"log/slog"
@@ -79,7 +80,53 @@ func generateCanonicalHttpMethod(r *http.Request) string {
 }
 
 func generateCanonicalURI(r *http.Request) string {
-	return r.URL.EscapedPath()
+	escapedPath := r.URL.EscapedPath()
+	if escapedPath == "" {
+		return "/"
+	}
+
+	canonicalURI := ""
+	for idx := 0; idx < len(escapedPath); idx++ {
+		ch := escapedPath[idx]
+		if ch == '/' {
+			canonicalURI += "/"
+			continue
+		}
+
+		if ch == '%' && idx+2 < len(escapedPath) && isHexChar(escapedPath[idx+1]) && isHexChar(escapedPath[idx+2]) {
+			canonicalURI += "%"
+			canonicalURI += strings.ToUpper(string(escapedPath[idx+1]))
+			canonicalURI += strings.ToUpper(string(escapedPath[idx+2]))
+			idx += 2
+			continue
+		}
+
+		if isUnreservedChar(ch) {
+			canonicalURI += string(ch)
+			continue
+		}
+
+		canonicalURI += fmt.Sprintf("%%%02X", ch)
+	}
+
+	return canonicalURI
+}
+
+func isHexChar(ch byte) bool {
+	return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+}
+
+func isUnreservedChar(ch byte) bool {
+	if ch >= 'A' && ch <= 'Z' {
+		return true
+	}
+	if ch >= 'a' && ch <= 'z' {
+		return true
+	}
+	if ch >= '0' && ch <= '9' {
+		return true
+	}
+	return ch == '-' || ch == '.' || ch == '_' || ch == '~'
 }
 
 func uriEncode(input string) string {

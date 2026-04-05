@@ -257,3 +257,81 @@ func TestGenerateCanonicalQueryStringSortsAfterEncoding(t *testing.T) {
 	queryString := generateCanonicalQueryString(r)
 	assert.Equal(t, "%C3%A4=1&z=1", queryString)
 }
+
+func TestGenerateCanonicalURIUsesAwsStyleEscaping(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodPut, "http://examplebucket.s3.amazonaws.com/test$file.text", nil)
+	assert.NoError(t, err)
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/test%24file.text", canonicalURI)
+}
+
+func TestGenerateCanonicalURIDoesNotNormalizePath(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/my-object//example//photo.user", nil)
+	assert.NoError(t, err)
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/my-object//example//photo.user", canonicalURI)
+}
+
+func TestGenerateCanonicalURIUsesRawPathWhenPresent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com", nil)
+	assert.NoError(t, err)
+	r.URL.Path = "/photos/month/sample.jpg"
+	r.URL.RawPath = "/photos%2Fmonth%2Fsample.jpg"
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/photos%2Fmonth%2Fsample.jpg", canonicalURI)
+}
+
+func TestGenerateCanonicalURIEncodesReservedPathChars(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/photos/month/a b+c*.txt", nil)
+	assert.NoError(t, err)
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/photos/month/a%20b%2Bc%2A.txt", canonicalURI)
+}
+
+func TestGenerateCanonicalURINormalizesPercentEscapesToUppercase(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com", nil)
+	assert.NoError(t, err)
+	r.URL.Path = "/photos/month/sample.jpg"
+	r.URL.RawPath = "/photos%2fmonth%2fsample.jpg"
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/photos%2Fmonth%2Fsample.jpg", canonicalURI)
+}
+
+func TestGenerateCanonicalURIReturnsSlashForEmptyPath(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com", nil)
+	assert.NoError(t, err)
+	r.URL.Path = ""
+	r.URL.RawPath = ""
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/", canonicalURI)
+}
+
+func TestGenerateCanonicalURIEncodesInvalidPercentSequences(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com", nil)
+	assert.NoError(t, err)
+	r.URL.Path = "/photos/%zz/sample"
+	r.URL.RawPath = "/photos/%zz/sample"
+
+	canonicalURI := generateCanonicalURI(r)
+	assert.Equal(t, "/photos/%25zz/sample", canonicalURI)
+}
