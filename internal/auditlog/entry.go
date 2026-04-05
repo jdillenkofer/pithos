@@ -44,7 +44,7 @@ const (
 	PhaseComplete Phase = "COMPLETE"
 )
 
-const CurrentVersion uint16 = 1
+const CurrentVersion uint16 = 2
 
 type EntryType string
 
@@ -58,15 +58,56 @@ const GroundingBlockSize = 1000
 
 type GenesisDetails struct{}
 
-type LogDetails struct {
-	Operation  Operation
-	Phase      Phase
+type AuthType string
+
+const (
+	AuthTypeAnonymous    AuthType = "anonymous"
+	AuthTypeSigV4Header  AuthType = "sigv4-header"
+	AuthTypeSigV4Presign AuthType = "sigv4-presign"
+)
+
+type OutcomeType string
+
+const (
+	OutcomePending OutcomeType = "pending"
+	OutcomeSuccess OutcomeType = "success"
+	OutcomeError   OutcomeType = "error"
+	OutcomeDenied  OutcomeType = "denied"
+)
+
+type ResourceDetails struct {
 	Bucket     string
 	Key        string
 	UploadID   string
 	PartNumber int32
-	Actor      string
+}
+
+type ActorDetails struct {
+	CredentialID string
+	AuthType     AuthType
+}
+
+type RequestDetails struct {
+	RequestID string
+	TraceID   string
+	ClientIP  string
+}
+
+type OutcomeDetails struct {
+	StatusCode int32
+	Outcome    OutcomeType
+	ErrorCode  string
 	Error      string
+	DurationMs int64
+}
+
+type LogDetails struct {
+	Operation Operation
+	Phase     Phase
+	Resource  ResourceDetails
+	Actor     ActorDetails
+	Request   RequestDetails
+	Outcome   OutcomeDetails
 }
 
 type GroundingDetails struct {
@@ -102,12 +143,27 @@ func (e *Entry) CalculateHash() []byte {
 	case *LogDetails:
 		writeString(buf, string(d.Operation))
 		writeString(buf, string(d.Phase))
-		writeString(buf, d.Bucket)
-		writeString(buf, d.Key)
-		writeString(buf, d.UploadID)
-		binary.Write(buf, binary.BigEndian, d.PartNumber)
-		writeString(buf, d.Actor)
-		writeString(buf, d.Error)
+		writeString(buf, d.Resource.Bucket)
+		writeString(buf, d.Resource.Key)
+		writeString(buf, d.Resource.UploadID)
+		binary.Write(buf, binary.BigEndian, d.Resource.PartNumber)
+
+		if e.Version <= 1 {
+			writeString(buf, d.Actor.CredentialID)
+			writeString(buf, d.Outcome.Error)
+			break
+		}
+
+		writeString(buf, d.Actor.CredentialID)
+		writeString(buf, string(d.Actor.AuthType))
+		writeString(buf, d.Request.RequestID)
+		writeString(buf, d.Request.TraceID)
+		writeString(buf, d.Request.ClientIP)
+		binary.Write(buf, binary.BigEndian, d.Outcome.StatusCode)
+		writeString(buf, string(d.Outcome.Outcome))
+		writeString(buf, d.Outcome.ErrorCode)
+		writeString(buf, d.Outcome.Error)
+		binary.Write(buf, binary.BigEndian, d.Outcome.DurationMs)
 	case *GroundingDetails:
 		writeBytes(buf, d.MerkleRootHash)
 		if len(d.SignatureEd25519) != ed25519.SignatureSize {

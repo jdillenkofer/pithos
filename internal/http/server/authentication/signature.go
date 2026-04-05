@@ -43,6 +43,9 @@ const maxMemoryCacheSize = 10 * 1000 * 1000
 var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 
 type AccessKeyIdContextKey struct{}
+type AuthTypeContextKey struct{}
+type RequestIDContextKey struct{}
+type ClientIPContextKey struct{}
 
 func hmacSha256(secret []byte, data []byte) []byte {
 	hmac := hmac.New(sha256.New, secret)
@@ -595,6 +598,19 @@ type Credentials struct {
 
 type IsAuthenticatedContextKey struct{}
 
+func authTypeForRequest(r *http.Request) string {
+	if isAnonymousRequest(r) {
+		return "anonymous"
+	}
+	if r.Header.Get("Authorization") != "" {
+		return "sigv4-header"
+	}
+	if r.URL.Query().Get("X-Amz-Credential") != "" {
+		return "sigv4-presign"
+	}
+	return "anonymous"
+}
+
 func isAnonymousRequest(r *http.Request) bool {
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader != "" {
@@ -615,6 +631,7 @@ func MakeSignatureMiddleware(validCredentials []Credentials, region string, next
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
 			ctx := context.WithValue(r.Context(), IsAuthenticatedContextKey{}, false)
+			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 			return
@@ -624,6 +641,7 @@ func MakeSignatureMiddleware(validCredentials []Credentials, region string, next
 		if isAuthenticated {
 			ctx := context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId)
 			ctx = context.WithValue(ctx, IsAuthenticatedContextKey{}, true)
+			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {

@@ -16,14 +16,16 @@ func TestWriterSink_WriteEntry(t *testing.T) {
 	sink := NewWriterSink(&buf, serializer)
 
 	entry := &auditlog.Entry{
-		Version:   1,
+		Version:   auditlog.CurrentVersion,
 		Timestamp: time.Date(2025, 12, 23, 10, 0, 0, 0, time.UTC),
 		Type:      auditlog.EntryTypeLog,
 		Details: &auditlog.LogDetails{
 			Operation: auditlog.OpPutObject,
 			Phase:     auditlog.PhaseComplete,
-			Bucket:    "test-bucket",
-			Key:       "test-key",
+			Resource: auditlog.ResourceDetails{
+				Bucket: "test-bucket",
+				Key:    "test-key",
+			},
 		},
 	}
 
@@ -35,7 +37,7 @@ func TestWriterSink_WriteEntry(t *testing.T) {
 	if output == "" {
 		t.Error("Output is empty")
 	}
-	
+
 	// Basic check if output contains expected string
 	if !bytes.Contains(buf.Bytes(), []byte("test-bucket")) {
 		t.Errorf("Output does not contain bucket name. Got: %s", output)

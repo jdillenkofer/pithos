@@ -33,11 +33,26 @@ func TestSerializers(t *testing.T) {
 			Timestamp: time.Date(2025, 12, 22, 10, 0, 1, 0, time.UTC),
 			Type:      auditlog.EntryTypeLog,
 			Details: &auditlog.LogDetails{
-				Operation:  auditlog.OpCreateBucket,
-				Phase:      auditlog.PhaseStart,
-				Bucket:     "test-bucket",
-				Key:        "test-key",
-				Actor:      "test-actor",
+				Operation: auditlog.OpCreateBucket,
+				Phase:     auditlog.PhaseStart,
+				Resource: auditlog.ResourceDetails{
+					Bucket: "test-bucket",
+					Key:    "test-key",
+				},
+				Actor: auditlog.ActorDetails{
+					CredentialID: "test-actor",
+					AuthType:     auditlog.AuthTypeSigV4Header,
+				},
+				Request: auditlog.RequestDetails{
+					RequestID: "req-1",
+					TraceID:   "trace-1",
+					ClientIP:  "127.0.0.1",
+				},
+				Outcome: auditlog.OutcomeDetails{
+					StatusCode: 200,
+					Outcome:    auditlog.OutcomeSuccess,
+					DurationMs: 5,
+				},
 			},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
@@ -50,7 +65,7 @@ func TestSerializers(t *testing.T) {
 			Details: &auditlog.GroundingDetails{
 				MerkleRootHash:   make([]byte, sha512.Size),
 				SignatureEd25519: make([]byte, ed25519.SignatureSize),
-				SignatureMlDsa87:   make([]byte, mldsa87.SignatureSize),
+				SignatureMlDsa87: make([]byte, mldsa87.SignatureSize),
 			},
 			PreviousHash:     make([]byte, sha512.Size),
 			Hash:             make([]byte, sha512.Size),
@@ -136,9 +151,18 @@ func BenchmarkSerializers(b *testing.B) {
 			Details: &auditlog.LogDetails{
 				Operation: auditlog.OpPutObject,
 				Phase:     auditlog.PhaseComplete,
-				Bucket:    "benchmark-bucket",
-				Key:       fmt.Sprintf("object-%d", i),
-				Actor:     "admin",
+				Resource: auditlog.ResourceDetails{
+					Bucket: "benchmark-bucket",
+					Key:    fmt.Sprintf("object-%d", i),
+				},
+				Actor: auditlog.ActorDetails{
+					CredentialID: "admin",
+					AuthType:     auditlog.AuthTypeSigV4Header,
+				},
+				Outcome: auditlog.OutcomeDetails{
+					StatusCode: 200,
+					Outcome:    auditlog.OutcomeSuccess,
+				},
 			},
 			PreviousHash: prevHash,
 		}

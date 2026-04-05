@@ -25,21 +25,47 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 	case *auditlog.GenesisDetails:
 		base += " | GENESIS"
 	case *auditlog.LogDetails:
-		base += fmt.Sprintf(" | %s %s Bucket: %s", escape(string(d.Operation)), escape(string(d.Phase)), escape(d.Bucket))
-		if d.Key != "" {
-			base += fmt.Sprintf(" | Key: %s", escape(d.Key))
+		base += fmt.Sprintf(" | Op: %s", escape(string(d.Operation)))
+		base += fmt.Sprintf(" | Phase: %s", escape(string(d.Phase)))
+		base += fmt.Sprintf(" | Bucket: %s", escape(d.Resource.Bucket))
+		if d.Resource.Key != "" {
+			base += fmt.Sprintf(" | Key: %s", escape(d.Resource.Key))
 		}
-		if d.UploadID != "" {
-			base += fmt.Sprintf(" | UploadID: %s", escape(d.UploadID))
+		if d.Resource.UploadID != "" {
+			base += fmt.Sprintf(" | UploadID: %s", escape(d.Resource.UploadID))
 		}
-		if d.PartNumber != 0 {
-			base += fmt.Sprintf(" | Part: %d", d.PartNumber)
+		if d.Resource.PartNumber != 0 {
+			base += fmt.Sprintf(" | Part: %d", d.Resource.PartNumber)
 		}
-		if d.Actor != "" {
-			base += fmt.Sprintf(" | Actor: %s", escape(d.Actor))
+		if d.Actor.CredentialID != "" {
+			base += fmt.Sprintf(" | CredentialID: %s", escape(d.Actor.CredentialID))
 		}
-		if d.Error != "" {
-			base += fmt.Sprintf(" | Error: %s", escape(d.Error))
+		if d.Actor.AuthType != "" {
+			base += fmt.Sprintf(" | AuthType: %s", escape(string(d.Actor.AuthType)))
+		}
+		if d.Request.RequestID != "" {
+			base += fmt.Sprintf(" | RequestID: %s", escape(d.Request.RequestID))
+		}
+		if d.Request.TraceID != "" {
+			base += fmt.Sprintf(" | TraceID: %s", escape(d.Request.TraceID))
+		}
+		if d.Request.ClientIP != "" {
+			base += fmt.Sprintf(" | ClientIP: %s", escape(d.Request.ClientIP))
+		}
+		if d.Outcome.StatusCode != 0 {
+			base += fmt.Sprintf(" | StatusCode: %d", d.Outcome.StatusCode)
+		}
+		if d.Outcome.Outcome != "" {
+			base += fmt.Sprintf(" | Outcome: %s", escape(string(d.Outcome.Outcome)))
+		}
+		if d.Outcome.ErrorCode != "" {
+			base += fmt.Sprintf(" | ErrorCode: %s", escape(d.Outcome.ErrorCode))
+		}
+		if d.Outcome.Error != "" {
+			base += fmt.Sprintf(" | Error: %s", escape(d.Outcome.Error))
+		}
+		if d.Outcome.DurationMs != 0 {
+			base += fmt.Sprintf(" | DurationMs: %d", d.Outcome.DurationMs)
 		}
 	case *auditlog.GroundingDetails:
 		base += fmt.Sprintf(" | MerkleRoot: %x | Ed25519: %x | ML-DSA-87: %x", d.MerkleRootHash, d.SignatureEd25519, d.SignatureMlDsa87)
@@ -90,24 +116,24 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 	}
 
 	parts := strings.Split(line, " | ")
-	
+
 	switch entry.Type {
 	case auditlog.EntryTypeGenesis:
 		entry.Details = &auditlog.GenesisDetails{}
 	case auditlog.EntryTypeLog:
 		dls := &auditlog.LogDetails{}
-		if len(parts) > 1 {
+		if len(parts) > 1 && !strings.Contains(parts[1], ": ") {
 			opPhase := strings.Fields(parts[1])
 			if len(opPhase) >= 2 {
 				dls.Operation = auditlog.Operation(unescape(opPhase[0]))
 				dls.Phase = auditlog.Phase(unescape(opPhase[1]))
 			}
 			if idx := strings.Index(parts[1], "Bucket: "); idx != -1 {
-				dls.Bucket = unescape(strings.TrimSpace(parts[1][idx+8:]))
+				dls.Resource.Bucket = unescape(strings.TrimSpace(parts[1][idx+8:]))
 			}
 		}
-		
-		for _, part := range parts[2:] {
+
+		for _, part := range parts[1:] {
 			kv := strings.SplitN(part, ": ", 2)
 			if len(kv) != 2 {
 				continue
@@ -116,17 +142,53 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 			val := strings.TrimSpace(kv[1])
 
 			switch key {
+			case "Op":
+				dls.Operation = auditlog.Operation(unescape(val))
+			case "Phase":
+				dls.Phase = auditlog.Phase(unescape(val))
+			case "Bucket":
+				dls.Resource.Bucket = unescape(val)
 			case "Key":
-				dls.Key = unescape(val)
+				dls.Resource.Key = unescape(val)
 			case "UploadID":
-				dls.UploadID = unescape(val)
+				dls.Resource.UploadID = unescape(val)
 			case "Part":
 				p, _ := strconv.Atoi(val)
-				dls.PartNumber = int32(p)
-			case "Actor":
-				dls.Actor = unescape(val)
+				dls.Resource.PartNumber = int32(p)
+			case "Actor", "CredentialID":
+				dls.Actor.CredentialID = unescape(val)
+			case "AuthType":
+				dls.Actor.AuthType = auditlog.AuthType(unescape(val))
+			case "RequestID":
+				dls.Request.RequestID = unescape(val)
+			case "TraceID":
+				dls.Request.TraceID = unescape(val)
+			case "ClientIP":
+				dls.Request.ClientIP = unescape(val)
+			case "StatusCode":
+				s, _ := strconv.Atoi(val)
+				dls.Outcome.StatusCode = int32(s)
+			case "Outcome":
+				dls.Outcome.Outcome = auditlog.OutcomeType(unescape(val))
+			case "ErrorCode":
+				dls.Outcome.ErrorCode = unescape(val)
 			case "Error":
-				dls.Error = unescape(val)
+				dls.Outcome.Error = unescape(val)
+			case "DurationMs":
+				duration, _ := strconv.ParseInt(val, 10, 64)
+				dls.Outcome.DurationMs = duration
+			}
+		}
+		if version <= 1 {
+			dls.Actor.AuthType = auditlog.AuthTypeAnonymous
+			if dls.Outcome.Outcome == "" {
+				dls.Outcome.Outcome = auditlog.OutcomeSuccess
+				if dls.Outcome.Error != "" {
+					dls.Outcome.Outcome = auditlog.OutcomeError
+					dls.Outcome.StatusCode = 500
+				} else {
+					dls.Outcome.StatusCode = 200
+				}
 			}
 		}
 		entry.Details = dls
