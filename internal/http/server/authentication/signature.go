@@ -307,7 +307,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		credential = query.Get("X-Amz-Credential")
 		timestamp = query.Get("X-Amz-Date")
 		expires := query.Get("X-Amz-Expires")
-		slog.Debug("X-Amz-Credential: " + credential + " X-Amz-Date: " + timestamp + " X-Amz-Expires: " + expires)
+		slog.Debug("Using presigned auth query parameters")
 		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
 		if err != nil {
 			slog.Debug("Failed to parse X-Amz-Expires: " + err.Error())
@@ -321,7 +321,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		signedHeaders = query.Get("X-Amz-SignedHeaders")
 		signature = query.Get("X-Amz-Signature")
 	} else {
-		slog.Debug("Authorization header: " + authorizationHeader)
+		slog.Debug("Authorization header is present")
 		isPresigned = false
 		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
 		if !found {
@@ -428,8 +428,6 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	isSignatureValid := subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
 		slog.Debug("Signature does not match calculated signature")
-		slog.Debug("Expected signature: " + calculatedSignature)
-		slog.Debug("Received signature: " + signature)
 		return nil, false
 	}
 
@@ -491,8 +489,6 @@ func (r *awsChunkReadCloser) validateSignature() error {
 	isSignatureValid := subtle.ConstantTimeCompare([]byte(r.chunkSignature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
 		slog.Debug("Chunk signature does not match calculated chunk signature")
-		slog.Debug("Expected chunk signature: " + calculatedSignature)
-		slog.Debug("Received chunk signature: " + r.chunkSignature)
 		return ErrChunkSignatureMismatch
 	}
 
@@ -541,17 +537,14 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				checksumHeader = strings.TrimSpace(checksumHeader)
 				trailerSignature = strings.TrimSpace(trailerSignature)
 				trailerSignature = strings.TrimPrefix(trailerSignature, "x-amz-trailer-signature:")
-				slog.Debug("Trailing header checksum: " + checksumHeader)
+				slog.Debug("Validating trailing headers")
 
 				if r.hasTrailingHeaderWithSignature {
-					slog.Debug("Trailing header signature: " + trailerSignature)
 					stringToSign := generateStringToSignForTrailerChunk(r.timestamp, r.scope, r.previousSignature, checksumHeader)
 					calculatedSignature := createSignature(r.signingKey, stringToSign)
 					isSignatureValid := subtle.ConstantTimeCompare([]byte(trailerSignature), []byte(calculatedSignature)) == 1
 					if !isSignatureValid {
 						slog.Debug("Trailing header signature does not match calculated signature")
-						slog.Debug("Expected trailing header signature: " + calculatedSignature)
-						slog.Debug("Received trailing header signature: " + trailerSignature)
 						return 0, ErrChunkSignatureMismatch
 					}
 				}
