@@ -83,6 +83,9 @@ type AppendObjectResult struct {
 
 type CompleteMultipartUploadOptions = metadatastore.CompleteMultipartUploadOptions
 
+const ChecksumTypeFullObject = metadatastore.ChecksumTypeFullObject
+const ChecksumTypeComposite = metadatastore.ChecksumTypeComposite
+
 type DeleteObjectOptions struct {
 	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
 	// value before deleting; otherwise ErrPreconditionFailed is returned.
