@@ -623,23 +623,6 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 			return 1
 		})
 		L.SetField(-2, "remoteIPInCIDR")
-		L.PushGoFunction(func(L *lua.State) int {
-			expectedApiKey, ok := L.ToString(2)
-			if !ok {
-				L.PushBoolean(false)
-				return 1
-			}
-			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, "X-Api-Key")
-			for _, headerValue := range headerValues {
-				if headerValue == expectedApiKey {
-					L.PushBoolean(true)
-					return 1
-				}
-			}
-			L.PushBoolean(false)
-			return 1
-		})
-		L.SetField(-2, "hasXApiKey")
 	}
 	L.Pop(1)
 	L.PushGoFunction(func(L *lua.State) int {
