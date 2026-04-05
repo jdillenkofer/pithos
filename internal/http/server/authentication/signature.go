@@ -96,10 +96,12 @@ func generateCanonicalQueryString(r *http.Request) string {
 		if queryKey == "X-Amz-Signature" {
 			continue
 		}
+		encodedQueryKey := uriEncode(queryKey)
 		for _, queryVal := range queryValues {
+			encodedQueryVal := uriEncode(queryVal)
 			queryStrings = append(queryStrings, pair{
-				key: queryKey,
-				val: queryVal,
+				key: encodedQueryKey,
+				val: encodedQueryVal,
 			})
 		}
 	}
@@ -113,7 +115,7 @@ func generateCanonicalQueryString(r *http.Request) string {
 
 	canonicalQueryString := ""
 	for idx, queryStringPair := range queryStrings {
-		canonicalQueryString += uriEncode(queryStringPair.key) + "=" + uriEncode(queryStringPair.val)
+		canonicalQueryString += queryStringPair.key + "=" + queryStringPair.val
 		if idx < len(queryStrings)-1 {
 			canonicalQueryString += "&"
 		}

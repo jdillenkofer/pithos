@@ -247,3 +247,13 @@ func TestGenerateCanonicalQueryStringUsesAwsUriEncoding(t *testing.T) {
 	queryString := generateCanonicalQueryString(r)
 	assert.Equal(t, "prefix=a%20b%2A~", queryString)
 }
+
+func TestGenerateCanonicalQueryStringSortsAfterEncoding(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/test.txt?z=1&%C3%A4=1", nil)
+	assert.NoError(t, err)
+
+	queryString := generateCanonicalQueryString(r)
+	assert.Equal(t, "%C3%A4=1&z=1", queryString)
+}
