@@ -2314,6 +2314,172 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, body, objectBytes)
 		})
 
+		t.Run("it should reject stale If-Match CompleteMultipartUpload during concurrent completes"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			initialPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("initial-state")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, initialPut.ETag)
+
+			prepareUpload := func(payload []byte) *string {
+				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+				if !assert.Nil(t, createErr) {
+					return nil
+				}
+				if !assert.NotNil(t, createOut.UploadId) {
+					return nil
+				}
+
+				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Key:        key,
+					UploadId:   createOut.UploadId,
+					PartNumber: aws.Int32(1),
+					Body:       bytes.NewReader(payload),
+				})
+				if !assert.Nil(t, uploadErr) {
+					return nil
+				}
+
+				return createOut.UploadId
+			}
+
+			uploadIDs := []*string{
+				prepareUpload([]byte("payload-a")),
+				prepareUpload([]byte("payload-b")),
+			}
+			if !assert.NotNil(t, uploadIDs[0]) || !assert.NotNil(t, uploadIDs[1]) {
+				return
+			}
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+						Bucket:   bucketName,
+						Key:      key,
+						UploadId: uploadIDs[i],
+						IfMatch:  initialPut.ETag,
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent stale If-Match CompleteMultipartUpload may succeed")
+		})
+
+		t.Run("it should allow at most one concurrent create-if-absent CompleteMultipartUpload"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			prepareUpload := func(payload []byte) *string {
+				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+				if !assert.Nil(t, createErr) {
+					return nil
+				}
+				if !assert.NotNil(t, createOut.UploadId) {
+					return nil
+				}
+
+				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Key:        key,
+					UploadId:   createOut.UploadId,
+					PartNumber: aws.Int32(1),
+					Body:       bytes.NewReader(payload),
+				})
+				if !assert.Nil(t, uploadErr) {
+					return nil
+				}
+
+				return createOut.UploadId
+			}
+
+			uploadIDs := []*string{
+				prepareUpload([]byte("payload-1")),
+				prepareUpload([]byte("payload-2")),
+			}
+			if !assert.NotNil(t, uploadIDs[0]) || !assert.NotNil(t, uploadIDs[1]) {
+				return
+			}
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+						Bucket:      bucketName,
+						Key:         key,
+						UploadId:    uploadIDs[i],
+						IfNoneMatch: aws.String("*"),
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent If-None-Match CompleteMultipartUpload may succeed")
+		})
+
 		t.Run("it should hit the upload limit when uploading a part that is too large"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -2892,6 +3058,58 @@ func TestDeleteObject(t *testing.T) {
 			// Verify the object still exists.
 			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
 			assert.Nil(t, err)
+		})
+
+		t.Run("it should reject stale If-Match deletes during concurrent writes"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+						Bucket:  bucketName,
+						Key:     key,
+						IfMatch: putResult.ETag,
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent If-Match delete may succeed")
 		})
 	})
 }
