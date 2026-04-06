@@ -246,15 +246,30 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 	maxKeys := opts.MaxKeys
 
-	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
-	if err != nil {
-		return nil, err
-	}
 	commonPrefixes := []string{}
 	objects := []metadatastore.Object{}
-	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
-	if err != nil {
-		return nil, err
+	var err error
+	isTruncated := false
+	var objectEntities []object.Entity
+	if delimiter == "" {
+		objectEntities, err = sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx, tx, bucketName, prefix, startAfter, maxKeys+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(objectEntities)) > maxKeys {
+			isTruncated = true
+			objectEntities = objectEntities[:maxKeys]
+		}
+	} else {
+		keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
+		if err != nil {
+			return nil, err
+		}
+		isTruncated = int32(*keyCount) > maxKeys
+		objectEntities, err = sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for _, objectEntity := range objectEntities {
@@ -308,7 +323,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	listBucketResult := metadatastore.ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
-		IsTruncated:    int32(*keyCount) > maxKeys,
+		IsTruncated:    isTruncated,
 	}
 	return &listBucketResult, nil
 }
@@ -978,15 +993,29 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		delimiter = *opts.Delimiter
 	}
 
-	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-	if err != nil {
-		return nil, err
-	}
 	commonPrefixes := []string{}
 	uploads := []metadatastore.Upload{}
-	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-	if err != nil {
-		return nil, err
+	isTruncated := false
+	var objectEntities []object.Entity
+	if delimiter == "" {
+		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker, opts.MaxUploads+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(objectEntities)) > opts.MaxUploads {
+			isTruncated = true
+			objectEntities = objectEntities[:opts.MaxUploads]
+		}
+	} else {
+		keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+		if err != nil {
+			return nil, err
+		}
+		isTruncated = int32(*keyCount) > opts.MaxUploads
+		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	nextKeyMarker := ""
@@ -1024,7 +1053,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		MaxUploads:         opts.MaxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
-		IsTruncated:        int32(*keyCount) > opts.MaxUploads,
+		IsTruncated:        isTruncated,
 	}
 	return &listMultipartUploadsResult, nil
 }
