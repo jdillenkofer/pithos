@@ -48,6 +48,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -4034,6 +4035,93 @@ func TestBucketWebsite(t *testing.T) {
 			assert.Equal(t, "default.html", *getResult.IndexDocument.Suffix)
 			assert.NotNil(t, getResult.ErrorDocument)
 			assert.Equal(t, "404.html", *getResult.ErrorDocument.Key)
+		})
+	})
+}
+
+func TestBucketCORS(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+		t.Run("it should put get and delete bucket cors configuration"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			maxAge := int32(600)
+			_, err = s3Client.PutBucketCors(context.Background(), &s3.PutBucketCorsInput{
+				Bucket: bucketName,
+				CORSConfiguration: &types.CORSConfiguration{
+					CORSRules: []types.CORSRule{{
+						AllowedOrigins: []string{"https://app.example.com"},
+						AllowedMethods: []string{"GET", "PUT"},
+						AllowedHeaders: []string{"content-type", "x-amz-*"},
+						ExposeHeaders:  []string{"etag"},
+						MaxAgeSeconds:  &maxAge,
+					}},
+				},
+			})
+			require.NoError(t, err)
+
+			getResult, err := s3Client.GetBucketCors(context.Background(), &s3.GetBucketCorsInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.Len(t, getResult.CORSRules, 1)
+			assert.Equal(t, []string{"https://app.example.com"}, getResult.CORSRules[0].AllowedOrigins)
+			assert.Equal(t, []string{"GET", "PUT"}, getResult.CORSRules[0].AllowedMethods)
+
+			_, err = s3Client.DeleteBucketCors(context.Background(), &s3.DeleteBucketCorsInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.GetBucketCors(context.Background(), &s3.GetBucketCorsInput{Bucket: bucketName})
+			assert.Error(t, err)
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				assert.Equal(t, "NoSuchCORSConfiguration", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should apply cors headers to preflight request"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketCors(context.Background(), &s3.PutBucketCorsInput{
+				Bucket: bucketName,
+				CORSConfiguration: &types.CORSConfiguration{
+					CORSRules: []types.CORSRule{{
+						AllowedOrigins: []string{"https://app.example.com"},
+						AllowedMethods: []string{"PUT"},
+						AllowedHeaders: []string{"content-type"},
+					}},
+				},
+			})
+			require.NoError(t, err)
+
+			addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
+			require.NoError(t, err)
+
+			client := buildHttpClient()
+			url := fmt.Sprintf("http://%s:%d/%s/test-object", testAPIEndpoint, addr.Port, *bucketName)
+			req, err := http.NewRequest(http.MethodOptions, url, nil)
+			require.NoError(t, err)
+			req.Header.Set("Origin", "https://app.example.com")
+			req.Header.Set("Access-Control-Request-Method", "PUT")
+			req.Header.Set("Access-Control-Request-Headers", "content-type")
+
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "https://app.example.com", resp.Header.Get("Access-Control-Allow-Origin"))
+			assert.Equal(t, "PUT", resp.Header.Get("Access-Control-Allow-Methods"))
+			assert.Equal(t, "content-type", resp.Header.Get("Access-Control-Allow-Headers"))
 		})
 	})
 }

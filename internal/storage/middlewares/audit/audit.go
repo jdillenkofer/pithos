@@ -253,6 +253,30 @@ func (m *AuditLogMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Contex
 	return err
 }
 
+func (m *AuditLogMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	start := time.Now()
+	m.log(ctx, auditlog.OpGetBucketCORS, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)
+	config, err := m.next.GetBucketCORSConfiguration(ctx, bucketName)
+	m.log(ctx, auditlog.OpGetBucketCORS, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return config, err
+}
+
+func (m *AuditLogMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	start := time.Now()
+	m.log(ctx, auditlog.OpPutBucketCORS, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)
+	err := m.next.PutBucketCORSConfiguration(ctx, bucketName, config)
+	m.log(ctx, auditlog.OpPutBucketCORS, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return err
+}
+
+func (m *AuditLogMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	start := time.Now()
+	m.log(ctx, auditlog.OpDeleteBucketCORS, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)
+	err := m.next.DeleteBucketCORSConfiguration(ctx, bucketName)
+	m.log(ctx, auditlog.OpDeleteBucketCORS, auditlog.PhaseComplete, bucketName.String(), "", "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	return err
+}
+
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	start := time.Now()
 	m.log(ctx, auditlog.OpListObjects, auditlog.PhaseStart, bucketName.String(), "", "", 0, nil, 0, 0)

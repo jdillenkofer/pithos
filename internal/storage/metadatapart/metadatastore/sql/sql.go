@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -214,6 +215,71 @@ func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Contex
 
 	bucketEntity.WebsiteIndexDocumentSuffix = nil
 	bucketEntity.WebsiteErrorDocumentKey = nil
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) GetBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketCORSConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+	if bucketEntity.CORSConfigurationJSON == nil {
+		return nil, metadatastore.ErrNoSuchCORSConfiguration
+	}
+
+	var config metadatastore.BucketCORSConfiguration
+	err = json.Unmarshal([]byte(*bucketEntity.CORSConfigurationJSON), &config)
+	if err != nil {
+		return nil, err
+	}
+	if config.Rules == nil {
+		config.Rules = []metadatastore.CORSRule{}
+	}
+	return &config, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketCORSConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	jsonString := string(jsonConfig)
+	bucketEntity.CORSConfigurationJSON = &jsonString
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.CORSConfigurationJSON = nil
 
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }

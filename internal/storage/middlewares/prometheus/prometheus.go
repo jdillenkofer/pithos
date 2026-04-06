@@ -320,6 +320,51 @@ func (psm *prometheusStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx con
 	return nil
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketCORSConfiguration")
+	defer span.End()
+
+	config, err := psm.innerStorage.GetBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketCORS"}).Inc()
+		return nil, err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketCORS"}).Inc()
+
+	return config, nil
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketCORSConfiguration")
+	defer span.End()
+
+	err := psm.innerStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketCORS"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketCORS"}).Inc()
+
+	return nil
+}
+
+func (psm *prometheusStorageMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	err := psm.innerStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketCORS"}).Inc()
+		return err
+	}
+
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketCORS"}).Inc()
+
+	return nil
+}
+
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjects")
 	defer span.End()
