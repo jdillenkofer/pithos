@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -539,10 +540,12 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil)
 	if !putMustBeSynchronous {
 		versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
-		if err != nil {
+		if err != nil && !errors.Is(err, storage.ErrNoSuchBucket) {
 			return nil, err
 		}
-		putMustBeSynchronous = versioningConfig.Status != nil && *versioningConfig.Status == storage.BucketVersioningStatusEnabled
+		if err == nil {
+			putMustBeSynchronous = versioningConfig.Status != nil && *versioningConfig.Status == storage.BucketVersioningStatusEnabled
+		}
 	}
 
 	if putMustBeSynchronous {

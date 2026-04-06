@@ -128,6 +128,12 @@ func (rs *s3ClientStorage) GetBucketVersioningConfiguration(ctx context.Context,
 	defer span.End()
 
 	result, err := rs.s3Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(bucketName.String())})
+	var notFoundError *types.NotFound
+	var noSuchBucketError *types.NoSuchBucket
+	var apiErr smithy.APIError
+	if err != nil && (errors.As(err, &notFoundError) || errors.As(err, &noSuchBucketError) || (errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchBucket" || apiErr.ErrorCode() == "NotFound"))) {
+		return nil, storage.ErrNoSuchBucket
+	}
 	if err != nil {
 		return nil, err
 	}
