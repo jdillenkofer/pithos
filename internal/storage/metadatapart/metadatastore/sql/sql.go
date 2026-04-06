@@ -729,12 +729,17 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AppendObject")
 	defer span.End()
 
-	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
-	if !*existsBucket {
+	if bucketEntity == nil {
 		return metadatastore.ErrNoSuchBucket
+	}
+
+	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
+	if versioningEnabled {
+		return sms.PutObject(ctx, tx, bucketName, obj, nil)
 	}
 
 	// Check whether an object already exists at this key.

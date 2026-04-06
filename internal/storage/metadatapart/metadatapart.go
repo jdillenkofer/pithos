@@ -3,6 +3,7 @@ package metadatapart
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"time"
@@ -764,11 +765,22 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		return nil, err
 	}
 
-	// Fetch the existing object (if any).
-	existingObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
-	if err != nil && err != storage.ErrNoSuchKey {
+	versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx, bucketName)
+	if err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+	versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
+
+	// Fetch the existing object (if any).
+	existingObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	var currentDeleteMarkerErr *storage.CurrentDeleteMarkerError
+	if err != nil && !errors.As(err, &currentDeleteMarkerErr) && err != storage.ErrNoSuchKey {
+		tx.Rollback()
+		return nil, err
+	}
+	if currentDeleteMarkerErr != nil {
+		existingObject = nil
 	}
 
 	// Validate WriteOffset condition.
@@ -824,15 +836,53 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	var allParts []metadatastore.Part
 	var totalSize int64
 	if existingObject != nil {
-		allParts = append(allParts, existingObject.Parts...)
 		totalSize = existingObject.Size
 	}
 
 	// S3 enforces a maximum of 10,000 parts per object.
 	const maxAppendParts = 10_000
-	if len(allParts)+1 > maxAppendParts {
+	existingPartCount := 0
+	if existingObject != nil {
+		existingPartCount = len(existingObject.Parts)
+	}
+	if existingPartCount+1 > maxAppendParts {
 		tx.Rollback()
 		return nil, storage.ErrTooManyParts
+	}
+
+	if existingObject != nil {
+		if versioningEnabled {
+			// Versioned append creates a new object version, so existing parts need
+			// fresh IDs instead of being reused in the new version metadata.
+			allParts = make([]metadatastore.Part, 0, len(existingObject.Parts)+1)
+			for _, existingPart := range existingObject.Parts {
+				existingPartReader, partErr := mbs.partStore.GetPart(ctx, tx, existingPart.Id)
+				if partErr != nil {
+					tx.Rollback()
+					return nil, partErr
+				}
+
+				newExistingPartID, partErr := partstore.NewRandomPartId()
+				if partErr != nil {
+					existingPartReader.Close()
+					tx.Rollback()
+					return nil, partErr
+				}
+
+				partErr = mbs.partStore.PutPart(ctx, tx, *newExistingPartID, existingPartReader)
+				existingPartReader.Close()
+				if partErr != nil {
+					tx.Rollback()
+					return nil, partErr
+				}
+
+				clonedPart := existingPart
+				clonedPart.Id = *newExistingPartID
+				allParts = append(allParts, clonedPart)
+			}
+		} else {
+			allParts = append(allParts, existingObject.Parts...)
+		}
 	}
 
 	allParts = append(allParts, newPart)
