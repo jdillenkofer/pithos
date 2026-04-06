@@ -606,8 +606,17 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	if opts != nil && opts.IfNoneMatchStar && objectExists {
 		return metadatastore.ErrPreconditionFailed
 	}
+	if opts != nil && opts.IfNoneMatchStar {
+		latestObjectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+		if err != nil {
+			return err
+		}
+		if latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker {
+			return metadatastore.ErrPreconditionFailed
+		}
+	}
 
-	if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil {
+	if opts != nil && (opts.IfMatchETag != nil || opts.IfNoneMatchStar) && latestObjectEntity != nil {
 		lockedObjectEntity := *latestObjectEntity
 		locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, latestObjectEntity.OptimisticLockVersion)
 		if err != nil {
