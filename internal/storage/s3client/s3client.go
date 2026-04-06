@@ -634,3 +634,93 @@ func (rs *s3ClientStorage) DeleteBucketWebsiteConfiguration(ctx context.Context,
 	}
 	return nil
 }
+
+func (rs *s3ClientStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketCors(ctx, &s3.GetBucketCorsInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchCORSConfiguration" {
+		return nil, storage.ErrNoSuchCORSConfiguration
+	}
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rules := make([]storage.CORSRule, 0, len(result.CORSRules))
+	for _, rule := range result.CORSRules {
+		var maxAge *int
+		if rule.MaxAgeSeconds != nil {
+			maxAgeValue := int(*rule.MaxAgeSeconds)
+			maxAge = &maxAgeValue
+		}
+		rules = append(rules, storage.CORSRule{
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  maxAge,
+		})
+	}
+
+	return &storage.BucketCORSConfiguration{Rules: rules}, nil
+}
+
+func (rs *s3ClientStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	rules := make([]types.CORSRule, 0, len(config.Rules))
+	for _, rule := range config.Rules {
+		var maxAge *int32
+		if rule.MaxAgeSeconds != nil {
+			maxAgeValue := int32(*rule.MaxAgeSeconds)
+			maxAge = &maxAgeValue
+		}
+		rules = append(rules, types.CORSRule{
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  maxAge,
+		})
+	}
+
+	_, err := rs.s3Client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
+		Bucket: aws.String(bucketName.String()),
+		CORSConfiguration: &types.CORSConfiguration{
+			CORSRules: rules,
+		},
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	_, err := rs.s3Client.DeleteBucketCors(ctx, &s3.DeleteBucketCorsInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}

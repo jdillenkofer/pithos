@@ -178,6 +178,7 @@ var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 var ErrPreconditionFailed error = errors.New("PreconditionFailed")
 var ErrNotModified error = errors.New("NotModified")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
+var ErrNoSuchCORSConfiguration error = errors.New("NoSuchCORSConfiguration")
 var ErrTooManyParts error = errors.New("TooManyParts")
 var ErrInvalidWriteOffset error = errors.New("InvalidWriteOffset")
 
@@ -264,10 +265,29 @@ type WebsiteConfiguration struct {
 	ErrorDocumentKey    *string
 }
 
+type CORSRule struct {
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	ExposeHeaders    []string
+	MaxAgeSeconds    *int
+	AllowCredentials bool
+}
+
+type BucketCORSConfiguration struct {
+	Rules []CORSRule
+}
+
 type BucketWebsiteStore interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *WebsiteConfiguration) error
 	DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
+type BucketCORSStore interface {
+	GetBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketCORSConfiguration, error)
+	PutBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketCORSConfiguration) error
+	DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 }
 
 type ObjectStore interface {
@@ -297,6 +317,7 @@ type MetadataStore interface {
 	MaintenanceStore
 	BucketStore
 	BucketWebsiteStore
+	BucketCORSStore
 	ObjectStore
 	MultipartStore
 }

@@ -274,6 +274,28 @@ func (m *AuditLogMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Contex
 	})
 }
 
+func (m *AuditLogMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	var result *storage.BucketCORSConfiguration
+	err := m.run(ctx, auditlog.OpGetBucketCORS, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.GetBucketCORSConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (m *AuditLogMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	return m.run(ctx, auditlog.OpPutBucketCORS, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.PutBucketCORSConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (m *AuditLogMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return m.run(ctx, auditlog.OpDeleteBucketCORS, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
+	})
+}
+
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	var result *storage.ListBucketResult
 	err := m.run(ctx, auditlog.OpListObjects, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {

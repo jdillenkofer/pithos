@@ -347,3 +347,44 @@ func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Conte
 	}
 	return nil
 }
+
+func (rs *replicationStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	return rs.Next.GetBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	err := rs.Next.PutBucketCORSConfiguration(ctx, bucketName, config)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rs *replicationStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	err := rs.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

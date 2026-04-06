@@ -286,6 +286,41 @@ func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Con
 	})
 }
 
+func (mbs *metadataPartStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	var config *storage.BucketCORSConfiguration
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		config, err = mbs.metadataStore.GetBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.PutBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName, config)
+	})
+}
+
+func (mbs *metadataPartStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.DeleteBucketCORSConfiguration(ctx, tx.SqlTx(), bucketName)
+	})
+}
+
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
 		Key:               mObject.Key,
