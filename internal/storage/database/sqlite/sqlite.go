@@ -6,6 +6,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
@@ -19,6 +20,8 @@ import (
 
 //go:embed migrations/*.sql
 var migrationsFilesystem embed.FS
+
+var openDatabaseMu sync.Mutex
 
 // In auto-vacuum full mode freelist pages are moved to the end of the file
 // end the file is truncated
@@ -125,6 +128,9 @@ func (sdb *sqliteDatabase) GetDatabaseType() database.DatabaseType {
 }
 
 func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
+	openDatabaseMu.Lock()
+	defer openDatabaseMu.Unlock()
+
 	storagePath := filepath.Dir(dbPath)
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
