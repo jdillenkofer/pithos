@@ -1166,8 +1166,17 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			}
 		}
 	}
+	if opts != nil && opts.IfNoneMatchStar {
+		latestObjectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+		if err != nil {
+			return nil, err
+		}
+		if latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker {
+			return nil, metadatastore.ErrPreconditionFailed
+		}
+	}
 
-	if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil {
+	if opts != nil && (opts.IfMatchETag != nil || opts.IfNoneMatchStar) && latestObjectEntity != nil {
 		lockedObjectEntity := *latestObjectEntity
 		locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, latestObjectEntity.OptimisticLockVersion)
 		if err != nil {
