@@ -193,7 +193,13 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
-			_, err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
+			deleteOpts := &storage.DeleteObjectOptions{}
+			if entry.VersionID != nil {
+				deleteOpts.VersionID = entry.VersionID
+			} else {
+				deleteOpts = nil
+			}
+			_, err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), deleteOpts)
 			if err != nil {
 				tx.Rollback()
 				os.metrics.errorsCounter.Inc()
@@ -268,11 +274,12 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string, versionID *string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucketName,
 		Key:       key,
+		VersionID: versionID,
 	}
 	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &entry)
 	if err != nil {
@@ -296,7 +303,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "")
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -316,7 +323,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "")
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -518,7 +525,16 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
 
-	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil) {
+	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil)
+	if !putMustBeSynchronous {
+		versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		putMustBeSynchronous = versioningConfig.Status != nil && *versioningConfig.Status == storage.BucketVersioningStatusEnabled
+	}
+
+	if putMustBeSynchronous {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err
@@ -531,7 +547,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 		return nil, err
 	}
 	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-		entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String())
+		entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -607,9 +623,8 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
 
-	// Version-specific / conditional deletes must execute synchronously to
-	// preserve exact semantics because outbox entries currently only persist key.
-	if opts != nil && (opts.VersionID != nil || opts.IfMatchETag != nil) {
+	// ETag-conditional deletes must execute synchronously.
+	if opts != nil && opts.IfMatchETag != nil {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err
@@ -621,7 +636,11 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return nil, err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
+	var versionID *string
+	if opts != nil {
+		versionID = opts.VersionID
+	}
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), versionID)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -630,21 +649,21 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return nil, err
 	}
-	return &storage.DeleteObjectResult{}, nil
+	return &storage.DeleteObjectResult{VersionID: versionID}, nil
 }
 
 func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()
 
-	hasVersionOrCondition := false
+	hasETagCondition := false
 	for _, entry := range entries {
-		if entry.VersionID != nil || entry.IfMatchETag != nil {
-			hasVersionOrCondition = true
+		if entry.IfMatchETag != nil {
+			hasETagCondition = true
 			break
 		}
 	}
-	if hasVersionOrCondition {
+	if hasETagCondition {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err
@@ -658,7 +677,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	}
 
 	for _, entry := range entries {
-		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String())
+		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), entry.VersionID)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -674,7 +693,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 		Entries: make([]storage.DeleteObjectsEntry, len(entries)),
 	}
 	for i, entry := range entries {
-		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true}
+		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, Deleted: true}
 	}
 	return result, nil
 }

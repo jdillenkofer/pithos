@@ -4782,8 +4782,10 @@ func TestBucketVersioning(t *testing.T) {
 			})
 			assert.Nil(t, err)
 
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			putOut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
 			assert.Nil(t, err)
+			assert.NotNil(t, putOut.VersionId)
+			assert.NotEmpty(t, aws.ToString(putOut.VersionId))
 
 			deleteOut, err := s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: bucketName, Key: key})
 			if err != nil {
@@ -4853,10 +4855,15 @@ func TestBucketVersioning(t *testing.T) {
 			})
 			assert.Nil(t, err)
 
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v1"))})
+			putV1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v1"))})
 			assert.Nil(t, err)
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v2"))})
+			assert.NotNil(t, putV1.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV1.VersionId))
+			putV2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v2"))})
 			assert.Nil(t, err)
+			assert.NotNil(t, putV2.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV2.VersionId))
+			assert.NotEqual(t, aws.ToString(putV1.VersionId), aws.ToString(putV2.VersionId))
 
 			page1, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, MaxKeys: aws.Int32(1)})
 			assert.Nil(t, err)
@@ -4885,10 +4892,14 @@ func TestBucketVersioning(t *testing.T) {
 			})
 			assert.Nil(t, err)
 
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("a/one.txt"), Body: bytes.NewReader(body)})
+			putA, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("a/one.txt"), Body: bytes.NewReader(body)})
 			assert.Nil(t, err)
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("b/two.txt"), Body: bytes.NewReader(body)})
+			assert.NotNil(t, putA.VersionId)
+			assert.NotEmpty(t, aws.ToString(putA.VersionId))
+			putB, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("b/two.txt"), Body: bytes.NewReader(body)})
 			assert.Nil(t, err)
+			assert.NotNil(t, putB.VersionId)
+			assert.NotEmpty(t, aws.ToString(putB.VersionId))
 
 			page1, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Delimiter: aws.String("/"), MaxKeys: aws.Int32(1)})
 			assert.Nil(t, err)
