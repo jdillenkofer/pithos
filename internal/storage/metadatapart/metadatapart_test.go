@@ -360,6 +360,41 @@ func TestConditionalDeleteObjects_MixedConditions(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
 
+func TestDeleteObjects_KeyOnlyDeleteReturnsDeleteMarkerVersionID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	deleteResult, err := st.DeleteObjects(ctx, bucket, []storage.DeleteObjectsInputEntry{{Key: key}})
+	require.NoError(t, err)
+	require.Len(t, deleteResult.Entries, 1)
+
+	entry := deleteResult.Entries[0]
+	assert.True(t, entry.Deleted)
+	require.NotNil(t, entry.DeleteMarker)
+	assert.True(t, *entry.DeleteMarker)
+	assert.Nil(t, entry.VersionID)
+	require.NotNil(t, entry.DeleteMarkerVersionID)
+	assert.NotEmpty(t, *entry.DeleteMarkerVersionID)
+
+	_, err = st.HeadObject(ctx, bucket, key, nil)
+	var currentDeleteMarkerErr *storage.CurrentDeleteMarkerError
+	assert.ErrorAs(t, err, &currentDeleteMarkerErr)
+	require.NotNil(t, currentDeleteMarkerErr)
+	assert.Equal(t, *entry.DeleteMarkerVersionID, currentDeleteMarkerErr.VersionID)
+}
+
 func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()

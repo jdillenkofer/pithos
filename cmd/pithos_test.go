@@ -4803,6 +4803,57 @@ func TestDeleteObjects(t *testing.T) {
 			assert.Nil(t, err)
 		})
 
+		t.Run("it should return DeleteMarkerVersionId for key-only deletes on versioned buckets"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket: bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{
+					Status: types.BucketVersioningStatusEnabled,
+				},
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 0)
+			assert.Equal(t, *key, *result.Deleted[0].Key)
+			if assert.NotNil(t, result.Deleted[0].DeleteMarker) {
+				assert.True(t, *result.Deleted[0].DeleteMarker)
+			}
+			assert.Nil(t, result.Deleted[0].VersionId)
+			if assert.NotNil(t, result.Deleted[0].DeleteMarkerVersionId) {
+				assert.NotEmpty(t, *result.Deleted[0].DeleteMarkerVersionId)
+			}
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+			var responseErr *awshttp.ResponseError
+			if assert.True(t, errors.As(err, &responseErr)) {
+				assert.Equal(t, http.StatusNotFound, responseErr.HTTPStatusCode())
+				assert.Equal(t, "true", responseErr.HTTPResponse().Header.Get("x-amz-delete-marker"))
+				assert.Equal(t, aws.ToString(result.Deleted[0].DeleteMarkerVersionId), responseErr.HTTPResponse().Header.Get("x-amz-version-id"))
+			}
+		})
+
 		t.Run("it should handle duplicate keys with different VersionIds"+testSuffix, func(t *testing.T) {
 			t.Parallel()
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)

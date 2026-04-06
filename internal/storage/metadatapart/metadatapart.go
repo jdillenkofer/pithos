@@ -1127,7 +1127,13 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 			return nil, err
 		}
 
-		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, VersionID: metaResult.VersionID, DeleteMarker: &metaResult.IsDeleteMarker, Deleted: true})
+		resultEntry := storage.DeleteObjectsEntry{Key: entry.Key, DeleteMarker: &metaResult.IsDeleteMarker, Deleted: true}
+		if metaResult.IsDeleteMarker && entry.VersionID == nil {
+			resultEntry.DeleteMarkerVersionID = metaResult.VersionID
+		} else {
+			resultEntry.VersionID = metaResult.VersionID
+		}
+		result.Entries = append(result.Entries, resultEntry)
 	}
 
 	err = tx.Commit()
