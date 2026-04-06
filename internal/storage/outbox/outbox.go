@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -29,6 +30,8 @@ type outboxMetrics struct {
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
 }
+
+const maxOutboxReplayMemoryCacheSize = 32 * 1024 * 1024 // 32MB
 
 func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
 	m := &outboxMetrics{
@@ -185,7 +188,15 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			for i, chunk := range chunks {
 				readers[i] = bytes.NewReader(chunk.Content)
 			}
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
+			readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(io.MultiReader(readers...), maxOutboxReplayMemoryCacheSize)
+			if err != nil {
+				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
+				time.Sleep(5 * time.Second)
+				return
+			}
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, readSeekCloser, nil, nil)
+			readSeekCloser.Close()
 			if err != nil {
 				tx.Rollback()
 				os.metrics.errorsCounter.Inc()
