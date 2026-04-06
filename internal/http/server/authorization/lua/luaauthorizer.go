@@ -403,9 +403,9 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 func isReadOnly(operation string) bool {
 	var isReadOnly bool
 	switch operation {
-	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite:
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketCORS:
 		isReadOnly = true
-	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite:
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationPutObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketCORS, authorization.OperationDeleteBucketCORS:
 		isReadOnly = false
 	}
 	return isReadOnly

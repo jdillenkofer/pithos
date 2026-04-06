@@ -45,20 +45,22 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 		tracer:            otel.Tracer("internal/http/server"),
 	}
 	apiMux := http.NewServeMux()
-	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	apiMux.HandleFunc("GET /", server.listBucketsHandler)
 	apiMux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	apiMux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
-	apiMux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteHandler)
-	apiMux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteHandler)
+	apiMux.HandleFunc("GET /{bucket}", server.routeBucketGetHandler)
+	apiMux.HandleFunc("PUT /{bucket}", server.routeBucketPutHandler)
+	apiMux.HandleFunc("DELETE /{bucket}", server.routeBucketDeleteHandler)
+	apiMux.HandleFunc("OPTIONS /{bucket}", server.optionsBucketHandler)
 	apiMux.HandleFunc("POST /{bucket}", server.postBucketHandler)
 	apiMux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	apiMux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	apiMux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
 	apiMux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
+	apiMux.HandleFunc("OPTIONS /{bucket}/{key...}", server.optionsObjectHandler)
 	var apiHandler http.Handler = apiMux
 	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
+	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
 
 	websiteMux := http.NewServeMux()
 	websiteMux.HandleFunc("GET /{bucket}/{key...}", server.serveWebsiteGetObject)
@@ -156,6 +158,7 @@ const maxPartsQuery = "max-parts"
 const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
+const corsQuery = "cors"
 const appendQuery = "append"
 
 const acceptRangesHeader = "Accept-Ranges"
@@ -365,6 +368,20 @@ type WebsiteConfigurationResponse struct {
 	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
 }
 
+type CORSConfigurationRule struct {
+	AllowedOrigins []string `xml:"AllowedOrigin"`
+	AllowedMethods []string `xml:"AllowedMethod"`
+	AllowedHeaders []string `xml:"AllowedHeader,omitempty"`
+	ExposeHeaders  []string `xml:"ExposeHeader,omitempty"`
+	MaxAgeSeconds  *int     `xml:"MaxAgeSeconds,omitempty"`
+}
+
+type CORSConfiguration struct {
+	XMLName xml.Name                `xml:"CORSConfiguration"`
+	Xmlns   string                  `xml:"xmlns,attr,omitempty"`
+	Rules   []CORSConfigurationRule `xml:"CORSRule"`
+}
+
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
@@ -553,6 +570,22 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(statusCode)
+	w.Write(xmlErrorResponse)
+}
+
+func writeNoSuchCORSConfiguration(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:      "NoSuchCORSConfiguration",
+		Message:   "The CORS configuration does not exist",
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(404)
 	w.Write(xmlErrorResponse)
 }
 
@@ -772,8 +805,12 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(corsQuery) {
+		s.getBucketCORSHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
 		return
@@ -1176,8 +1213,12 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
-func (s *Server) createBucketOrPutBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(corsQuery) {
+		s.putBucketCORSHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.putBucketWebsiteHandler(w, r)
 		return
@@ -1211,8 +1252,12 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) deleteBucketOrDeleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(corsQuery) {
+		s.deleteBucketCORSHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.deleteBucketWebsiteHandler(w, r)
 		return
@@ -2181,6 +2226,7 @@ const maxDeleteObjects = 1000
 const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
 const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
 const maxPutBucketWebsiteBodySize int64 = 128 * 1024
+const maxPutBucketCORSBodySize int64 = 128 * 1024
 
 func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -2329,6 +2375,165 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	out, _ := xmlMarshalWithDocType(result)
 	w.Write(out)
+}
+
+func (s *Server) getBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	config, err := s.storage.GetBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchCORSConfiguration {
+			writeNoSuchCORSConfiguration(w, r)
+			return
+		}
+		handleError(err, w, r)
+		return
+	}
+
+	response := CORSConfiguration{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+		Rules: make([]CORSConfigurationRule, 0, len(config.Rules)),
+	}
+	for _, rule := range config.Rules {
+		response.Rules = append(response.Rules, CORSConfigurationRule{
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  rule.MaxAgeSeconds,
+		})
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutBucketCORSBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request CORSConfiguration
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	rules := make([]storage.CORSRule, 0, len(request.Rules))
+	for _, rule := range request.Rules {
+		rules = append(rules, storage.CORSRule{
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  rule.MaxAgeSeconds,
+		})
+	}
+
+	normalizedRules, err := httpmiddleware.NormalizeAndValidateCORSRules(rules)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = s.storage.PutBucketCORSConfiguration(ctx, bucketName, &storage.BucketCORSConfiguration{Rules: normalizedRules})
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) optionsBucketHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func (s *Server) optionsObjectHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func (s *Server) resolveCORSRulesForRequest(r *http.Request) []httpmiddleware.CORSRule {
+	bucket, ok := bucketFromPath(r.URL.Path)
+	if !ok {
+		return nil
+	}
+	bucketName, err := storage.NewBucketName(bucket)
+	if err != nil {
+		return nil
+	}
+	config, err := s.storage.GetBucketCORSConfiguration(r.Context(), bucketName)
+	if err != nil {
+		return nil
+	}
+	return config.Rules
+}
+
+func bucketFromPath(requestPath string) (string, bool) {
+	trimmedPath := strings.TrimPrefix(requestPath, "/")
+	if trimmedPath == "" {
+		return "", false
+	}
+	pathSegments := strings.SplitN(trimmedPath, "/", 2)
+	bucket := strings.TrimSpace(pathSegments[0])
+	if bucket == "" {
+		return "", false
+	}
+	return bucket, true
 }
 
 func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {

@@ -268,6 +268,75 @@ func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Con
 	return nil
 }
 
+func (mbs *metadataPartStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := mbs.metadataStore.GetBucketCORSConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return err
+	}
+
+	err = mbs.metadataStore.PutBucketCORSConfiguration(ctx, tx, bucketName, config)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (mbs *metadataPartStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return err
+	}
+
+	err = mbs.metadataStore.DeleteBucketCORSConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
 		Key:               mObject.Key,

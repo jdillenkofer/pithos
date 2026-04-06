@@ -724,3 +724,39 @@ func (os *outboxStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, b
 
 	return os.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
+
+func (os *outboxStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+}
+
+func (os *outboxStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+}

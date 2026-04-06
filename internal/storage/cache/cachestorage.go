@@ -355,3 +355,24 @@ func (cs *CacheStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bu
 
 	return cs.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
+
+func (cs *CacheStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetBucketCORSConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.GetBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (cs *CacheStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutBucketCORSConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+}
+
+func (cs *CacheStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	return cs.innerStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+}
