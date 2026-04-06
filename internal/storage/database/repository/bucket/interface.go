@@ -20,6 +20,7 @@ type Repository interface {
 type Entity struct {
 	Id                         *ulid.ULID
 	Name                       storage.BucketName
+	VersioningStatus           *string
 	WebsiteIndexDocumentSuffix *string
 	WebsiteErrorDocumentKey    *string
 	CreatedAt                  time.Time

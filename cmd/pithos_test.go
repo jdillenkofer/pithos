@@ -2314,6 +2314,172 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Equal(t, body, objectBytes)
 		})
 
+		t.Run("it should reject stale If-Match CompleteMultipartUpload during concurrent completes"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			initialPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("initial-state")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, initialPut.ETag)
+
+			prepareUpload := func(payload []byte) *string {
+				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+				if !assert.Nil(t, createErr) {
+					return nil
+				}
+				if !assert.NotNil(t, createOut.UploadId) {
+					return nil
+				}
+
+				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Key:        key,
+					UploadId:   createOut.UploadId,
+					PartNumber: aws.Int32(1),
+					Body:       bytes.NewReader(payload),
+				})
+				if !assert.Nil(t, uploadErr) {
+					return nil
+				}
+
+				return createOut.UploadId
+			}
+
+			uploadIDs := []*string{
+				prepareUpload([]byte("payload-a")),
+				prepareUpload([]byte("payload-b")),
+			}
+			if !assert.NotNil(t, uploadIDs[0]) || !assert.NotNil(t, uploadIDs[1]) {
+				return
+			}
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+						Bucket:   bucketName,
+						Key:      key,
+						UploadId: uploadIDs[i],
+						IfMatch:  initialPut.ETag,
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent stale If-Match CompleteMultipartUpload may succeed")
+		})
+
+		t.Run("it should allow at most one concurrent create-if-absent CompleteMultipartUpload"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			prepareUpload := func(payload []byte) *string {
+				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+					Bucket: bucketName,
+					Key:    key,
+				})
+				if !assert.Nil(t, createErr) {
+					return nil
+				}
+				if !assert.NotNil(t, createOut.UploadId) {
+					return nil
+				}
+
+				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Key:        key,
+					UploadId:   createOut.UploadId,
+					PartNumber: aws.Int32(1),
+					Body:       bytes.NewReader(payload),
+				})
+				if !assert.Nil(t, uploadErr) {
+					return nil
+				}
+
+				return createOut.UploadId
+			}
+
+			uploadIDs := []*string{
+				prepareUpload([]byte("payload-1")),
+				prepareUpload([]byte("payload-2")),
+			}
+			if !assert.NotNil(t, uploadIDs[0]) || !assert.NotNil(t, uploadIDs[1]) {
+				return
+			}
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+						Bucket:      bucketName,
+						Key:         key,
+						UploadId:    uploadIDs[i],
+						IfNoneMatch: aws.String("*"),
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent If-None-Match CompleteMultipartUpload may succeed")
+		})
+
 		t.Run("it should hit the upload limit when uploading a part that is too large"+testSuffix, func(t *testing.T) {
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
@@ -2892,6 +3058,58 @@ func TestDeleteObject(t *testing.T) {
 			// Verify the object still exists.
 			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
 			assert.Nil(t, err)
+		})
+
+		t.Run("it should reject stale If-Match deletes during concurrent writes"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			putResult, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("Hello, first object!")),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, putResult.ETag)
+
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			errs := make([]error, 2)
+
+			for i := range 2 {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					<-start
+					_, errs[i] = s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+						Bucket:  bucketName,
+						Key:     key,
+						IfMatch: putResult.ETag,
+					})
+				}(i)
+			}
+
+			close(start)
+			wg.Wait()
+
+			successCount := 0
+			for i := range 2 {
+				if errs[i] == nil {
+					successCount++
+					continue
+				}
+
+				var apiErr smithy.APIError
+				if !errors.As(errs[i], &apiErr) {
+					assert.Fail(t, "Expected smithy.APIError", "err %v", errs[i])
+					continue
+				}
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+
+			assert.LessOrEqual(t, successCount, 1, "at most one concurrent If-Match delete may succeed")
 		})
 	})
 }
@@ -4538,12 +4756,67 @@ func TestDeleteObjects(t *testing.T) {
 			assert.NotNil(t, err)
 		})
 
-		t.Run("it should return an error entry for objects with a VersionId"+testSuffix, func(t *testing.T) {
+		t.Run("it should delete an explicit object VersionId"+testSuffix, func(t *testing.T) {
 			t.Parallel()
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket: bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{
+					Status: types.BucketVersioningStatusEnabled,
+				},
+			})
+			assert.Nil(t, err)
+
+			firstPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, firstPut.VersionId)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("second")),
+			})
+			assert.Nil(t, err)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{
+					Objects: []types.ObjectIdentifier{
+						{Key: key, VersionId: firstPut.VersionId},
+					},
+				},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 0)
+			assert.Equal(t, *key, *result.Deleted[0].Key)
+			assert.NotNil(t, result.Deleted[0].VersionId)
+			assert.Equal(t, *firstPut.VersionId, *result.Deleted[0].VersionId)
+
+			// Latest version must still exist.
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+		})
+
+		t.Run("it should return DeleteMarkerVersionId for key-only deletes on versioned buckets"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket: bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{
+					Status: types.BucketVersioningStatusEnabled,
+				},
+			})
 			assert.Nil(t, err)
 
 			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
@@ -4555,15 +4828,72 @@ func TestDeleteObjects(t *testing.T) {
 				Bucket: bucketName,
 				Delete: &types.Delete{
 					Objects: []types.ObjectIdentifier{
-						{Key: key, VersionId: aws.String("some-version-id")},
+						{Key: key},
 					},
 				},
 			})
 			assert.Nil(t, err)
-			assert.Len(t, result.Deleted, 0)
-			assert.Len(t, result.Errors, 1)
-			assert.Equal(t, *key, *result.Errors[0].Key)
-			assert.Equal(t, "NotImplemented", *result.Errors[0].Code)
+			assert.Len(t, result.Deleted, 1)
+			assert.Len(t, result.Errors, 0)
+			assert.Equal(t, *key, *result.Deleted[0].Key)
+			if assert.NotNil(t, result.Deleted[0].DeleteMarker) {
+				assert.True(t, *result.Deleted[0].DeleteMarker)
+			}
+			assert.Nil(t, result.Deleted[0].VersionId)
+			if assert.NotNil(t, result.Deleted[0].DeleteMarkerVersionId) {
+				assert.NotEmpty(t, *result.Deleted[0].DeleteMarkerVersionId)
+			}
+
+			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.NotNil(t, err)
+			var responseErr *awshttp.ResponseError
+			if assert.True(t, errors.As(err, &responseErr)) {
+				assert.Equal(t, http.StatusNotFound, responseErr.HTTPStatusCode())
+				assert.Equal(t, "true", responseErr.HTTPResponse().Header.Get("x-amz-delete-marker"))
+				assert.Equal(t, aws.ToString(result.Deleted[0].DeleteMarkerVersionId), responseErr.HTTPResponse().Header.Get("x-amz-version-id"))
+			}
+		})
+
+		t.Run("it should handle duplicate keys with different VersionIds"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket: bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{
+					Status: types.BucketVersioningStatusEnabled,
+				},
+			})
+			assert.Nil(t, err)
+
+			put1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v1"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, put1.VersionId)
+
+			put2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v2"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, put2.VersionId)
+
+			result, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
+				Bucket: bucketName,
+				Delete: &types.Delete{Objects: []types.ObjectIdentifier{{Key: key, VersionId: put1.VersionId}, {Key: key, VersionId: put2.VersionId}}},
+			})
+			assert.Nil(t, err)
+			assert.Len(t, result.Errors, 0)
+			assert.Len(t, result.Deleted, 2)
+
+			deletedVersions := map[string]bool{}
+			for _, deleted := range result.Deleted {
+				if deleted.VersionId != nil {
+					deletedVersions[*deleted.VersionId] = true
+				}
+			}
+			assert.True(t, deletedVersions[*put1.VersionId])
+			assert.True(t, deletedVersions[*put2.VersionId])
 		})
 
 		t.Run("it should return 404 when the bucket does not exist"+testSuffix, func(t *testing.T) {
@@ -4697,6 +5027,408 @@ func TestDeleteObjects(t *testing.T) {
 			// Object must still exist.
 			_, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
 			assert.Nil(t, err)
+		})
+	})
+}
+
+func TestBucketVersioning(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+		t.Run("it should keep prior versions and reuse null version after suspend"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err := s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusEnabled, versioningOut.Status)
+
+			putV1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v1"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV1.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV1.VersionId))
+
+			putV2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v2"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV2.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV2.VersionId))
+			assert.NotEqual(t, aws.ToString(putV1.VersionId), aws.ToString(putV2.VersionId))
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusSuspended},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err = s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusSuspended, versioningOut.Status)
+
+			putNull1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v3"))})
+			assert.Nil(t, err)
+			assert.Equal(t, "null", aws.ToString(putNull1.VersionId))
+
+			putNull2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v4"))})
+			assert.Nil(t, err)
+			assert.Equal(t, "null", aws.ToString(putNull2.VersionId))
+
+			versionsOut, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Prefix: key})
+			assert.Nil(t, err)
+
+			versionIDs := map[string]bool{}
+			nullVersionCount := 0
+			nullLatest := false
+			for _, version := range versionsOut.Versions {
+				if aws.ToString(version.Key) != aws.ToString(key) {
+					continue
+				}
+				versionID := aws.ToString(version.VersionId)
+				versionIDs[versionID] = true
+				if versionID == "null" {
+					nullVersionCount++
+					nullLatest = aws.ToBool(version.IsLatest)
+				}
+			}
+
+			assert.True(t, versionIDs[aws.ToString(putV1.VersionId)])
+			assert.True(t, versionIDs[aws.ToString(putV2.VersionId)])
+			assert.True(t, versionIDs["null"])
+			assert.Equal(t, 1, nullVersionCount)
+			assert.True(t, nullLatest)
+		})
+
+		t.Run("it should resume unique version ids after re-enabling versioning"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusSuspended},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err := s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusSuspended, versioningOut.Status)
+
+			putNull1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("sv1"))})
+			assert.Nil(t, err)
+			assert.Equal(t, "null", aws.ToString(putNull1.VersionId))
+
+			putNull2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("sv2"))})
+			assert.Nil(t, err)
+			assert.Equal(t, "null", aws.ToString(putNull2.VersionId))
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err = s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusEnabled, versioningOut.Status)
+
+			putV1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("ev1"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV1.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV1.VersionId))
+			assert.NotEqual(t, "null", aws.ToString(putV1.VersionId))
+
+			putV2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("ev2"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV2.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV2.VersionId))
+			assert.NotEqual(t, "null", aws.ToString(putV2.VersionId))
+			assert.NotEqual(t, aws.ToString(putV1.VersionId), aws.ToString(putV2.VersionId))
+
+			versionsOut, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Prefix: key})
+			assert.Nil(t, err)
+
+			versionIDs := map[string]bool{}
+			latestByID := map[string]bool{}
+			for _, version := range versionsOut.Versions {
+				if aws.ToString(version.Key) != aws.ToString(key) {
+					continue
+				}
+				versionID := aws.ToString(version.VersionId)
+				versionIDs[versionID] = true
+				latestByID[versionID] = aws.ToBool(version.IsLatest)
+			}
+
+			assert.True(t, versionIDs["null"])
+			assert.True(t, versionIDs[aws.ToString(putV1.VersionId)])
+			assert.True(t, versionIDs[aws.ToString(putV2.VersionId)])
+			assert.True(t, latestByID[aws.ToString(putV2.VersionId)])
+		})
+
+		t.Run("it should keep api status and put semantics across enable suspend re-enable transitions"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err := s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusEnabled, versioningOut.Status)
+
+			enabledPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("enabled"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, enabledPut.VersionId)
+			assert.NotEmpty(t, aws.ToString(enabledPut.VersionId))
+			assert.NotEqual(t, "null", aws.ToString(enabledPut.VersionId))
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusSuspended},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err = s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusSuspended, versioningOut.Status)
+
+			suspendedPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("suspended"))})
+			assert.Nil(t, err)
+			assert.Equal(t, "null", aws.ToString(suspendedPut.VersionId))
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			versioningOut, err = s3Client.GetBucketVersioning(context.Background(), &s3.GetBucketVersioningInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Equal(t, types.BucketVersioningStatusEnabled, versioningOut.Status)
+
+			reenabledPut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("reenabled"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, reenabledPut.VersionId)
+			assert.NotEmpty(t, aws.ToString(reenabledPut.VersionId))
+			assert.NotEqual(t, "null", aws.ToString(reenabledPut.VersionId))
+			assert.NotEqual(t, aws.ToString(enabledPut.VersionId), aws.ToString(reenabledPut.VersionId))
+		})
+
+		t.Run("it should return delete-marker semantics for current and explicit versions"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			putOut, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+			assert.NotNil(t, putOut.VersionId)
+			assert.NotEmpty(t, aws.ToString(putOut.VersionId))
+
+			deleteOut, err := s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: bucketName, Key: key})
+			if err != nil {
+				t.Fatalf("DeleteObject failed: %v", err)
+			}
+			markerVersionID := ""
+			if deleteOut != nil && deleteOut.VersionId != nil {
+				markerVersionID = *deleteOut.VersionId
+			}
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			httpClient := buildHttpClient()
+			objectURL := fmt.Sprintf("http://%s:%d/%s/%s", testAPIEndpoint, addr.Port, *bucketName, *key)
+
+			headReq, _ := http.NewRequest(http.MethodHead, objectURL, nil)
+			headResp, err := httpClient.Do(headReq)
+			assert.Nil(t, err)
+			defer headResp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, headResp.StatusCode)
+			assert.Equal(t, "true", headResp.Header.Get("x-amz-delete-marker"))
+			if markerVersionID == "" {
+				markerVersionID = headResp.Header.Get("x-amz-version-id")
+			}
+			if markerVersionID == "" {
+				t.Fatalf("missing delete marker version id in DeleteObject output and HEAD response")
+			}
+			assert.Equal(t, markerVersionID, headResp.Header.Get("x-amz-version-id"))
+
+			getReq, _ := http.NewRequest(http.MethodGet, objectURL, nil)
+			getResp, err := httpClient.Do(getReq)
+			assert.Nil(t, err)
+			defer getResp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, getResp.StatusCode)
+			assert.Equal(t, "true", getResp.Header.Get("x-amz-delete-marker"))
+			assert.Equal(t, markerVersionID, getResp.Header.Get("x-amz-version-id"))
+
+			headVersionReq, _ := http.NewRequest(http.MethodHead, objectURL+"?versionId="+markerVersionID, nil)
+			headVersionResp, err := httpClient.Do(headVersionReq)
+			assert.Nil(t, err)
+			defer headVersionResp.Body.Close()
+			assert.Equal(t, http.StatusMethodNotAllowed, headVersionResp.StatusCode)
+			assert.Equal(t, "true", headVersionResp.Header.Get("x-amz-delete-marker"))
+			assert.Equal(t, markerVersionID, headVersionResp.Header.Get("x-amz-version-id"))
+			assert.NotEmpty(t, headVersionResp.Header.Get("Last-Modified"))
+
+			getVersionReq, _ := http.NewRequest(http.MethodGet, objectURL+"?versionId="+markerVersionID, nil)
+			getVersionResp, err := httpClient.Do(getVersionReq)
+			assert.Nil(t, err)
+			defer getVersionResp.Body.Close()
+			assert.Equal(t, http.StatusMethodNotAllowed, getVersionResp.StatusCode)
+			assert.Equal(t, "true", getVersionResp.Header.Get("x-amz-delete-marker"))
+			assert.Equal(t, markerVersionID, getVersionResp.Header.Get("x-amz-version-id"))
+			assert.NotEmpty(t, getVersionResp.Header.Get("Last-Modified"))
+		})
+
+		t.Run("it should return version id for completed multipart upload in versioned bucket"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			createOut, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			assert.NotNil(t, createOut)
+			assert.NotNil(t, createOut.UploadId)
+
+			_, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Key:        key,
+				UploadId:   createOut.UploadId,
+				PartNumber: aws.Int32(1),
+				Body:       bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			completeOut, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: createOut.UploadId,
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, completeOut)
+			assert.NotNil(t, completeOut.VersionId)
+			assert.NotEmpty(t, aws.ToString(completeOut.VersionId))
+
+			versionsOut, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Prefix: key})
+			assert.Nil(t, err)
+			assert.NotEmpty(t, versionsOut.Versions)
+
+			versionFound := false
+			for _, version := range versionsOut.Versions {
+				if aws.ToString(version.Key) == aws.ToString(key) && aws.ToString(version.VersionId) == aws.ToString(completeOut.VersionId) {
+					versionFound = true
+					assert.True(t, aws.ToBool(version.IsLatest))
+					break
+				}
+			}
+			assert.True(t, versionFound)
+		})
+
+		t.Run("it should paginate ListObjectVersions with key and version markers"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			putV1, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v1"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV1.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV1.VersionId))
+			putV2, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader([]byte("v2"))})
+			assert.Nil(t, err)
+			assert.NotNil(t, putV2.VersionId)
+			assert.NotEmpty(t, aws.ToString(putV2.VersionId))
+			assert.NotEqual(t, aws.ToString(putV1.VersionId), aws.ToString(putV2.VersionId))
+
+			page1, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, MaxKeys: aws.Int32(1)})
+			assert.Nil(t, err)
+			assert.True(t, aws.ToBool(page1.IsTruncated))
+			assert.NotNil(t, page1.NextKeyMarker)
+			assert.NotNil(t, page1.NextVersionIdMarker)
+			assert.Len(t, page1.Versions, 1)
+
+			page2, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, MaxKeys: aws.Int32(1), KeyMarker: page1.NextKeyMarker, VersionIdMarker: page1.NextVersionIdMarker})
+			assert.Nil(t, err)
+			assert.Len(t, page2.Versions, 1)
+			assert.NotEqual(t, aws.ToString(page1.Versions[0].VersionId), aws.ToString(page2.Versions[0].VersionId))
+		})
+
+		t.Run("it should count common prefixes in ListObjectVersions pagination"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			putA, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("a/one.txt"), Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+			assert.NotNil(t, putA.VersionId)
+			assert.NotEmpty(t, aws.ToString(putA.VersionId))
+			putB, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("b/two.txt"), Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+			assert.NotNil(t, putB.VersionId)
+			assert.NotEmpty(t, aws.ToString(putB.VersionId))
+
+			page1, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Delimiter: aws.String("/"), MaxKeys: aws.Int32(1)})
+			assert.Nil(t, err)
+			assert.True(t, aws.ToBool(page1.IsTruncated))
+			assert.Len(t, page1.CommonPrefixes, 1)
+
+			page2, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Delimiter: aws.String("/"), MaxKeys: aws.Int32(1), KeyMarker: page1.NextKeyMarker, VersionIdMarker: page1.NextVersionIdMarker})
+			assert.Nil(t, err)
+			assert.Len(t, page2.CommonPrefixes, 1)
+			assert.NotEqual(t, aws.ToString(page1.CommonPrefixes[0].Prefix), aws.ToString(page2.CommonPrefixes[0].Prefix))
 		})
 	})
 }

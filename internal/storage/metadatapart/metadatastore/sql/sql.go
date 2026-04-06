@@ -218,6 +218,48 @@ func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Contex
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
+func (sms *sqlMetadataStore) GetBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketVersioningConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	if bucketEntity.VersioningStatus == nil {
+		return &metadatastore.BucketVersioningConfiguration{}, nil
+	}
+
+	status := metadatastore.BucketVersioningStatus(*bucketEntity.VersioningStatus)
+	return &metadatastore.BucketVersioningConfiguration{Status: &status}, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketVersioningConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	if config == nil || config.Status == nil {
+		bucketEntity.VersioningStatus = nil
+	} else {
+		status := string(*config.Status)
+		bucketEntity.VersioningStatus = &status
+	}
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
 func determineCommonPrefix(prefix, key, delimiter string) *string {
 	prefixSegments := strings.Split(prefix, delimiter)
 	keySegments := strings.Split(key, delimiter)
@@ -291,6 +333,8 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 				objects = append(objects, metadatastore.Object{
 					Key:               objectEntity.Key,
 					LastModified:      objectEntity.UpdatedAt,
+					VersionID:         objectEntity.VersionID,
+					IsDeleteMarker:    objectEntity.IsDeleteMarker,
 					ETag:              objectEntity.ETag,
 					ChecksumCRC32:     objectEntity.ChecksumCRC32,
 					ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
@@ -326,6 +370,120 @@ func (sms *sqlMetadataStore) ListObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 
 	return sms.listObjects(ctx, tx, bucketName, opts)
+}
+
+func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListObjectVersionsOptions) (*metadatastore.ListObjectVersionsResult, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListObjectVersions")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	prefix := ""
+	if opts.Prefix != nil {
+		prefix = *opts.Prefix
+	}
+	delimiter := ""
+	if opts.Delimiter != nil {
+		delimiter = *opts.Delimiter
+	}
+	keyMarker := ""
+	if opts.KeyMarker != nil {
+		keyMarker = *opts.KeyMarker
+	}
+	versionIDMarker := ""
+	if opts.VersionIDMarker != nil {
+		versionIDMarker = *opts.VersionIDMarker
+	}
+
+	entities, err := sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker)
+	if err != nil {
+		return nil, err
+	}
+
+	maxKeys := opts.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+
+	commonPrefixes := []string{}
+	commonPrefixSet := map[string]struct{}{}
+	versions := []metadatastore.ObjectVersion{}
+	isTruncated := false
+	emittedCount := int32(0)
+	var lastReturnedKey *string
+	var lastReturnedVersionID *string
+	var nextKeyMarker *string
+	var nextVersionIDMarker *string
+
+	for _, entity := range entities {
+		if delimiter != "" {
+			commonPrefix := determineCommonPrefix(prefix, entity.Key.String(), delimiter)
+			if commonPrefix != nil {
+				if _, exists := commonPrefixSet[*commonPrefix]; exists {
+					continue
+				}
+				if emittedCount >= maxKeys {
+					isTruncated = true
+					break
+				}
+				commonPrefixSet[*commonPrefix] = struct{}{}
+				commonPrefixes = append(commonPrefixes, *commonPrefix)
+				emittedCount++
+				k := entity.Key.String()
+				lastReturnedKey = &k
+				lastReturnedVersionID = entity.VersionID
+				continue
+			}
+		}
+
+		if emittedCount >= maxKeys {
+			isTruncated = true
+			break
+		}
+
+		keyWithoutPrefix := strings.TrimPrefix(entity.Key.String(), prefix)
+		if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
+			versionID := ""
+			if entity.VersionID != nil {
+				versionID = *entity.VersionID
+			}
+			versions = append(versions, metadatastore.ObjectVersion{
+				Key:            entity.Key,
+				VersionID:      versionID,
+				IsDeleteMarker: entity.IsDeleteMarker,
+				IsLatest:       entity.IsLatest,
+				LastModified:   entity.UpdatedAt,
+				Size:           entity.Size,
+				ETag:           &entity.ETag,
+			})
+			emittedCount++
+			nextKey := entity.Key.String()
+			lastReturnedKey = &nextKey
+			lastReturnedVersionID = entity.VersionID
+		}
+	}
+
+	if !isTruncated && emittedCount >= maxKeys && int(emittedCount) < len(entities) {
+		isTruncated = true
+	}
+	if isTruncated {
+		nextKeyMarker = lastReturnedKey
+		nextVersionIDMarker = lastReturnedVersionID
+	}
+
+	return &metadatastore.ListObjectVersionsResult{
+		Versions:            versions,
+		CommonPrefixes:      commonPrefixes,
+		IsTruncated:         isTruncated,
+		NextKeyMarker:       nextKeyMarker,
+		NextVersionIDMarker: nextVersionIDMarker,
+	}, nil
 }
 
 func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (*metadatastore.Object, error) {
@@ -368,6 +526,8 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		Key:               key,
 		ContentType:       objectEntity.ContentType,
 		LastModified:      objectEntity.UpdatedAt,
+		VersionID:         objectEntity.VersionID,
+		IsDeleteMarker:    objectEntity.IsDeleteMarker,
 		ETag:              objectEntity.ETag,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,
 		ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
@@ -380,16 +540,92 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	}, nil
 }
 
+func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, versionID string) (*metadatastore.Object, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.HeadObjectVersion")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndVersionID(ctx, tx, bucketName, key, versionID)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	parts := []metadatastore.Part{}
+	if !objectEntity.IsDeleteMarker {
+		partEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+		parts = sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
+			return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size}
+		}, partEntities)
+	}
+
+	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, Parts: parts}, nil
+}
+
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObject")
 	defer span.End()
 
-	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
-	if !*existsBucket {
+	if bucketEntity == nil {
 		return metadatastore.ErrNoSuchBucket
+	}
+
+	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
+
+	latestObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+	if err != nil {
+		return err
+	}
+
+	objectExists := latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker
+	if opts != nil && opts.IfMatchETag != nil {
+		if *opts.IfMatchETag == metadatastore.ETagWildcard {
+			if !objectExists {
+				return metadatastore.ErrPreconditionFailed
+			}
+		} else if !objectExists || latestObjectEntity.ETag != *opts.IfMatchETag {
+			return metadatastore.ErrPreconditionFailed
+		}
+	}
+	if opts != nil && opts.IfNoneMatchStar && objectExists {
+		return metadatastore.ErrPreconditionFailed
+	}
+	if opts != nil && opts.IfNoneMatchStar {
+		latestObjectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
+		if err != nil {
+			return err
+		}
+		if latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker {
+			return metadatastore.ErrPreconditionFailed
+		}
+	}
+
+	if opts != nil && (opts.IfMatchETag != nil || opts.IfNoneMatchStar) && latestObjectEntity != nil {
+		lockedObjectEntity := *latestObjectEntity
+		locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, latestObjectEntity.OptimisticLockVersion)
+		if err != nil {
+			return err
+		}
+		if !*locked {
+			return metadatastore.ErrPreconditionFailed
+		}
+		latestObjectEntity = &lockedObjectEntity
 	}
 
 	objectEntity := object.Entity{
@@ -404,56 +640,64 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		ChecksumSHA256:    obj.ChecksumSHA256,
 		ChecksumType:      obj.ChecksumType,
 		Size:              obj.Size,
+		IsDeleteMarker:    false,
+		IsLatest:          true,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
 
-	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
-	if err != nil {
-		return err
-	}
-
-	if opts != nil && opts.IfMatchETag != nil {
-		if oldObjectEntity == nil || oldObjectEntity.ETag != *opts.IfMatchETag {
-			return metadatastore.ErrPreconditionFailed
+	if versioningEnabled {
+		versionID := metadatastore.NewRandomUploadId().String()
+		objectEntity.VersionID = &versionID
+		if latestObjectEntity != nil {
+			latestObjectEntity.IsLatest = false
+			if err := sms.objectRepository.SaveObject(ctx, tx, latestObjectEntity); err != nil {
+				return err
+			}
 		}
-
-		objectEntity.Id = oldObjectEntity.Id
-		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &objectEntity, oldObjectEntity.OptimisticLockVersion)
-		if err != nil {
-			return err
-		}
-		if !*updated {
-			return metadatastore.ErrPreconditionFailed
-		}
-
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
-		if err != nil {
-			return err
-		}
-	} else if opts != nil && opts.IfNoneMatchStar {
-		inserted, err := sms.objectRepository.InsertObjectIfAbsent(ctx, tx, &objectEntity)
-		if err != nil {
-			return err
-		}
-		if !*inserted {
-			return metadatastore.ErrPreconditionFailed
-		}
-	} else if oldObjectEntity != nil {
-		objectEntity.Id = oldObjectEntity.Id
-		objectEntity.OptimisticLockVersion = oldObjectEntity.OptimisticLockVersion
-		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
-		if err != nil {
-			return err
-		}
-
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
-		if err != nil {
+		if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
+			if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
+				return metadatastore.ErrPreconditionFailed
+			}
 			return err
 		}
 	} else {
-		err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
+		nullVersionEntity, err := sms.objectRepository.FindNullObjectVersionByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 		if err != nil {
 			return err
+		}
+		if opts != nil && opts.IfNoneMatchStar && nullVersionEntity != nil {
+			return metadatastore.ErrPreconditionFailed
+		}
+		nullVersion := "null"
+		objectEntity.VersionID = &nullVersion
+
+		if latestObjectEntity != nil {
+			latestObjectEntity.IsLatest = false
+			if err := sms.objectRepository.SaveObject(ctx, tx, latestObjectEntity); err != nil {
+				return err
+			}
+		}
+
+		if nullVersionEntity != nil {
+			objectEntity.Id = nullVersionEntity.Id
+			objectEntity.OptimisticLockVersion = nullVersionEntity.OptimisticLockVersion
+			if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
+				if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
+					return metadatastore.ErrPreconditionFailed
+				}
+				return err
+			}
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return err
+			}
+		} else {
+			if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
+				if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
+					return metadatastore.ErrPreconditionFailed
+				}
+				return err
+			}
 		}
 	}
 
@@ -479,6 +723,8 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		sequenceNumber += 1
 	}
 
+	obj.VersionID = objectEntity.VersionID
+
 	return nil
 }
 
@@ -486,12 +732,17 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AppendObject")
 	defer span.End()
 
-	existsBucket, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
-	if !*existsBucket {
+	if bucketEntity == nil {
 		return metadatastore.ErrNoSuchBucket
+	}
+
+	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
+	if versioningEnabled {
+		return sms.PutObject(ctx, tx, bucketName, obj, nil)
 	}
 
 	// Check whether an object already exists at this key.
@@ -502,14 +753,17 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 
 	if oldObjectEntity != nil {
 		updatedEntity := object.Entity{
-			Id:           oldObjectEntity.Id,
-			BucketName:   bucketName,
-			Key:          obj.Key,
-			ContentType:  oldObjectEntity.ContentType,
-			ETag:         obj.ETag,
-			ChecksumType: obj.ChecksumType,
-			Size:         obj.Size,
-			UploadStatus: object.UploadStatusCompleted,
+			Id:             oldObjectEntity.Id,
+			BucketName:     bucketName,
+			Key:            obj.Key,
+			ContentType:    oldObjectEntity.ContentType,
+			ETag:           obj.ETag,
+			ChecksumType:   obj.ChecksumType,
+			Size:           obj.Size,
+			VersionID:      oldObjectEntity.VersionID,
+			IsLatest:       true,
+			IsDeleteMarker: false,
+			UploadStatus:   object.UploadStatusCompleted,
 		}
 		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &updatedEntity, oldObjectEntity.OptimisticLockVersion)
 		if err != nil {
@@ -549,13 +803,16 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 
 	// No existing object — create a new one (same semantics as PutObject).
 	newEntity := object.Entity{
-		BucketName:   bucketName,
-		Key:          obj.Key,
-		ContentType:  obj.ContentType,
-		ETag:         obj.ETag,
-		ChecksumType: obj.ChecksumType,
-		Size:         obj.Size,
-		UploadStatus: object.UploadStatusCompleted,
+		BucketName:     bucketName,
+		Key:            obj.Key,
+		ContentType:    obj.ContentType,
+		ETag:           obj.ETag,
+		ChecksumType:   obj.ChecksumType,
+		Size:           obj.Size,
+		VersionID:      ptrutils.ToPtr("null"),
+		IsLatest:       true,
+		IsDeleteMarker: false,
+		UploadStatus:   object.UploadStatusCompleted,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
 	if err != nil {
@@ -585,74 +842,163 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) error {
+func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) (*metadatastore.DeleteObjectResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !*exists {
-		return metadatastore.ErrNoSuchBucket
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	versioningStatus := ""
+	if bucketEntity.VersioningStatus != nil {
+		versioningStatus = *bucketEntity.VersioningStatus
+	}
+
+	currentEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	if opts != nil && opts.VersionID != nil {
+		versionEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndVersionID(ctx, tx, bucketName, key, *opts.VersionID)
+		if err != nil {
+			return nil, err
+		}
+		if versionEntity == nil {
+			return &metadatastore.DeleteObjectResult{VersionID: opts.VersionID}, nil
+		}
+
+		if opts.IfMatchETag != nil {
+			if *opts.IfMatchETag == metadatastore.ETagWildcard {
+				// any existing version matches
+			} else if versionEntity.IsDeleteMarker || versionEntity.ETag != *opts.IfMatchETag {
+				return nil, metadatastore.ErrPreconditionFailed
+			}
+		}
+
+		if !versionEntity.IsDeleteMarker {
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *versionEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *versionEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		if versionEntity.IsLatest {
+			nextLatest, err := sms.objectRepository.FindLatestObjectByBucketNameAndKeyExcludingID(ctx, tx, bucketName, key, *versionEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+			if nextLatest != nil {
+				nextLatest.IsLatest = true
+				if err := sms.objectRepository.SaveObject(ctx, tx, nextLatest); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		return &metadatastore.DeleteObjectResult{VersionID: versionEntity.VersionID, IsDeleteMarker: versionEntity.IsDeleteMarker}, nil
 	}
 
 	if opts != nil && opts.IfMatchETag != nil {
 		if *opts.IfMatchETag == metadatastore.ETagWildcard {
-			// If-Match: * — object must exist (any ETag); 412 if absent.
-			if objectEntity == nil {
-				return metadatastore.ErrPreconditionFailed
+			if currentEntity == nil || currentEntity.IsDeleteMarker {
+				return nil, metadatastore.ErrPreconditionFailed
 			}
 		} else {
-			// Conditional delete: object must exist and ETag must match exactly.
-			if objectEntity == nil || objectEntity.ETag != *opts.IfMatchETag {
-				return metadatastore.ErrPreconditionFailed
+			if currentEntity == nil || currentEntity.IsDeleteMarker || currentEntity.ETag != *opts.IfMatchETag {
+				return nil, metadatastore.ErrPreconditionFailed
 			}
 		}
 	}
 
-	if objectEntity != nil {
-		if opts != nil && opts.IfMatchETag != nil {
-			lockedObjectEntity := *objectEntity
-			locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, objectEntity.OptimisticLockVersion)
+	if versioningStatus == string(metadatastore.BucketVersioningStatusEnabled) || versioningStatus == string(metadatastore.BucketVersioningStatusSuspended) {
+		if versioningStatus == string(metadatastore.BucketVersioningStatusSuspended) {
+			nullVersionEntity, err := sms.objectRepository.FindNullObjectVersionByBucketNameAndKey(ctx, tx, bucketName, key)
 			if err != nil {
-				return err
+				return nil, err
+			}
+			if nullVersionEntity != nil {
+				_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *nullVersionEntity.Id)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		if currentEntity != nil {
+			currentEntity.IsLatest = false
+			if err := sms.objectRepository.SaveObject(ctx, tx, currentEntity); err != nil {
+				return nil, err
+			}
+		}
+		deleteMarkerVersionID := metadatastore.NewRandomUploadId().String()
+		deleteMarker := object.Entity{
+			BucketName:     bucketName,
+			Key:            key,
+			ETag:           "",
+			Size:           0,
+			VersionID:      &deleteMarkerVersionID,
+			IsDeleteMarker: true,
+			IsLatest:       true,
+			UploadStatus:   object.UploadStatusCompleted,
+		}
+		if err := sms.objectRepository.SaveObject(ctx, tx, &deleteMarker); err != nil {
+			return nil, err
+		}
+		return &metadatastore.DeleteObjectResult{VersionID: deleteMarker.VersionID, IsDeleteMarker: true}, nil
+	}
+
+	if currentEntity != nil {
+		if opts != nil && opts.IfMatchETag != nil {
+			lockedObjectEntity := *currentEntity
+			locked, lockErr := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, currentEntity.OptimisticLockVersion)
+			if lockErr != nil {
+				return nil, lockErr
 			}
 			if !*locked {
-				return metadatastore.ErrPreconditionFailed
+				return nil, metadatastore.ErrPreconditionFailed
 			}
 
-			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *lockedObjectEntity.Id)
-			if err != nil {
-				return err
+			if !lockedObjectEntity.IsDeleteMarker {
+				err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *lockedObjectEntity.Id)
+				if err != nil {
+					return nil, err
+				}
 			}
 
-			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
-			if err != nil {
-				return err
+			deleted, deleteErr := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
+			if deleteErr != nil {
+				return nil, deleteErr
 			}
 			if !*deleted {
-				return metadatastore.ErrPreconditionFailed
+				return nil, metadatastore.ErrPreconditionFailed
 			}
 		} else {
-			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
-			if err != nil {
-				return err
+			if !currentEntity.IsDeleteMarker {
+				err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *currentEntity.Id)
+				if err != nil {
+					return nil, err
+				}
 			}
 
-			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *currentEntity.Id)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
-	return nil
+	return &metadatastore.DeleteObjectResult{}, nil
 }
 
 func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
@@ -672,14 +1018,16 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}
 
 	objectEntity := object.Entity{
-		BucketName:   bucketName,
-		Key:          key,
-		ContentType:  contentType,
-		ETag:         "",
-		ChecksumType: checksumType,
-		Size:         -1,
-		UploadId:     ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
-		UploadStatus: object.UploadStatusPending,
+		BucketName:     bucketName,
+		Key:            key,
+		ContentType:    contentType,
+		ETag:           "",
+		ChecksumType:   checksumType,
+		Size:           -1,
+		IsLatest:       false,
+		IsDeleteMarker: false,
+		UploadId:       ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
+		UploadStatus:   object.UploadStatusPending,
 	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
@@ -735,11 +1083,11 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CompleteMultipartUpload")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
@@ -794,79 +1142,118 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 	deletedParts := []metadatastore.Part{}
 
-	// Remove old objects
-	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
+
+	latestObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
+	objectExists := latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker
 
 	// Evaluate conditional headers (AWS S3 compatible behaviour):
 	//   If-Match:      the current object's ETag must match the supplied value.
 	//   If-None-Match: "*" means the operation must fail when any object exists.
 	if opts != nil {
 		if opts.IfMatchETag != nil {
-			// If-Match: * — any existing object satisfies the condition; fail when absent.
+			// If-Match: * — any existing non-delete-marker object satisfies the condition; fail when absent.
 			// If-Match: <etag> — existing ETag must match exactly; fail otherwise.
 			if *opts.IfMatchETag == metadatastore.ETagWildcard {
-				if oldObjectEntity == nil {
+				if !objectExists {
 					return nil, metadatastore.ErrPreconditionFailed
 				}
 			} else {
-				if oldObjectEntity == nil || oldObjectEntity.ETag != *opts.IfMatchETag {
+				if !objectExists || latestObjectEntity.ETag != *opts.IfMatchETag {
 					return nil, metadatastore.ErrPreconditionFailed
 				}
 			}
 		}
 		if opts.IfNoneMatchStar {
-			// If-None-Match: * — fail when any object currently exists at the key.
-			if oldObjectEntity != nil {
+			// If-None-Match: * — fail when any existing non-delete-marker object currently exists at the key.
+			if objectExists {
 				return nil, metadatastore.ErrPreconditionFailed
 			}
 		}
 	}
-
-	if oldObjectEntity != nil {
-		oldPartEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *oldObjectEntity.Id)
+	if opts != nil && opts.IfNoneMatchStar {
+		latestObjectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 		if err != nil {
 			return nil, err
 		}
+		if latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker {
+			return nil, metadatastore.ErrPreconditionFailed
+		}
+	}
 
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
+	if opts != nil && (opts.IfMatchETag != nil || opts.IfNoneMatchStar) && latestObjectEntity != nil {
+		lockedObjectEntity := *latestObjectEntity
+		locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, latestObjectEntity.OptimisticLockVersion)
 		if err != nil {
 			return nil, err
 		}
+		if !*locked {
+			return nil, metadatastore.ErrPreconditionFailed
+		}
+		latestObjectEntity = &lockedObjectEntity
+	}
 
-		deletedParts = sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
-			return metadatastore.Part{
-				Id:                partEntity.PartId,
-				ETag:              partEntity.ETag,
-				ChecksumCRC32:     partEntity.ChecksumCRC32,
-				ChecksumCRC32C:    partEntity.ChecksumCRC32C,
-				ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME,
-				ChecksumSHA1:      partEntity.ChecksumSHA1,
-				ChecksumSHA256:    partEntity.ChecksumSHA256,
-				Size:              partEntity.Size,
-			}
-		}, oldPartEntities)
-
-		if opts != nil && opts.IfMatchETag != nil {
-			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *oldObjectEntity.Id, oldObjectEntity.OptimisticLockVersion)
+	if versioningEnabled {
+		newVersionID := metadatastore.NewRandomUploadId().String()
+		objectEntity.VersionID = &newVersionID
+	} else {
+		nullVersionEntity, err := sms.objectRepository.FindNullObjectVersionByBucketNameAndKey(ctx, tx, bucketName, key)
+		if err != nil {
+			return nil, err
+		}
+		if opts != nil && opts.IfNoneMatchStar && nullVersionEntity != nil {
+			return nil, metadatastore.ErrPreconditionFailed
+		}
+		if nullVersionEntity != nil {
+			oldPartEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *nullVersionEntity.Id)
 			if err != nil {
 				return nil, err
 			}
-			if !*deleted {
-				return nil, metadatastore.ErrPreconditionFailed
-			}
-		} else {
-			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *oldObjectEntity.Id)
+
+			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *nullVersionEntity.Id)
 			if err != nil {
 				return nil, err
 			}
+
+			deletedParts = append(deletedParts, sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
+				return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size}
+			}, oldPartEntities)...)
+
+			if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil && latestObjectEntity.Id != nil && nullVersionEntity.Id != nil && *latestObjectEntity.Id == *nullVersionEntity.Id {
+				deleted, deleteErr := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *nullVersionEntity.Id, latestObjectEntity.OptimisticLockVersion)
+				if deleteErr != nil {
+					return nil, deleteErr
+				}
+				if !*deleted {
+					return nil, metadatastore.ErrPreconditionFailed
+				}
+			} else {
+				_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *nullVersionEntity.Id)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		nullVersion := "null"
+		objectEntity.VersionID = &nullVersion
+	}
+
+	if latestObjectEntity != nil {
+		latestObjectEntity.IsLatest = false
+		err = sms.objectRepository.SaveObject(ctx, tx, latestObjectEntity)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	objectEntity.UploadStatus = object.UploadStatusCompleted
 	objectEntity.UploadId = nil
+	objectEntity.IsDeleteMarker = false
+	objectEntity.IsLatest = true
 	objectEntity.Size = totalSize
 	objectEntity.ETag = *calculatedChecksums.ETag
 	objectEntity.ChecksumCRC32 = calculatedChecksums.ChecksumCRC32
@@ -887,6 +1274,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	return &metadatastore.CompleteMultipartUploadResult{
 		DeletedParts:      deletedParts,
 		ETag:              objectEntity.ETag,
+		VersionID:         objectEntity.VersionID,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,
 		ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
 		ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,

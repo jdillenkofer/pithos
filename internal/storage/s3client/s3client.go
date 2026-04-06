@@ -123,6 +123,39 @@ func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucketName storage.Bu
 	}, nil
 }
 
+func (rs *s3ClientStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(bucketName.String())})
+	var notFoundError *types.NotFound
+	var noSuchBucketError *types.NoSuchBucket
+	var apiErr smithy.APIError
+	if err != nil && (errors.As(err, &notFoundError) || errors.As(err, &noSuchBucketError) || (errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchBucket" || apiErr.ErrorCode() == "NotFound"))) {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+	if result.Status == "" {
+		return &storage.BucketVersioningConfiguration{}, nil
+	}
+	status := storage.BucketVersioningStatus(result.Status)
+	return &storage.BucketVersioningConfiguration{Status: &status}, nil
+}
+
+func (rs *s3ClientStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	status := types.BucketVersioningStatusSuspended
+	if config != nil && config.Status != nil && *config.Status == storage.BucketVersioningStatusEnabled {
+		status = types.BucketVersioningStatusEnabled
+	}
+	_, err := rs.s3Client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{Bucket: aws.String(bucketName.String()), VersioningConfiguration: &types.VersioningConfiguration{Status: status}})
+	return err
+}
+
 func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListObjects")
 	defer span.End()
@@ -160,6 +193,39 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 	}, nil
 }
 
+func (rs *s3ClientStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListObjectVersions")
+	defer span.End()
+
+	result, err := rs.s3Client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
+		Bucket:          aws.String(bucketName.String()),
+		Prefix:          opts.Prefix,
+		Delimiter:       opts.Delimiter,
+		KeyMarker:       opts.KeyMarker,
+		VersionIdMarker: opts.VersionIDMarker,
+		MaxKeys:         aws.Int32(opts.MaxKeys),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	versions := []storage.ObjectVersion{}
+	for _, version := range result.Versions {
+		if version.Key == nil || version.VersionId == nil || version.LastModified == nil {
+			continue
+		}
+		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*version.Key), VersionID: *version.VersionId, IsDeleteMarker: false, IsLatest: aws.ToBool(version.IsLatest), LastModified: *version.LastModified, Size: aws.ToInt64(version.Size), ETag: version.ETag})
+	}
+	for _, marker := range result.DeleteMarkers {
+		if marker.Key == nil || marker.VersionId == nil || marker.LastModified == nil {
+			continue
+		}
+		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*marker.Key), VersionID: *marker.VersionId, IsDeleteMarker: true, IsLatest: aws.ToBool(marker.IsLatest), LastModified: *marker.LastModified})
+	}
+
+	return &storage.ListObjectVersionsResult{Versions: versions, IsTruncated: aws.ToBool(result.IsTruncated), NextKeyMarker: result.NextKeyMarker, NextVersionIDMarker: result.NextVersionIdMarker}, nil
+}
+
 func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.HeadObject")
 	defer span.End()
@@ -167,6 +233,12 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	headObjectResult, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
+		VersionId: func() *string {
+			if opts != nil {
+				return opts.VersionID
+			}
+			return nil
+		}(),
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -178,6 +250,8 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	return &storage.Object{
 		Key:               key,
 		LastModified:      *headObjectResult.LastModified,
+		VersionID:         headObjectResult.VersionId,
+		IsDeleteMarker:    aws.ToBool(headObjectResult.DeleteMarker),
 		ETag:              *headObjectResult.ETag,
 		ChecksumCRC32:     headObjectResult.ChecksumCRC32,
 		ChecksumCRC32C:    headObjectResult.ChecksumCRC32C,
@@ -225,6 +299,12 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			Bucket: aws.String(bucketName.String()),
 			Key:    aws.String(key.String()),
 			Range:  awsRange,
+			VersionId: func() *string {
+				if opts != nil {
+					return opts.VersionID
+				}
+				return nil
+			}(),
 		})
 		var notFoundError *types.NotFound
 		if err != nil && errors.As(err, &notFoundError) {
@@ -296,7 +376,7 @@ func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName,
 	return nil, storage.ErrNotImplemented
 }
 
-func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObject")
 	defer span.End()
 
@@ -307,15 +387,18 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 	if opts != nil && opts.IfMatchETag != nil {
 		input.IfMatch = opts.IfMatchETag
 	}
-	_, err := rs.s3Client.DeleteObject(ctx, input)
+	if opts != nil && opts.VersionID != nil {
+		input.VersionId = opts.VersionID
+	}
+	result, err := rs.s3Client.DeleteObject(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
-		return storage.ErrNoSuchBucket
+		return nil, storage.ErrNoSuchBucket
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &storage.DeleteObjectResult{VersionID: result.VersionId, IsDeleteMarker: aws.ToBool(result.DeleteMarker)}, nil
 }
 
 func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
@@ -325,7 +408,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 	identifiers := make([]types.ObjectIdentifier, len(entries))
 	for i, entry := range entries {
 		k := entry.Key.String()
-		identifiers[i] = types.ObjectIdentifier{Key: &k}
+		identifiers[i] = types.ObjectIdentifier{Key: &k, VersionId: entry.VersionID}
 	}
 
 	deleteResult, err := rs.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
@@ -353,7 +436,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 
 	for _, deleted := range deleteResult.Deleted {
 		key := storage.MustNewObjectKey(*deleted.Key)
-		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: true})
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, VersionID: deleted.VersionId, DeleteMarkerVersionID: deleted.DeleteMarkerVersionId, DeleteMarker: deleted.DeleteMarker, Deleted: true})
 	}
 	for _, errEntry := range deleteResult.Errors {
 		key := storage.MustNewObjectKey(*errEntry.Key)
@@ -365,7 +448,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 		if errEntry.Message != nil {
 			msg = *errEntry.Message
 		}
-		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, Deleted: false, ErrCode: code, ErrMsg: msg})
+		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: key, VersionID: errEntry.VersionId, Deleted: false, ErrCode: code, ErrMsg: msg})
 	}
 
 	return result, nil
@@ -445,6 +528,7 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 	}
 	return &storage.CompleteMultipartUploadResult{
 		Location:          *completeMultipartUploadResult.Location,
+		VersionID:         completeMultipartUploadResult.VersionId,
 		ETag:              *completeMultipartUploadResult.ETag,
 		ChecksumCRC32:     completeMultipartUploadResult.ChecksumCRC32,
 		ChecksumCRC32C:    completeMultipartUploadResult.ChecksumCRC32C,

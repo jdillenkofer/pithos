@@ -14,10 +14,10 @@ type pgxRepository struct {
 }
 
 const (
-	findAllBucketsStmt     = "SELECT id, name, website_index_document_suffix, website_error_document_key, created_at, updated_at FROM buckets"
-	findBucketByNameStmt   = "SELECT id, name, website_index_document_suffix, website_error_document_key, created_at, updated_at FROM buckets WHERE name = $1"
-	insertBucketStmt       = "INSERT INTO buckets (id, name, website_index_document_suffix, website_error_document_key, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
-	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, website_index_document_suffix = $2, website_error_document_key = $3, updated_at = $4 WHERE id = $5"
+	findAllBucketsStmt     = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, created_at, updated_at FROM buckets"
+	findBucketByNameStmt   = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, created_at, updated_at FROM buckets WHERE name = $1"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, versioning_status, website_index_document_suffix, website_error_document_key, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, versioning_status = $2, website_index_document_suffix = $3, website_error_document_key = $4, updated_at = $5 WHERE id = $6"
 	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = $1"
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = $1"
 )
@@ -29,11 +29,12 @@ func NewRepository() (bucket.Repository, error) {
 func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	var id string
 	var name string
+	var versioningStatus *string
 	var websiteIndexDocumentSuffix *string
 	var websiteErrorDocumentKey *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := bucketRows.Scan(&id, &name, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &createdAt, &updatedAt)
+	err := bucketRows.Scan(&id, &name, &versioningStatus, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +42,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	bucketEntity := bucket.Entity{
 		Id:                         &ulidId,
 		Name:                       storage.MustNewBucketName(name),
+		VersioningStatus:           versioningStatus,
 		WebsiteIndexDocumentSuffix: websiteIndexDocumentSuffix,
 		WebsiteErrorDocumentKey:    websiteErrorDocumentKey,
 		CreatedAt:                  createdAt,
@@ -88,11 +90,11 @@ func (br *pgxRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *buc
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 

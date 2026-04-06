@@ -111,7 +111,7 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 				report.FailedObjects++
 				if v.deleteCorrupted {
 					if v.confirmDeletion(result) {
-						err := v.storage.DeleteObject(ctx, bucket.Name, object.Key, nil)
+						_, err := v.storage.DeleteObject(ctx, bucket.Name, object.Key, nil)
 						if err != nil {
 							result.ActionTaken = fmt.Sprintf("Failed to delete: %v", err)
 						} else {

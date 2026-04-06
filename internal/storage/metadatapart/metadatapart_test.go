@@ -194,6 +194,45 @@ func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	return mps, cleanup
 }
 
+func readObjectContent(t *testing.T, st *metadataPartStorage, bucket storage.BucketName, key storage.ObjectKey, versionID *string) string {
+	t.Helper()
+
+	var opts *storage.GetObjectOptions
+	if versionID != nil {
+		opts = &storage.GetObjectOptions{VersionID: versionID}
+	}
+
+	_, readers, err := st.GetObject(context.Background(), bucket, key, nil, opts)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	defer readers[0].Close()
+
+	content, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	return string(content)
+}
+
+func versionIDsForKey(t *testing.T, st *metadataPartStorage, bucket storage.BucketName, key storage.ObjectKey) (latestVersionID string, olderVersionIDs []string) {
+	t.Helper()
+
+	versions, err := st.ListObjectVersions(context.Background(), bucket, storage.ListObjectVersionsOptions{MaxKeys: 1000})
+	require.NoError(t, err)
+
+	for _, version := range versions.Versions {
+		if !version.Key.Equals(key) || version.IsDeleteMarker {
+			continue
+		}
+		if version.IsLatest {
+			latestVersionID = version.VersionID
+			continue
+		}
+		olderVersionIDs = append(olderVersionIDs, version.VersionID)
+	}
+
+	require.NotEmpty(t, latestVersionID)
+	return latestVersionID, olderVersionIDs
+}
+
 func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -209,7 +248,7 @@ func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
 	etag := *result.ETag
 
 	// Delete with correct ETag — should succeed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(etag)})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(etag)})
 	require.NoError(t, err)
 
 	// Object should be gone.
@@ -231,7 +270,7 @@ func TestConditionalDeleteObject_WrongETag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete with wrong ETag — should return PreconditionFailed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("wrong-etag")})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("wrong-etag")})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 
 	// Object should still exist.
@@ -250,7 +289,7 @@ func TestConditionalDeleteObject_NoObjectWithCondition(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete non-existent object with ETag condition — should return PreconditionFailed.
-	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("any-etag")})
+	_, err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr("any-etag")})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 }
 
@@ -265,7 +304,7 @@ func TestConditionalDeleteObject_NoObjectNoCondition(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete non-existent object without condition — should silently succeed (S3 semantics).
-	err := st.DeleteObject(ctx, bucket, key, nil)
+	_, err := st.DeleteObject(ctx, bucket, key, nil)
 	require.NoError(t, err)
 }
 
@@ -321,6 +360,41 @@ func TestConditionalDeleteObjects_MixedConditions(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
 
+func TestDeleteObjects_KeyOnlyDeleteReturnsDeleteMarkerVersionID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	deleteResult, err := st.DeleteObjects(ctx, bucket, []storage.DeleteObjectsInputEntry{{Key: key}})
+	require.NoError(t, err)
+	require.Len(t, deleteResult.Entries, 1)
+
+	entry := deleteResult.Entries[0]
+	assert.True(t, entry.Deleted)
+	require.NotNil(t, entry.DeleteMarker)
+	assert.True(t, *entry.DeleteMarker)
+	assert.Nil(t, entry.VersionID)
+	require.NotNil(t, entry.DeleteMarkerVersionID)
+	assert.NotEmpty(t, *entry.DeleteMarkerVersionID)
+
+	_, err = st.HeadObject(ctx, bucket, key, nil)
+	var currentDeleteMarkerErr *storage.CurrentDeleteMarkerError
+	assert.ErrorAs(t, err, &currentDeleteMarkerErr)
+	require.NotNil(t, currentDeleteMarkerErr)
+	assert.Equal(t, *entry.DeleteMarkerVersionID, currentDeleteMarkerErr.VersionID)
+}
+
 func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -335,7 +409,7 @@ func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete with If-Match: * on an existing object — should succeed.
-	err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
 	require.NoError(t, err)
 
 	// Object should be gone.
@@ -354,7 +428,7 @@ func TestConditionalDeleteObject_WildcardMatchMissingObject(t *testing.T) {
 	require.NoError(t, st.CreateBucket(ctx, bucket))
 
 	// Delete with If-Match: * on a non-existent object — should return PreconditionFailed.
-	err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
+	_, err := st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{IfMatchETag: ptrutils.ToPtr(storage.ETagWildcard)})
 	assert.ErrorIs(t, err, storage.ErrPreconditionFailed)
 }
 
@@ -503,6 +577,154 @@ func TestAppendObject_WriteOffsetNonZeroOnMissing(t *testing.T) {
 	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil,
 		&storage.AppendObjectOptions{WriteOffset: &nonZero})
 	assert.ErrorIs(t, err, storage.ErrInvalidWriteOffset)
+}
+
+func TestAppendObject_CreatesNewVersionWhenVersioningEnabled(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(11), result.Size)
+
+	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
+	require.Len(t, olderVersionIDs, 1)
+	assert.NotEqual(t, "null", latestVersionID)
+	assert.NotEqual(t, "null", olderVersionIDs[0])
+	assert.NotEqual(t, latestVersionID, olderVersionIDs[0])
+
+	assert.Equal(t, "hello world", readObjectContent(t, st, bucket, key, nil))
+	assert.Equal(t, "hello world", readObjectContent(t, st, bucket, key, &latestVersionID))
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, &olderVersionIDs[0]))
+}
+
+func TestAppendObject_CreatesNewVersionAfterDeleteMarkerWhenVersioningEnabled(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("world")), nil, nil)
+	require.NoError(t, err)
+
+	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
+	require.Len(t, olderVersionIDs, 1)
+	assert.NotEqual(t, latestVersionID, olderVersionIDs[0])
+	assert.Equal(t, "world", readObjectContent(t, st, bucket, key, nil))
+	assert.Equal(t, "world", readObjectContent(t, st, bucket, key, &latestVersionID))
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, &olderVersionIDs[0]))
+}
+
+func TestAppendObject_DeleteObjectVersionPreservesOlderVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+
+	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
+	require.Len(t, olderVersionIDs, 1)
+
+	_, err = st.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: &latestVersionID})
+	require.NoError(t, err)
+
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, nil))
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, &olderVersionIDs[0]))
+
+	_, err = st.HeadObject(ctx, bucket, key, &storage.HeadObjectOptions{VersionID: &latestVersionID})
+	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+func TestAppendObject_DeleteObjectsVersionPreservesOlderVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+
+	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
+	require.Len(t, olderVersionIDs, 1)
+
+	deleteResult, err := st.DeleteObjects(ctx, bucket, []storage.DeleteObjectsInputEntry{{Key: key, VersionID: &latestVersionID}})
+	require.NoError(t, err)
+	require.Len(t, deleteResult.Entries, 1)
+	assert.True(t, deleteResult.Entries[0].Deleted)
+
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, nil))
+	assert.Equal(t, "hello", readObjectContent(t, st, bucket, key, &olderVersionIDs[0]))
+
+	_, err = st.HeadObject(ctx, bucket, key, &storage.HeadObjectOptions{VersionID: &latestVersionID})
+	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+func TestAppendObject_SuspendedBucketReusesNullVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusSuspended
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(11), result.Size)
+
+	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
+	assert.Equal(t, "null", latestVersionID)
+	assert.Empty(t, olderVersionIDs)
+	assert.Equal(t, "hello world", readObjectContent(t, st, bucket, key, nil))
 }
 
 func TestAppendObject_NoSuchBucket(t *testing.T) {

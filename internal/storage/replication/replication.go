@@ -124,11 +124,37 @@ func (rs *replicationStorage) HeadBucket(ctx context.Context, bucketName storage
 	return rs.primaryStorage.HeadBucket(ctx, bucketName)
 }
 
+func (rs *replicationStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+	return rs.primaryStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+	if err := rs.primaryStorage.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		if err := secondaryStorage.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (rs *replicationStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListObjects")
 	defer span.End()
 
 	return rs.primaryStorage.ListObjects(ctx, bucketName, opts)
+}
+
+func (rs *replicationStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.ListObjectVersions")
+	defer span.End()
+	return rs.primaryStorage.ListObjectVersions(ctx, bucketName, opts)
 }
 
 func (rs *replicationStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -207,21 +233,21 @@ func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName stora
 	return appendObjectResult, nil
 }
 
-func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
 	defer span.End()
 
-	err := rs.primaryStorage.DeleteObject(ctx, bucketName, key, opts)
+	result, err := rs.primaryStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
+		_, err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -29,6 +31,8 @@ type outboxMetrics struct {
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
 }
+
+const maxOutboxReplayMemoryCacheSize = 32 * 1024 * 1024 // 32MB
 
 func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
 	m := &outboxMetrics{
@@ -185,7 +189,15 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			for i, chunk := range chunks {
 				readers[i] = bytes.NewReader(chunk.Content)
 			}
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
+			readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(io.MultiReader(readers...), maxOutboxReplayMemoryCacheSize)
+			if err != nil {
+				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
+				time.Sleep(5 * time.Second)
+				return
+			}
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, readSeekCloser, nil, nil)
+			readSeekCloser.Close()
 			if err != nil {
 				tx.Rollback()
 				os.metrics.errorsCounter.Inc()
@@ -193,7 +205,13 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				return
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
+			deleteOpts := &storage.DeleteObjectOptions{}
+			if entry.VersionID != nil {
+				deleteOpts.VersionID = entry.VersionID
+			} else {
+				deleteOpts = nil
+			}
+			_, err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), deleteOpts)
 			if err != nil {
 				tx.Rollback()
 				os.metrics.errorsCounter.Inc()
@@ -268,11 +286,12 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string, versionID *string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucketName,
 		Key:       key,
+		VersionID: versionID,
 	}
 	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, &entry)
 	if err != nil {
@@ -296,7 +315,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "")
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -316,7 +335,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "")
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -440,6 +459,30 @@ func (os *outboxStorage) HeadBucket(ctx context.Context, bucketName storage.Buck
 	return os.innerStorage.HeadBucket(ctx, bucketName)
 }
 
+func (os *outboxStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
+}
+
 func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListObjects")
 	defer span.End()
@@ -450,6 +493,18 @@ func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.Buc
 	}
 
 	return os.innerStorage.ListObjects(ctx, bucketName, opts)
+}
+
+func (os *outboxStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListObjectVersions")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.ListObjectVersions(ctx, bucketName, opts)
 }
 
 func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -482,7 +537,18 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
 
-	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil) {
+	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil)
+	if !putMustBeSynchronous {
+		versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+		if err != nil && !errors.Is(err, storage.ErrNoSuchBucket) {
+			return nil, err
+		}
+		if err == nil {
+			putMustBeSynchronous = versioningConfig.Status != nil && *versioningConfig.Status == storage.BucketVersioningStatusEnabled
+		}
+	}
+
+	if putMustBeSynchronous {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err
@@ -495,7 +561,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 		return nil, err
 	}
 	_, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-		entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String())
+		entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -567,29 +633,57 @@ func (os *outboxStorage) AppendObject(ctx context.Context, bucketName storage.Bu
 	return os.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
 }
 
-func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
 
+	// ETag-conditional deletes must execute synchronously.
+	if opts != nil && opts.IfMatchETag != nil {
+		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		return os.innerStorage.DeleteObject(ctx, bucketName, key, opts)
+	}
+
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
+	var versionID *string
+	if opts != nil {
+		versionID = opts.VersionID
+	}
+	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), versionID)
 	if err != nil {
 		tx.Rollback()
-		return err
+		return nil, err
 	}
 	err = tx.Commit()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return &storage.DeleteObjectResult{VersionID: versionID}, nil
 }
 
 func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()
+
+	hasETagCondition := false
+	for _, entry := range entries {
+		if entry.IfMatchETag != nil {
+			hasETagCondition = true
+			break
+		}
+	}
+	if hasETagCondition {
+		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		return os.innerStorage.DeleteObjects(ctx, bucketName, entries)
+	}
 
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -597,7 +691,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	}
 
 	for _, entry := range entries {
-		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String())
+		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), entry.VersionID)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -613,7 +707,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 		Entries: make([]storage.DeleteObjectsEntry, len(entries)),
 	}
 	for i, entry := range entries {
-		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true}
+		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, Deleted: true}
 	}
 	return result, nil
 }

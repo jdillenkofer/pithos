@@ -98,6 +98,18 @@ func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName storage.Bucke
 	return bucket, nil
 }
 
+func (cs *CacheStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+	return cs.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (cs *CacheStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+	return cs.innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
+}
+
 func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListObjects")
 	defer span.End()
@@ -107,6 +119,12 @@ func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.Buck
 		return nil, err
 	}
 	return objects, nil
+}
+
+func (cs *CacheStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListObjectVersions")
+	defer span.End()
+	return cs.innerStorage.ListObjectVersions(ctx, bucketName, opts)
 }
 
 func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -124,13 +142,19 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetObject")
 	defer span.End()
 
+	// Version-specific or conditional reads should bypass cache to avoid serving
+	// stale or wrong versions from a key-only cache entry.
+	if opts != nil && (opts.VersionID != nil || opts.IfMatchETag != nil || opts.IfNoneMatchETag != nil) {
+		return cs.innerStorage.GetObject(ctx, bucketName, key, ranges, opts)
+	}
+
 	// If no ranges specified, get the entire object
 	if len(ranges) == 0 {
 		ranges = []storage.ByteRange{{Start: nil, End: nil}}
 	}
 
 	// Get object metadata
-	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, nil)
+	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, &storage.HeadObjectOptions{})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -233,21 +257,21 @@ func (cs *CacheStorage) AppendObject(ctx context.Context, bucketName storage.Buc
 	return appendObjectResult, nil
 }
 
-func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObject")
 	defer span.End()
 
-	err := cs.innerStorage.DeleteObject(ctx, bucketName, key, opts)
+	result, err := cs.innerStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	err = cs.cache.Remove(cacheKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return result, nil
 }
 
 func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

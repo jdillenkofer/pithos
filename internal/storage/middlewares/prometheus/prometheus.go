@@ -275,6 +275,32 @@ func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketNa
 	return mBucket, err
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	config, err := psm.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketVersioning"}).Inc()
+		return nil, err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketVersioning"}).Inc()
+	return config, nil
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	err := psm.innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketVersioning"}).Inc()
+		return err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketVersioning"}).Inc()
+	return nil
+}
+
 func (psm *prometheusStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketWebsiteConfiguration")
 	defer span.End()
@@ -333,6 +359,19 @@ func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketN
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
 
 	return mListBucketResult, nil
+}
+
+func (psm *prometheusStorageMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjectVersions")
+	defer span.End()
+
+	res, err := psm.innerStorage.ListObjectVersions(ctx, bucketName, opts)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjectVersions"}).Inc()
+		return nil, err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListObjectVersions"}).Inc()
+	return res, nil
 }
 
 func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -410,19 +449,19 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 	return appendObjectResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObject")
 	defer span.End()
 
-	err := psm.innerStorage.DeleteObject(ctx, bucketName, key, opts)
+	result, err := psm.innerStorage.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
-		return err
+		return nil, err
 	}
 
 	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
 
-	return nil
+	return result, nil
 }
 
 func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
