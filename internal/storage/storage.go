@@ -157,6 +157,7 @@ type UploadPartResult struct {
 
 type CompleteMultipartUploadResult struct {
 	Location          string
+	VersionID         *string
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string

@@ -522,6 +522,7 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 	}
 	return &storage.CompleteMultipartUploadResult{
 		Location:          *completeMultipartUploadResult.Location,
+		VersionID:         completeMultipartUploadResult.VersionId,
 		ETag:              *completeMultipartUploadResult.ETag,
 		ChecksumCRC32:     completeMultipartUploadResult.ChecksumCRC32,
 		ChecksumCRC32C:    completeMultipartUploadResult.ChecksumCRC32C,

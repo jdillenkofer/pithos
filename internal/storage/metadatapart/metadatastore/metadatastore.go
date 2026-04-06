@@ -70,6 +70,7 @@ type InitiateMultipartUploadResult struct {
 type CompleteMultipartUploadResult struct {
 	DeletedParts      []Part
 	Location          string
+	VersionID         *string
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string

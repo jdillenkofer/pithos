@@ -5059,6 +5059,59 @@ func TestBucketVersioning(t *testing.T) {
 			assert.NotEmpty(t, getVersionResp.Header.Get("Last-Modified"))
 		})
 
+		t.Run("it should return version id for completed multipart upload in versioned bucket"+testSuffix, func(t *testing.T) {
+			t.Parallel()
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+				Bucket:                  bucketName,
+				VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+			})
+			assert.Nil(t, err)
+
+			createOut, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			assert.NotNil(t, createOut)
+			assert.NotNil(t, createOut.UploadId)
+
+			_, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Key:        key,
+				UploadId:   createOut.UploadId,
+				PartNumber: aws.Int32(1),
+				Body:       bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			completeOut, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: createOut.UploadId,
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, completeOut)
+			assert.NotNil(t, completeOut.VersionId)
+			assert.NotEmpty(t, aws.ToString(completeOut.VersionId))
+
+			versionsOut, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{Bucket: bucketName, Prefix: key})
+			assert.Nil(t, err)
+			assert.NotEmpty(t, versionsOut.Versions)
+
+			versionFound := false
+			for _, version := range versionsOut.Versions {
+				if aws.ToString(version.Key) == aws.ToString(key) && aws.ToString(version.VersionId) == aws.ToString(completeOut.VersionId) {
+					versionFound = true
+					assert.True(t, aws.ToBool(version.IsLatest))
+					break
+				}
+			}
+			assert.True(t, versionFound)
+		})
+
 		t.Run("it should paginate ListObjectVersions with key and version markers"+testSuffix, func(t *testing.T) {
 			t.Parallel()
 			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)

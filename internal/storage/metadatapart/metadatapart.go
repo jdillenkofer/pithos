@@ -1180,6 +1180,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {
 	return storage.CompleteMultipartUploadResult{
 		Location:          result.Location,
+		VersionID:         result.VersionID,
 		ETag:              result.ETag,
 		ChecksumCRC32:     result.ChecksumCRC32,
 		ChecksumCRC32C:    result.ChecksumCRC32C,

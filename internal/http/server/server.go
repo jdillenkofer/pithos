@@ -1934,6 +1934,9 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		ChecksumSHA256:    result.ChecksumSHA256,
 		ChecksumType:      result.ChecksumType,
 	}
+	if result.VersionID != nil {
+		w.Header().Set(versionIDHeader, *result.VersionID)
+	}
 
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(completeMultipartUploadResult)

@@ -1263,6 +1263,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	return &metadatastore.CompleteMultipartUploadResult{
 		DeletedParts:      deletedParts,
 		ETag:              objectEntity.ETag,
+		VersionID:         objectEntity.VersionID,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,
 		ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
 		ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
