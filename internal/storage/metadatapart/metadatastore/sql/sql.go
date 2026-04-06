@@ -665,6 +665,9 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		if err != nil {
 			return err
 		}
+		if opts != nil && opts.IfNoneMatchStar && nullVersionEntity != nil {
+			return metadatastore.ErrPreconditionFailed
+		}
 		nullVersion := "null"
 		objectEntity.VersionID = &nullVersion
 
@@ -1200,6 +1203,9 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		nullVersionEntity, err := sms.objectRepository.FindNullObjectVersionByBucketNameAndKey(ctx, tx, bucketName, key)
 		if err != nil {
 			return nil, err
+		}
+		if opts != nil && opts.IfNoneMatchStar && nullVersionEntity != nil {
+			return nil, metadatastore.ErrPreconditionFailed
 		}
 		if nullVersionEntity != nil {
 			oldPartEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *nullVersionEntity.Id)
