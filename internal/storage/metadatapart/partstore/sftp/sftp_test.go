@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -50,8 +49,7 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 	sshPublicKey, err := ssh.NewPublicKey(&sshPrivateKey.PublicKey)
 	assert.Nil(t, err)
 
-	internalSshPort, err := nat.NewPort("tcp", "2222")
-	assert.Nil(t, err)
+	const internalSshPort = "2222/tcp"
 
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
