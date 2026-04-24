@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.15
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.16
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.0
-	github.com/aws/smithy-go v1.25.0
+	github.com/aws/smithy-go v1.25.1
 	github.com/cloudflare/circl v1.6.3
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/go-tpm v0.9.8
