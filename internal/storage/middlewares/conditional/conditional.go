@@ -11,12 +11,13 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 )
 
 type conditionalStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
+	delegator.DelegatingStorage
 	bucketToStorageMap map[string]storage.Storage
-	defaultStorage     storage.Storage
 	tracer             trace.Tracer
 }
 
@@ -31,8 +32,8 @@ func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, default
 
 	return &conditionalStorageMiddleware{
 		ValidatedLifecycle: lifecycle,
+		DelegatingStorage:  delegator.Wrap(defaultStorage),
 		bucketToStorageMap: bucketToStorageMap,
-		defaultStorage:     defaultStorage,
 		tracer:             otel.Tracer("internal/storage/middlewares/conditional"),
 	}, nil
 }
@@ -48,7 +49,7 @@ func (csm *conditionalStorageMiddleware) Start(ctx context.Context) error {
 		}
 	}
 
-	return csm.defaultStorage.Start(ctx)
+	return csm.Next.Start(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) Stop(ctx context.Context) error {
@@ -62,7 +63,7 @@ func (csm *conditionalStorageMiddleware) Stop(ctx context.Context) error {
 		}
 	}
 
-	return csm.defaultStorage.Stop(ctx)
+	return csm.Next.Stop(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) lookupStorage(bucketName storage.BucketName) storage.Storage {
@@ -70,7 +71,7 @@ func (csm *conditionalStorageMiddleware) lookupStorage(bucketName storage.Bucket
 	if ok {
 		return storage
 	}
-	return csm.defaultStorage
+	return csm.Next
 }
 
 func (csm *conditionalStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -105,7 +106,7 @@ func (csm *conditionalStorageMiddleware) ListBuckets(ctx context.Context) ([]sto
 	}
 
 	// Include buckets from default storage
-	buckets, err := csm.defaultStorage.ListBuckets(ctx)
+	buckets, err := csm.Next.ListBuckets(ctx)
 	if err != nil {
 		return nil, err
 	}

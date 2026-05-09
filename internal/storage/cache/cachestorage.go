@@ -11,27 +11,27 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 )
 
 type CacheStorage struct {
 	*lifecycle.ValidatedLifecycle
-	cache        Cache
-	innerStorage storage.Storage
-	tracer       trace.Tracer
+	delegator.DelegatingStorage
+	cache  Cache
+	tracer trace.Tracer
 }
 
-// Compile-time check to ensure CacheStorage implements storage.Storage
 var _ storage.Storage = (*CacheStorage)(nil)
 
 func New(cache Cache, innerStorage storage.Storage) (storage.Storage, error) {
-	lifecycle, err := lifecycle.NewValidatedLifecycle("CacheStorage")
+	lc, err := lifecycle.NewValidatedLifecycle("CacheStorage")
 	if err != nil {
 		return nil, err
 	}
 	return &CacheStorage{
-		ValidatedLifecycle: lifecycle,
+		ValidatedLifecycle: lc,
+		DelegatingStorage:  delegator.Wrap(innerStorage),
 		cache:              cache,
-		innerStorage:       innerStorage,
 		tracer:             otel.Tracer("internal/storage/cache"),
 	}, nil
 }
@@ -44,93 +44,25 @@ func (cs *CacheStorage) Start(ctx context.Context) error {
 	if err := cs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	return cs.innerStorage.Start(ctx)
+	return cs.Next.Start(ctx)
 }
 
 func (cs *CacheStorage) Stop(ctx context.Context) error {
 	if err := cs.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
-	return cs.innerStorage.Stop(ctx)
-}
-
-func (cs *CacheStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.CreateBucket")
-	defer span.End()
-
-	err := cs.innerStorage.CreateBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (cs *CacheStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteBucket")
-	defer span.End()
-
-	err := cs.innerStorage.DeleteBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (cs *CacheStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListBuckets")
-	defer span.End()
-
-	buckets, err := cs.innerStorage.ListBuckets(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return buckets, nil
-}
-
-func (cs *CacheStorage) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.HeadBucket")
-	defer span.End()
-
-	bucket, err := cs.innerStorage.HeadBucket(ctx, bucketName)
-	if err != nil {
-		return nil, err
-	}
-	return bucket, nil
-}
-
-func (cs *CacheStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListObjects")
-	defer span.End()
-
-	objects, err := cs.innerStorage.ListObjects(ctx, bucketName, opts)
-	if err != nil {
-		return nil, err
-	}
-	return objects, nil
-}
-
-func (cs *CacheStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.HeadObject")
-	defer span.End()
-
-	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, opts)
-	if err != nil {
-		return nil, err
-	}
-	return object, nil
+	return cs.Next.Stop(ctx)
 }
 
 func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetObject")
 	defer span.End()
 
-	// If no ranges specified, get the entire object
 	if len(ranges) == 0 {
 		ranges = []storage.ByteRange{{Start: nil, End: nil}}
 	}
 
-	// Get object metadata
-	object, err := cs.innerStorage.HeadObject(ctx, bucketName, key, nil)
+	object, err := cs.Next.HeadObject(ctx, bucketName, key, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -142,8 +74,7 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 	}
 
 	if err == ErrCacheMiss {
-		// @TODO: only cache byteRange that was requested
-		_, readers, err := cs.innerStorage.GetObject(ctx, bucketName, key, nil, opts)
+		_, readers, err := cs.Next.GetObject(ctx, bucketName, key, nil, opts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -164,23 +95,18 @@ func (cs *CacheStorage) GetObject(ctx context.Context, bucketName storage.Bucket
 		}
 	}
 
-	// Create readers for each range
 	readers := []io.ReadCloser{}
 	for _, byteRange := range ranges {
 		startByte := byteRange.Start
 		endByte := byteRange.End
 
 		var reader io.ReadCloser = ioutils.NewByteReadSeekCloser(data)
-
-		// We need to apply the LimitedEndReadSeekCloser first, otherwise we need to recalculate the end offset
-		// because the LimitedStartSeekCloser changes the offsets
 		if endByte != nil {
 			reader = ioutils.NewLimitedEndReadCloser(reader, *endByte)
 		}
 		if startByte != nil {
 			_, err := ioutils.SkipNBytes(reader, *startByte)
 			if err != nil {
-				// Close any readers we've already opened
 				for _, r := range readers {
 					r.Close()
 				}
@@ -203,7 +129,7 @@ func (cs *CacheStorage) PutObject(ctx context.Context, bucketName storage.Bucket
 	}
 	byteReadSeekCloser := ioutils.NewByteReadSeekCloser(data)
 
-	putObjectResult, err := cs.innerStorage.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput, opts)
+	putObjectResult, err := cs.Next.PutObject(ctx, bucketName, key, contentType, byteReadSeekCloser, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -221,12 +147,11 @@ func (cs *CacheStorage) AppendObject(ctx context.Context, bucketName storage.Buc
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.AppendObject")
 	defer span.End()
 
-	appendObjectResult, err := cs.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+	appendObjectResult, err := cs.Next.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	// Invalidate the cached object so subsequent reads see the new content.
 	cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, key)
 	_ = cs.cache.Remove(cacheKey)
 
@@ -237,7 +162,7 @@ func (cs *CacheStorage) DeleteObject(ctx context.Context, bucketName storage.Buc
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObject")
 	defer span.End()
 
-	err := cs.innerStorage.DeleteObject(ctx, bucketName, key, opts)
+	err := cs.Next.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}
@@ -254,7 +179,7 @@ func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.Bu
 	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteObjects")
 	defer span.End()
 
-	result, err := cs.innerStorage.DeleteObjects(ctx, bucketName, entries)
+	result, err := cs.Next.DeleteObjects(ctx, bucketName, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -262,96 +187,9 @@ func (cs *CacheStorage) DeleteObjects(ctx context.Context, bucketName storage.Bu
 	for _, entry := range result.Entries {
 		if entry.Deleted {
 			cacheKey := getObjectCacheKeyForBucketAndKey(bucketName, entry.Key)
-			_ = cs.cache.Remove(cacheKey) // best-effort cache eviction
+			_ = cs.cache.Remove(cacheKey)
 		}
 	}
 
 	return result, nil
-}
-
-func (cs *CacheStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.CreateMultipartUpload")
-	defer span.End()
-
-	initiateMultipartUploadResult, err := cs.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
-	if err != nil {
-		return nil, err
-	}
-	return initiateMultipartUploadResult, nil
-}
-
-func (cs *CacheStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.UploadPart")
-	defer span.End()
-
-	uploadPartResult, err := cs.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
-	if err != nil {
-		return nil, err
-	}
-	return uploadPartResult, nil
-}
-
-func (cs *CacheStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.CompleteMultipartUpload")
-	defer span.End()
-
-	completeMultipartUploadResult, err := cs.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
-	if err != nil {
-		return nil, err
-	}
-	return completeMultipartUploadResult, nil
-}
-
-func (cs *CacheStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.AbortMultipartUpload")
-	defer span.End()
-
-	err := cs.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (cs *CacheStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListMultipartUploads")
-	defer span.End()
-
-	listMultipartUploadsResult, err := cs.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
-	if err != nil {
-		return nil, err
-	}
-	return listMultipartUploadsResult, nil
-}
-
-func (cs *CacheStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.ListParts")
-	defer span.End()
-
-	listPartsResult, err := cs.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
-	if err != nil {
-		return nil, err
-	}
-	return listPartsResult, nil
-}
-
-func (cs *CacheStorage) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.GetBucketWebsiteConfiguration")
-	defer span.End()
-
-	return cs.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
-}
-
-func (cs *CacheStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.PutBucketWebsiteConfiguration")
-	defer span.End()
-
-	return cs.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
-}
-
-func (cs *CacheStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := cs.tracer.Start(ctx, "CacheStorage.DeleteBucketWebsiteConfiguration")
-	defer span.End()
-
-	return cs.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
