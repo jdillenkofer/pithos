@@ -11,7 +11,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/singleflight"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -33,7 +32,6 @@ type cachePartStore struct {
 	maxPartSizeBytes      int64
 	cacheReadErrorsAsMiss bool
 	tracer                trace.Tracer
-	readGroup             singleflight.Group
 	oversizedHints        sync.Map
 }
 
@@ -133,46 +131,37 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 		return ps.innerPartStore.GetPart(ctx, tx, partId)
 	}
 
-	v, err, shared := ps.readGroup.Do(cacheKey, func() (interface{}, error) {
-		rc, innerErr := ps.innerPartStore.GetPart(ctx, tx, partId)
-		if innerErr != nil {
-			return nil, innerErr
-		}
-		payload, readErr := readUpTo(rc, ps.maxPartSizeBytes+1)
-		if readErr != nil {
-			_ = rc.Close()
-			return nil, readErr
-		}
-
-		if int64(len(payload)) > ps.maxPartSizeBytes {
-			ps.markOversizedHint(cacheKey)
-			return &oversizedMissResult{readCloser: &bytesPrefixReadCloser{prefix: payload, inner: rc}}, nil
-		}
-
-		_ = rc.Close()
-
-		if setErr := ps.cache.Set(cacheKey, bytes.NewReader(payload), int64(len(payload))); setErr != nil {
-			slog.WarnContext(ctx, "Failed to set part cache entry after backend read", "cacheKey", cacheKey, "error", setErr)
-		}
-
-		return payload, nil
-	})
-	if err == nil {
-		payload, ok := v.([]byte)
-		if ok {
-			return io.NopCloser(bytes.NewReader(payload)), nil
-		}
-		overSized, ok := v.(*oversizedMissResult)
-		if !ok {
-			return nil, errors.New("invalid cache read payload type")
-		}
-		if !shared {
-			return overSized.readCloser, nil
-		}
-		_ = overSized.readCloser.Close()
-		return ps.innerPartStore.GetPart(ctx, tx, partId)
+	rc, err = ps.innerPartStore.GetPart(ctx, tx, partId)
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+
+	pr, pw := io.Pipe()
+	cacheWriteDone := make(chan struct{})
+	go func() {
+		defer close(cacheWriteDone)
+		err := ps.cache.Set(cacheKey, pr, -1)
+		if err == nil {
+			ps.clearOversizedHint(cacheKey)
+			return
+		}
+		if errors.Is(err, errPartLargerThanCacheThreshold) {
+			ps.markOversizedHint(cacheKey)
+			_ = ps.cache.Remove(cacheKey)
+			return
+		}
+		slog.WarnContext(ctx, "Failed to stream part into cache", "cacheKey", cacheKey, "error", err)
+		_ = ps.cache.Remove(cacheKey)
+	}()
+
+	return &streamingCacheOnReadCloser{
+		ReadCloser:        rc,
+		pipeWriter:        pw,
+		cacheWriteDone:    cacheWriteDone,
+		maxPartSizeBytes:  ps.maxPartSizeBytes,
+		cacheBytesWritten: 0,
+		cachePipeActive:   true,
+	}, nil
 }
 
 func (ps *cachePartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
@@ -215,10 +204,6 @@ func (ps *cachePartStore) OnTxRollback(ctx context.Context, tx *database.TxConte
 	return nil
 }
 
-type oversizedMissResult struct {
-	readCloser io.ReadCloser
-}
-
 func (ps *cachePartStore) hasOversizedHint(cacheKey string) bool {
 	_, ok := ps.oversizedHints.Load(cacheKey)
 	return ok
@@ -232,103 +217,65 @@ func (ps *cachePartStore) clearOversizedHint(cacheKey string) {
 	ps.oversizedHints.Delete(cacheKey)
 }
 
-type bytesPrefixReadCloser struct {
-	prefix []byte
-	inner  io.ReadCloser
-}
+var errPartLargerThanCacheThreshold = errors.New("part larger than cache threshold")
 
-func (r *bytesPrefixReadCloser) Read(p []byte) (int, error) {
-	if len(r.prefix) > 0 {
-		n := copy(p, r.prefix)
-		r.prefix = r.prefix[n:]
-		return n, nil
-	}
-	return r.inner.Read(p)
-}
-
-func (r *bytesPrefixReadCloser) Close() error {
-	return r.inner.Close()
-}
-
-func readUpTo(reader io.Reader, limit int64) ([]byte, error) {
-	if limit <= 0 {
-		return []byte{}, nil
-	}
-	capHint := int(minInt64(limit, 64*1024))
-	buf := make([]byte, 0, capHint)
-	tmp := make([]byte, 32*1024)
-	for int64(len(buf)) < limit {
-		remaining := limit - int64(len(buf))
-		chunk := tmp
-		if remaining < int64(len(chunk)) {
-			chunk = chunk[:remaining]
-		}
-		n, err := reader.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-		}
-		if err == io.EOF {
-			return buf, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	return buf, nil
-}
-
-func minInt64(a int64, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-type cacheOnReadCloser struct {
+type streamingCacheOnReadCloser struct {
 	io.ReadCloser
-	cache            cachepkg.Cache
-	cacheKey         string
-	maxPartSizeBytes int64
-	cacheEligible    bool
-	buf              []byte
-	closed           bool
-	reachedEOF       bool
+	pipeWriter        *io.PipeWriter
+	cacheWriteDone    chan struct{}
+	maxPartSizeBytes  int64
+	cacheBytesWritten int64
+	cachePipeActive   bool
+	closed            bool
 }
 
-func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
+func (r *streamingCacheOnReadCloser) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	if n > 0 && r.cacheEligible {
-		nextLen := int64(len(r.buf) + n)
-		if nextLen <= r.maxPartSizeBytes {
-			r.buf = append(r.buf, p[:n]...)
-		} else {
-			r.cacheEligible = false
-			r.buf = nil
+	if n > 0 && r.cachePipeActive {
+		r.cacheBytesWritten += int64(n)
+		if r.cacheBytesWritten > r.maxPartSizeBytes {
+			_ = r.pipeWriter.CloseWithError(errPartLargerThanCacheThreshold)
+			r.cachePipeActive = false
+			r.pipeWriter = nil
+		} else if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
+			_ = r.pipeWriter.CloseWithError(writeErr)
+			r.cachePipeActive = false
+			r.pipeWriter = nil
 		}
 	}
+
 	if err == io.EOF {
-		r.reachedEOF = true
-		r.persistCache()
+		if r.cachePipeActive && r.pipeWriter != nil {
+			_ = r.pipeWriter.Close()
+			r.cachePipeActive = false
+			r.pipeWriter = nil
+		}
+	} else if err != nil {
+		if r.cachePipeActive && r.pipeWriter != nil {
+			_ = r.pipeWriter.CloseWithError(err)
+			r.cachePipeActive = false
+			r.pipeWriter = nil
+		}
 	}
+
 	return n, err
 }
 
-func (r *cacheOnReadCloser) Close() error {
+func (r *streamingCacheOnReadCloser) Close() error {
 	if r.closed {
 		return nil
 	}
 	r.closed = true
-	r.persistCache()
-	return r.ReadCloser.Close()
-}
-
-func (r *cacheOnReadCloser) persistCache() {
-	if !r.cacheEligible || !r.reachedEOF {
-		return
+	if r.cachePipeActive && r.pipeWriter != nil {
+		_ = r.pipeWriter.CloseWithError(io.ErrUnexpectedEOF)
+		r.cachePipeActive = false
+		r.pipeWriter = nil
 	}
-	_ = r.cache.Set(r.cacheKey, bytes.NewReader(r.buf), int64(len(r.buf)))
-	r.cacheEligible = false
-	r.buf = nil
+	if r.cacheWriteDone != nil {
+		<-r.cacheWriteDone
+		r.cacheWriteDone = nil
+	}
+	return r.ReadCloser.Close()
 }
 
 type cacheBufferingReader struct {

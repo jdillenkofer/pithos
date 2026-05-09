@@ -26,17 +26,32 @@ func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, size)
-	for _, evictedKey := range evictedKeys {
-		err := c.cachePersistor.Remove(evictedKey)
-		if err != nil {
-			return err
+	actualSize := size
+	var err error
+	if size >= 0 {
+		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, size)
+		for _, evictedKey := range evictedKeys {
+			err = c.cachePersistor.Remove(evictedKey)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	err := c.cachePersistor.Store(key, reader)
+	actualSize, err = c.cachePersistor.Store(key, reader)
 	if err != nil {
+		_ = c.cachePersistor.Remove(key)
 		return err
+	}
+
+	if size < 0 {
+		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, actualSize)
+		for _, evictedKey := range evictedKeys {
+			err = c.cachePersistor.Remove(evictedKey)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

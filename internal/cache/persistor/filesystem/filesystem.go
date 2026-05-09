@@ -41,20 +41,21 @@ func (fp *filesystemCachePersistor) getFilename(key string) string {
 	return filepath.Join(fp.root, filename)
 }
 
-func (fp *filesystemCachePersistor) Store(key string, reader io.Reader) error {
+func (fp *filesystemCachePersistor) Store(key string, reader io.Reader) (int64, error) {
 	filename := fp.getFilename(key)
+	var written int64
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		defer f.Close()
-		_, err = io.Copy(f, reader)
+		written, err = io.Copy(f, reader)
 		if err != nil {
-			return err
+			return written, err
 		}
 	}
-	return nil
+	return written, nil
 }
 
 func (fp *filesystemCachePersistor) Get(key string) (io.ReadCloser, error) {

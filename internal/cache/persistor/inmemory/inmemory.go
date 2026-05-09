@@ -17,13 +17,13 @@ func New() (persistor.CachePersistor, error) {
 	}, nil
 }
 
-func (cs *inMemoryCachePersistor) Store(key string, reader io.Reader) error {
+func (cs *inMemoryCachePersistor) Store(key string, reader io.Reader) (int64, error) {
 	val, err := io.ReadAll(reader)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	cs.keyToCacheEntryMap[key] = val
-	return nil
+	return int64(len(val)), nil
 }
 
 func (cs *inMemoryCachePersistor) Get(key string) (io.ReadCloser, error) {
