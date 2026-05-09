@@ -5,10 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"io"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -27,6 +30,7 @@ type cachePartStore struct {
 	maxPartSizeBytes      int64
 	cacheReadErrorsAsMiss bool
 	tracer                trace.Tracer
+	readGroup             singleflight.Group
 }
 
 var _ partstore.PartStore = (*cachePartStore)(nil)
@@ -74,10 +78,13 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 
 	if teed.cacheEligible {
 		if err := ps.cache.Set(cacheKey, buf); err != nil {
+			slog.WarnContext(ctx, "Failed to write part to cache", "cacheKey", cacheKey, "error", err)
 			_ = ps.cache.Remove(cacheKey)
 		}
 	} else {
-		_ = ps.cache.Remove(cacheKey)
+		if err := ps.cache.Remove(cacheKey); err != nil {
+			slog.DebugContext(ctx, "Failed to remove oversized part from cache", "cacheKey", cacheKey, "error", err)
+		}
 	}
 
 	return nil
@@ -93,9 +100,53 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partst
 		if !ps.cacheReadErrorsAsMiss {
 			return nil, err
 		}
+		slog.WarnContext(ctx, "Treating cache read error as cache miss", "cacheKey", cacheKey, "error", err)
 	}
 	if err == nil {
 		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+
+	v, err, _ := ps.readGroup.Do(cacheKey, func() (interface{}, error) {
+		// Re-check cache while serialized to avoid duplicate backend fetches.
+		cached, cacheErr := ps.cache.Get(cacheKey)
+		if cacheErr == nil {
+			return cached, nil
+		}
+		if cacheErr != nil && cacheErr != cachepkg.ErrCacheMiss && !ps.cacheReadErrorsAsMiss {
+			return nil, cacheErr
+		}
+
+		rc, innerErr := ps.innerPartStore.GetPart(ctx, tx, partId)
+		if innerErr != nil {
+			return nil, innerErr
+		}
+		defer rc.Close()
+
+		limitedReader := io.LimitReader(rc, ps.maxPartSizeBytes+1)
+		payload, readErr := io.ReadAll(limitedReader)
+		if readErr != nil {
+			return nil, readErr
+		}
+
+		if int64(len(payload)) > ps.maxPartSizeBytes {
+			return nil, errPartLargerThanCacheThreshold
+		}
+
+		if cacheErr = ps.cache.Set(cacheKey, payload); cacheErr != nil {
+			slog.WarnContext(ctx, "Failed to set part cache entry after backend read", "cacheKey", cacheKey, "error", cacheErr)
+		}
+
+		return payload, nil
+	})
+	if err == nil {
+		payload, ok := v.([]byte)
+		if !ok {
+			return nil, errors.New("invalid cache read payload type")
+		}
+		return io.NopCloser(bytes.NewReader(payload)), nil
+	}
+	if !errors.Is(err, errPartLargerThanCacheThreshold) {
+		return nil, err
 	}
 
 	rc, err := ps.innerPartStore.GetPart(ctx, tx, partId)
@@ -129,9 +180,14 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId par
 		return err
 	}
 
-	_ = ps.cache.Remove(getPartCacheKey(partId))
+	cacheKey := getPartCacheKey(partId)
+	if err := ps.cache.Remove(cacheKey); err != nil {
+		slog.DebugContext(ctx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", err)
+	}
 	return nil
 }
+
+var errPartLargerThanCacheThreshold = errors.New("part larger than cache threshold")
 
 type cacheOnReadCloser struct {
 	io.ReadCloser
@@ -141,6 +197,7 @@ type cacheOnReadCloser struct {
 	cacheEligible    bool
 	buf              []byte
 	closed           bool
+	reachedEOF       bool
 }
 
 func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
@@ -155,6 +212,7 @@ func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
 		}
 	}
 	if err == io.EOF {
+		r.reachedEOF = true
 		r.persistCache()
 	}
 	return n, err
@@ -170,7 +228,7 @@ func (r *cacheOnReadCloser) Close() error {
 }
 
 func (r *cacheOnReadCloser) persistCache() {
-	if !r.cacheEligible {
+	if !r.cacheEligible || !r.reachedEOF {
 		return
 	}
 	_ = r.cache.Set(r.cacheKey, r.buf)

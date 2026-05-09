@@ -159,5 +159,32 @@ func TestCachePartStore_MaxSizeBypassesCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, rc.Close())
 
-	assert.Equal(t, 2, inner.getPartCall)
+	assert.Equal(t, 4, inner.getPartCall)
+}
+
+func TestCachePartStore_DoesNotCachePartialReads(t *testing.T) {
+	ctx := context.Background()
+	cache := newMemoryCache()
+	inner := newMemoryPartStore()
+	partId, _ := partstore.NewRandomPartId()
+	inner.parts[*partId] = []byte("abcdef")
+
+	store, err := New(cache, inner, Options{MaxPartSizeBytes: 2, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	rc, err := store.GetPart(ctx, nil, *partId)
+	assert.NoError(t, err)
+
+	buf := make([]byte, 2)
+	_, err = rc.Read(buf)
+	assert.NoError(t, err)
+	assert.NoError(t, rc.Close())
+
+	rc, err = store.GetPart(ctx, nil, *partId)
+	assert.NoError(t, err)
+	_, err = io.ReadAll(rc)
+	assert.NoError(t, err)
+	assert.NoError(t, rc.Close())
+
+	assert.Equal(t, 4, inner.getPartCall)
 }
