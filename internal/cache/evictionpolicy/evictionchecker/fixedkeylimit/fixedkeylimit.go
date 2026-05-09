@@ -16,7 +16,8 @@ func (f *fixedKeyLimitEvictionChecker) ShouldEvict() bool {
 	return len(f.keySet) > f.maxKeyLimit
 }
 
-func (f *fixedKeyLimitEvictionChecker) TrackSet(key string, val []byte) {
+func (f *fixedKeyLimitEvictionChecker) TrackSet(key string, size int64) {
+	_ = size
 	_, ok := f.keySet[key]
 	if ok {
 		return

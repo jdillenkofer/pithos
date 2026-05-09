@@ -18,8 +18,8 @@ func (f *fixedSizeLimitEvictionChecker) ShouldEvict() bool {
 	return f.currentSize > f.maxSizeLimit
 }
 
-func (f *fixedSizeLimitEvictionChecker) TrackSet(key string, val []byte) {
-	newSize := int64(len(val))
+func (f *fixedSizeLimitEvictionChecker) TrackSet(key string, size int64) {
+	newSize := size
 	oldSize, ok := f.keySet[key]
 	if ok {
 		f.currentSize -= oldSize

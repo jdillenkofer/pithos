@@ -22,21 +22,35 @@ func newMemoryCache() *memoryCache {
 	return &memoryCache{data: map[string][]byte{}}
 }
 
-func (c *memoryCache) Set(key string, data []byte) error {
+func (c *memoryCache) Set(key string, reader io.Reader, size int64) error {
+	_ = size
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
 	cloned := make([]byte, len(data))
 	copy(cloned, data)
 	c.data[key] = cloned
 	return nil
 }
 
-func (c *memoryCache) Get(key string) ([]byte, error) {
+func readAllCacheEntry(c *memoryCache, key string) ([]byte, error) {
+	rc, err := c.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+func (c *memoryCache) Get(key string) (io.ReadCloser, error) {
 	data, ok := c.data[key]
 	if !ok {
 		return nil, cachepkg.ErrCacheMiss
 	}
 	cloned := make([]byte, len(data))
 	copy(cloned, data)
-	return cloned, nil
+	return io.NopCloser(bytes.NewReader(cloned)), nil
 }
 
 func (c *memoryCache) Remove(key string) error {
@@ -184,7 +198,7 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
 	assert.NoError(t, err)
 
-	_, err = cache.Get(getPartCacheKey(*partId))
+	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
 	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 
 	err = store.DeletePart(ctx, tx, *partId)
@@ -209,13 +223,13 @@ func TestCachePartStore_AppliesPendingMutationsOnTxCommit(t *testing.T) {
 	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
 	assert.NoError(t, err)
 
-	_, err = cache.Get(getPartCacheKey(*partId))
+	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
 	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 
 	err = tx.Commit(ctx)
 	assert.NoError(t, err)
 
-	data, err := cache.Get(getPartCacheKey(*partId))
+	data, err := readAllCacheEntry(cache, getPartCacheKey(*partId))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("v1"), data)
 }
@@ -242,7 +256,7 @@ func TestCachePartStore_DropsPendingMutationsOnTxRollback(t *testing.T) {
 	err = tx.Rollback(ctx)
 	assert.NoError(t, err)
 
-	_, err = cache.Get(getPartCacheKey(*partId))
+	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
 	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 }
 

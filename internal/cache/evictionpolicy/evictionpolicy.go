@@ -1,7 +1,7 @@
 package evictionpolicy
 
 type CacheEvictionPolicy interface {
-	TrackSetAndReturnEvictedKeys(key string, val []byte) []string
+	TrackSetAndReturnEvictedKeys(key string, size int64) []string
 	TrackGet(key string)
 	TrackRemove(key string)
 }

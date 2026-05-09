@@ -41,7 +41,7 @@ func (fp *filesystemCachePersistor) getFilename(key string) string {
 	return filepath.Join(fp.root, filename)
 }
 
-func (fp *filesystemCachePersistor) Store(key string, val []byte) error {
+func (fp *filesystemCachePersistor) Store(key string, reader io.Reader) error {
 	filename := fp.getFilename(key)
 	{
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -49,7 +49,7 @@ func (fp *filesystemCachePersistor) Store(key string, val []byte) error {
 			return err
 		}
 		defer f.Close()
-		_, err = f.Write(val)
+		_, err = io.Copy(f, reader)
 		if err != nil {
 			return err
 		}
@@ -57,7 +57,7 @@ func (fp *filesystemCachePersistor) Store(key string, val []byte) error {
 	return nil
 }
 
-func (fp *filesystemCachePersistor) Get(key string) ([]byte, error) {
+func (fp *filesystemCachePersistor) Get(key string) (io.ReadCloser, error) {
 	filename := fp.getFilename(key)
 	f, err := os.OpenFile(filename, os.O_RDONLY, 0o600)
 	if err != nil {
@@ -66,12 +66,7 @@ func (fp *filesystemCachePersistor) Get(key string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return f, nil
 }
 
 func (fp *filesystemCachePersistor) Remove(key string) error {

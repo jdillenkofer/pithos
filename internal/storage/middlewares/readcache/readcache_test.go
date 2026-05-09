@@ -22,21 +22,26 @@ func newMemoryCache() *memoryCache {
 	return &memoryCache{data: map[string][]byte{}}
 }
 
-func (c *memoryCache) Set(key string, data []byte) error {
+func (c *memoryCache) Set(key string, reader io.Reader, size int64) error {
+	_ = size
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
 	buf := make([]byte, len(data))
 	copy(buf, data)
 	c.data[key] = buf
 	return nil
 }
 
-func (c *memoryCache) Get(key string) ([]byte, error) {
+func (c *memoryCache) Get(key string) (io.ReadCloser, error) {
 	data, ok := c.data[key]
 	if !ok {
 		return nil, cachepkg.ErrCacheMiss
 	}
 	buf := make([]byte, len(data))
 	copy(buf, data)
-	return buf, nil
+	return io.NopCloser(bytes.NewReader(buf)), nil
 }
 
 func (c *memoryCache) Remove(key string) error {

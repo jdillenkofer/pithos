@@ -66,8 +66,8 @@ func New(evictionChecker evictionchecker.EvictionChecker) (evictionpolicy.CacheE
 	}, nil
 }
 
-func (lfu *LFUCacheEvictionPolicy) TrackSetAndReturnEvictedKeys(key string, val []byte) []string {
-	lfu.evictionChecker.TrackSet(key, val)
+func (lfu *LFUCacheEvictionPolicy) TrackSetAndReturnEvictedKeys(key string, size int64) []string {
+	lfu.evictionChecker.TrackSet(key, size)
 
 	evictedKeys := []string{}
 	for lfu.evictionChecker.ShouldEvict() {

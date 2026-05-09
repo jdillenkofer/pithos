@@ -2,6 +2,7 @@ package persistor
 
 import (
 	"errors"
+	"io"
 )
 
 var (
@@ -9,8 +10,8 @@ var (
 )
 
 type CachePersistor interface {
-	Store(key string, val []byte) error
-	Get(key string) ([]byte, error)
+	Store(key string, reader io.Reader) error
+	Get(key string) (io.ReadCloser, error)
 	Remove(key string) error
 	RemoveAll() error
 }

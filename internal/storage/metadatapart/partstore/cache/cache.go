@@ -83,7 +83,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 		tx.RegisterOnCommit(func(opCtx context.Context) error {
 			if teed.cacheEligible {
 				ps.clearOversizedHint(cacheKey)
-				if setErr := ps.cache.Set(cacheKey, buf); setErr != nil {
+				if setErr := ps.cache.Set(cacheKey, bytes.NewReader(buf), int64(len(buf))); setErr != nil {
 					slog.WarnContext(opCtx, "Failed to write part to cache", "cacheKey", cacheKey, "error", setErr)
 					_ = ps.cache.Remove(cacheKey)
 				}
@@ -100,7 +100,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 
 	if teed.cacheEligible {
 		ps.clearOversizedHint(cacheKey)
-		if err := ps.cache.Set(cacheKey, buf); err != nil {
+		if err := ps.cache.Set(cacheKey, bytes.NewReader(buf), int64(len(buf))); err != nil {
 			slog.WarnContext(ctx, "Failed to write part to cache", "cacheKey", cacheKey, "error", err)
 			_ = ps.cache.Remove(cacheKey)
 		}
@@ -119,7 +119,7 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	defer span.End()
 
 	cacheKey := getPartCacheKey(partId)
-	data, err := ps.cache.Get(cacheKey)
+	rc, err := ps.cache.Get(cacheKey)
 	if err != nil && err != cachepkg.ErrCacheMiss {
 		if !ps.cacheReadErrorsAsMiss {
 			return nil, err
@@ -127,28 +127,18 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 		slog.WarnContext(ctx, "Treating cache read error as cache miss", "cacheKey", cacheKey, "error", err)
 	}
 	if err == nil {
-		return io.NopCloser(bytes.NewReader(data)), nil
+		return rc, nil
 	}
 	if ps.hasOversizedHint(cacheKey) {
 		return ps.innerPartStore.GetPart(ctx, tx, partId)
 	}
 
 	v, err, shared := ps.readGroup.Do(cacheKey, func() (interface{}, error) {
-		// Re-check cache while serialized to avoid duplicate backend fetches.
-		cached, cacheErr := ps.cache.Get(cacheKey)
-		if cacheErr == nil {
-			return cached, nil
-		}
-		if cacheErr != nil && cacheErr != cachepkg.ErrCacheMiss && !ps.cacheReadErrorsAsMiss {
-			return nil, cacheErr
-		}
-
 		rc, innerErr := ps.innerPartStore.GetPart(ctx, tx, partId)
 		if innerErr != nil {
 			return nil, innerErr
 		}
-		limitedReader := io.LimitReader(rc, ps.maxPartSizeBytes+1)
-		payload, readErr := io.ReadAll(limitedReader)
+		payload, readErr := readUpTo(rc, ps.maxPartSizeBytes+1)
 		if readErr != nil {
 			_ = rc.Close()
 			return nil, readErr
@@ -161,8 +151,8 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 
 		_ = rc.Close()
 
-		if cacheErr = ps.cache.Set(cacheKey, payload); cacheErr != nil {
-			slog.WarnContext(ctx, "Failed to set part cache entry after backend read", "cacheKey", cacheKey, "error", cacheErr)
+		if setErr := ps.cache.Set(cacheKey, bytes.NewReader(payload), int64(len(payload))); setErr != nil {
+			slog.WarnContext(ctx, "Failed to set part cache entry after backend read", "cacheKey", cacheKey, "error", setErr)
 		}
 
 		return payload, nil
@@ -260,6 +250,40 @@ func (r *bytesPrefixReadCloser) Close() error {
 	return r.inner.Close()
 }
 
+func readUpTo(reader io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return []byte{}, nil
+	}
+	capHint := int(minInt64(limit, 64*1024))
+	buf := make([]byte, 0, capHint)
+	tmp := make([]byte, 32*1024)
+	for int64(len(buf)) < limit {
+		remaining := limit - int64(len(buf))
+		chunk := tmp
+		if remaining < int64(len(chunk)) {
+			chunk = chunk[:remaining]
+		}
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+		}
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buf, nil
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type cacheOnReadCloser struct {
 	io.ReadCloser
 	cache            cachepkg.Cache
@@ -302,7 +326,7 @@ func (r *cacheOnReadCloser) persistCache() {
 	if !r.cacheEligible || !r.reachedEOF {
 		return
 	}
-	_ = r.cache.Set(r.cacheKey, r.buf)
+	_ = r.cache.Set(r.cacheKey, bytes.NewReader(r.buf), int64(len(r.buf)))
 	r.cacheEligible = false
 	r.buf = nil
 }

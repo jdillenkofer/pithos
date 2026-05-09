@@ -9,7 +9,9 @@ func New() (evictionpolicy.CacheEvictionPolicy, error) {
 	return &EvictNothingPolicy{}, nil
 }
 
-func (*EvictNothingPolicy) TrackSetAndReturnEvictedKeys(key string, val []byte) []string {
+func (*EvictNothingPolicy) TrackSetAndReturnEvictedKeys(key string, size int64) []string {
+	_ = key
+	_ = size
 	return []string{}
 }
 

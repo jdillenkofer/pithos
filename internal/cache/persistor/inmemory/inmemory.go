@@ -1,6 +1,11 @@
 package inmemory
 
-import "github.com/jdillenkofer/pithos/internal/cache/persistor"
+import (
+	"bytes"
+	"io"
+
+	"github.com/jdillenkofer/pithos/internal/cache/persistor"
+)
 
 type inMemoryCachePersistor struct {
 	keyToCacheEntryMap map[string][]byte
@@ -12,17 +17,21 @@ func New() (persistor.CachePersistor, error) {
 	}, nil
 }
 
-func (cs *inMemoryCachePersistor) Store(key string, val []byte) error {
+func (cs *inMemoryCachePersistor) Store(key string, reader io.Reader) error {
+	val, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
 	cs.keyToCacheEntryMap[key] = val
 	return nil
 }
 
-func (cs *inMemoryCachePersistor) Get(key string) ([]byte, error) {
+func (cs *inMemoryCachePersistor) Get(key string) (io.ReadCloser, error) {
 	val, ok := cs.keyToCacheEntryMap[key]
 	if !ok {
 		return nil, persistor.ErrCacheMiss
 	}
-	return val, nil
+	return io.NopCloser(bytes.NewReader(val)), nil
 }
 
 func (cs *inMemoryCachePersistor) Remove(key string) error {

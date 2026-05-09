@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"io"
+
 	"github.com/jdillenkofer/pithos/internal/cache/persistor"
 )
 
@@ -9,7 +11,7 @@ var (
 )
 
 type Cache interface {
-	Set(key string, data []byte) error
-	Get(key string) ([]byte, error)
+	Set(key string, reader io.Reader, size int64) error
+	Get(key string) (io.ReadCloser, error)
 	Remove(key string) error
 }

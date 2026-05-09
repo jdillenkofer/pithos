@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -35,7 +36,6 @@ type readCacheStorageMiddleware struct {
 
 type cachedObject struct {
 	Object storage.Object `json:"object"`
-	Body   []byte         `json:"body"`
 }
 
 var _ storage.Storage = (*readCacheStorageMiddleware)(nil)
@@ -55,7 +55,7 @@ func NewStorageMiddleware(innerStorage storage.Storage, cache cachepkg.Cache, op
 }
 
 func objectCacheKey(bucketName storage.BucketName, key storage.ObjectKey) string {
-	return fmt.Sprintf("READCACHE_OBJECT_%s_%s", bucketName.String(), key.String())
+	return fmt.Sprintf("READCACHE_OBJECT_BODY_%s_%s", bucketName.String(), key.String())
 }
 
 func headCacheKey(bucketName storage.BucketName, key storage.ObjectKey) string {
@@ -76,13 +76,13 @@ func (m *readCacheStorageMiddleware) HeadObject(ctx context.Context, bucketName 
 
 	objKey := objectCacheKey(bucketName, key)
 	if cachedObj, err := m.readObjectFromCache(ctx, objKey); err == nil {
-		if err = validateConditionalHead(&cachedObj.Object, opts); err != nil {
+		if err = validateConditionalHead(cachedObj, opts); err != nil {
 			return nil, err
 		}
-		if err = m.writeHeadToCache(ctx, headKey, &cachedObj.Object); err != nil {
+		if err = m.writeHeadToCache(ctx, headKey, cachedObj); err != nil {
 			slog.DebugContext(ctx, "Failed to write head cache from object cache", "key", headKey, "error", err)
 		}
-		return cloneObject(&cachedObj.Object), nil
+		return cloneObject(cachedObj), nil
 	}
 	v, err, _ := m.readGroup.Do(headKey, func() (interface{}, error) {
 		cachedHead, cacheErr := m.readHeadFromCache(ctx, headKey)
@@ -122,10 +122,16 @@ func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName s
 
 	objKey := objectCacheKey(bucketName, key)
 	if cachedObj, err := m.readObjectFromCache(ctx, objKey); err == nil {
-		if err = validateConditionalGet(&cachedObj.Object, opts); err != nil {
+		if err = validateConditionalGet(cachedObj, opts); err != nil {
 			return nil, nil, err
 		}
-		return cloneObject(&cachedObj.Object), []io.ReadCloser{io.NopCloser(bytes.NewReader(cachedObj.Body))}, nil
+		bodyReader, getErr := m.cache.Get(objKey)
+		if getErr == nil {
+			return cloneObject(cachedObj), []io.ReadCloser{bodyReader}, nil
+		}
+		if getErr != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
+			return nil, nil, getErr
+		}
 	}
 
 	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, nil, opts)
@@ -142,43 +148,48 @@ func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName s
 		slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", err)
 	}
 
+	pr, pw := io.Pipe()
+	cacheWriteDone := make(chan struct{})
+	go func(cacheKey string, objectSize int64) {
+		defer close(cacheWriteDone)
+		setErr := m.cache.Set(cacheKey, pr, objectSize)
+		if setErr != nil {
+			slog.DebugContext(ctx, "Failed to write streamed object body to cache", "key", cacheKey, "error", setErr)
+		}
+	}(objKey, obj.Size)
+
 	return cloneObject(obj), []io.ReadCloser{&cacheOnReadCloser{
-		ReadCloser:         readers[0],
-		cache:              m.cache,
-		cacheKey:           objKey,
-		object:             *obj,
-		maxObjectSizeBytes: m.maxObjectSizeBytes,
-		cacheEligible:      true,
-		buf:                make([]byte, 0),
+		ReadCloser:     readers[0],
+		pipeWriter:     pw,
+		cacheWriteDone: cacheWriteDone,
 	}}, nil
 }
 
 type cacheOnReadCloser struct {
 	io.ReadCloser
-	cache              cachepkg.Cache
-	cacheKey           string
-	object             storage.Object
-	maxObjectSizeBytes int64
-	cacheEligible      bool
-	buf                []byte
-	closed             bool
-	reachedEOF         bool
+	pipeWriter     *io.PipeWriter
+	cacheWriteDone chan struct{}
+	closed         bool
 }
 
 func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	if n > 0 && r.cacheEligible {
-		nextLen := int64(len(r.buf) + n)
-		if nextLen <= r.maxObjectSizeBytes {
-			r.buf = append(r.buf, p[:n]...)
-		} else {
-			r.cacheEligible = false
-			r.buf = nil
+	if n > 0 {
+		if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
+			_ = r.pipeWriter.CloseWithError(writeErr)
+			r.pipeWriter = nil
 		}
 	}
 	if err == io.EOF {
-		r.reachedEOF = true
-		r.persistCache()
+		if r.pipeWriter != nil {
+			_ = r.pipeWriter.Close()
+			r.pipeWriter = nil
+		}
+	} else if err != nil {
+		if r.pipeWriter != nil {
+			_ = r.pipeWriter.CloseWithError(err)
+			r.pipeWriter = nil
+		}
 	}
 	return n, err
 }
@@ -188,22 +199,15 @@ func (r *cacheOnReadCloser) Close() error {
 		return nil
 	}
 	r.closed = true
-	r.persistCache()
+	if r.pipeWriter != nil {
+		_ = r.pipeWriter.CloseWithError(io.ErrUnexpectedEOF)
+		r.pipeWriter = nil
+	}
+	if r.cacheWriteDone != nil {
+		<-r.cacheWriteDone
+		r.cacheWriteDone = nil
+	}
 	return r.ReadCloser.Close()
-}
-
-func (r *cacheOnReadCloser) persistCache() {
-	if !r.cacheEligible || !r.reachedEOF {
-		return
-	}
-	entry := cachedObject{Object: r.object, Body: r.buf}
-	bytesData, err := json.Marshal(&entry)
-	if err != nil {
-		return
-	}
-	_ = r.cache.Set(r.cacheKey, bytesData)
-	r.cacheEligible = false
-	r.buf = nil
 }
 
 func (m *readCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
@@ -267,7 +271,7 @@ func (m *readCacheStorageMiddleware) invalidateObjectCaches(ctx context.Context,
 }
 
 func (m *readCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key string) (*storage.Object, error) {
-	bytesData, err := m.cache.Get(key)
+	rc, err := m.cache.Get(key)
 	if err != nil {
 		if err != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
 			return nil, err
@@ -275,29 +279,35 @@ func (m *readCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key 
 		return nil, cachepkg.ErrCacheMiss
 	}
 	var obj storage.Object
-	if err = json.Unmarshal(bytesData, &obj); err != nil {
+	if err = json.NewDecoder(rc).Decode(&obj); err != nil {
+		_ = rc.Close()
 		_ = m.cache.Remove(key)
 		slog.DebugContext(ctx, "Failed to decode head cache entry", "key", key, "error", err)
+		return nil, cachepkg.ErrCacheMiss
+	}
+	if err = rc.Close(); err != nil {
 		return nil, cachepkg.ErrCacheMiss
 	}
 	return &obj, nil
 }
 
-func (m *readCacheStorageMiddleware) readObjectFromCache(ctx context.Context, key string) (*cachedObject, error) {
-	bytesData, err := m.cache.Get(key)
+func (m *readCacheStorageMiddleware) readObjectFromCache(ctx context.Context, key string) (*storage.Object, error) {
+	headKey := strings.Replace(key, "READCACHE_OBJECT_BODY_", "READCACHE_HEAD_", 1)
+	obj, err := m.readHeadFromCache(ctx, headKey)
+	if err != nil {
+		return nil, err
+	}
+	rc, err := m.cache.Get(key)
 	if err != nil {
 		if err != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
 			return nil, err
 		}
 		return nil, cachepkg.ErrCacheMiss
 	}
-	var obj cachedObject
-	if err = json.Unmarshal(bytesData, &obj); err != nil {
-		_ = m.cache.Remove(key)
-		slog.DebugContext(ctx, "Failed to decode object cache entry", "key", key, "error", err)
+	if err = rc.Close(); err != nil {
 		return nil, cachepkg.ErrCacheMiss
 	}
-	return &obj, nil
+	return obj, nil
 }
 
 func (m *readCacheStorageMiddleware) writeHeadToCache(ctx context.Context, key string, obj *storage.Object) error {
@@ -305,21 +315,9 @@ func (m *readCacheStorageMiddleware) writeHeadToCache(ctx context.Context, key s
 	if err != nil {
 		return err
 	}
-	err = m.cache.Set(key, bytesData)
+	err = m.cache.Set(key, bytes.NewReader(bytesData), int64(len(bytesData)))
 	if err != nil {
 		slog.DebugContext(ctx, "Failed to write head cache entry", "key", key, "error", err)
-	}
-	return err
-}
-
-func (m *readCacheStorageMiddleware) writeObjectToCache(ctx context.Context, key string, obj *cachedObject) error {
-	bytesData, err := json.Marshal(obj)
-	if err != nil {
-		return err
-	}
-	err = m.cache.Set(key, bytesData)
-	if err != nil {
-		slog.DebugContext(ctx, "Failed to write object cache entry", "key", key, "error", err)
 	}
 	return err
 }

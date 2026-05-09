@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"io"
 	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy"
@@ -21,11 +22,11 @@ func NewGenericCache(cachePersistor persistor.CachePersistor, cacheEvictionPolic
 	}, nil
 }
 
-func (c *GenericCache) Set(key string, val []byte) error {
+func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, val)
+	evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, size)
 	for _, evictedKey := range evictedKeys {
 		err := c.cachePersistor.Remove(evictedKey)
 		if err != nil {
@@ -33,14 +34,14 @@ func (c *GenericCache) Set(key string, val []byte) error {
 		}
 	}
 
-	err := c.cachePersistor.Store(key, val)
+	err := c.cachePersistor.Store(key, reader)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *GenericCache) Get(key string) ([]byte, error) {
+func (c *GenericCache) Get(key string) (io.ReadCloser, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
