@@ -4,8 +4,8 @@ import (
 	"container/heap"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker"
 )
 
 type LFUCacheEntry struct {

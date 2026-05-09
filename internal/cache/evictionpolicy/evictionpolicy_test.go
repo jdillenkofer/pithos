@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/lfu"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker/fixedkeylimit"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker/fixedsizelimit"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/lfu"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )

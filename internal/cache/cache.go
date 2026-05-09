@@ -1,7 +1,7 @@
 package cache
 
 import (
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+	"github.com/jdillenkofer/pithos/internal/cache/persistor"
 )
 
 var (

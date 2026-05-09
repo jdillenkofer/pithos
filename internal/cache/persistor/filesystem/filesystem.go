@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+	"github.com/jdillenkofer/pithos/internal/cache/persistor"
 )
 
 type filesystemCachePersistor struct {

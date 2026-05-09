@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jdillenkofer/pithos/internal/cache"
+	evictionPolicyConfig "github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/config"
+	persistorConfig "github.com/jdillenkofer/pithos/internal/cache/persistor/config"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/cache"
-	evictionPolicyConfig "github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/config"
-	persistorConfig "github.com/jdillenkofer/pithos/internal/storage/cache/persistor/config"
 )
 
 const (

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jdillenkofer/pithos/internal/cache/persistor"
+	"github.com/jdillenkofer/pithos/internal/cache/persistor/filesystem"
+	"github.com/jdillenkofer/pithos/internal/cache/persistor/inmemory"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/filesystem"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor/inmemory"
 )
 
 const (

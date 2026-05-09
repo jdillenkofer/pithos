@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )

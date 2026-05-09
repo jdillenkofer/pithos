@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker/fixedkeylimit"
+	"github.com/jdillenkofer/pithos/internal/cache/evictionpolicy/evictionchecker/fixedsizelimit"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedkeylimit"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy/evictionchecker/fixedsizelimit"
 )
 
 const (

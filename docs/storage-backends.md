@@ -15,9 +15,6 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 ### Enhancement Layers
 
-- **CacheStorage**: Adds caching capabilities to any storage backend
-  - Configurable cache policies (LFU, etc.)
-  - Support for both in-memory and persistent caching
 - **ReplicationStorage**: Enables replication across multiple storage backends
   - Supports primary-replica configuration
 
@@ -32,6 +29,9 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **CompressionPartStoreMiddleware**: Compresses parts based on sample compression ratio checks
   - Supported `compressionAlgorithm` values: `gzip`, `zstd`
   - Defaults: `sampleSizeBytes=65536`, `compressionAlgorithm="zstd"`, `maxCompressionRatio=0.95`
+- **CachePartStore**: Adds caching capabilities to part storage
+  - Configurable cache policies (LFU, etc.)
+  - Support for both in-memory and persistent caching
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and TPM 2.0
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)

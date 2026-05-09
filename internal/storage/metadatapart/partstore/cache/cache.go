@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
-	cachepkg "github.com/jdillenkofer/pithos/internal/storage/cache"
+	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 

@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	cachepkg "github.com/jdillenkofer/pithos/internal/storage/cache"
+	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"

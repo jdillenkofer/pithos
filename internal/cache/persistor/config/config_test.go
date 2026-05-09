@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/cache/persistor"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	"github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )

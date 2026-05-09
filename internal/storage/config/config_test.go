@@ -15,8 +15,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
@@ -139,55 +139,6 @@ func TestCanCreateMetadataPartStorageFromJson(t *testing.T) {
 			"partStore": {
 				"type": "FilesystemPartStore",
 				"root": %s
-			}
-		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
-
-	storage, err := createStorageFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, storage)
-}
-
-func TestCanCreateCacheStorageFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	dbPath := filepath.Join(storagePath, "pithos.db")
-	jsonData := fmt.Sprintf(`{
-			"type": "CacheStorage",
-			"cache": {
-				"type": "GenericCache",
-				"cachePersistor": {
-					"type": "InMemoryPersistor"
-				},
-				"cacheEvictionPolicy": {
-					"type": "EvictNothingEvictionPolicy"
-				}
-			},
-			"innerStorage": {
-				"type": "MetadataPartStorage",
-				"db": {
-					"type": "RegisterDatabaseReference",
-					"refName": "db",
-					"db": {
-						"type": "SqliteDatabase",
-						"dbPath": %s
-					}
-				},
-				"metadataStore": {
-					"type": "SqlMetadataStore",
-					"db": {
-						"type": "DatabaseReference",
-						"refName": "db"
-					}
-				},
-				"partStore": {
-					"type": "FilesystemPartStore",
-					"root": %s
-				}
 			}
 		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
@@ -458,7 +409,7 @@ func TestCanCreateAuditStorageMiddlewareFromJson(t *testing.T) {
 	// Generate keys for signing
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
-	
+
 	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
 	mlPrivBytes, _ := mlPriv.MarshalBinary()
 	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)
@@ -526,7 +477,7 @@ func TestCanCreateAuditStorageMiddlewareWithMultipleSinksFromJson(t *testing.T) 
 	// Generate keys for signing
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
-	
+
 	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
 	mlPrivBytes, _ := mlPriv.MarshalBinary()
 	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)

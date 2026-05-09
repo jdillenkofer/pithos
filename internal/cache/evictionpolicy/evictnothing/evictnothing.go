@@ -1,6 +1,6 @@
 package evictnothing
 
-import "github.com/jdillenkofer/pithos/internal/storage/cache/evictionpolicy"
+import "github.com/jdillenkofer/pithos/internal/cache/evictionpolicy"
 
 type EvictNothingPolicy struct {
 }

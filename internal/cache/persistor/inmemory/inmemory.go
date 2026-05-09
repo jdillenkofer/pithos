@@ -1,6 +1,6 @@
 package inmemory
 
-import "github.com/jdillenkofer/pithos/internal/storage/cache/persistor"
+import "github.com/jdillenkofer/pithos/internal/cache/persistor"
 
 type inMemoryCachePersistor struct {
 	keyToCacheEntryMap map[string][]byte

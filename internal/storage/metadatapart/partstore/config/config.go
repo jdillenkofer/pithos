@@ -9,9 +9,9 @@ import (
 	"reflect"
 	"time"
 
+	cacheConfig "github.com/jdillenkofer/pithos/internal/cache/config"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
-	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
