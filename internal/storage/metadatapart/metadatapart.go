@@ -1,10 +1,13 @@
 package metadatapart
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -22,6 +25,89 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
+
+type partRange struct {
+	id    partstore.PartId
+	skip  int64
+	limit *int64
+}
+
+type lazyPartSequenceReadCloser struct {
+	ctx       context.Context
+	tx        *sql.Tx
+	partStore partstore.PartStore
+	parts     []partRange
+
+	partIndex int
+	current   io.ReadCloser
+	closed    bool
+}
+
+func (l *lazyPartSequenceReadCloser) openNextPart() error {
+	for l.partIndex < len(l.parts) {
+		part := l.parts[l.partIndex]
+		l.partIndex++
+
+		rc, err := l.partStore.GetPart(l.ctx, l.tx, part.id)
+		if err != nil {
+			return err
+		}
+
+		if part.skip > 0 {
+			if _, err := ioutils.SkipNBytes(rc, part.skip); err != nil {
+				rc.Close()
+				return err
+			}
+		}
+
+		if part.limit != nil {
+			rc = ioutils.NewLimitedEndReadCloser(rc, *part.limit)
+		}
+
+		l.current = rc
+		return nil
+	}
+
+	return io.EOF
+}
+
+func (l *lazyPartSequenceReadCloser) Read(p []byte) (int, error) {
+	if l.closed {
+		return 0, io.EOF
+	}
+
+	for {
+		if l.current == nil {
+			if err := l.openNextPart(); err != nil {
+				if err == io.EOF {
+					return 0, io.EOF
+				}
+				return 0, err
+			}
+		}
+
+		n, err := l.current.Read(p)
+		if err == io.EOF {
+			_ = l.current.Close()
+			l.current = nil
+			if n > 0 {
+				return n, nil
+			}
+			continue
+		}
+		return n, err
+	}
+}
+
+func (l *lazyPartSequenceReadCloser) Close() error {
+	l.closed = true
+	if l.current != nil {
+		err := l.current.Close()
+		l.current = nil
+		return err
+	}
+	return nil
+}
 
 type metadataPartStorage struct {
 	*lifecycle.ValidatedLifecycle
@@ -403,15 +489,20 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.T
 	startByte := byteRange.Start
 	endByte := byteRange.End
 
-	var partReaders []io.ReadCloser
+	parts := make([]partRange, 0)
 	var partsSizeUntilNow int64
-	var bytesSkipped int64
-	newStartByteOffset := int64(0)
+	var globalStart int64
 	if startByte != nil {
-		newStartByteOffset = *startByte
+		globalStart = *startByte
+	}
+	globalEnd := object.Size
+	if endByte != nil {
+		globalEnd = *endByte
+	}
+	if globalStart >= globalEnd {
+		return nil, storage.ErrInvalidRange
 	}
 
-	skippingAtTheStart := true
 	for _, part := range object.Parts {
 		// Skip parts past the requested range
 		if endByte != nil && *endByte <= partsSizeUntilNow {
@@ -420,41 +511,37 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.T
 
 		partsSizeUntilNow += part.Size
 
-		// Skip parts before the requested range
-		if skippingAtTheStart && newStartByteOffset >= part.Size {
-			newStartByteOffset -= part.Size
-			bytesSkipped += part.Size
-			continue
+		partStart := partsSizeUntilNow - part.Size
+		partEnd := partsSizeUntilNow
+		rangeStartInPart := int64(0)
+		if globalStart > partStart {
+			rangeStartInPart = globalStart - partStart
 		}
-		skippingAtTheStart = false
+		rangeEndInPart := part.Size
+		if globalEnd < partEnd {
+			rangeEndInPart = globalEnd - partStart
+		}
+		if rangeEndInPart < rangeStartInPart {
+			return nil, fmt.Errorf("invalid part range computed")
+		}
 
-		partReader, err := mbs.partStore.GetPart(ctx, tx, part.Id)
-		if err != nil {
-			// Close any readers we've already opened
-			for _, r := range partReaders {
-				r.Close()
-			}
-			return nil, err
-		}
-		partReaders = append(partReaders, partReader)
+		limit := rangeEndInPart - rangeStartInPart
+		parts = append(parts, partRange{
+			id:    part.Id,
+			skip:  rangeStartInPart,
+			limit: &limit,
+		})
+	}
+	if len(parts) == 0 {
+		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 
-	reader := ioutils.NewMultiReadCloser(partReaders...)
-
-	// Apply end limit first to avoid offset recalculation
-	if endByte != nil {
-		reader = ioutils.NewLimitedEndReadCloser(reader, *endByte-bytesSkipped)
-	}
-
-	// Skip to start position
-	if startByte != nil {
-		if _, err := ioutils.SkipNBytes(reader, newStartByteOffset); err != nil {
-			reader.Close()
-			return nil, err
-		}
-	}
-
-	return reader, nil
+	return &lazyPartSequenceReadCloser{
+		ctx:       ctx,
+		tx:        tx,
+		partStore: mbs.partStore,
+		parts:     parts,
+	}, nil
 }
 
 func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
@@ -465,21 +552,23 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	if err != nil {
 		return nil, nil, err
 	}
-	defer tx.Rollback() // Safe to call multiple times
 
 	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
 	if err != nil {
+		tx.Rollback()
 		return nil, nil, err
 	}
 
 	if opts != nil {
 		if opts.IfMatchETag != nil {
 			if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
+				tx.Rollback()
 				return nil, nil, storage.ErrPreconditionFailed
 			}
 		}
 		if opts.IfNoneMatchETag != nil {
 			if *opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag {
+				tx.Rollback()
 				return nil, nil, storage.ErrNotModified
 			}
 		}
@@ -493,6 +582,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// Normalize suffix ranges and validate
 	ranges, err = normalizeAndValidateRanges(ranges, object.Size)
 	if err != nil {
+		tx.Rollback()
 		return nil, nil, err
 	}
 
@@ -504,16 +594,25 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			for _, r := range readers {
 				r.Close()
 			}
+			tx.Rollback()
 			return nil, nil, err
 		}
 		readers = append(readers, reader)
 	}
 
-	if err := tx.Commit(); err != nil {
-		for _, r := range readers {
-			r.Close()
+	remainingReaders := int64(len(readers))
+	if remainingReaders == 0 {
+		tx.Rollback()
+	} else {
+		for i := range readers {
+			inner := readers[i]
+			readers[i] = ioutils.NewReadCloserWithCloseHook(inner, func() error {
+				if atomic.AddInt64(&remainingReaders, -1) == 0 {
+					return tx.Rollback()
+				}
+				return nil
+			})
 		}
-		return nil, nil, err
 	}
 
 	storageObject := convertObject(*object)
