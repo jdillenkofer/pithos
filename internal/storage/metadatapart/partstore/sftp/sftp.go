@@ -39,7 +39,7 @@ type sftpPartStore struct {
 var _ partstore.PartStore = (*sftpPartStore)(nil)
 
 func (s *sftpPartStore) ensureRootDir() error {
-	_, err := doRetriableOperation(func() (*struct{}, error) {
+	_, err := doRetriableOperation(context.Background(), func() (*struct{}, error) {
 		return nil, s.client.MkdirAll(s.root)
 	}, maxStpRetries, s.reconnectSftpClient, nil)
 	return err
@@ -116,10 +116,14 @@ func getBackoffDuration(attempt int) time.Duration {
 	}
 }
 
-func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry func() error, shouldIgnoreError func(error) bool) (T, error) {
+func doRetriableOperation[T any](ctx context.Context, op func() (T, error), maxRetries int, preRetry func() error, shouldIgnoreError func(error) bool) (T, error) {
 	retries := 0
 	var empty T
 	for {
+		if err := ctx.Err(); err != nil {
+			return empty, err
+		}
+
 		t, err := op()
 		if err != nil {
 			if shouldIgnoreError != nil && shouldIgnoreError(err) {
@@ -131,9 +135,16 @@ func doRetriableOperation[T any](op func() (T, error), maxRetries int, preRetry 
 				backoff := getBackoffDuration(retries)
 				if backoff > 0 {
 					slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, waiting %v before reconnect", retries, maxRetries, err, backoff))
-					time.Sleep(backoff)
+					select {
+					case <-ctx.Done():
+						return empty, ctx.Err()
+					case <-time.After(backoff):
+					}
 				} else {
 					slog.Warn(fmt.Sprintf("SFTP operation failed (attempt %d/%d): %v, attempting immediate reconnect", retries, maxRetries, err))
+				}
+				if err := ctx.Err(); err != nil {
+					return empty, err
 				}
 				err = preRetry()
 				if err != nil {
@@ -185,7 +196,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstor
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	f, err := doRetriableOperation(func() (*sftp.File, error) {
+	f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
 		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
@@ -204,7 +215,7 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstor
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	f, err := doRetriableOperation(func() (*sftp.File, error) {
+	f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
 		f, err := s.client.OpenFile(filename, os.O_RDONLY)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -227,7 +238,7 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPartIds")
 	defer span.End()
 
-	dirEntries, err := doRetriableOperation(func() ([]os.FileInfo, error) {
+	dirEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
 		return s.client.ReadDir(s.root)
 	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
@@ -250,7 +261,7 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId parts
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	_, err := doRetriableOperation(func() (*struct{}, error) {
+	_, err := doRetriableOperation(ctx, func() (*struct{}, error) {
 		return nil, s.client.Remove(filename)
 	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
 		// Check for both ENOENT and fs.ErrNotExist to be safe
