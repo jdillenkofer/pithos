@@ -9,6 +9,7 @@ import (
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/storage/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -160,6 +161,56 @@ func TestCachePartStore_MaxSizeBypassesCache(t *testing.T) {
 	assert.NoError(t, rc.Close())
 
 	assert.Equal(t, 4, inner.getPartCall)
+}
+
+func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
+	ctx := context.Background()
+	cache := newMemoryCache()
+	inner := newMemoryPartStore()
+	partId, _ := partstore.NewRandomPartId()
+
+	db, err := sql.Open("sqlite3", ":memory:")
+	assert.NoError(t, err)
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	assert.NoError(t, err)
+	defer tx.Rollback()
+
+	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
+	assert.NoError(t, err)
+
+	_, err = cache.Get(getPartCacheKey(*partId))
+	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
+
+	err = store.DeletePart(ctx, tx, *partId)
+	assert.NoError(t, err)
+}
+
+func TestCachePartStore_CanMutateCacheInsideTxWhenEnabled(t *testing.T) {
+	ctx := context.Background()
+	cache := newMemoryCache()
+	inner := newMemoryPartStore()
+	partId, _ := partstore.NewRandomPartId()
+
+	db, err := sql.Open("sqlite3", ":memory:")
+	assert.NoError(t, err)
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, nil)
+	assert.NoError(t, err)
+	defer tx.Rollback()
+
+	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true, MutatingOpsAffectCacheWithinTx: true})
+	assert.NoError(t, err)
+
+	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
+	assert.NoError(t, err)
+
+	data, err := cache.Get(getPartCacheKey(*partId))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("v1"), data)
 }
 
 func TestCachePartStore_DoesNotCachePartialReads(t *testing.T) {

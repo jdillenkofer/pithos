@@ -17,20 +17,24 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
-const defaultMaxPartSizeBytes int64 = 32 * 1024 * 1024
+// Production default: cache parts up to 64 MiB.
+// This balances hit rate and memory pressure for common multipart workloads.
+const defaultMaxPartSizeBytes int64 = 64 * 1024 * 1024
 
 type Options struct {
-	MaxPartSizeBytes      int64
-	CacheReadErrorsAsMiss bool
+	MaxPartSizeBytes               int64
+	CacheReadErrorsAsMiss          bool
+	MutatingOpsAffectCacheWithinTx bool
 }
 
 type cachePartStore struct {
-	innerPartStore        partstore.PartStore
-	cache                 cachepkg.Cache
-	maxPartSizeBytes      int64
-	cacheReadErrorsAsMiss bool
-	tracer                trace.Tracer
-	readGroup             singleflight.Group
+	innerPartStore                 partstore.PartStore
+	cache                          cachepkg.Cache
+	maxPartSizeBytes               int64
+	cacheReadErrorsAsMiss          bool
+	mutatingOpsAffectCacheWithinTx bool
+	tracer                         trace.Tracer
+	readGroup                      singleflight.Group
 }
 
 var _ partstore.PartStore = (*cachePartStore)(nil)
@@ -42,11 +46,12 @@ func New(cache cachepkg.Cache, innerPartStore partstore.PartStore, opts Options)
 	}
 
 	return &cachePartStore{
-		innerPartStore:        innerPartStore,
-		cache:                 cache,
-		maxPartSizeBytes:      maxPartSizeBytes,
-		cacheReadErrorsAsMiss: opts.CacheReadErrorsAsMiss,
-		tracer:                otel.Tracer("internal/storage/metadatapart/partstore/cache"),
+		innerPartStore:                 innerPartStore,
+		cache:                          cache,
+		maxPartSizeBytes:               maxPartSizeBytes,
+		cacheReadErrorsAsMiss:          opts.CacheReadErrorsAsMiss,
+		mutatingOpsAffectCacheWithinTx: opts.MutatingOpsAffectCacheWithinTx,
+		tracer:                         otel.Tracer("internal/storage/metadatapart/partstore/cache"),
 	}, nil
 }
 
@@ -74,6 +79,10 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 	err := ps.innerPartStore.PutPart(ctx, tx, partId, teed)
 	if err != nil {
 		return err
+	}
+	if tx != nil && !ps.mutatingOpsAffectCacheWithinTx {
+		slog.DebugContext(ctx, "Skipping cache mutation for PutPart inside transaction", "cacheKey", cacheKey)
+		return nil
 	}
 
 	if teed.cacheEligible {
@@ -178,6 +187,10 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId par
 	err := ps.innerPartStore.DeletePart(ctx, tx, partId)
 	if err != nil {
 		return err
+	}
+	if tx != nil && !ps.mutatingOpsAffectCacheWithinTx {
+		slog.DebugContext(ctx, "Skipping cache mutation for DeletePart inside transaction", "cacheKey", getPartCacheKey(partId))
+		return nil
 	}
 
 	cacheKey := getPartCacheKey(partId)
