@@ -82,7 +82,7 @@ const subcommandTPMInfo = "tpm-info"
 
 const readHeaderTimeout = 10 * time.Second
 const readTimeout = 30 * time.Second
-const writeTimeout = 5 * time.Minute
+const writeTimeout = 0
 const idleTimeout = 2 * time.Minute
 const maxHeaderBytes = 1 << 20
 
