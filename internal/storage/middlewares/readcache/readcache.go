@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,8 +37,6 @@ type cachedObject struct {
 	Object storage.Object `json:"object"`
 	Body   []byte         `json:"body"`
 }
-
-var errObjectLargerThanCacheThreshold = errors.New("object larger than cache threshold")
 
 var _ storage.Storage = (*readCacheStorageMiddleware)(nil)
 
@@ -130,59 +127,83 @@ func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName s
 		}
 		return cloneObject(&cachedObj.Object), []io.ReadCloser{io.NopCloser(bytes.NewReader(cachedObj.Body))}, nil
 	}
-	v, err, _ := m.readGroup.Do(objKey, func() (interface{}, error) {
-		cachedObj, cacheErr := m.readObjectFromCache(ctx, objKey)
-		if cacheErr == nil {
-			return cachedObj, nil
-		}
 
-		obj, readers, innerErr := m.Next.GetObject(ctx, bucketName, key, nil, nil)
-		if innerErr != nil {
-			return nil, innerErr
-		}
-		if len(readers) != 1 {
-			for _, r := range readers {
-				_ = r.Close()
-			}
-			return nil, fmt.Errorf("expected single reader for full object fetch")
-		}
-		if obj.Size > m.maxObjectSizeBytes {
-			_ = readers[0].Close()
-			return nil, errObjectLargerThanCacheThreshold
-		}
-
-		body, readErr := io.ReadAll(readers[0])
-		closeErr := readers[0].Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-
-		entry := cachedObject{Object: *obj, Body: body}
-		if writeErr := m.writeObjectToCache(ctx, objKey, &entry); writeErr != nil {
-			slog.DebugContext(ctx, "Failed to write object cache", "key", objKey, "error", writeErr)
-		}
-		if writeErr := m.writeHeadToCache(ctx, headCacheKey(bucketName, key), obj); writeErr != nil {
-			slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", writeErr)
-		}
-		return &entry, nil
-	})
+	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, nil, opts)
 	if err != nil {
-		if errors.Is(err, errObjectLargerThanCacheThreshold) {
-			return m.Next.GetObject(ctx, bucketName, key, nil, opts)
+		return nil, nil, err
+	}
+	if len(readers) != 1 {
+		return obj, readers, nil
+	}
+	if obj.Size > m.maxObjectSizeBytes {
+		return obj, readers, nil
+	}
+	if err = m.writeHeadToCache(ctx, headCacheKey(bucketName, key), obj); err != nil {
+		slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", err)
+	}
+
+	return cloneObject(obj), []io.ReadCloser{&cacheOnReadCloser{
+		ReadCloser:         readers[0],
+		cache:              m.cache,
+		cacheKey:           objKey,
+		object:             *obj,
+		maxObjectSizeBytes: m.maxObjectSizeBytes,
+		cacheEligible:      true,
+		buf:                make([]byte, 0),
+	}}, nil
+}
+
+type cacheOnReadCloser struct {
+	io.ReadCloser
+	cache              cachepkg.Cache
+	cacheKey           string
+	object             storage.Object
+	maxObjectSizeBytes int64
+	cacheEligible      bool
+	buf                []byte
+	closed             bool
+	reachedEOF         bool
+}
+
+func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.cacheEligible {
+		nextLen := int64(len(r.buf) + n)
+		if nextLen <= r.maxObjectSizeBytes {
+			r.buf = append(r.buf, p[:n]...)
+		} else {
+			r.cacheEligible = false
+			r.buf = nil
 		}
-		return nil, nil, err
 	}
-	entry, ok := v.(*cachedObject)
-	if !ok {
-		return nil, nil, fmt.Errorf("invalid object cache payload type")
+	if err == io.EOF {
+		r.reachedEOF = true
+		r.persistCache()
 	}
-	if err = validateConditionalGet(&entry.Object, opts); err != nil {
-		return nil, nil, err
+	return n, err
+}
+
+func (r *cacheOnReadCloser) Close() error {
+	if r.closed {
+		return nil
 	}
-	return cloneObject(&entry.Object), []io.ReadCloser{io.NopCloser(bytes.NewReader(entry.Body))}, nil
+	r.closed = true
+	r.persistCache()
+	return r.ReadCloser.Close()
+}
+
+func (r *cacheOnReadCloser) persistCache() {
+	if !r.cacheEligible || !r.reachedEOF {
+		return
+	}
+	entry := cachedObject{Object: r.object, Body: r.buf}
+	bytesData, err := json.Marshal(&entry)
+	if err != nil {
+		return
+	}
+	_ = r.cache.Set(r.cacheKey, bytesData)
+	r.cacheEligible = false
+	r.buf = nil
 }
 
 func (m *readCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

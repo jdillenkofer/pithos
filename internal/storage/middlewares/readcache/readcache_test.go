@@ -191,34 +191,3 @@ func TestS3ReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	_, _, err = mw.GetObject(ctx, bucket, key, nil, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
 }
-
-func TestReadCacheMiddleware_CoalescesConcurrentMisses(t *testing.T) {
-	ctx := context.Background()
-	bucket := metadatastore.MustNewBucketName("bucket")
-	key := metadatastore.MustNewObjectKey("key")
-
-	inner := newFakeStorage()
-	inner.objectByKey["bucket/key"] = storage.Object{Key: key, ETag: "e1", Size: 5}
-	inner.bodyByKey["bucket/key"] = []byte("hello")
-
-	mw, err := NewStorageMiddleware(inner, newMemoryCache(), Options{MaxObjectSizeBytes: 1024, CacheReadErrorsAsMiss: true})
-	assert.NoError(t, err)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, readers, getErr := mw.GetObject(ctx, bucket, key, nil, nil)
-			assert.NoError(t, getErr)
-			if getErr != nil {
-				return
-			}
-			_, _ = io.ReadAll(readers[0])
-			_ = readers[0].Close()
-		}()
-	}
-	wg.Wait()
-
-	assert.Equal(t, 1, inner.getCalls["bucket/key"])
-}
