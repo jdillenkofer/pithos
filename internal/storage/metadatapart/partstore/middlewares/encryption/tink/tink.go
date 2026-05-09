@@ -503,13 +503,22 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		return nil, err
 	}
 
+	var closeOnce sync.Once
+	closeUnderlying := func() error {
+		var closeErr error
+		closeOnce.Do(func() {
+			closeErr = rc.Close()
+		})
+		return closeErr
+	}
+
 	// Use lazy initialization to defer header parsing and DEK decryption until first read
 	// This allows streaming to start immediately without blocking on KMS/Vault operations
-	return ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+	lazyReader := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
 		// Read the header length (4 bytes big-endian)
 		lengthBytes := make([]byte, 4)
 		if _, err := io.ReadFull(rc, lengthBytes); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
@@ -518,42 +527,42 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		// Read and parse the header
 		headerBytes := make([]byte, headerLen)
 		if _, err := io.ReadFull(rc, headerBytes); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		var header PartHeader
 		if err := json.Unmarshal(headerBytes, &header); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		if header.Version > PartHeaderVersion || header.Version < 1 {
-			rc.Close()
+			closeUnderlying()
 			return nil, fmt.Errorf("unsupported part header version: %d", header.Version)
 		}
 
 		// Decrypt the classical DEK with master AEAD
 		classicalDEK, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		finalDEK := classicalDEK
 		if len(header.PQEncapsulatedKey) > 0 {
 			if mw.mlkemKey == nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, fmt.Errorf("part is PQ-encrypted but no ML-KEM key is configured")
 			}
 			pqSharedSecret, err := mw.mlkemKey.Decapsulate(header.PQEncapsulatedKey)
 			if err != nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, fmt.Errorf("failed to decapsulate PQ key: %w", err)
 			}
 			finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
 			if err != nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, err
 			}
 		}
@@ -566,20 +575,28 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		// Create streaming AEAD with the final DEK
 		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(finalDEK, "SHA256", 32, segmentSize, 0)
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		// Create a decrypting reader for the remaining data
 		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, partId.Bytes())
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		// Return a composite reader that wraps the decrypt reader with the underlying closer
-		return &compositeReadCloser{decryptReader, rc}, nil
-	}), nil
+		return &compositeReadCloser{decryptReader, closerFunc(closeUnderlying)}, nil
+	})
+
+	return ioutils.NewReadCloserWithCloseHook(lazyReader, closeUnderlying), nil
+}
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error {
+	return f()
 }
 
 // compositeReadCloser combines a Reader with a Closer
