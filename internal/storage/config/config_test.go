@@ -250,7 +250,7 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
-func TestCanCreateReadCacheStorageMiddlewareFromJson(t *testing.T) {
+func TestCanCreateObjectCacheStorageMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	tempDir, cleanup, err := config.CreateTempDir()
@@ -260,7 +260,7 @@ func TestCanCreateReadCacheStorageMiddlewareFromJson(t *testing.T) {
 	storagePath := *tempDir
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
-			"type": "ReadCacheStorageMiddleware",
+			"type": "ObjectCacheStorageMiddleware",
 			"maxObjectSizeBytes": 1048576,
 			"cacheReadErrorsAsMiss": true,
 			"cache": {

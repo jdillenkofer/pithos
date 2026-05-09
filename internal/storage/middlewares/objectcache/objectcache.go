@@ -1,9 +1,10 @@
-package readcache
+package objectcache
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,7 +26,7 @@ type Options struct {
 	CacheReadErrorsAsMiss bool
 }
 
-type readCacheStorageMiddleware struct {
+type objectCacheStorageMiddleware struct {
 	delegator.DelegatingStorage
 	cache                 cachepkg.Cache
 	maxObjectSizeBytes    int64
@@ -38,32 +39,34 @@ type cachedObject struct {
 	Object storage.Object `json:"object"`
 }
 
-var _ storage.Storage = (*readCacheStorageMiddleware)(nil)
+var errObjectLargerThanCacheThreshold = errors.New("object larger than cache threshold")
+
+var _ storage.Storage = (*objectCacheStorageMiddleware)(nil)
 
 func NewStorageMiddleware(innerStorage storage.Storage, cache cachepkg.Cache, opts Options) (storage.Storage, error) {
 	maxObjectSizeBytes := opts.MaxObjectSizeBytes
 	if maxObjectSizeBytes <= 0 {
 		maxObjectSizeBytes = defaultMaxObjectSizeBytes
 	}
-	return &readCacheStorageMiddleware{
+	return &objectCacheStorageMiddleware{
 		DelegatingStorage:     delegator.Wrap(innerStorage),
 		cache:                 cache,
 		maxObjectSizeBytes:    maxObjectSizeBytes,
 		cacheReadErrorsAsMiss: opts.CacheReadErrorsAsMiss,
-		tracer:                otel.Tracer("internal/storage/middlewares/readcache"),
+		tracer:                otel.Tracer("internal/storage/middlewares/objectcache"),
 	}, nil
 }
 
 func objectCacheKey(bucketName storage.BucketName, key storage.ObjectKey) string {
-	return fmt.Sprintf("READCACHE_OBJECT_BODY_%s_%s", bucketName.String(), key.String())
+	return fmt.Sprintf("OBJECTCACHE_OBJECT_BODY_%s_%s", bucketName.String(), key.String())
 }
 
 func headCacheKey(bucketName storage.BucketName, key storage.ObjectKey) string {
-	return fmt.Sprintf("READCACHE_HEAD_%s_%s", bucketName.String(), key.String())
+	return fmt.Sprintf("OBJECTCACHE_HEAD_%s_%s", bucketName.String(), key.String())
 }
 
-func (m *readCacheStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
-	ctx, span := m.tracer.Start(ctx, "ReadCacheStorageMiddleware.HeadObject")
+func (m *objectCacheStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
+	ctx, span := m.tracer.Start(ctx, "ObjectCacheStorageMiddleware.HeadObject")
 	defer span.End()
 
 	headKey := headCacheKey(bucketName, key)
@@ -112,8 +115,8 @@ func (m *readCacheStorageMiddleware) HeadObject(ctx context.Context, bucketName 
 	return cloneObject(obj), nil
 }
 
-func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
-	ctx, span := m.tracer.Start(ctx, "ReadCacheStorageMiddleware.GetObject")
+func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
+	ctx, span := m.tracer.Start(ctx, "ObjectCacheStorageMiddleware.GetObject")
 	defer span.End()
 
 	if len(ranges) > 0 {
@@ -210,16 +213,114 @@ func (r *cacheOnReadCloser) Close() error {
 	return r.ReadCloser.Close()
 }
 
-func (m *readCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
-	result, err := m.Next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
+func (m *objectCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
+	objKey := objectCacheKey(bucketName, key)
+	headKey := headCacheKey(bucketName, key)
+	pr, pw := io.Pipe()
+	cacheWriteDone := make(chan struct{})
+	go func() {
+		defer close(cacheWriteDone)
+		setErr := m.cache.Set(objKey, pr, -1)
+		if setErr != nil {
+			if !errors.Is(setErr, errObjectLargerThanCacheThreshold) {
+				slog.DebugContext(ctx, "Failed to stream object body into cache on put", "key", objKey, "error", setErr)
+			}
+			_ = m.cache.Remove(objKey)
+		}
+	}()
+
+	teedReader := &cacheOnWriteReader{
+		Reader:             data,
+		pipeWriter:         pw,
+		maxObjectSizeBytes: m.maxObjectSizeBytes,
+	}
+
+	result, err := m.Next.PutObject(ctx, bucketName, key, contentType, teedReader, checksumInput, opts)
 	if err != nil {
+		_ = teedReader.closeWithError(err)
+		<-cacheWriteDone
+		m.invalidateObjectCaches(ctx, bucketName, key)
 		return nil, err
 	}
-	m.invalidateObjectCaches(ctx, bucketName, key)
+	_ = teedReader.close()
+	<-cacheWriteDone
+
+	obj, headErr := m.Next.HeadObject(ctx, bucketName, key, nil)
+	if headErr == nil {
+		if writeErr := m.writeHeadToCache(ctx, headKey, obj); writeErr != nil {
+			slog.DebugContext(ctx, "Failed to write head cache on put", "key", headKey, "error", writeErr)
+		}
+	} else {
+		slog.DebugContext(ctx, "Failed to head object on put for cache metadata", "key", headKey, "error", headErr)
+		_ = m.cache.Remove(headKey)
+	}
+
 	return result, nil
 }
 
-func (m *readCacheStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+type cacheOnWriteReader struct {
+	io.Reader
+	pipeWriter         *io.PipeWriter
+	maxObjectSizeBytes int64
+	bytesSeen          int64
+	cachePipeActive    bool
+}
+
+func (r *cacheOnWriteReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		if !r.cachePipeActive {
+			r.cachePipeActive = true
+		}
+		r.bytesSeen += int64(n)
+		if r.bytesSeen > r.maxObjectSizeBytes {
+			_ = r.pipeWriter.CloseWithError(errObjectLargerThanCacheThreshold)
+			r.pipeWriter = nil
+			r.cachePipeActive = false
+		} else if r.pipeWriter != nil {
+			if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
+				_ = r.pipeWriter.CloseWithError(writeErr)
+				r.pipeWriter = nil
+				r.cachePipeActive = false
+			}
+		}
+	}
+
+	if err == io.EOF {
+		if r.pipeWriter != nil {
+			_ = r.pipeWriter.Close()
+			r.pipeWriter = nil
+			r.cachePipeActive = false
+		}
+	} else if err != nil {
+		if r.pipeWriter != nil {
+			_ = r.pipeWriter.CloseWithError(err)
+			r.pipeWriter = nil
+			r.cachePipeActive = false
+		}
+	}
+	return n, err
+}
+
+func (r *cacheOnWriteReader) close() error {
+	if r.pipeWriter != nil {
+		_ = r.pipeWriter.Close()
+		r.pipeWriter = nil
+		r.cachePipeActive = false
+	}
+	return nil
+}
+
+func (r *cacheOnWriteReader) closeWithError(err error) error {
+	if r.pipeWriter != nil {
+		_ = r.pipeWriter.CloseWithError(err)
+		r.pipeWriter = nil
+		r.cachePipeActive = false
+	}
+	return nil
+}
+
+func (m *objectCacheStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	result, err := m.Next.AppendObject(ctx, bucketName, key, data, checksumInput, opts)
 	if err != nil {
 		return nil, err
@@ -228,7 +329,7 @@ func (m *readCacheStorageMiddleware) AppendObject(ctx context.Context, bucketNam
 	return result, nil
 }
 
-func (m *readCacheStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (m *objectCacheStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	err := m.Next.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
 		return err
@@ -237,7 +338,7 @@ func (m *readCacheStorageMiddleware) DeleteObject(ctx context.Context, bucketNam
 	return nil
 }
 
-func (m *readCacheStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
+func (m *objectCacheStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	result, err := m.Next.DeleteObjects(ctx, bucketName, entries)
 	if err != nil {
 		return nil, err
@@ -250,7 +351,7 @@ func (m *readCacheStorageMiddleware) DeleteObjects(ctx context.Context, bucketNa
 	return result, nil
 }
 
-func (m *readCacheStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
+func (m *objectCacheStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	result, err := m.Next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		return nil, err
@@ -259,7 +360,7 @@ func (m *readCacheStorageMiddleware) CompleteMultipartUpload(ctx context.Context
 	return result, nil
 }
 
-func (m *readCacheStorageMiddleware) invalidateObjectCaches(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) {
+func (m *objectCacheStorageMiddleware) invalidateObjectCaches(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) {
 	objKey := objectCacheKey(bucketName, key)
 	if err := m.cache.Remove(objKey); err != nil {
 		slog.DebugContext(ctx, "Failed to remove object cache key", "key", objKey, "error", err)
@@ -270,7 +371,7 @@ func (m *readCacheStorageMiddleware) invalidateObjectCaches(ctx context.Context,
 	}
 }
 
-func (m *readCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key string) (*storage.Object, error) {
+func (m *objectCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key string) (*storage.Object, error) {
 	rc, err := m.cache.Get(key)
 	if err != nil {
 		if err != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
@@ -291,8 +392,8 @@ func (m *readCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key 
 	return &obj, nil
 }
 
-func (m *readCacheStorageMiddleware) readObjectFromCache(ctx context.Context, key string) (*storage.Object, error) {
-	headKey := strings.Replace(key, "READCACHE_OBJECT_BODY_", "READCACHE_HEAD_", 1)
+func (m *objectCacheStorageMiddleware) readObjectFromCache(ctx context.Context, key string) (*storage.Object, error) {
+	headKey := strings.Replace(key, "OBJECTCACHE_OBJECT_BODY_", "OBJECTCACHE_HEAD_", 1)
 	obj, err := m.readHeadFromCache(ctx, headKey)
 	if err != nil {
 		return nil, err
@@ -310,7 +411,7 @@ func (m *readCacheStorageMiddleware) readObjectFromCache(ctx context.Context, ke
 	return obj, nil
 }
 
-func (m *readCacheStorageMiddleware) writeHeadToCache(ctx context.Context, key string, obj *storage.Object) error {
+func (m *objectCacheStorageMiddleware) writeHeadToCache(ctx context.Context, key string, obj *storage.Object) error {
 	bytesData, err := json.Marshal(obj)
 	if err != nil {
 		return err

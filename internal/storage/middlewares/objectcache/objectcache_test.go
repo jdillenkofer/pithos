@@ -1,4 +1,4 @@
-package readcache
+package objectcache
 
 import (
 	"bytes"
@@ -135,7 +135,7 @@ func (s *fakeStorage) DeleteObject(ctx context.Context, bucketName storage.Bucke
 	return nil
 }
 
-func TestS3ReadCacheMiddleware_CachesGetObject(t *testing.T) {
+func TestReadCacheMiddleware_CachesGetObject(t *testing.T) {
 	ctx := context.Background()
 	bucket := metadatastore.MustNewBucketName("bucket")
 	key := metadatastore.MustNewObjectKey("key")
@@ -164,7 +164,7 @@ func TestS3ReadCacheMiddleware_CachesGetObject(t *testing.T) {
 	assert.Equal(t, 1, inner.getCalls["bucket/key"])
 }
 
-func TestS3ReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
+func TestReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	ctx := context.Background()
 	bucket := metadatastore.MustNewBucketName("bucket")
 	key := metadatastore.MustNewObjectKey("key")
@@ -195,4 +195,25 @@ func TestS3ReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	assert.NoError(t, err)
 	_, _, err = mw.GetObject(ctx, bucket, key, nil, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+func TestReadCacheMiddleware_CachesBodyOnPutObject(t *testing.T) {
+	ctx := context.Background()
+	bucket := metadatastore.MustNewBucketName("bucket")
+	key := metadatastore.MustNewObjectKey("key")
+
+	inner := newFakeStorage()
+	mw, err := NewStorageMiddleware(inner, newMemoryCache(), Options{MaxObjectSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	_, err = mw.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("hello")), nil, nil)
+	assert.NoError(t, err)
+
+	_, readers, err := mw.GetObject(ctx, bucket, key, nil, nil)
+	assert.NoError(t, err)
+	body, err := io.ReadAll(readers[0])
+	assert.NoError(t, err)
+	assert.NoError(t, readers[0].Close())
+	assert.Equal(t, []byte("hello"), body)
+	assert.Equal(t, 0, inner.getCalls["bucket/key"])
 }

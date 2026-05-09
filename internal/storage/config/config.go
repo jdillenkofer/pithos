@@ -28,8 +28,8 @@ import (
 	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
-	"github.com/jdillenkofer/pithos/internal/storage/middlewares/readcache"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
@@ -45,7 +45,7 @@ const (
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
-	readCacheStorageMiddlewareType   = "ReadCacheStorageMiddleware"
+	objectCacheStorageMiddlewareType = "ObjectCacheStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -507,7 +507,7 @@ type S3ClientStorageConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-type ReadCacheStorageMiddlewareConfiguration struct {
+type ObjectCacheStorageMiddlewareConfiguration struct {
 	CacheInstantiator        cacheConfig.CacheInstantiator `json:"-"`
 	RawCache                 json.RawMessage               `json:"cache"`
 	MaxObjectSizeBytes       internalConfig.Int64Provider  `json:"maxObjectSizeBytes"`
@@ -517,9 +517,9 @@ type ReadCacheStorageMiddlewareConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-func (s *ReadCacheStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type readCacheStorageMiddlewareConfiguration ReadCacheStorageMiddlewareConfiguration
-	err := json.Unmarshal(b, (*readCacheStorageMiddlewareConfiguration)(s))
+func (s *ObjectCacheStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type objectCacheStorageMiddlewareConfiguration ObjectCacheStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*objectCacheStorageMiddlewareConfiguration)(s))
 	if err != nil {
 		return err
 	}
@@ -534,7 +534,7 @@ func (s *ReadCacheStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error 
 	return nil
 }
 
-func (s *ReadCacheStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+func (s *ObjectCacheStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	err := s.CacheInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
@@ -546,7 +546,7 @@ func (s *ReadCacheStorageMiddlewareConfiguration) RegisterReferences(diCollectio
 	return nil
 }
 
-func (s *ReadCacheStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+func (s *ObjectCacheStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
 	cacheImpl, err := s.CacheInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
@@ -555,7 +555,7 @@ func (s *ReadCacheStorageMiddlewareConfiguration) Instantiate(diProvider depende
 	if err != nil {
 		return nil, err
 	}
-	return readcache.NewStorageMiddleware(innerStorage, cacheImpl, readcache.Options{
+	return objectcache.NewStorageMiddleware(innerStorage, cacheImpl, objectcache.Options{
 		MaxObjectSizeBytes:    s.MaxObjectSizeBytes.Value(),
 		CacheReadErrorsAsMiss: s.CacheReadErrorsAsMiss.Value(),
 	})
@@ -604,8 +604,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &ReplicationStorageConfiguration{}
 	case s3ClientStorageType:
 		si = &S3ClientStorageConfiguration{}
-	case readCacheStorageMiddlewareType:
-		si = &ReadCacheStorageMiddlewareConfiguration{}
+	case objectCacheStorageMiddlewareType:
+		si = &ObjectCacheStorageMiddlewareConfiguration{}
 	default:
 		return nil, errors.New("unknown storage type")
 	}
