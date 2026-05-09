@@ -1657,27 +1657,48 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
 		for idx := range readers {
 			if idx > 0 {
-				io.WriteString(writer, "\r\n")
+				if _, err := io.WriteString(writer, "\r\n"); err != nil {
+					slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+					return
+				}
 			}
-			io.WriteString(writer, fmt.Sprintf("--%s\r\n", separator))
+			if _, err := io.WriteString(writer, fmt.Sprintf("--%s\r\n", separator)); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+				return
+			}
 
-			io.WriteString(writer, rangeHeaders[idx])
+			if _, err := io.WriteString(writer, rangeHeaders[idx]); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+				return
+			}
 
-			ioutils.CopyN(writer, readers[idx], sizes[idx])
+			if _, err := ioutils.CopyN(writer, readers[idx], sizes[idx]); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response copy", "error", err)
+				return
+			}
 		}
-		io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator))
+		if _, err := io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator)); err != nil {
+			slog.DebugContext(ctx, "Stopped multipart response final write", "error", err)
+			return
+		}
 	} else if len(storageRanges) == 1 {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		contentRangeValue := generateContentRangeValue(storageRanges[0], object.Size)
 		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		ioutils.CopyN(writer, readers[0], totalSize)
+		if _, err := ioutils.CopyN(writer, readers[0], totalSize); err != nil {
+			slog.DebugContext(ctx, "Stopped single range response copy", "error", err)
+			return
+		}
 	} else {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		ioutils.CopyN(writer, readers[0], totalSize)
+		if _, err := ioutils.CopyN(writer, readers[0], totalSize); err != nil {
+			slog.DebugContext(ctx, "Stopped full response copy", "error", err)
+			return
+		}
 	}
 }
 
@@ -2580,7 +2601,10 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	writer := ioutils.NewTracingWriter(ctx, s.tracer, "WebsiteGetObject", w)
-	ioutils.CopyN(writer, readers[0], object.Size)
+	if _, err := ioutils.CopyN(writer, readers[0], object.Size); err != nil {
+		slog.DebugContext(ctx, "Stopped website object response copy", "error", err)
+		return
+	}
 }
 
 func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) {
@@ -2670,7 +2694,10 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	io.Copy(w, readers[0])
+	if _, err := io.Copy(w, readers[0]); err != nil {
+		slog.DebugContext(ctx, "Stopped website error document response copy", "error", err)
+		return
+	}
 }
 
 // writePlainError writes a plain-text error response for the website endpoint.
