@@ -504,15 +504,19 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.T
 	}
 
 	for _, part := range object.Parts {
-		// Skip parts past the requested range
-		if endByte != nil && *endByte <= partsSizeUntilNow {
+		partStart := partsSizeUntilNow
+		partEnd := partStart + part.Size
+
+		// Skip parts before the requested range.
+		if globalStart >= partEnd {
+			partsSizeUntilNow = partEnd
+			continue
+		}
+		// Stop once we're past the requested range.
+		if globalEnd <= partStart {
 			break
 		}
 
-		partsSizeUntilNow += part.Size
-
-		partStart := partsSizeUntilNow - part.Size
-		partEnd := partsSizeUntilNow
 		rangeStartInPart := int64(0)
 		if globalStart > partStart {
 			rangeStartInPart = globalStart - partStart
@@ -531,6 +535,8 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.T
 			skip:  rangeStartInPart,
 			limit: &limit,
 		})
+
+		partsSizeUntilNow = partEnd
 	}
 	if len(parts) == 0 {
 		return io.NopCloser(bytes.NewReader(nil)), nil

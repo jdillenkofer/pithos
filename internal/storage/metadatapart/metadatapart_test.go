@@ -573,3 +573,127 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("x")), nil, nil)
 	assert.ErrorIs(t, err, storage.ErrTooManyParts)
 }
+
+func TestGetObject_RangeRegression_StartInsideLaterPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-0000-")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-1111-")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-2222")), nil, nil)
+	require.NoError(t, err)
+
+	start := int64(12) // inside second part
+	end := int64(26)   // inside third part
+	_, readers, err := st.GetObject(ctx, bucket, key, []storage.ByteRange{{Start: &start, End: &end}}, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	defer readers[0].Close()
+
+	content, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	assert.Equal(t, "rt-1111-part-2", string(content))
+}
+
+func TestGetObject_RangeHandlingAcrossPartBoundaries(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("!!!")), nil, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		byteRange storage.ByteRange
+		expected string
+	}{
+		{
+			name:     "entire second part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(5)), End: ptrutils.ToPtr(int64(11))},
+			expected: " world",
+		},
+		{
+			name:     "straddles second and third part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(8)), End: ptrutils.ToPtr(int64(13))},
+			expected: "rld!!",
+		},
+		{
+			name:     "open-ended from middle of second part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(7)), End: nil},
+			expected: "orld!!!",
+		},
+		{
+			name:     "exact part boundary",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(11)), End: ptrutils.ToPtr(int64(14))},
+			expected: "!!!",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, readers, err := st.GetObject(ctx, bucket, key, []storage.ByteRange{tc.byteRange}, nil)
+			require.NoError(t, err)
+			require.Len(t, readers, 1)
+			defer readers[0].Close()
+
+			content, err := io.ReadAll(readers[0])
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, string(content))
+		})
+	}
+}
+
+func TestGetObject_MultipleRangesStartingAfterEarlierParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("aaa")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("bbb")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("ccc")), nil, nil)
+	require.NoError(t, err)
+
+	ranges := []storage.ByteRange{
+		{Start: ptrutils.ToPtr(int64(4)), End: ptrutils.ToPtr(int64(6))},
+		{Start: ptrutils.ToPtr(int64(7)), End: ptrutils.ToPtr(int64(9))},
+	}
+
+	_, readers, err := st.GetObject(ctx, bucket, key, ranges, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	defer readers[0].Close()
+	defer readers[1].Close()
+
+	first, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	second, err := io.ReadAll(readers[1])
+	require.NoError(t, err)
+
+	assert.Equal(t, "bb", string(first))
+	assert.Equal(t, "cc", string(second))
+}
