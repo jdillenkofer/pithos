@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -29,12 +31,15 @@ type readCacheStorageMiddleware struct {
 	maxObjectSizeBytes    int64
 	cacheReadErrorsAsMiss bool
 	tracer                trace.Tracer
+	readGroup             singleflight.Group
 }
 
 type cachedObject struct {
 	Object storage.Object `json:"object"`
 	Body   []byte         `json:"body"`
 }
+
+var errObjectLargerThanCacheThreshold = errors.New("object larger than cache threshold")
 
 var _ storage.Storage = (*readCacheStorageMiddleware)(nil)
 
@@ -82,15 +87,32 @@ func (m *readCacheStorageMiddleware) HeadObject(ctx context.Context, bucketName 
 		}
 		return cloneObject(&cachedObj.Object), nil
 	}
+	v, err, _ := m.readGroup.Do(headKey, func() (interface{}, error) {
+		cachedHead, cacheErr := m.readHeadFromCache(ctx, headKey)
+		if cacheErr == nil {
+			return cachedHead, nil
+		}
 
-	obj, err := m.Next.HeadObject(ctx, bucketName, key, opts)
+		obj, innerErr := m.Next.HeadObject(ctx, bucketName, key, nil)
+		if innerErr != nil {
+			return nil, innerErr
+		}
+		if writeErr := m.writeHeadToCache(ctx, headKey, obj); writeErr != nil {
+			slog.DebugContext(ctx, "Failed to write head cache", "key", headKey, "error", writeErr)
+		}
+		return obj, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err = m.writeHeadToCache(ctx, headKey, obj); err != nil {
-		slog.DebugContext(ctx, "Failed to write head cache", "key", headKey, "error", err)
+	obj, ok := v.(*storage.Object)
+	if !ok {
+		return nil, fmt.Errorf("invalid head cache payload type")
 	}
-	return obj, nil
+	if err = validateConditionalHead(obj, opts); err != nil {
+		return nil, err
+	}
+	return cloneObject(obj), nil
 }
 
 func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
@@ -108,37 +130,59 @@ func (m *readCacheStorageMiddleware) GetObject(ctx context.Context, bucketName s
 		}
 		return cloneObject(&cachedObj.Object), []io.ReadCloser{io.NopCloser(bytes.NewReader(cachedObj.Body))}, nil
 	}
+	v, err, _ := m.readGroup.Do(objKey, func() (interface{}, error) {
+		cachedObj, cacheErr := m.readObjectFromCache(ctx, objKey)
+		if cacheErr == nil {
+			return cachedObj, nil
+		}
 
-	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, nil, opts)
+		obj, readers, innerErr := m.Next.GetObject(ctx, bucketName, key, nil, nil)
+		if innerErr != nil {
+			return nil, innerErr
+		}
+		if len(readers) != 1 {
+			for _, r := range readers {
+				_ = r.Close()
+			}
+			return nil, fmt.Errorf("expected single reader for full object fetch")
+		}
+		if obj.Size > m.maxObjectSizeBytes {
+			_ = readers[0].Close()
+			return nil, errObjectLargerThanCacheThreshold
+		}
+
+		body, readErr := io.ReadAll(readers[0])
+		closeErr := readers[0].Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+
+		entry := cachedObject{Object: *obj, Body: body}
+		if writeErr := m.writeObjectToCache(ctx, objKey, &entry); writeErr != nil {
+			slog.DebugContext(ctx, "Failed to write object cache", "key", objKey, "error", writeErr)
+		}
+		if writeErr := m.writeHeadToCache(ctx, headCacheKey(bucketName, key), obj); writeErr != nil {
+			slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", writeErr)
+		}
+		return &entry, nil
+	})
 	if err != nil {
+		if errors.Is(err, errObjectLargerThanCacheThreshold) {
+			return m.Next.GetObject(ctx, bucketName, key, nil, opts)
+		}
 		return nil, nil, err
 	}
-	if len(readers) != 1 {
-		return obj, readers, nil
+	entry, ok := v.(*cachedObject)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid object cache payload type")
 	}
-
-	if obj.Size > m.maxObjectSizeBytes {
-		return obj, readers, nil
+	if err = validateConditionalGet(&entry.Object, opts); err != nil {
+		return nil, nil, err
 	}
-
-	body, readErr := io.ReadAll(readers[0])
-	closeErr := readers[0].Close()
-	if readErr != nil {
-		return nil, nil, readErr
-	}
-	if closeErr != nil {
-		return nil, nil, closeErr
-	}
-
-	entry := cachedObject{Object: *obj, Body: body}
-	if err = m.writeObjectToCache(ctx, objKey, &entry); err != nil {
-		slog.DebugContext(ctx, "Failed to write object cache", "key", objKey, "error", err)
-	}
-	if err = m.writeHeadToCache(ctx, headCacheKey(bucketName, key), obj); err != nil {
-		slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", err)
-	}
-
-	return cloneObject(obj), []io.ReadCloser{io.NopCloser(bytes.NewReader(body))}, nil
+	return cloneObject(&entry.Object), []io.ReadCloser{io.NopCloser(bytes.NewReader(entry.Body))}, nil
 }
 
 func (m *readCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

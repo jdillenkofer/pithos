@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ func (c *memoryCache) Remove(key string) error {
 
 type fakeStorage struct {
 	storage.Storage
+	mu          sync.Mutex
 	bodyByKey   map[string][]byte
 	objectByKey map[string]storage.Object
 	headCalls   map[string]int
@@ -65,8 +67,10 @@ func (s *fakeStorage) Stop(ctx context.Context) error  { return nil }
 
 func (s *fakeStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	k := bucketName.String() + "/" + key.String()
+	s.mu.Lock()
 	s.headCalls[k]++
 	obj, ok := s.objectByKey[k]
+	s.mu.Unlock()
 	if !ok {
 		return nil, storage.ErrNoSuchKey
 	}
@@ -84,8 +88,11 @@ func (s *fakeStorage) HeadObject(ctx context.Context, bucketName storage.BucketN
 
 func (s *fakeStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	k := bucketName.String() + "/" + key.String()
+	s.mu.Lock()
 	s.getCalls[k]++
 	obj, ok := s.objectByKey[k]
+	body := s.bodyByKey[k]
+	s.mu.Unlock()
 	if !ok {
 		return nil, nil, storage.ErrNoSuchKey
 	}
@@ -97,7 +104,6 @@ func (s *fakeStorage) GetObject(ctx context.Context, bucketName storage.BucketNa
 			return nil, nil, storage.ErrNotModified
 		}
 	}
-	body := s.bodyByKey[k]
 	return &obj, []io.ReadCloser{io.NopCloser(bytes.NewReader(body))}, nil
 }
 
@@ -108,15 +114,19 @@ func (s *fakeStorage) PutObject(ctx context.Context, bucketName storage.BucketNa
 	}
 	k := bucketName.String() + "/" + key.String()
 	etag := "etag-" + time.Now().String()
+	s.mu.Lock()
 	s.bodyByKey[k] = body
 	s.objectByKey[k] = storage.Object{Key: key, ETag: etag, Size: int64(len(body))}
+	s.mu.Unlock()
 	return &storage.PutObjectResult{ETag: &etag}, nil
 }
 
 func (s *fakeStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	k := bucketName.String() + "/" + key.String()
+	s.mu.Lock()
 	delete(s.bodyByKey, k)
 	delete(s.objectByKey, k)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -180,4 +190,35 @@ func TestS3ReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	assert.NoError(t, err)
 	_, _, err = mw.GetObject(ctx, bucket, key, nil, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+func TestReadCacheMiddleware_CoalescesConcurrentMisses(t *testing.T) {
+	ctx := context.Background()
+	bucket := metadatastore.MustNewBucketName("bucket")
+	key := metadatastore.MustNewObjectKey("key")
+
+	inner := newFakeStorage()
+	inner.objectByKey["bucket/key"] = storage.Object{Key: key, ETag: "e1", Size: 5}
+	inner.bodyByKey["bucket/key"] = []byte("hello")
+
+	mw, err := NewStorageMiddleware(inner, newMemoryCache(), Options{MaxObjectSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, readers, getErr := mw.GetObject(ctx, bucket, key, nil, nil)
+			assert.NoError(t, getErr)
+			if getErr != nil {
+				return
+			}
+			_, _ = io.ReadAll(readers[0])
+			_ = readers[0].Close()
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, inner.getCalls["bucket/key"])
 }
