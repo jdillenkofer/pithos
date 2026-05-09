@@ -11,9 +11,11 @@ import (
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	partStoreCache "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
@@ -35,6 +37,7 @@ const (
 	sftpPartStoreType                     = "SftpPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
+	cachePartStoreType                    = "CachePartStore"
 )
 
 type PartStoreInstantiator = internalConfig.DynamicJsonInstantiator[partstore.PartStore]
@@ -471,6 +474,58 @@ func (e *ErasureCodedPartStoreMiddlewareConfiguration) Instantiate(diProvider de
 	)
 }
 
+type CachePartStoreConfiguration struct {
+	CacheInstantiator          cacheConfig.CacheInstantiator `json:"-"`
+	RawCache                   json.RawMessage               `json:"cache"`
+	MaxPartSizeBytes           internalConfig.Int64Provider  `json:"maxPartSizeBytes"`
+	CacheReadErrorsAsMiss      internalConfig.BoolProvider   `json:"cacheReadErrorsAsMiss"`
+	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
+	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
+	internalConfig.DynamicJsonType
+}
+
+func (c *CachePartStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type cachePartStoreConfiguration CachePartStoreConfiguration
+	err := json.Unmarshal(b, (*cachePartStoreConfiguration)(c))
+	if err != nil {
+		return err
+	}
+
+	c.CacheInstantiator, err = cacheConfig.CreateCacheInstantiatorFromJson(c.RawCache)
+	if err != nil {
+		return err
+	}
+	c.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(c.RawInnerPartStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *CachePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := c.CacheInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = c.InnerPartStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *CachePartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	cache, err := c.CacheInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	innerPartStore, err := c.InnerPartStoreInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	return partStoreCache.New(cache, innerPartStore, partStoreCache.Options{
+		MaxPartSizeBytes:      c.MaxPartSizeBytes.Value(),
+		CacheReadErrorsAsMiss: c.CacheReadErrorsAsMiss.Value(),
+	})
+}
 func (s *SqlPartStoreConfiguration) UnmarshalJSON(b []byte) error {
 	type sqlPartStoreConfiguration SqlPartStoreConfiguration
 	err := json.Unmarshal(b, (*sqlPartStoreConfiguration)(s))
@@ -527,6 +582,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SqlPartStoreConfiguration{}
 	case erasureCodedPartStoreMiddlewareType:
 		bi = &ErasureCodedPartStoreMiddlewareConfiguration{}
+	case cachePartStoreType:
+		bi = &CachePartStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown partStore type")
 	}

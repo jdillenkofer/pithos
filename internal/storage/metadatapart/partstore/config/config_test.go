@@ -62,6 +62,37 @@ func TestCanCreateFilesystemPartStoreFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateCachePartStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "CachePartStore",
+				 "maxPartSizeBytes": 1024,
+				 "cacheReadErrorsAsMiss": true,
+				 "cache": {
+					 "type": "GenericCache",
+					 "cachePersistor": {
+						 "type": "InMemoryPersistor"
+					 },
+					 "cacheEvictionPolicy": {
+						 "type": "EvictNothingEvictionPolicy"
+					 }
+				 },
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
 func TestCanCreateSftpPartStoreFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
