@@ -23,6 +23,10 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **ConditionalStorage**: Conditional forwarding to different storage backends based on bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 - **AuditStorage**: Provides cryptographically signed audit logs (see [Audit Logging](audit-logging.md))
+- **ReadCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
+  - Caches `GetObject` full-object reads and `HeadObject` metadata
+  - Invalidates cache entries on successful object mutation operations (`PutObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
+  - Bypasses cache for ranged `GetObject` requests
 
 ### Part Store Middleware
 
@@ -131,7 +135,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   "type": "CompressionPartStoreMiddleware",
   "sampleSizeBytes": 65536,
   "compressionAlgorithm": "zstd",
-    "maxCompressionRatio": 0.95,
+  "maxCompressionRatio": 0.95,
   "innerPartStore": {
     "type": "FilesystemPartStore",
     "root": "./data/parts"
@@ -139,6 +143,40 @@ Pithos supports multiple storage backends that can be configured in the storage 
 }
 ```
 
+### Read Cache Middleware
+
+```json
+{
+  "type": "ReadCacheStorageMiddleware",
+  "maxObjectSizeBytes": 67108864,
+  "cacheReadErrorsAsMiss": true,
+  "cache": {
+    "type": "GenericCache",
+    "cachePersistor": {
+      "type": "InMemoryPersistor"
+    },
+    "cacheEvictionPolicy": {
+      "type": "LfuEvictionPolicy",
+      "evictionCheckers": [
+        {
+          "type": "FixedSizeLimit",
+          "maxSizeLimit": 2147483648
+        }
+      ]
+    }
+  },
+  "innerStorage": {
+    "type": "S3ClientStorage",
+    "baseEndpoint": "https://s3.amazonaws.com",
+    "region": "us-east-1",
+    "accessKeyId": "${AWS_ACCESS_KEY_ID}",
+    "secretAccessKey": "${AWS_SECRET_ACCESS_KEY}",
+    "usePathStyle": false
+  }
+}
+```
+
+> **Note:** This middleware currently caches only full-object reads. Ranged reads are always fetched from the inner storage.
 ### Post-Quantum Encryption
 
 ```json

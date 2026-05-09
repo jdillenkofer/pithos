@@ -250,6 +250,57 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
+func TestCanCreateReadCacheStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
+			"type": "ReadCacheStorageMiddleware",
+			"maxObjectSizeBytes": 1048576,
+			"cacheReadErrorsAsMiss": true,
+			"cache": {
+				"type": "GenericCache",
+				"cachePersistor": {
+					"type": "InMemoryPersistor"
+				},
+				"cacheEvictionPolicy": {
+					"type": "EvictNothingEvictionPolicy"
+				}
+			},
+			"innerStorage": {
+				"type": "MetadataPartStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"partStore": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
 func TestCanCreateOutboxStorageFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
