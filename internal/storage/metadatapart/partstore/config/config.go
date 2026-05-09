@@ -475,13 +475,12 @@ func (e *ErasureCodedPartStoreMiddlewareConfiguration) Instantiate(diProvider de
 }
 
 type CachePartStoreConfiguration struct {
-	CacheInstantiator              cacheConfig.CacheInstantiator `json:"-"`
-	RawCache                       json.RawMessage               `json:"cache"`
-	MaxPartSizeBytes               internalConfig.Int64Provider  `json:"maxPartSizeBytes"`
-	CacheReadErrorsAsMiss          internalConfig.BoolProvider   `json:"cacheReadErrorsAsMiss"`
-	MutatingOpsAffectCacheWithinTx internalConfig.BoolProvider   `json:"mutatingOpsAffectCacheWithinTx"`
-	InnerPartStoreInstantiator     PartStoreInstantiator         `json:"-"`
-	RawInnerPartStore              json.RawMessage               `json:"innerPartStore"`
+	CacheInstantiator          cacheConfig.CacheInstantiator `json:"-"`
+	RawCache                   json.RawMessage               `json:"cache"`
+	MaxPartSizeBytes           internalConfig.Int64Provider  `json:"maxPartSizeBytes"`
+	CacheReadErrorsAsMiss      internalConfig.BoolProvider   `json:"cacheReadErrorsAsMiss"`
+	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
+	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
 }
 
@@ -523,9 +522,8 @@ func (c *CachePartStoreConfiguration) Instantiate(diProvider dependencyinjection
 		return nil, err
 	}
 	return partStoreCache.New(cache, innerPartStore, partStoreCache.Options{
-		MaxPartSizeBytes:               c.MaxPartSizeBytes.Value(),
-		CacheReadErrorsAsMiss:          c.CacheReadErrorsAsMiss.Value(),
-		MutatingOpsAffectCacheWithinTx: c.MutatingOpsAffectCacheWithinTx.Value(),
+		MaxPartSizeBytes:      c.MaxPartSizeBytes.Value(),
+		CacheReadErrorsAsMiss: c.CacheReadErrorsAsMiss.Value(),
 	})
 }
 func (s *SqlPartStoreConfiguration) UnmarshalJSON(b []byte) error {

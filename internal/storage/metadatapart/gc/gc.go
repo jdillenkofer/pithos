@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
-	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -98,14 +98,14 @@ func (partGC *partGC) runGC() error {
 
 	existingPartIds, err := partGC.partStore.GetPartIds(ctx, tx)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
 
 	inUsePartIdMap := make(map[partstore.PartId]struct{})
-	inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx)
+	inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx.SqlTx())
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
 	for _, inUsePartId := range inUsePartIds {
@@ -118,7 +118,7 @@ func (partGC *partGC) runGC() error {
 		if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
 			err = partGC.partStore.DeletePart(ctx, tx, existingPartId)
 			if err != nil {
-				tx.Rollback()
+				_ = tx.Rollback(ctx)
 				return err
 			}
 
@@ -128,7 +128,7 @@ func (partGC *partGC) runGC() error {
 
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}

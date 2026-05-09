@@ -3,7 +3,6 @@ package cache
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
@@ -22,19 +22,17 @@ import (
 const defaultMaxPartSizeBytes int64 = 64 * 1024 * 1024
 
 type Options struct {
-	MaxPartSizeBytes               int64
-	CacheReadErrorsAsMiss          bool
-	MutatingOpsAffectCacheWithinTx bool
+	MaxPartSizeBytes      int64
+	CacheReadErrorsAsMiss bool
 }
 
 type cachePartStore struct {
-	innerPartStore                 partstore.PartStore
-	cache                          cachepkg.Cache
-	maxPartSizeBytes               int64
-	cacheReadErrorsAsMiss          bool
-	mutatingOpsAffectCacheWithinTx bool
-	tracer                         trace.Tracer
-	readGroup                      singleflight.Group
+	innerPartStore        partstore.PartStore
+	cache                 cachepkg.Cache
+	maxPartSizeBytes      int64
+	cacheReadErrorsAsMiss bool
+	tracer                trace.Tracer
+	readGroup             singleflight.Group
 }
 
 var _ partstore.PartStore = (*cachePartStore)(nil)
@@ -46,12 +44,11 @@ func New(cache cachepkg.Cache, innerPartStore partstore.PartStore, opts Options)
 	}
 
 	return &cachePartStore{
-		innerPartStore:                 innerPartStore,
-		cache:                          cache,
-		maxPartSizeBytes:               maxPartSizeBytes,
-		cacheReadErrorsAsMiss:          opts.CacheReadErrorsAsMiss,
-		mutatingOpsAffectCacheWithinTx: opts.MutatingOpsAffectCacheWithinTx,
-		tracer:                         otel.Tracer("internal/storage/metadatapart/partstore/cache"),
+		innerPartStore:        innerPartStore,
+		cache:                 cache,
+		maxPartSizeBytes:      maxPartSizeBytes,
+		cacheReadErrorsAsMiss: opts.CacheReadErrorsAsMiss,
+		tracer:                otel.Tracer("internal/storage/metadatapart/partstore/cache"),
 	}, nil
 }
 
@@ -67,7 +64,7 @@ func (ps *cachePartStore) Stop(ctx context.Context) error {
 	return ps.innerPartStore.Stop(ctx)
 }
 
-func (ps *cachePartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.PutPart")
 	defer span.End()
 
@@ -80,8 +77,20 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 	if err != nil {
 		return err
 	}
-	if tx != nil && !ps.mutatingOpsAffectCacheWithinTx {
-		slog.DebugContext(ctx, "Skipping cache mutation for PutPart inside transaction", "cacheKey", cacheKey)
+	if tx != nil {
+		tx.RegisterOnCommit(func(opCtx context.Context) error {
+			if teed.cacheEligible {
+				if setErr := ps.cache.Set(cacheKey, buf); setErr != nil {
+					slog.WarnContext(opCtx, "Failed to write part to cache", "cacheKey", cacheKey, "error", setErr)
+					_ = ps.cache.Remove(cacheKey)
+				}
+				return nil
+			}
+			if removeErr := ps.cache.Remove(cacheKey); removeErr != nil {
+				slog.DebugContext(opCtx, "Failed to remove oversized part from cache", "cacheKey", cacheKey, "error", removeErr)
+			}
+			return nil
+		})
 		return nil
 	}
 
@@ -99,7 +108,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 	return nil
 }
 
-func (ps *cachePartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPart")
 	defer span.End()
 
@@ -173,14 +182,14 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partst
 	}, nil
 }
 
-func (ps *cachePartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (ps *cachePartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPartIds")
 	defer span.End()
 
 	return ps.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (ps *cachePartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.DeletePart")
 	defer span.End()
 
@@ -188,8 +197,14 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId par
 	if err != nil {
 		return err
 	}
-	if tx != nil && !ps.mutatingOpsAffectCacheWithinTx {
-		slog.DebugContext(ctx, "Skipping cache mutation for DeletePart inside transaction", "cacheKey", getPartCacheKey(partId))
+	if tx != nil {
+		cacheKey := getPartCacheKey(partId)
+		tx.RegisterOnCommit(func(opCtx context.Context) error {
+			if removeErr := ps.cache.Remove(cacheKey); removeErr != nil {
+				slog.DebugContext(opCtx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", removeErr)
+			}
+			return nil
+		})
 		return nil
 	}
 
@@ -197,6 +212,11 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId par
 	if err := ps.cache.Remove(cacheKey); err != nil {
 		slog.DebugContext(ctx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", err)
 	}
+	return nil
+}
+
+func (ps *cachePartStore) OnTxCommit(ctx context.Context, tx *database.TxContext) error { return nil }
+func (ps *cachePartStore) OnTxRollback(ctx context.Context, tx *database.TxContext) error {
 	return nil
 }
 

@@ -242,10 +242,10 @@ func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := gzipStore.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -255,16 +255,16 @@ func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 	}
 	rc, err := zstdStore.GetPart(ctx, tx, *partId)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(rc)
 	rc.Close()
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,10 +313,10 @@ func TestCompressionPartStoreMiddleware_ReadsLegacyPlainDataWithoutHeader(t *tes
 		t.Fatal(err)
 	}
 	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -326,16 +326,16 @@ func TestCompressionPartStoreMiddleware_ReadsLegacyPlainDataWithoutHeader(t *tes
 	}
 	rc, err := store.GetPart(ctx, tx, *partId)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(rc)
 	rc.Close()
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -388,10 +388,10 @@ func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *tes
 		t.Fatal(err)
 	}
 	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -401,16 +401,16 @@ func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *tes
 	}
 	rc, err := store.GetPart(ctx, tx, *partId)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
 	got, err := io.ReadAll(rc)
 	rc.Close()
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		t.Fatal(err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 

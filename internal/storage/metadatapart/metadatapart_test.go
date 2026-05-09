@@ -560,13 +560,13 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 	for _, p := range parts {
 		require.NoError(t, st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)))
 	}
-	err = st.metadataStore.PutObject(ctx, tx, bucket, &metadatastore.Object{
+	err = st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 		Key:   key,
 		ETag:  *objectChecksums.ETag,
 		Size:  int64(maxParts) * int64(len(partData)),
 		Parts: parts,
 	}, nil)
-	require.NoError(t, tx.Commit())
+	require.NoError(t, tx.Commit(ctx))
 	require.NoError(t, err)
 
 	// The next append must fail with ErrTooManyParts.
@@ -621,29 +621,29 @@ func TestGetObject_RangeHandlingAcrossPartBoundaries(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		name     string
+		name      string
 		byteRange storage.ByteRange
-		expected string
+		expected  string
 	}{
 		{
-			name:     "entire second part",
+			name:      "entire second part",
 			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(5)), End: ptrutils.ToPtr(int64(11))},
-			expected: " world",
+			expected:  " world",
 		},
 		{
-			name:     "straddles second and third part",
+			name:      "straddles second and third part",
 			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(8)), End: ptrutils.ToPtr(int64(13))},
-			expected: "rld!!",
+			expected:  "rld!!",
 		},
 		{
-			name:     "open-ended from middle of second part",
+			name:      "open-ended from middle of second part",
 			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(7)), End: nil},
-			expected: "orld!!!",
+			expected:  "orld!!!",
 		},
 		{
-			name:     "exact part boundary",
+			name:      "exact part boundary",
 			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(11)), End: ptrutils.ToPtr(int64(14))},
-			expected: "!!!",
+			expected:  "!!!",
 		},
 	}
 

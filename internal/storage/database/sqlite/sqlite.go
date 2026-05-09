@@ -97,11 +97,19 @@ type sqliteDatabase struct {
 	writeableDb *sql.DB
 }
 
-func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxContext, error) {
 	if opts != nil && opts.ReadOnly {
-		return sdb.readOnlyDb.BeginTx(ctx, opts)
+		tx, err := sdb.readOnlyDb.BeginTx(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		return database.NewTxContext(tx), nil
 	}
-	return sdb.writeableDb.BeginTx(ctx, opts)
+	tx, err := sdb.writeableDb.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return database.NewTxContext(tx), nil
 }
 
 func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {

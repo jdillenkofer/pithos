@@ -16,19 +16,24 @@ var ErrPartNotFound error = errors.New("part not found")
 
 // Core part operations
 type PartManager interface {
-	PutPart(ctx context.Context, tx *sql.Tx, partId PartId, reader io.Reader) error
+	PutPart(ctx context.Context, tx *database.TxContext, partId PartId, reader io.Reader) error
 	// GetPart returns a ReadCloser for the part with the given partId.
 	// If the part does not exist, ErrPartNotFound is returned.
 	// The caller is responsible for closing the ReadCloser.
-	GetPart(ctx context.Context, tx *sql.Tx, partId PartId) (io.ReadCloser, error)
-	GetPartIds(ctx context.Context, tx *sql.Tx) ([]PartId, error)
-	DeletePart(ctx context.Context, tx *sql.Tx, partId PartId) error
+	GetPart(ctx context.Context, tx *database.TxContext, partId PartId) (io.ReadCloser, error)
+	GetPartIds(ctx context.Context, tx *database.TxContext) ([]PartId, error)
+	DeletePart(ctx context.Context, tx *database.TxContext, partId PartId) error
 }
 
 // Composite interface
 type PartStore interface {
 	lifecycle.Manager
 	PartManager
+}
+
+type TxAwarePartStore interface {
+	OnTxCommit(ctx context.Context, tx *database.TxContext) error
+	OnTxRollback(ctx context.Context, tx *database.TxContext) error
 }
 
 func Tester(partStore PartStore, db database.Database, content []byte) error {
@@ -51,10 +56,13 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	err = partStore.PutPart(ctx, tx, *partId, part)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit(ctx)
+	if err != nil {
+		return err
+	}
 
 	_, err = part.Seek(0, io.SeekStart)
 	if err != nil {
@@ -67,10 +75,13 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	err = partStore.PutPart(ctx, tx, *partId, part)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit(ctx)
+	if err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -78,10 +89,12 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	partReader, err := partStore.GetPart(ctx, tx, *partId)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	getPartResult, err := io.ReadAll(partReader)
 	partReader.Close()
@@ -98,10 +111,13 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	err = partStore.DeletePart(ctx, tx, *partId)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	err = tx.Commit(ctx)
+	if err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -112,10 +128,12 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 		if partReader != nil {
 			partReader.Close()
 		}
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return errors.New("expected ErrPartNotFound")
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -150,9 +150,9 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, pa
 		result.ErrorType = fmt.Sprintf("DB Error: %v", err)
 		return result
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
-	objEntity, err := objectRepo.FindObjectByBucketNameAndKey(ctx, tx, bucketName, object.Key)
+	objEntity, err := objectRepo.FindObjectByBucketNameAndKey(ctx, tx.SqlTx(), bucketName, object.Key)
 	if err != nil {
 		result.Success = false
 		result.ErrorType = fmt.Sprintf("Object not found in DB: %v", err)
@@ -160,7 +160,7 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, pa
 	}
 
 	// Get parts
-	parts, err := partRepo.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objEntity.Id)
+	parts, err := partRepo.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx.SqlTx(), *objEntity.Id)
 	if err != nil {
 		result.Success = false
 		result.ErrorType = fmt.Sprintf("Failed to get parts: %v", err)

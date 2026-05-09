@@ -3,7 +3,6 @@ package tink
 import (
 	"context"
 	"crypto/tls"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
@@ -24,16 +24,16 @@ type mockPartStore struct{}
 
 func (m *mockPartStore) Start(ctx context.Context) error { return nil }
 func (m *mockPartStore) Stop(ctx context.Context) error  { return nil }
-func (m *mockPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (m *mockPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	return nil
 }
-func (m *mockPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (m *mockPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	return nil, nil
 }
-func (m *mockPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (m *mockPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	return nil, nil
 }
-func (m *mockPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (m *mockPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	return nil
 }
 
@@ -89,7 +89,7 @@ func TestNewWithHCVault_AppRole(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "new-token", tinkMw.vaultToken)
 	assert.Equal(t, KeyTypeVault, tinkMw.keyType)
-	
+
 	// Cleanup
 	mw.Stop(context.Background())
 }
@@ -129,14 +129,14 @@ func TestNewWithHCVault_Token(t *testing.T) {
 	tinkMw, ok := mw.(*TinkEncryptionPartStoreMiddleware)
 	require.True(t, ok)
 	assert.Equal(t, "my-token", tinkMw.vaultToken)
-	
+
 	mw.Stop(context.Background())
 }
 
 func TestNewWithHCVault_InvalidArgs(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	innerStore := &mockPartStore{}
-	
+
 	_, err := NewWithHCVault("http://localhost:8200", "", "", "", "key", innerStore, nil, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "must be provided")
@@ -187,7 +187,7 @@ func TestTinkMiddleware_RefreshVaultToken(t *testing.T) {
 
 	mw, err := NewWithHCVault(ts.URL, "", "role", "secret", "transit/keys/my-key", innerStore, tlsConfig, nil)
 	require.NoError(t, err)
-	
+
 	tinkMw, ok := mw.(*TinkEncryptionPartStoreMiddleware)
 	require.True(t, ok)
 	assert.Equal(t, "token-1", tinkMw.vaultToken)
@@ -196,9 +196,9 @@ func TestTinkMiddleware_RefreshVaultToken(t *testing.T) {
 	// Trigger refresh manually
 	err = tinkMw.refreshVaultToken()
 	require.NoError(t, err)
-	
+
 	assert.Equal(t, "token-2", tinkMw.vaultToken)
 	assert.Equal(t, 2, authCalls)
-	
+
 	mw.Stop(context.Background())
 }

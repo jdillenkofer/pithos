@@ -34,7 +34,7 @@ type partRange struct {
 
 type lazyPartSequenceReadCloser struct {
 	ctx       context.Context
-	tx        *sql.Tx
+	tx        *database.TxContext
 	partStore partstore.PartStore
 	parts     []partRange
 
@@ -192,13 +192,13 @@ func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName sto
 		return err
 	}
 
-	err = mbs.metadataStore.CreateBucket(ctx, tx, bucketName)
+	err = mbs.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -217,13 +217,13 @@ func (mbs *metadataPartStorage) DeleteBucket(ctx context.Context, bucketName sto
 		return err
 	}
 
-	err = mbs.metadataStore.DeleteBucket(ctx, tx, bucketName)
+	err = mbs.metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -247,13 +247,13 @@ func (mbs *metadataPartStorage) ListBuckets(ctx context.Context) ([]storage.Buck
 		return nil, err
 	}
 
-	mBuckets, err := mbs.metadataStore.ListBuckets(ctx, tx)
+	mBuckets, err := mbs.metadataStore.ListBuckets(ctx, tx.SqlTx())
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -270,13 +270,13 @@ func (mbs *metadataPartStorage) HeadBucket(ctx context.Context, bucketName stora
 		return nil, err
 	}
 
-	mBucket, err := mbs.metadataStore.HeadBucket(ctx, tx, bucketName)
+	mBucket, err := mbs.metadataStore.HeadBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -294,13 +294,13 @@ func (mbs *metadataPartStorage) GetBucketWebsiteConfiguration(ctx context.Contex
 		return nil, err
 	}
 
-	config, err := mbs.metadataStore.GetBucketWebsiteConfiguration(ctx, tx, bucketName)
+	config, err := mbs.metadataStore.GetBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -317,13 +317,13 @@ func (mbs *metadataPartStorage) PutBucketWebsiteConfiguration(ctx context.Contex
 		return err
 	}
 
-	err = mbs.metadataStore.PutBucketWebsiteConfiguration(ctx, tx, bucketName, config)
+	err = mbs.metadataStore.PutBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -340,13 +340,13 @@ func (mbs *metadataPartStorage) DeleteBucketWebsiteConfiguration(ctx context.Con
 		return err
 	}
 
-	err = mbs.metadataStore.DeleteBucketWebsiteConfiguration(ctx, tx, bucketName)
+	err = mbs.metadataStore.DeleteBucketWebsiteConfiguration(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -387,7 +387,7 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 		return nil, err
 	}
 
-	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx, bucketName, metadatastore.ListObjectsOptions{
+	mListBucketResult, err := mbs.metadataStore.ListObjects(ctx, tx.SqlTx(), bucketName, metadatastore.ListObjectsOptions{
 		Prefix:        opts.Prefix,
 		Delimiter:     opts.Delimiter,
 		StartAfter:    opts.StartAfter,
@@ -395,11 +395,11 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 		SkipPartFetch: true,
 	})
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -417,28 +417,28 @@ func (mbs *metadataPartStorage) HeadObject(ctx context.Context, bucketName stora
 		return nil, err
 	}
 
-	mObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	mObject, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
 	if opts != nil {
 		if opts.IfMatchETag != nil {
 			if *opts.IfMatchETag != storage.ETagWildcard && mObject.ETag != *opts.IfMatchETag {
-				tx.Rollback()
+				tx.Rollback(ctx)
 				return nil, storage.ErrPreconditionFailed
 			}
 		}
 		if opts.IfNoneMatchETag != nil {
 			if *opts.IfNoneMatchETag == storage.ETagWildcard || mObject.ETag == *opts.IfNoneMatchETag {
-				tx.Rollback()
+				tx.Rollback(ctx)
 				return nil, storage.ErrNotModified
 			}
 		}
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -485,7 +485,7 @@ func normalizeAndValidateRanges(ranges []storage.ByteRange, objectSize int64) ([
 }
 
 // createRangeReader creates a reader for a specific byte range of an object.
-func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *sql.Tx, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
+func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *database.TxContext, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
 	startByte := byteRange.Start
 	endByte := byteRange.End
 
@@ -559,22 +559,22 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 		return nil, nil, err
 	}
 
-	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, nil, err
 	}
 
 	if opts != nil {
 		if opts.IfMatchETag != nil {
 			if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
-				tx.Rollback()
+				tx.Rollback(ctx)
 				return nil, nil, storage.ErrPreconditionFailed
 			}
 		}
 		if opts.IfNoneMatchETag != nil {
 			if *opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag {
-				tx.Rollback()
+				tx.Rollback(ctx)
 				return nil, nil, storage.ErrNotModified
 			}
 		}
@@ -588,7 +588,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// Normalize suffix ranges and validate
 	ranges, err = normalizeAndValidateRanges(ranges, object.Size)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, nil, err
 	}
 
@@ -600,7 +600,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			for _, r := range readers {
 				r.Close()
 			}
-			tx.Rollback()
+			tx.Rollback(ctx)
 			return nil, nil, err
 		}
 		readers = append(readers, reader)
@@ -608,13 +608,13 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 
 	remainingReaders := int64(len(readers))
 	if remainingReaders == 0 {
-		tx.Rollback()
+		tx.Rollback(ctx)
 	} else {
 		for i := range readers {
 			inner := readers[i]
 			readers[i] = ioutils.NewReadCloserWithCloseHook(inner, func() error {
 				if atomic.AddInt64(&remainingReaders, -1) == 0 {
-					return tx.Rollback()
+					return tx.Rollback(ctx)
 				}
 				return nil
 			})
@@ -635,21 +635,24 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	if err != nil {
 		return nil, err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 	if !ifNoneMatchStar {
 		// if we already have such an object,
 		// remove all previous parts
-		previousObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+		previousObject, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 		if err != nil && err != storage.ErrNoSuchKey {
-			tx.Rollback()
+			rollback()
 			return nil, err
 		}
 		if previousObject != nil {
 			for _, part := range previousObject.Parts {
 				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
 				if err != nil {
-					tx.Rollback()
+					rollback()
 					return nil, err
 				}
 			}
@@ -658,7 +661,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 
 	partId, err := partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -666,13 +669,13 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		return mbs.partStore.PutPart(ctx, tx, *partId, reader)
 	})
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
 	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -706,14 +709,15 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	if opts != nil {
 		metadataPutObjectOptions.IfMatchETag = opts.IfMatchETag
 	}
-	err = mbs.metadataStore.PutObject(ctx, tx, bucketName, &object, metadataPutObjectOptions)
+	err = mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 
@@ -737,11 +741,14 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	if err != nil {
 		return nil, err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
 	// Fetch the existing object (if any).
-	existingObject, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	existingObject, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 	if err != nil && err != storage.ErrNoSuchKey {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -750,13 +757,13 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		if existingObject == nil {
 			// Object does not exist — only allowed when offset == 0.
 			if *opts.WriteOffset != 0 {
-				tx.Rollback()
+				rollback()
 				return nil, storage.ErrInvalidWriteOffset
 			}
 		} else {
 			// Object exists — offset must equal current size.
 			if *opts.WriteOffset != existingObject.Size {
-				tx.Rollback()
+				rollback()
 				return nil, storage.ErrInvalidWriteOffset
 			}
 		}
@@ -765,7 +772,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	// Write the new part's bytes.
 	newPartId, err := partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -773,13 +780,13 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
 	})
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
 	// Validate checksums for the new data chunk (if provided by the caller).
 	if err = metadatastore.ValidateChecksums(checksumInput, *newPartChecksums); err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -805,7 +812,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	// S3 enforces a maximum of 10,000 parts per object.
 	const maxAppendParts = 10_000
 	if len(allParts)+1 > maxAppendParts {
-		tx.Rollback()
+		rollback()
 		return nil, storage.ErrTooManyParts
 	}
 
@@ -822,7 +829,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	}
 	combinedChecksums, err := checksumutils.CalculateMultipartChecksums(partChecksums, checksumutils.ChecksumTypeFullObject)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -843,8 +850,8 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	}
 
 	metaOpts := &metadatastore.AppendObjectOptions{}
-	if err = mbs.metadataStore.AppendObject(ctx, tx, bucketName, updatedObject, metaOpts); err != nil {
-		tx.Rollback()
+	if err = mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts); err != nil {
+		rollback()
 		// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a
 		// concurrent write that changed the object between our HeadObject read
 		// and this update. It surfaces that as ErrCASFailure. From the caller's
@@ -856,7 +863,8 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		return nil, err
 	}
 
-	if err = tx.Commit(); err != nil {
+	if err = tx.Commit(ctx); err != nil {
+		rollback()
 		return nil, err
 	}
 
@@ -876,11 +884,14 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	if err != nil {
 		return err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
-	object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, key)
+	object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
-			tx.Rollback()
+			rollback()
 			// Object does not exist.
 			if opts != nil && opts.IfMatchETag != nil {
 				// Conditional delete: object must exist.
@@ -889,14 +900,14 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 			// No condition: silently succeed per S3 semantics.
 			return nil
 		}
-		tx.Rollback()
+		rollback()
 		return err
 	}
 
 	for _, part := range object.Parts {
 		err = mbs.partStore.DeletePart(ctx, tx, part.Id)
 		if err != nil {
-			tx.Rollback()
+			rollback()
 			return err
 		}
 	}
@@ -907,17 +918,17 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 			IfMatchETag: opts.IfMatchETag,
 		}
 	}
-	err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, key, metaOpts)
+	err = mbs.metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, key, metaOpts)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return err
 	}
-
 	return nil
 }
 
@@ -931,13 +942,16 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 	if err != nil {
 		return nil, err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
 	result := &storage.DeleteObjectsResult{
 		Entries: make([]storage.DeleteObjectsEntry, 0, len(entries)),
 	}
 
 	for _, entry := range entries {
-		object, err := mbs.metadataStore.HeadObject(ctx, tx, bucketName, entry.Key)
+		object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, entry.Key)
 		if err != nil {
 			if err == storage.ErrNoSuchKey {
 				if entry.IfMatchETag != nil {
@@ -953,7 +967,7 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 				}
 				continue
 			}
-			tx.Rollback()
+			rollback()
 			return nil, err
 		}
 
@@ -972,7 +986,7 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 			for _, part := range object.Parts {
 				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
 				if err != nil {
-					tx.Rollback()
+					rollback()
 					return nil, err
 				}
 			}
@@ -982,17 +996,18 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 		if entry.IfMatchETag != nil {
 			metaOpts = &metadatastore.DeleteObjectOptions{IfMatchETag: entry.IfMatchETag}
 		}
-		err = mbs.metadataStore.DeleteObject(ctx, tx, bucketName, entry.Key, metaOpts)
+		err = mbs.metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, entry.Key, metaOpts)
 		if err != nil {
-			tx.Rollback()
+			rollback()
 			return nil, err
 		}
 
 		result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 
@@ -1016,13 +1031,13 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 		return nil, err
 	}
 
-	result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, contentType, checksumType)
+	result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 	initiateMultipartUploadResult := convertInitiateMultipartUploadResult(*result)
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1039,10 +1054,13 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 	if err != nil {
 		return nil, err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
 	partId, err := partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
@@ -1050,17 +1068,17 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		return mbs.partStore.PutPart(ctx, tx, *partId, reader)
 	})
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
 	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 
-	err = mbs.metadataStore.UploadPart(ctx, tx, bucketName, key, uploadId, partNumber, metadatastore.Part{
+	err = mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
 		Id:                *partId,
 		ETag:              *calculatedChecksums.ETag,
 		ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
@@ -1071,11 +1089,12 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		Size:              *originalSize,
 	})
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 	return &storage.UploadPartResult{
@@ -1111,23 +1130,27 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 	if err != nil {
 		return nil, err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
-	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, uploadId, checksumInput, opts)
+	result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return nil, err
 	}
 	deletedParts := result.DeletedParts
 	for _, deletedPart := range deletedParts {
 		err = mbs.partStore.DeletePart(ctx, tx, deletedPart.Id)
 		if err != nil {
-			tx.Rollback()
+			rollback()
 			return nil, err
 		}
 	}
 	completeMultipartUploadResult := convertCompleteMultipartUploadResult(*result)
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return nil, err
 	}
 	return &completeMultipartUploadResult, nil
@@ -1143,22 +1166,26 @@ func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucket
 	if err != nil {
 		return err
 	}
+	rollback := func() {
+		_ = tx.Rollback(ctx)
+	}
 
-	abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, uploadId)
+	abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
 	if err != nil {
-		tx.Rollback()
+		rollback()
 		return err
 	}
 	deletedParts := abortMultipartUploadResult.DeletedParts
 	for _, deletedPart := range deletedParts {
 		err = mbs.partStore.DeletePart(ctx, tx, deletedPart.Id)
 		if err != nil {
-			tx.Rollback()
+			rollback()
 			return err
 		}
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
+		rollback()
 		return err
 	}
 	return nil
@@ -1195,7 +1222,7 @@ func (mbs *metadataPartStorage) ListMultipartUploads(ctx context.Context, bucket
 		return nil, err
 	}
 
-	mListMultipartUploadsResult, err := mbs.metadataStore.ListMultipartUploads(ctx, tx, bucketName, metadatastore.ListMultipartUploadsOptions{
+	mListMultipartUploadsResult, err := mbs.metadataStore.ListMultipartUploads(ctx, tx.SqlTx(), bucketName, metadatastore.ListMultipartUploadsOptions{
 		Prefix:         opts.Prefix,
 		Delimiter:      opts.Delimiter,
 		KeyMarker:      opts.KeyMarker,
@@ -1203,11 +1230,11 @@ func (mbs *metadataPartStorage) ListMultipartUploads(ctx context.Context, bucket
 		MaxUploads:     opts.MaxUploads,
 	})
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1250,16 +1277,16 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 		return nil, err
 	}
 
-	mListPartsResult, err := mbs.metadataStore.ListParts(ctx, tx, bucketName, key, uploadId, metadatastore.ListPartsOptions{
+	mListPartsResult, err := mbs.metadataStore.ListParts(ctx, tx.SqlTx(), bucketName, key, uploadId, metadatastore.ListPartsOptions{
 		PartNumberMarker: opts.PartNumberMarker,
 		MaxParts:         opts.MaxParts,
 	})
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}

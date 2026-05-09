@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,7 @@ func newMemoryPartStore() *memoryPartStore {
 func (s *memoryPartStore) Start(ctx context.Context) error { return nil }
 func (s *memoryPartStore) Stop(ctx context.Context) error  { return nil }
 
-func (s *memoryPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *memoryPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -64,7 +65,7 @@ func (s *memoryPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 	return nil
 }
 
-func (s *memoryPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (s *memoryPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	s.getPartCall++
 	data, ok := s.parts[partId]
 	if !ok {
@@ -73,7 +74,7 @@ func (s *memoryPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partst
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (s *memoryPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (s *memoryPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	ids := make([]partstore.PartId, 0, len(s.parts))
 	for id := range s.parts {
 		ids = append(ids, id)
@@ -81,7 +82,7 @@ func (s *memoryPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partsto
 	return ids, nil
 }
 
-func (s *memoryPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (s *memoryPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	delete(s.parts, partId)
 	return nil
 }
@@ -172,9 +173,10 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.NoError(t, err)
 	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
+	sqlTx, err := db.BeginTx(ctx, nil)
 	assert.NoError(t, err)
-	defer tx.Rollback()
+	defer sqlTx.Rollback()
+	tx := database.NewTxContext(sqlTx)
 
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
@@ -189,7 +191,7 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestCachePartStore_CanMutateCacheInsideTxWhenEnabled(t *testing.T) {
+func TestCachePartStore_AppliesPendingMutationsOnTxCommit(t *testing.T) {
 	ctx := context.Background()
 	cache := newMemoryCache()
 	inner := newMemoryPartStore()
@@ -198,19 +200,50 @@ func TestCachePartStore_CanMutateCacheInsideTxWhenEnabled(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	assert.NoError(t, err)
 	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
+	sqlTx, err := db.BeginTx(ctx, nil)
 	assert.NoError(t, err)
-	defer tx.Rollback()
-
-	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true, MutatingOpsAffectCacheWithinTx: true})
+	tx := database.NewTxContext(sqlTx)
+	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
 	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
 	assert.NoError(t, err)
 
+	_, err = cache.Get(getPartCacheKey(*partId))
+	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
+
+	err = tx.Commit(ctx)
+	assert.NoError(t, err)
+
 	data, err := cache.Get(getPartCacheKey(*partId))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("v1"), data)
+}
+
+func TestCachePartStore_DropsPendingMutationsOnTxRollback(t *testing.T) {
+	ctx := context.Background()
+	cache := newMemoryCache()
+	inner := newMemoryPartStore()
+	partId, _ := partstore.NewRandomPartId()
+
+	db, err := sql.Open("sqlite3", ":memory:")
+	assert.NoError(t, err)
+	defer db.Close()
+	sqlTx, err := db.BeginTx(ctx, nil)
+	assert.NoError(t, err)
+	tx := database.NewTxContext(sqlTx)
+
+	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
+	assert.NoError(t, err)
+
+	err = tx.Rollback(ctx)
+	assert.NoError(t, err)
+
+	_, err = cache.Get(getPartCacheKey(*partId))
+	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 }
 
 func TestCachePartStore_DoesNotCachePartialReads(t *testing.T) {

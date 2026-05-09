@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/klauspost/reedsolomon"
@@ -218,7 +218,7 @@ func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
 	return idx, dataBytes, payloadLen, h, nil
 }
 
-func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	unlock := e.partLocker.Lock(partId)
 	defer unlock()
 
@@ -305,7 +305,7 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId
 	return nil
 }
 
-func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	unlock := e.partLocker.RLock(partId)
 	readers, healShards, err := e.openPartReaders(ctx, tx, partId)
 	if err != nil {
@@ -323,7 +323,7 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 	return e.newPartReader(ctx, tx, partId, readers, healShards, false, unlock), nil
 }
 
-func (e *erasureCodingPartStore) getPartWithHealing(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (e *erasureCodingPartStore) getPartWithHealing(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	unlock := e.partLocker.Lock(partId)
 	readers, healShards, err := e.openPartReaders(ctx, tx, partId)
 	if err != nil {
@@ -334,7 +334,7 @@ func (e *erasureCodingPartStore) getPartWithHealing(ctx context.Context, tx *sql
 	return e.newPartReader(ctx, tx, partId, readers, healShards, true, unlock), nil
 }
 
-func (e *erasureCodingPartStore) openPartReaders(ctx context.Context, tx *sql.Tx, partId partstore.PartId) ([]io.ReadCloser, []bool, error) {
+func (e *erasureCodingPartStore) openPartReaders(ctx context.Context, tx *database.TxContext, partId partstore.PartId) ([]io.ReadCloser, []bool, error) {
 	readers := make([]io.ReadCloser, e.totalShards)
 	healShards := make([]bool, e.totalShards)
 	for i := 0; i < e.totalShards; i++ {
@@ -389,7 +389,7 @@ func closePartReaders(readers []io.ReadCloser) {
 	}
 }
 
-func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx *sql.Tx, partId partstore.PartId, readers []io.ReadCloser, healShards []bool, healMissing bool, unlock func()) io.ReadCloser {
+func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx *database.TxContext, partId partstore.PartId, readers []io.ReadCloser, healShards []bool, healMissing bool, unlock func()) io.ReadCloser {
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
@@ -569,7 +569,7 @@ func (r *readCloserWithWait) Close() error {
 	return err
 }
 
-func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	ids := make([]partstore.PartId, 0)
 	seen := make(map[string]struct{})
 	for _, store := range e.partStores {
@@ -589,7 +589,7 @@ func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]
 	return ids, nil
 }
 
-func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	unlock := e.partLocker.Lock(partId)
 	defer unlock()
 

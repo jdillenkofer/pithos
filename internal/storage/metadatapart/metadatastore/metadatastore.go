@@ -316,23 +316,27 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.CreateBucket(ctx, tx, bucketName)
+	err = metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	bucket, err := metadataStore.HeadBucket(ctx, tx, bucketName)
+	bucket, err := metadataStore.HeadBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	if !bucketName.Equals(bucket.Name) {
 		return errors.New("invalid bucketName")
@@ -342,12 +346,14 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	buckets, err := metadataStore.ListBuckets(ctx, tx)
+	buckets, err := metadataStore.ListBuckets(ctx, tx.SqlTx())
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	if len(buckets) != 1 {
 		return errors.New("expected 1 bucket got " + strconv.Itoa(len(buckets)))
@@ -361,7 +367,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.PutObject(ctx, tx, bucketName, &Object{
+	err = metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &Object{
 		Key:          key,
 		LastModified: time.Now(),
 		ETag:         "",
@@ -369,21 +375,25 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		Parts:        []Part{},
 	}, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	object, err := metadataStore.HeadObject(ctx, tx, bucketName, key)
+	object, err := metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	if len(object.Parts) != 0 {
 		return errors.New("invalid part length")
@@ -393,15 +403,17 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	listBucketResult, err := metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
+	listBucketResult, err := metadataStore.ListObjects(ctx, tx.SqlTx(), bucketName, ListObjectsOptions{
 		MaxKeys:       1000,
 		SkipPartFetch: true,
 	})
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	if len(listBucketResult.Objects) != 1 {
 		return errors.New("invalid objects length")
@@ -415,23 +427,27 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+	err = metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, key, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
+	initiateMultipartUploadResult, err := metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, nil, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -439,52 +455,60 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 	partId, err := partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+	err = metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 		Id:   *partId,
 		Size: 0,
 		ETag: "",
 	})
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil, nil)
+	_, err = metadataStore.CompleteMultipartUpload(ctx, tx.SqlTx(), bucketName, key, initiateMultipartUploadResult.UploadId, nil, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+	err = metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, key, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
+	initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, nil, nil)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
@@ -492,52 +516,60 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 	partId, err = partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+	err = metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 		Id:   *partId,
 		Size: 0,
 		ETag: "",
 	})
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
+	_, err = metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, initiateMultipartUploadResult.UploadId)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	if err != nil {
 		return err
 	}
-	err = metadataStore.DeleteBucket(ctx, tx, bucketName)
+	err = metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
-	buckets, err = metadataStore.ListBuckets(ctx, tx)
+	buckets, err = metadataStore.ListBuckets(ctx, tx.SqlTx())
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback(ctx)
 		return err
 	}
-	tx.Commit()
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
 
 	if len(buckets) != 0 {
 		return errors.New("expected 0 bucket got " + strconv.Itoa(len(buckets)))
