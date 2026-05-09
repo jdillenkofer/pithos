@@ -18,7 +18,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -205,36 +204,22 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstor
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	// @Perf: We skip the stat call here to reduce the number of roundtrips.
-	// This means that if the file doesn't exist, we will only find out when we try
-	// to read from it.
-	/*
-	   _, err := doRetriableOperation(func() (*struct{}, error) {
-	       _, err := s.client.Stat(filename)
-	       return nil, err
-	   }, maxStpRetries, s.reconnectSftpClient, func(err error) bool { return errors.Is(err, fs.ErrNotExist) })
-	   if err != nil {
-	       if errors.Is(err, fs.ErrNotExist) {
-	           return nil, partstore.ErrPartNotFound
-	       }
-	       return nil, err
-	   }
-	*/
-
-	f := ioutils.NewLazyReadSeekCloser(func() (io.ReadSeekCloser, error) {
-		return doRetriableOperation(func() (*sftp.File, error) {
-			f, err := s.client.OpenFile(filename, os.O_RDONLY)
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return nil, partstore.ErrPartNotFound
-				}
-				return nil, err
+	f, err := doRetriableOperation(func() (*sftp.File, error) {
+		f, err := s.client.OpenFile(filename, os.O_RDONLY)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, partstore.ErrPartNotFound
 			}
-			return f, nil
-		}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
-			return errors.Is(err, partstore.ErrPartNotFound)
-		})
+			return nil, err
+		}
+		return f, nil
+	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
+		return errors.Is(err, partstore.ErrPartNotFound)
 	})
+	if err != nil {
+		return nil, err
+	}
+
 	return f, nil
 }
 
