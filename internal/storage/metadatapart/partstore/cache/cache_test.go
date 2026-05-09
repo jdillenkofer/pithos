@@ -161,7 +161,7 @@ func TestCachePartStore_MaxSizeBypassesCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, rc.Close())
 
-	assert.Equal(t, 4, inner.getPartCall)
+	assert.Equal(t, 2, inner.getPartCall)
 }
 
 func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
@@ -270,5 +270,5 @@ func TestCachePartStore_DoesNotCachePartialReads(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, rc.Close())
 
-	assert.Equal(t, 4, inner.getPartCall)
+	assert.Equal(t, 2, inner.getPartCall)
 }

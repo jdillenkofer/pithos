@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -33,6 +34,7 @@ type cachePartStore struct {
 	cacheReadErrorsAsMiss bool
 	tracer                trace.Tracer
 	readGroup             singleflight.Group
+	oversizedHints        sync.Map
 }
 
 var _ partstore.PartStore = (*cachePartStore)(nil)
@@ -80,12 +82,14 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 	if tx != nil {
 		tx.RegisterOnCommit(func(opCtx context.Context) error {
 			if teed.cacheEligible {
+				ps.clearOversizedHint(cacheKey)
 				if setErr := ps.cache.Set(cacheKey, buf); setErr != nil {
 					slog.WarnContext(opCtx, "Failed to write part to cache", "cacheKey", cacheKey, "error", setErr)
 					_ = ps.cache.Remove(cacheKey)
 				}
 				return nil
 			}
+			ps.markOversizedHint(cacheKey)
 			if removeErr := ps.cache.Remove(cacheKey); removeErr != nil {
 				slog.DebugContext(opCtx, "Failed to remove oversized part from cache", "cacheKey", cacheKey, "error", removeErr)
 			}
@@ -95,11 +99,13 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 	}
 
 	if teed.cacheEligible {
+		ps.clearOversizedHint(cacheKey)
 		if err := ps.cache.Set(cacheKey, buf); err != nil {
 			slog.WarnContext(ctx, "Failed to write part to cache", "cacheKey", cacheKey, "error", err)
 			_ = ps.cache.Remove(cacheKey)
 		}
 	} else {
+		ps.markOversizedHint(cacheKey)
 		if err := ps.cache.Remove(cacheKey); err != nil {
 			slog.DebugContext(ctx, "Failed to remove oversized part from cache", "cacheKey", cacheKey, "error", err)
 		}
@@ -123,8 +129,11 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	if err == nil {
 		return io.NopCloser(bytes.NewReader(data)), nil
 	}
+	if ps.hasOversizedHint(cacheKey) {
+		return ps.innerPartStore.GetPart(ctx, tx, partId)
+	}
 
-	v, err, _ := ps.readGroup.Do(cacheKey, func() (interface{}, error) {
+	v, err, shared := ps.readGroup.Do(cacheKey, func() (interface{}, error) {
 		// Re-check cache while serialized to avoid duplicate backend fetches.
 		cached, cacheErr := ps.cache.Get(cacheKey)
 		if cacheErr == nil {
@@ -138,17 +147,19 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 		if innerErr != nil {
 			return nil, innerErr
 		}
-		defer rc.Close()
-
 		limitedReader := io.LimitReader(rc, ps.maxPartSizeBytes+1)
 		payload, readErr := io.ReadAll(limitedReader)
 		if readErr != nil {
+			_ = rc.Close()
 			return nil, readErr
 		}
 
 		if int64(len(payload)) > ps.maxPartSizeBytes {
-			return nil, errPartLargerThanCacheThreshold
+			ps.markOversizedHint(cacheKey)
+			return &oversizedMissResult{readCloser: &bytesPrefixReadCloser{prefix: payload, inner: rc}}, nil
 		}
+
+		_ = rc.Close()
 
 		if cacheErr = ps.cache.Set(cacheKey, payload); cacheErr != nil {
 			slog.WarnContext(ctx, "Failed to set part cache entry after backend read", "cacheKey", cacheKey, "error", cacheErr)
@@ -158,28 +169,20 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	})
 	if err == nil {
 		payload, ok := v.([]byte)
+		if ok {
+			return io.NopCloser(bytes.NewReader(payload)), nil
+		}
+		overSized, ok := v.(*oversizedMissResult)
 		if !ok {
 			return nil, errors.New("invalid cache read payload type")
 		}
-		return io.NopCloser(bytes.NewReader(payload)), nil
+		if !shared {
+			return overSized.readCloser, nil
+		}
+		_ = overSized.readCloser.Close()
+		return ps.innerPartStore.GetPart(ctx, tx, partId)
 	}
-	if !errors.Is(err, errPartLargerThanCacheThreshold) {
-		return nil, err
-	}
-
-	rc, err := ps.innerPartStore.GetPart(ctx, tx, partId)
-	if err != nil {
-		return nil, err
-	}
-
-	return &cacheOnReadCloser{
-		ReadCloser:       rc,
-		cache:            ps.cache,
-		cacheKey:         cacheKey,
-		maxPartSizeBytes: ps.maxPartSizeBytes,
-		cacheEligible:    true,
-		buf:              make([]byte, 0),
-	}, nil
+	return nil, err
 }
 
 func (ps *cachePartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
@@ -200,6 +203,7 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext
 	if tx != nil {
 		cacheKey := getPartCacheKey(partId)
 		tx.RegisterOnCommit(func(opCtx context.Context) error {
+			ps.clearOversizedHint(cacheKey)
 			if removeErr := ps.cache.Remove(cacheKey); removeErr != nil {
 				slog.DebugContext(opCtx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", removeErr)
 			}
@@ -209,6 +213,7 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext
 	}
 
 	cacheKey := getPartCacheKey(partId)
+	ps.clearOversizedHint(cacheKey)
 	if err := ps.cache.Remove(cacheKey); err != nil {
 		slog.DebugContext(ctx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", err)
 	}
@@ -220,7 +225,40 @@ func (ps *cachePartStore) OnTxRollback(ctx context.Context, tx *database.TxConte
 	return nil
 }
 
-var errPartLargerThanCacheThreshold = errors.New("part larger than cache threshold")
+type oversizedMissResult struct {
+	readCloser io.ReadCloser
+}
+
+func (ps *cachePartStore) hasOversizedHint(cacheKey string) bool {
+	_, ok := ps.oversizedHints.Load(cacheKey)
+	return ok
+}
+
+func (ps *cachePartStore) markOversizedHint(cacheKey string) {
+	ps.oversizedHints.Store(cacheKey, struct{}{})
+}
+
+func (ps *cachePartStore) clearOversizedHint(cacheKey string) {
+	ps.oversizedHints.Delete(cacheKey)
+}
+
+type bytesPrefixReadCloser struct {
+	prefix []byte
+	inner  io.ReadCloser
+}
+
+func (r *bytesPrefixReadCloser) Read(p []byte) (int, error) {
+	if len(r.prefix) > 0 {
+		n := copy(p, r.prefix)
+		r.prefix = r.prefix[n:]
+		return n, nil
+	}
+	return r.inner.Read(p)
+}
+
+func (r *bytesPrefixReadCloser) Close() error {
+	return r.inner.Close()
+}
 
 type cacheOnReadCloser struct {
 	io.ReadCloser
