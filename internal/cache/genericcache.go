@@ -28,16 +28,19 @@ func NewGenericCache(cachePersistor persistor.CachePersistor, cacheEvictionPolic
 }
 
 func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	actualSize := size
 	var err error
+
 	if size >= 0 {
+		c.mu.Lock()
 		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, size)
+		c.mu.Unlock()
 		for _, evictedKey := range evictedKeys {
 			err = c.cachePersistor.Remove(evictedKey)
 			if err != nil {
+				c.mu.Lock()
+				c.cacheEvictionPolicy.TrackRemove(key)
+				c.mu.Unlock()
 				return err
 			}
 		}
@@ -46,14 +49,22 @@ func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
 	actualSize, err = c.cachePersistor.Store(key, reader)
 	if err != nil {
 		_ = c.cachePersistor.Remove(key)
+		c.mu.Lock()
+		c.cacheEvictionPolicy.TrackRemove(key)
+		c.mu.Unlock()
 		return err
 	}
 
 	if size < 0 {
+		c.mu.Lock()
 		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, actualSize)
+		c.mu.Unlock()
 		for _, evictedKey := range evictedKeys {
 			err = c.cachePersistor.Remove(evictedKey)
 			if err != nil {
+				c.mu.Lock()
+				c.cacheEvictionPolicy.TrackRemove(key)
+				c.mu.Unlock()
 				return err
 			}
 		}
