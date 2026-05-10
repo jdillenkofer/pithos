@@ -177,7 +177,7 @@ type cacheOnReadCloser struct {
 
 func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	if n > 0 {
+	if n > 0 && r.pipeWriter != nil {
 		if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
 			_ = r.pipeWriter.CloseWithError(writeErr)
 			r.pipeWriter = nil
