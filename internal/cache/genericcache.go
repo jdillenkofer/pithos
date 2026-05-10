@@ -15,6 +15,11 @@ type GenericCache struct {
 }
 
 func NewGenericCache(cachePersistor persistor.CachePersistor, cacheEvictionPolicy evictionpolicy.CacheEvictionPolicy) (*GenericCache, error) {
+	err := cachePersistor.RemoveAll()
+	if err != nil {
+		return nil, err
+	}
+
 	return &GenericCache{
 		mu:                  sync.Mutex{},
 		cachePersistor:      cachePersistor,
