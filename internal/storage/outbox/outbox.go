@@ -126,7 +126,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}()
 
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return
 	}
@@ -139,12 +139,15 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	tx.Commit()
 
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		var entry *storageOutboxEntry.Entity
+		var putObjectReaders []io.Reader
+
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
 			return
 		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryWithForUpdateLock(ctx, tx)
+		entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			os.metrics.errorsCounter.Inc()
@@ -155,25 +158,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			tx.Commit()
 			break
 		}
-
-		switch entry.Operation {
-		case storageOutboxEntry.CreateBucketStorageOperation:
-			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case storageOutboxEntry.DeleteBucketStorageOperation:
-			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case storageOutboxEntry.PutObjectStorageOperation:
+		if entry.Operation == storageOutboxEntry.PutObjectStorageOperation {
 			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, *entry.Id)
 			if err != nil {
 				tx.Rollback()
@@ -181,13 +166,35 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				time.Sleep(5 * time.Second)
 				return
 			}
-			readers := make([]io.Reader, len(chunks))
+			putObjectReaders = make([]io.Reader, len(chunks))
 			for i, chunk := range chunks {
-				readers[i] = bytes.NewReader(chunk.Content)
+				putObjectReaders[i] = bytes.NewReader(chunk.Content)
 			}
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
+		}
+		err = tx.Commit()
+		if err != nil {
+			os.metrics.errorsCounter.Inc()
+			return
+		}
+
+		switch entry.Operation {
+		case storageOutboxEntry.CreateBucketStorageOperation:
+			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
 			if err != nil {
-				tx.Rollback()
+				os.metrics.errorsCounter.Inc()
+				time.Sleep(5 * time.Second)
+				return
+			}
+		case storageOutboxEntry.DeleteBucketStorageOperation:
+			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
+			if err != nil {
+				os.metrics.errorsCounter.Inc()
+				time.Sleep(5 * time.Second)
+				return
+			}
+		case storageOutboxEntry.PutObjectStorageOperation:
+			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(putObjectReaders...), nil, nil)
+			if err != nil {
 				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
@@ -195,20 +202,26 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		case storageOutboxEntry.DeleteObjectStorageOperation:
 			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
 			if err != nil {
-				tx.Rollback()
 				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
 			}
 		default:
 			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-			tx.Rollback()
 			time.Sleep(5 * time.Second)
+			return
+		}
+
+		tx, err = os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		if err != nil {
+			os.metrics.errorsCounter.Inc()
 			return
 		}
 		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx, *entry.Id)
 		if err != nil {
 			tx.Rollback()
+			os.metrics.errorsCounter.Inc()
+			time.Sleep(5 * time.Second)
 			return
 		}
 
@@ -329,7 +342,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 }
 
 func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bucketName storage.BucketName) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -349,7 +362,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 	lastId := lastStorageOutboxEntry.Id
 
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err
 		}
@@ -373,7 +386,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 }
 
 func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -393,7 +406,7 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 	lastId := lastStorageOutboxEntry.Id
 
 	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			return err
 		}
