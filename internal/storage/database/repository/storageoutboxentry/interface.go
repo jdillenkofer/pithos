@@ -15,6 +15,8 @@ type Repository interface {
 	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
 	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
 	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
+	FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*Entity, error)
+	FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*Entity, error)
 	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*ContentChunk, error)
 	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *Entity) error
 	SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
