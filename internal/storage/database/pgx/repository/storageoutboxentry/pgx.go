@@ -19,6 +19,8 @@ const (
 	findLastStorageOutboxEntryStmt                   = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
 	findFirstStorageOutboxEntryForBucketStmt         = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
 	findLastStorageOutboxEntryForBucketStmt          = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 AND (key = '' OR key = $2) ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 AND (key = '' OR key = $2) ORDER BY id DESC LIMIT 1"
 	findStorageOutboxEntryChunksByIdStmt             = "SELECT outbox_entry_id, chunk_index, content FROM storage_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
 	insertStorageOutboxEntryStmt                     = "INSERT INTO storage_outbox_entries (id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7)"
 	updateStorageOutboxEntryByIdStmt                 = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6"
@@ -95,6 +97,24 @@ func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Conte
 
 func (sor *pgxRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucketName.String())
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
+func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, bucketName.String(), key)
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
+func (sor *pgxRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, bucketName.String(), key)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err

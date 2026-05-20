@@ -385,6 +385,50 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 	}
 }
 
+func (os *outboxStorage) waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, bucketName, key.String())
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+	if lastStorageOutboxEntry == nil {
+		return nil
+	}
+
+	lastId := lastStorageOutboxEntry.Id
+
+	for {
+		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, bucketName, key.String())
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		err = tx.Commit()
+		if err != nil {
+			return err
+		}
+		if entry == nil {
+			return nil
+		}
+		if (*entry.Id).Compare(*lastId) > 0 {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -469,7 +513,7 @@ func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.Buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadObject")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +525,7 @@ func (os *outboxStorage) GetObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObject")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -496,7 +540,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	defer span.End()
 
 	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil) {
-		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 		if err != nil {
 			return nil, err
 		}
@@ -571,8 +615,8 @@ func (os *outboxStorage) AppendObject(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	// Append is always conditional (requires the object to be consistent), so
-	// flush all pending outbox entries for the bucket before delegating.
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Append is key scoped but must respect global bucket operations.
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +679,7 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName s
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateMultipartUpload")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +690,7 @@ func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.Buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.UploadPart")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +702,7 @@ func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CompleteMultipartUpload")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -670,7 +714,7 @@ func (os *outboxStorage) AbortMultipartUpload(ctx context.Context, bucketName st
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.AbortMultipartUpload")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return err
 	}
@@ -694,7 +738,7 @@ func (os *outboxStorage) ListParts(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListParts")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
