@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
@@ -16,83 +15,20 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
-	"github.com/jdillenkofer/pithos/internal/task"
+	"github.com/jdillenkofer/pithos/internal/storage/outboxruntime"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
-type outboxMetrics struct {
-	pendingEntries     prometheus.Gauge
-	processedEntries   prometheus.Counter
-	processingDuration prometheus.Histogram
-	errorsCounter      prometheus.Counter
-}
-
-func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
-	m := &outboxMetrics{
-		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "pending_entries",
-			Help:      "Number of pending outbox entries",
-		}),
-		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processed_entries_total",
-			Help:      "Total number of processed outbox entries",
-		}),
-		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processing_duration_seconds",
-			Help:      "Duration of outbox processing in seconds",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}),
-		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "errors_total",
-			Help:      "Total number of outbox processing errors",
-		}),
-	}
-
-	if err := registerer.Register(m.pendingEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register pendingEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processedEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processedEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processingDuration); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processingDuration metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.errorsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register errorsCounter metric", "error", err)
-		}
-	}
-
-	return m
-}
-
 type outboxStorage struct {
 	*lifecycle.ValidatedLifecycle
 	db                           database.Database
-	triggerChannel               chan struct{}
-	triggerChannelClosed         bool
-	outboxProcessingTaskHandle   *task.TaskHandle
+	runtime                      *outboxruntime.Runtime[*storageOutboxEntry.Entity]
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
 	tracer                       trace.Tracer
-	metrics                      *outboxMetrics
 }
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
@@ -106,146 +42,19 @@ func NewStorage(db database.Database, innerStorage storage.Storage, storageOutbo
 	os := &outboxStorage{
 		ValidatedLifecycle:           lifecycle,
 		db:                           db,
-		triggerChannel:               make(chan struct{}, 16),
-		triggerChannelClosed:         false,
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		tracer:                       otel.Tracer("internal/storage/outbox"),
-		metrics:                      newOutboxMetrics(registerer),
 	}
+	os.runtime = outboxruntime.New(db, os, outboxruntime.NewMetrics(registerer, "outbox", "Number of pending outbox entries", "Total number of processed outbox entries", "Duration of outbox processing in seconds", "Total number of outbox processing errors"))
 	return os, nil
-}
-
-func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
-	startTime := time.Now()
-	processedOutboxEntryCount := 0
-	defer func() {
-		os.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
-		if processedOutboxEntryCount > 0 {
-			os.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
-		}
-	}()
-
-	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return
-	}
-	pendingCount, err := os.storageOutboxEntryRepository.Count(ctx, tx)
-	if err != nil {
-		tx.Rollback()
-		return
-	}
-	os.metrics.pendingEntries.Set(float64(pendingCount))
-	tx.Commit()
-
-	for {
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		if err != nil {
-			os.metrics.errorsCounter.Inc()
-			return
-		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryWithForUpdateLock(ctx, tx)
-		if err != nil {
-			tx.Rollback()
-			os.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
-			return
-		}
-		if entry == nil {
-			tx.Commit()
-			break
-		}
-
-		switch entry.Operation {
-		case storageOutboxEntry.CreateBucketStorageOperation:
-			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case storageOutboxEntry.DeleteBucketStorageOperation:
-			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case storageOutboxEntry.PutObjectStorageOperation:
-			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, *entry.Id)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-			readers := make([]io.Reader, len(chunks))
-			for i, chunk := range chunks {
-				readers[i] = bytes.NewReader(chunk.Content)
-			}
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(readers...), nil, nil)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case storageOutboxEntry.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
-			if err != nil {
-				tx.Rollback()
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		default:
-			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-			tx.Rollback()
-			time.Sleep(5 * time.Second)
-			return
-		}
-		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx, *entry.Id)
-		if err != nil {
-			tx.Rollback()
-			return
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			return
-		}
-		processedOutboxEntryCount += 1
-	}
-	if processedOutboxEntryCount > 0 {
-		slog.Info(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
-	}
-}
-
-func (os *outboxStorage) processOutboxLoop() {
-	ctx := context.Background()
-out:
-	for {
-		select {
-		case _, ok := <-os.triggerChannel:
-			if !ok {
-				slog.Debug("Stopping outboxStorage processing")
-				break out
-			}
-		case <-time.After(1 * time.Second):
-		}
-		os.maybeProcessOutboxEntries(ctx)
-	}
 }
 
 func (os *outboxStorage) Start(ctx context.Context) error {
 	if err := os.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	os.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
-		os.processOutboxLoop()
-	})
+	os.runtime.Start()
 	return os.innerStorage.Start(ctx)
 }
 
@@ -253,19 +62,56 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	if err := os.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
-	if !os.triggerChannelClosed {
-		close(os.triggerChannel)
-		if os.outboxProcessingTaskHandle != nil {
-			joinedWithTimeout := os.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
-			if joinedWithTimeout {
-				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined with timeout of 30s")
-			} else {
-				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined without timeout")
-			}
-		}
-		os.triggerChannelClosed = true
-	}
+	os.runtime.Stop()
 	return os.innerStorage.Stop(ctx)
+}
+
+func (os *outboxStorage) Name() string {
+	return "OutboxStorage"
+}
+
+func (os *outboxStorage) CountPending(ctx context.Context, tx *sql.Tx) (int, error) {
+	return os.storageOutboxEntryRepository.Count(ctx, tx)
+}
+
+func (os *outboxStorage) FindFirstForUpdate(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+	return os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryWithForUpdateLock(ctx, tx)
+}
+
+func (os *outboxStorage) ProcessEntry(ctx context.Context, tx *sql.Tx, storageEntry *storageOutboxEntry.Entity) error {
+	if storageEntry == nil {
+		return fmt.Errorf("invalid storage outbox entry type")
+	}
+
+	switch storageEntry.Operation {
+	case storageOutboxEntry.CreateBucketStorageOperation:
+		return os.innerStorage.CreateBucket(ctx, storageEntry.Bucket)
+	case storageOutboxEntry.DeleteBucketStorageOperation:
+		return os.innerStorage.DeleteBucket(ctx, storageEntry.Bucket)
+	case storageOutboxEntry.PutObjectStorageOperation:
+		chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, *storageEntry.Id)
+		if err != nil {
+			return err
+		}
+		readers := make([]io.Reader, len(chunks))
+		for i, chunk := range chunks {
+			readers[i] = bytes.NewReader(chunk.Content)
+		}
+		_, err = os.innerStorage.PutObject(ctx, storageEntry.Bucket, storage.MustNewObjectKey(storageEntry.Key), storageEntry.ContentType, io.MultiReader(readers...), nil, nil)
+		return err
+	case storageOutboxEntry.DeleteObjectStorageOperation:
+		return os.innerStorage.DeleteObject(ctx, storageEntry.Bucket, storage.MustNewObjectKey(storageEntry.Key), nil)
+	default:
+		slog.Warn(fmt.Sprint("Invalid operation", storageEntry.Operation, "during outbox processing."))
+		return fmt.Errorf("invalid operation: %s", storageEntry.Operation)
+	}
+}
+
+func (os *outboxStorage) DeleteEntry(ctx context.Context, tx *sql.Tx, storageEntry *storageOutboxEntry.Entity) error {
+	if storageEntry == nil {
+		return fmt.Errorf("invalid storage outbox entry type")
+	}
+	return os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx, *storageEntry.Id)
 }
 
 func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
@@ -280,10 +126,7 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 	}
 
 	// Put struct{} in the channel unless it is full
-	select {
-	case os.triggerChannel <- struct{}{}:
-	default:
-	}
+	os.runtime.Trigger()
 
 	return entry.Id, nil
 }
