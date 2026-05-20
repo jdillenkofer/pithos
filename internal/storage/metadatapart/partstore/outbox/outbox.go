@@ -121,7 +121,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}()
 
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return
 	}
@@ -135,13 +135,16 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	tx.Commit()
 
 	for {
-		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		var entry *partOutboxEntry.Entity
+		var putPartReader io.Reader
+
+		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
 			return
 		}
 
-		entry, err := obs.partOutboxEntryRepository.FindFirstPartOutboxEntryWithForUpdateLock(ctx, tx)
+		entry, err = obs.partOutboxEntryRepository.FindFirstPartOutboxEntry(ctx, tx)
 		if err != nil {
 			tx.Rollback()
 			obs.metrics.errorsCounter.Inc()
@@ -152,9 +155,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			tx.Commit()
 			break
 		}
-
-		switch entry.Operation {
-		case partOutboxEntry.PutPartOperation:
+		if entry.Operation == partOutboxEntry.PutPartOperation {
 			chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *entry.Id)
 			if err != nil {
 				tx.Rollback()
@@ -166,7 +167,23 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			for i, chunk := range chunks {
 				readers[i] = bytes.NewReader(chunk.Content)
 			}
-			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, io.MultiReader(readers...))
+			putPartReader = io.MultiReader(readers...)
+		}
+		err = tx.Commit()
+		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			return
+		}
+
+		tx, err = obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			return
+		}
+
+		switch entry.Operation {
+		case partOutboxEntry.PutPartOperation:
+			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
 			if err != nil {
 				tx.Rollback()
 				obs.metrics.errorsCounter.Inc()
@@ -191,6 +208,8 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		err = obs.partOutboxEntryRepository.DeletePartOutboxEntryById(ctx, tx, *entry.Id)
 		if err != nil {
 			tx.Rollback()
+			obs.metrics.errorsCounter.Inc()
+			time.Sleep(5 * time.Second)
 			return
 		}
 		processedOutboxEntryCount += 1
