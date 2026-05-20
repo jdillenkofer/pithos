@@ -15,7 +15,6 @@ type pgxRepository struct {
 
 const (
 	countStorageOutboxEntriesStmt                    = "SELECT COUNT(*) FROM storage_outbox_entries"
-	findFirstStorageOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
 	findFirstStorageOutboxEntryStmt                  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
 	findLastStorageOutboxEntryStmt                   = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
 	findFirstStorageOutboxEntryForBucketStmt         = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
@@ -69,15 +68,6 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 
 func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt)
-	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
-	if err != nil {
-		return nil, err
-	}
-	return storageOutboxEntryEntity, nil
-}
-
-func (sor *pgxRepository) FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryWithForUpdateLockStmt)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err

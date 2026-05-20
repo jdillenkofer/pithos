@@ -18,7 +18,6 @@ const (
 	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
 	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY part_id, id DESC"
 	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
-	findFirstPartOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
 	findPartOutboxEntryChunksByIdStmt             = "SELECT outbox_entry_id, chunk_index, content FROM part_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
 	insertPartOutboxEntryStmt                     = "INSERT INTO part_outbox_entries (id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
 	updatePartOutboxEntryByIdStmt                 = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4"
@@ -108,15 +107,6 @@ func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Con
 
 func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt)
-	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
-	if err != nil {
-		return nil, err
-	}
-	return partOutboxEntryEntity, nil
-}
-
-func (bor *pgxRepository) FindFirstPartOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryWithForUpdateLockStmt)
 	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
