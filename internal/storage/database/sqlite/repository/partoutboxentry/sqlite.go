@@ -114,10 +114,6 @@ func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *s
 	return partOutboxEntryEntity, nil
 }
 
-func (bor *sqliteRepository) FindFirstPartOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	return bor.FindFirstPartOutboxEntry(ctx, tx)
-}
-
 func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
 	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String())
 	if err != nil {
