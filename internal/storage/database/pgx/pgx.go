@@ -3,6 +3,7 @@ package pgx
 import (
 	"database/sql"
 	"embed"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -50,17 +51,32 @@ type pgxDatabase struct {
 	*sql.DB
 }
 
+const (
+	defaultMaxOpenConns    = 20
+	defaultMaxIdleConns    = 20
+	defaultConnMaxLifetime = 30 * time.Minute
+	defaultConnMaxIdleTime = 5 * time.Minute
+)
+
+type ConnectionPoolConfiguration struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
 func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {
 	return database.DB_TYPE_POSTGRES
 }
 
-func OpenDatabase(dbUrl string) (*pgxDatabase, error) {
+func OpenDatabase(dbUrl string, poolConfig *ConnectionPoolConfiguration) (*pgxDatabase, error) {
 	db, err := otelsql.Open("pgx", dbUrl,
 		otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
 	)
 	if err != nil {
 		return nil, err
 	}
+	configureConnectionPool(db, poolConfig)
 	err = setupDatabase(db)
 	if err != nil {
 		db.Close()
@@ -68,6 +84,63 @@ func OpenDatabase(dbUrl string) (*pgxDatabase, error) {
 	}
 	pgxDatabase := pgxDatabase{db}
 	return &pgxDatabase, nil
+}
+
+func configureConnectionPool(db *sql.DB, poolConfigOverride *ConnectionPoolConfiguration) {
+	cfg := defaultPoolConfiguration()
+	if poolConfigOverride != nil {
+		cfg = mergePoolConfiguration(cfg, *poolConfigOverride)
+	}
+	cfg = normalizePoolConfiguration(cfg)
+
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+}
+
+func mergePoolConfiguration(base ConnectionPoolConfiguration, override ConnectionPoolConfiguration) ConnectionPoolConfiguration {
+	if override.MaxOpenConns > 0 {
+		base.MaxOpenConns = override.MaxOpenConns
+	}
+	if override.MaxIdleConns > 0 {
+		base.MaxIdleConns = override.MaxIdleConns
+	}
+	if override.ConnMaxLifetime > 0 {
+		base.ConnMaxLifetime = override.ConnMaxLifetime
+	}
+	if override.ConnMaxIdleTime > 0 {
+		base.ConnMaxIdleTime = override.ConnMaxIdleTime
+	}
+	return base
+}
+
+func normalizePoolConfiguration(cfg ConnectionPoolConfiguration) ConnectionPoolConfiguration {
+	if cfg.MaxOpenConns <= 0 {
+		cfg.MaxOpenConns = defaultMaxOpenConns
+	}
+	if cfg.MaxIdleConns <= 0 {
+		cfg.MaxIdleConns = defaultMaxIdleConns
+	}
+	if cfg.MaxIdleConns > cfg.MaxOpenConns {
+		cfg.MaxIdleConns = cfg.MaxOpenConns
+	}
+	if cfg.ConnMaxLifetime <= 0 {
+		cfg.ConnMaxLifetime = defaultConnMaxLifetime
+	}
+	if cfg.ConnMaxIdleTime <= 0 {
+		cfg.ConnMaxIdleTime = defaultConnMaxIdleTime
+	}
+	return cfg
+}
+
+func defaultPoolConfiguration() ConnectionPoolConfiguration {
+	return ConnectionPoolConfiguration{
+		MaxOpenConns:    defaultMaxOpenConns,
+		MaxIdleConns:    defaultMaxIdleConns,
+		ConnMaxLifetime: defaultConnMaxLifetime,
+		ConnMaxIdleTime: defaultConnMaxIdleTime,
+	}
 }
 
 func setupDatabase(db *sql.DB) error {
