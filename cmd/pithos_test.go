@@ -354,7 +354,7 @@ func (l *postgresContainerLease) openDatabase(ctx context.Context) (database.Dat
 	if err != nil {
 		return nil, err
 	}
-	return pgx.OpenDatabase(dbURL)
+	return pgx.OpenDatabase(dbURL, nil)
 }
 
 func (l *postgresContainerLease) cleanup(ctx context.Context) {
