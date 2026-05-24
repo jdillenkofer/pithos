@@ -36,6 +36,9 @@ Pithos supports multiple storage backends that can be configured in the storage 
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)
 - **OutboxPartStore**: Implements outbox pattern for reliable part operations
+- **ErasureCodedPartStoreMiddleware**: Reed-Solomon erasure coding for part storage
+  - Supports streaming reads/writes for large parts
+  - Can distribute shards across multiple independent part stores
 
 ## Configuration Examples
 
@@ -152,6 +155,49 @@ Pithos supports multiple storage backends that can be configured in the storage 
 ```
 
 > **Note:** `pqSeed` must be a 64-byte hex-encoded string. Generate one using `openssl rand -hex 64`. **Warning:** If this seed is lost, encrypted data cannot be decrypted.
+
+### Erasure-Coded Part Storage
+
+```json
+{
+  "type": "ErasureCodedPartStoreMiddleware",
+  "dataShards": 4,
+  "parityShards": 2,
+  "streamBlockSize": 65536,
+  "partStores": [
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-0" },
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-1" },
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-2" },
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-3" },
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-4" },
+    { "type": "FilesystemPartStore", "root": "./data/parts-shard-5" }
+  ]
+}
+```
+
+> **Note:** For erasure-coded storage, `partStores` must contain exactly `dataShards + parityShards` entries. Pithos uses strict write quorum in this mode: all shards must be written successfully.
+
+> **Sizing:** Storage overhead factor is `(dataShards + parityShards) / dataShards`. Failure tolerance is `parityShards` shard/backend losses.
+
+> **`streamBlockSize`:** Per-shard stripe size in bytes used during streaming encode/decode. Larger values usually improve throughput but increase peak memory usage. Default is `65536` when omitted.
+
+### Erasure-Coded Filesystem (2+1)
+
+```json
+{
+  "type": "ErasureCodedPartStoreMiddleware",
+  "dataShards": 2,
+  "parityShards": 1,
+  "streamBlockSize": 65536,
+  "partStores": [
+    { "type": "FilesystemPartStore", "root": "/mnt/disk-a/pithos/parts" },
+    { "type": "FilesystemPartStore", "root": "/mnt/disk-b/pithos/parts" },
+    { "type": "FilesystemPartStore", "root": "/mnt/disk-c/pithos/parts" }
+  ]
+}
+```
+
+> **Deployment note:** Place each `root` on a different physical disk or failure domain to get real resilience benefits.
 
 ## Storage Migration
 

@@ -1,0 +1,368 @@
+package erasurecoding
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/klauspost/reedsolomon"
+)
+
+const shardMagic = "PEC1"
+const shardHeaderVersion = uint8(1)
+const shardHeaderSize = 4 + 1 + 2 + 2 + 2 + 4
+const frameHeaderSize = 8 + 4 + 4 + 32
+
+type erasureCodingPartStore struct {
+	*lifecycle.ValidatedLifecycle
+	partStores    []partstore.PartStore
+	dataShards    int
+	parityShards  int
+	totalShards   int
+	stripeShardSz int
+}
+
+var _ partstore.PartStore = (*erasureCodingPartStore)(nil)
+
+func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, partStores []partstore.PartStore) (partstore.PartStore, error) {
+	if dataShards < 1 {
+		return nil, errors.New("dataShards must be >= 1")
+	}
+	if parityShards < 1 {
+		return nil, errors.New("parityShards must be >= 1")
+	}
+	totalShards := dataShards + parityShards
+	if totalShards > 256 {
+		return nil, errors.New("dataShards + parityShards must be <= 256")
+	}
+	if stripeShardSize < 1024 {
+		return nil, errors.New("streamBlockSize must be >= 1024")
+	}
+	if len(partStores) != totalShards {
+		return nil, errors.New("partStores length must equal dataShards + parityShards")
+	}
+	v, err := lifecycle.NewValidatedLifecycle("erasureCodingPartStore")
+	if err != nil {
+		return nil, err
+	}
+	return &erasureCodingPartStore{
+		ValidatedLifecycle: v,
+		partStores:         partStores,
+		dataShards:         dataShards,
+		parityShards:       parityShards,
+		totalShards:        totalShards,
+		stripeShardSz:      stripeShardSize,
+	}, nil
+}
+
+func (e *erasureCodingPartStore) Start(ctx context.Context) error {
+	if err := e.ValidatedLifecycle.Start(ctx); err != nil {
+		return err
+	}
+	for _, store := range e.partStores {
+		if err := store.Start(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *erasureCodingPartStore) Stop(ctx context.Context) error {
+	if err := e.ValidatedLifecycle.Stop(ctx); err != nil {
+		return err
+	}
+	for _, store := range e.partStores {
+		if err := store.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *erasureCodingPartStore) shardHeader(shardIndex int) []byte {
+	b := make([]byte, shardHeaderSize)
+	copy(b[0:4], []byte(shardMagic))
+	b[4] = shardHeaderVersion
+	binary.BigEndian.PutUint16(b[5:7], uint16(e.dataShards))
+	binary.BigEndian.PutUint16(b[7:9], uint16(e.totalShards))
+	binary.BigEndian.PutUint16(b[9:11], uint16(shardIndex))
+	binary.BigEndian.PutUint32(b[11:15], uint32(e.stripeShardSz))
+	return b
+}
+
+func parseShardHeader(b []byte) (int, int, int, int, error) {
+	if len(b) != shardHeaderSize {
+		return 0, 0, 0, 0, errors.New("invalid shard header")
+	}
+	if string(b[0:4]) != shardMagic || b[4] != shardHeaderVersion {
+		return 0, 0, 0, 0, errors.New("invalid shard magic/version")
+	}
+	data := int(binary.BigEndian.Uint16(b[5:7]))
+	total := int(binary.BigEndian.Uint16(b[7:9]))
+	idx := int(binary.BigEndian.Uint16(b[9:11]))
+	stripe := int(binary.BigEndian.Uint32(b[11:15]))
+	if data < 1 || total < data || idx < 0 || idx >= total || stripe < 1024 {
+		return 0, 0, 0, 0, errors.New("invalid shard header fields")
+	}
+	return data, total, idx, stripe, nil
+}
+
+func encodeFrameHeader(stripeIndex uint64, dataBytes int, payload []byte) []byte {
+	b := make([]byte, frameHeaderSize)
+	binary.BigEndian.PutUint64(b[0:8], stripeIndex)
+	binary.BigEndian.PutUint32(b[8:12], uint32(dataBytes))
+	binary.BigEndian.PutUint32(b[12:16], uint32(len(payload)))
+	h := sha256.Sum256(payload)
+	copy(b[16:48], h[:])
+	return b
+}
+
+func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
+	if len(b) != frameHeaderSize {
+		return 0, 0, 0, nil, errors.New("invalid frame header")
+	}
+	idx := binary.BigEndian.Uint64(b[0:8])
+	dataBytes := int(binary.BigEndian.Uint32(b[8:12]))
+	payloadLen := int(binary.BigEndian.Uint32(b[12:16]))
+	h := make([]byte, 32)
+	copy(h, b[16:48])
+	if dataBytes < 1 || payloadLen < 1 {
+		return 0, 0, 0, nil, errors.New("invalid frame header fields")
+	}
+	return idx, dataBytes, payloadLen, h, nil
+}
+
+func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+	enc, err := reedsolomon.New(e.dataShards, e.parityShards)
+	if err != nil {
+		return err
+	}
+
+	pipeReaders := make([]*io.PipeReader, e.totalShards)
+	pipeWriters := make([]*io.PipeWriter, e.totalShards)
+	errCh := make(chan error, e.totalShards)
+	for i := 0; i < e.totalShards; i++ {
+		pr, pw := io.Pipe()
+		pipeReaders[i], pipeWriters[i] = pr, pw
+		go func(idx int) {
+			errCh <- e.partStores[idx].PutPart(ctx, tx, partId, pr)
+		}(i)
+		if _, err := pipeWriters[i].Write(e.shardHeader(i)); err != nil {
+			return err
+		}
+	}
+
+	stripeDataCap := e.dataShards * e.stripeShardSz
+	stripeBuf := make([]byte, stripeDataCap)
+	stripeIndex := uint64(0)
+	for {
+		n, readErr := io.ReadFull(reader, stripeBuf)
+		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			for _, pw := range pipeWriters {
+				_ = pw.CloseWithError(readErr)
+			}
+			return readErr
+		}
+		if n == 0 {
+			break
+		}
+
+		shardLen := (n + e.dataShards - 1) / e.dataShards
+		shards := make([][]byte, e.totalShards)
+		for i := 0; i < e.totalShards; i++ {
+			shards[i] = make([]byte, shardLen)
+		}
+		for i := 0; i < e.dataShards; i++ {
+			start := i * shardLen
+			end := start + shardLen
+			if start > n {
+				start = n
+			}
+			if end > n {
+				end = n
+			}
+			copy(shards[i], stripeBuf[start:end])
+		}
+		if err := enc.Encode(shards); err != nil {
+			for _, pw := range pipeWriters {
+				_ = pw.CloseWithError(err)
+			}
+			return err
+		}
+
+		for i := 0; i < e.totalShards; i++ {
+			fh := encodeFrameHeader(stripeIndex, n, shards[i])
+			if _, err := pipeWriters[i].Write(fh); err != nil {
+				return err
+			}
+			if _, err := pipeWriters[i].Write(shards[i]); err != nil {
+				return err
+			}
+		}
+		stripeIndex++
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+			break
+		}
+	}
+
+	for _, pw := range pipeWriters {
+		_ = pw.Close()
+	}
+	for i := 0; i < e.totalShards; i++ {
+		if err := <-errCh; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+	readers := make([]io.ReadCloser, e.totalShards)
+	for i := 0; i < e.totalShards; i++ {
+		rc, err := e.partStores[i].GetPart(ctx, tx, partId)
+		if err != nil {
+			if errors.Is(err, partstore.ErrPartNotFound) {
+				readers[i] = nil
+				continue
+			}
+			return nil, err
+		}
+		if rc == nil {
+			continue
+		}
+		head := make([]byte, shardHeaderSize)
+		_, err = io.ReadFull(rc, head)
+		if err != nil {
+			_ = rc.Close()
+			readers[i] = nil
+			continue
+		}
+		d, t, idx, stripe, err := parseShardHeader(head)
+		if err != nil || d != e.dataShards || t != e.totalShards || idx != i || stripe != e.stripeShardSz {
+			_ = rc.Close()
+			readers[i] = nil
+			continue
+		}
+		readers[i] = rc
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer func() {
+			for _, rc := range readers {
+				if rc != nil {
+					_ = rc.Close()
+				}
+			}
+		}()
+		enc, err := reedsolomon.New(e.dataShards, e.parityShards)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		for stripeIndex := uint64(0); ; stripeIndex++ {
+			shards := make([][]byte, e.totalShards)
+			available := 0
+			dataBytes := 0
+			seenAny := false
+			for i := 0; i < e.totalShards; i++ {
+				if readers[i] == nil {
+					continue
+				}
+				fh := make([]byte, frameHeaderSize)
+				_, err := io.ReadFull(readers[i], fh)
+				if err != nil {
+					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+						readers[i] = nil
+						continue
+					}
+					_ = pw.CloseWithError(err)
+					return
+				}
+				seenAny = true
+				fIdx, fDataBytes, payloadLen, expectedHash, err := parseFrameHeader(fh)
+				if err != nil || fIdx != stripeIndex {
+					readers[i] = nil
+					continue
+				}
+				payload := make([]byte, payloadLen)
+				_, err = io.ReadFull(readers[i], payload)
+				if err != nil {
+					readers[i] = nil
+					continue
+				}
+				h := sha256.Sum256(payload)
+				if !bytes.Equal(expectedHash, h[:]) {
+					continue
+				}
+				if dataBytes == 0 {
+					dataBytes = fDataBytes
+				}
+				shards[i] = payload
+				available++
+			}
+			if !seenAny {
+				_ = pw.Close()
+				return
+			}
+			if available < e.dataShards {
+				_ = pw.CloseWithError(fmt.Errorf("insufficient shards in stripe %d", stripeIndex))
+				return
+			}
+			if err := enc.ReconstructData(shards); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+			buf := bytes.NewBuffer(nil)
+			for i := 0; i < e.dataShards; i++ {
+				buf.Write(shards[i])
+			}
+			out := buf.Bytes()
+			if dataBytes < len(out) {
+				out = out[:dataBytes]
+			}
+			if _, err := pw.Write(out); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
+	}()
+
+	return pr, nil
+}
+
+func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+	ids := make([]partstore.PartId, 0)
+	seen := make(map[string]struct{})
+	for _, store := range e.partStores {
+		storeIds, err := store.GetPartIds(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range storeIds {
+			k := id.String()
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+	for i := 0; i < e.totalShards; i++ {
+		if err := e.partStores[i].DeletePart(ctx, tx, partId); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -17,6 +17,7 @@ import (
 	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/erasurecoding"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
@@ -31,6 +32,7 @@ const (
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
+	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 )
 
 type PartStoreInstantiator = internalConfig.DynamicJsonInstantiator[partstore.PartStore]
@@ -386,6 +388,67 @@ type SqlPartStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type ErasureCodedPartStoreMiddlewareConfiguration struct {
+	DataShards             int64                        `json:"dataShards"`
+	ParityShards           int64                        `json:"parityShards"`
+	StreamBlockSize        internalConfig.Int64Provider `json:"streamBlockSize"`
+	PartStoreInstantiators []PartStoreInstantiator      `json:"-"`
+	RawPartStores          []json.RawMessage            `json:"partStores"`
+	internalConfig.DynamicJsonType
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type erasureCodedPartStoreMiddlewareConfiguration ErasureCodedPartStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*erasureCodedPartStoreMiddlewareConfiguration)(e))
+	if err != nil {
+		return err
+	}
+	e.PartStoreInstantiators = make([]PartStoreInstantiator, 0, len(e.RawPartStores))
+	for _, raw := range e.RawPartStores {
+		instantiator, err := CreatePartStoreInstantiatorFromJson(raw)
+		if err != nil {
+			return err
+		}
+		e.PartStoreInstantiators = append(e.PartStoreInstantiators, instantiator)
+	}
+	return nil
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	for _, instantiator := range e.PartStoreInstantiators {
+		if err := instantiator.RegisterReferences(diCollection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	blockSize := e.StreamBlockSize.Value()
+	if blockSize == 0 {
+		blockSize = 64 * 1024
+	}
+	if e.DataShards < 1 || e.ParityShards < 1 {
+		return nil, errors.New("dataShards and parityShards must be >= 1")
+	}
+	totalShards := e.DataShards + e.ParityShards
+	if totalShards > 256 {
+		return nil, errors.New("dataShards + parityShards must be <= 256")
+	}
+	if int64(len(e.PartStoreInstantiators)) != totalShards {
+		return nil, errors.New("partStores length must equal dataShards + parityShards")
+	}
+	stores := make([]partstore.PartStore, 0, len(e.PartStoreInstantiators))
+	for _, instantiator := range e.PartStoreInstantiators {
+		store, err := instantiator.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+		stores = append(stores, store)
+	}
+	return erasurecoding.NewWithPartStores(int(e.DataShards), int(e.ParityShards), int(blockSize), stores)
+}
+
 func (s *SqlPartStoreConfiguration) UnmarshalJSON(b []byte) error {
 	type sqlPartStoreConfiguration SqlPartStoreConfiguration
 	err := json.Unmarshal(b, (*sqlPartStoreConfiguration)(s))
@@ -440,6 +503,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SftpPartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
+	case erasureCodedPartStoreMiddlewareType:
+		bi = &ErasureCodedPartStoreMiddlewareConfiguration{}
 	default:
 		return nil, errors.New("unknown partStore type")
 	}
