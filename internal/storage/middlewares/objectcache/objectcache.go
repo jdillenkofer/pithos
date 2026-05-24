@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -33,6 +34,13 @@ type objectCacheStorageMiddleware struct {
 	cacheReadErrorsAsMiss bool
 	tracer                trace.Tracer
 	readGroup             singleflight.Group
+	inflightMu            sync.Mutex
+	inflightGets          map[string]*inflightGet
+}
+
+type inflightGet struct {
+	done chan struct{}
+	err  error
 }
 
 type cachedObject struct {
@@ -54,6 +62,7 @@ func NewStorageMiddleware(innerStorage storage.Storage, cache cachepkg.Cache, op
 		maxObjectSizeBytes:    maxObjectSizeBytes,
 		cacheReadErrorsAsMiss: opts.CacheReadErrorsAsMiss,
 		tracer:                otel.Tracer("internal/storage/middlewares/objectcache"),
+		inflightGets:          map[string]*inflightGet{},
 	}, nil
 }
 
@@ -137,18 +146,62 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 		}
 	}
 
+	inflight, leader := m.getOrCreateInflightGet(objKey)
+	if !leader {
+		<-inflight.done
+		if inflight.err != nil {
+			return nil, nil, inflight.err
+		}
+		if cachedObj, err := m.readObjectFromCache(ctx, objKey); err == nil {
+			if err = validateConditionalGet(cachedObj, opts); err != nil {
+				return nil, nil, err
+			}
+			bodyReader, getErr := m.cache.Get(objKey)
+			if getErr == nil {
+				return cloneObject(cachedObj), []io.ReadCloser{bodyReader}, nil
+			}
+			if getErr != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
+				return nil, nil, getErr
+			}
+		}
+	}
+
+	if cachedObj, err := m.readObjectFromCache(ctx, objKey); err == nil {
+		m.finishInflightGet(objKey, inflight, nil)
+		inflight = nil
+		if err = validateConditionalGet(cachedObj, opts); err != nil {
+			return nil, nil, err
+		}
+		bodyReader, getErr := m.cache.Get(objKey)
+		if getErr == nil {
+			return cloneObject(cachedObj), []io.ReadCloser{bodyReader}, nil
+		}
+		if getErr != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
+			return nil, nil, getErr
+		}
+	}
+
 	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, nil, opts)
 	if err != nil {
+		m.finishInflightGet(objKey, inflight, err)
+		inflight = nil
 		return nil, nil, err
 	}
 	if len(readers) != 1 {
+		m.finishInflightGet(objKey, inflight, nil)
+		inflight = nil
 		return obj, readers, nil
 	}
 	if obj.Size > m.maxObjectSizeBytes {
+		m.finishInflightGet(objKey, inflight, nil)
+		inflight = nil
 		return obj, readers, nil
 	}
 	if err = m.writeHeadToCache(ctx, headCacheKey(bucketName, key), obj); err != nil {
 		slog.DebugContext(ctx, "Failed to write head cache", "key", headCacheKey(bucketName, key), "error", err)
+		m.finishInflightGet(objKey, inflight, nil)
+		inflight = nil
+		return obj, readers, nil
 	}
 
 	pr, pw := io.Pipe()
@@ -165,6 +218,10 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 		ReadCloser:     readers[0],
 		pipeWriter:     pw,
 		cacheWriteDone: cacheWriteDone,
+		onClose: func() {
+			m.finishInflightGet(objKey, inflight, nil)
+			inflight = nil
+		},
 	}}, nil
 }
 
@@ -173,6 +230,7 @@ type cacheOnReadCloser struct {
 	pipeWriter     *io.PipeWriter
 	cacheWriteDone chan struct{}
 	closed         bool
+	onClose        func()
 }
 
 func (r *cacheOnReadCloser) Read(p []byte) (int, error) {
@@ -210,7 +268,37 @@ func (r *cacheOnReadCloser) Close() error {
 		<-r.cacheWriteDone
 		r.cacheWriteDone = nil
 	}
+	if r.onClose != nil {
+		r.onClose()
+		r.onClose = nil
+	}
 	return r.ReadCloser.Close()
+}
+
+func (m *objectCacheStorageMiddleware) getOrCreateInflightGet(cacheKey string) (*inflightGet, bool) {
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	if inflight, ok := m.inflightGets[cacheKey]; ok {
+		return inflight, false
+	}
+	inflight := &inflightGet{done: make(chan struct{})}
+	m.inflightGets[cacheKey] = inflight
+	return inflight, true
+}
+
+func (m *objectCacheStorageMiddleware) finishInflightGet(cacheKey string, inflight *inflightGet, err error) {
+	if inflight == nil {
+		return
+	}
+	m.inflightMu.Lock()
+	defer m.inflightMu.Unlock()
+	current, ok := m.inflightGets[cacheKey]
+	if !ok || current != inflight {
+		return
+	}
+	current.err = err
+	delete(m.inflightGets, cacheKey)
+	close(current.done)
 }
 
 func (m *objectCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

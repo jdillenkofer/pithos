@@ -15,6 +15,7 @@ import (
 )
 
 type memoryCache struct {
+	mu   sync.Mutex
 	data map[string][]byte
 }
 
@@ -30,12 +31,16 @@ func (c *memoryCache) Set(key string, reader io.Reader, size int64) error {
 	}
 	buf := make([]byte, len(data))
 	copy(buf, data)
+	c.mu.Lock()
 	c.data[key] = buf
+	c.mu.Unlock()
 	return nil
 }
 
 func (c *memoryCache) Get(key string) (io.ReadCloser, error) {
+	c.mu.Lock()
 	data, ok := c.data[key]
+	c.mu.Unlock()
 	if !ok {
 		return nil, cachepkg.ErrCacheMiss
 	}
@@ -45,7 +50,9 @@ func (c *memoryCache) Get(key string) (io.ReadCloser, error) {
 }
 
 func (c *memoryCache) Remove(key string) error {
+	c.mu.Lock()
 	delete(c.data, key)
+	c.mu.Unlock()
 	return nil
 }
 
@@ -216,4 +223,37 @@ func TestReadCacheMiddleware_CachesBodyOnPutObject(t *testing.T) {
 	assert.NoError(t, readers[0].Close())
 	assert.Equal(t, []byte("hello"), body)
 	assert.Equal(t, 0, inner.getCalls["bucket/key"])
+}
+
+func TestReadCacheMiddleware_CoalescesConcurrentGetMisses(t *testing.T) {
+	ctx := context.Background()
+	bucket := metadatastore.MustNewBucketName("bucket")
+	key := metadatastore.MustNewObjectKey("key")
+
+	inner := newFakeStorage()
+	inner.objectByKey["bucket/key"] = storage.Object{Key: key, ETag: "e1", Size: 5}
+	inner.bodyByKey["bucket/key"] = []byte("hello")
+
+	mw, err := NewStorageMiddleware(inner, newMemoryCache(), Options{MaxObjectSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, readers, getErr := mw.GetObject(ctx, bucket, key, nil, nil)
+			assert.NoError(t, getErr)
+			body, readErr := io.ReadAll(readers[0])
+			assert.NoError(t, readErr)
+			assert.NoError(t, readers[0].Close())
+			assert.Equal(t, []byte("hello"), body)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, 1, inner.getCalls["bucket/key"])
 }
