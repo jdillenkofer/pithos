@@ -14,6 +14,7 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	entropyCompression "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression/entropy"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
@@ -25,6 +26,7 @@ import (
 
 const (
 	filesystemPartStoreType               = "FilesystemPartStore"
+	entropyCompressionMiddlewareType       = "EntropyCompressionPartStoreMiddleware"
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
@@ -78,6 +80,48 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
+}
+
+type EntropyCompressionPartStoreMiddlewareConfiguration struct {
+	SampleSizeBytes           internalConfig.Int64Provider `json:"sampleSizeBytes,omitempty"`
+	CompressionAlgorithm      internalConfig.StringProvider `json:"compressionAlgorithm,omitempty"`
+	MaxEntropy                internalConfig.Float64Provider `json:"maxEntropy,omitempty"`
+	MaxCompressionRatio       internalConfig.Float64Provider `json:"maxCompressionRatio,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator `json:"-"`
+	RawInnerPartStore          json.RawMessage       `json:"innerPartStore"`
+	internalConfig.DynamicJsonType
+}
+
+func (e *EntropyCompressionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type entropyCompressionPartStoreMiddlewareConfiguration EntropyCompressionPartStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*entropyCompressionPartStoreMiddlewareConfiguration)(e))
+	if err != nil {
+		return err
+	}
+	e.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(e.RawInnerPartStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *EntropyCompressionPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return e.InnerPartStoreInstantiator.RegisterReferences(diCollection)
+}
+
+func (e *EntropyCompressionPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	innerPartStore, err := e.InnerPartStoreInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	algorithm := e.CompressionAlgorithm.Value()
+	return entropyCompression.NewWithConfig(innerPartStore, entropyCompression.Config{
+		SampleSize:          int(e.SampleSizeBytes.Value()),
+		Algorithm:           entropyCompression.Algorithm(algorithm),
+		MaxEntropy:          e.MaxEntropy.Value(),
+		MaxCompressionRatio: e.MaxCompressionRatio.Value(),
+	})
 }
 
 func (t *TinkEncryptionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -388,6 +432,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 	switch bc.Type {
 	case filesystemPartStoreType:
 		bi = &FilesystemPartStoreConfiguration{}
+	case entropyCompressionMiddlewareType:
+		bi = &EntropyCompressionPartStoreMiddlewareConfiguration{}
 	case tinkEncryptionPartStoreMiddlewareType:
 		bi = &TinkEncryptionPartStoreMiddlewareConfiguration{}
 	case outboxPartStoreType:

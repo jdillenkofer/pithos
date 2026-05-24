@@ -54,3 +54,34 @@ func TestCanCreateInt64ProviderFromEnvKeyStringJson(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(2), int64Provider.Value())
 }
+
+func TestCanCreateFloat64ProviderFromRawFloat64Json(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `1.5`
+	float64Provider := Float64Provider{}
+	err := json.Unmarshal([]byte(jsonData), &float64Provider)
+	assert.Nil(t, err)
+	assert.Equal(t, 1.5, float64Provider.Value())
+}
+
+func TestCannotCreateFloat64ProviderFromRawStringJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `"2.75"`
+	float64Provider := Float64Provider{}
+	err := json.Unmarshal([]byte(jsonData), &float64Provider)
+	assert.NotNil(t, err)
+}
+
+func TestCanCreateFloat64ProviderFromEnvKeyJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+	  "type": "EnvKey",
+	  "envKey": "PITHOS_ENV_KEY_FLOAT64_TEST"
+	}`
+	err := os.Setenv("PITHOS_ENV_KEY_FLOAT64_TEST", "3.25")
+	assert.Nil(t, err)
+	float64Provider := Float64Provider{}
+	err = json.Unmarshal([]byte(jsonData), &float64Provider)
+	assert.Nil(t, err)
+	assert.Equal(t, 3.25, float64Provider.Value())
+}

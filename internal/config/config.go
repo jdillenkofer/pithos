@@ -196,3 +196,34 @@ func (i *BoolProvider) UnmarshalJSON(b []byte) error {
 	}
 	return nil
 }
+
+type Float64Provider struct {
+	value float64
+}
+
+func (f *Float64Provider) Value() float64 {
+	return f.value
+}
+
+func (f *Float64Provider) UnmarshalJSON(b []byte) error {
+	var rawFloat64 float64
+	err := json.Unmarshal(b, &rawFloat64)
+	if err == nil {
+		f.value = rawFloat64
+		return nil
+	}
+	ekp := envKeyProvider{}
+	err = json.Unmarshal(b, &ekp)
+	if err != nil {
+		return err
+	}
+	if ekp.Type != envKeyType {
+		return errors.New("invalid float64Provider type")
+	}
+	envFloat64 := os.Getenv(ekp.EnvKey)
+	f.value, err = strconv.ParseFloat(envFloat64, 64)
+	if err != nil {
+		return err
+	}
+	return nil
+}
