@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -36,9 +39,33 @@ func createTestStore(t *testing.T, shardCount int) (partstore.PartStore, []parts
 		assert.Nil(t, err)
 		stores = append(stores, s)
 	}
-	ec, err := NewWithPartStores(2, 1, 64*1024, stores)
+	// Disable background healing here because these tests delete shard files directly,
+	// bypassing middleware locks and otherwise introducing timing-dependent races.
+	ec, err := NewWithPartStores(2, 1, 64*1024, stores, WithHealScanInterval(0))
 	assert.Nil(t, err)
 	return ec, stores, db
+}
+
+func deleteShardPartWithRetry(t *testing.T, ctx context.Context, db database.Database, shardStore partstore.PartStore, partId partstore.PartId) {
+	t.Helper()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		err := shardStore.DeletePart(ctx, tx, partId)
+		if err == nil {
+			assert.Nil(t, tx.Commit())
+			return
+		}
+		_ = tx.Rollback()
+
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32)) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		assert.Nil(t, err)
+		return
+	}
 }
 
 func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
@@ -90,10 +117,9 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	err = shardStores[0].DeletePart(ctx, tx, *partId)
-	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	// Background healing reads shards concurrently; on Windows this can briefly
+	// block direct file deletion, so retry to keep this test deterministic.
+	deleteShardPartWithRetry(t, ctx, db, shardStores[0], *partId)
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err := store.GetPart(ctx, tx, *partId)
@@ -112,10 +138,8 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	err = shardStores[1].DeletePart(ctx, tx, *partId)
-	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	// Same rationale as above: direct shard deletion races active heal reads.
+	deleteShardPartWithRetry(t, ctx, db, shardStores[1], *partId)
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err = store.GetPart(ctx, tx, *partId)

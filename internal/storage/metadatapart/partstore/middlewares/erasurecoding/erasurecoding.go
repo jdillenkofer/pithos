@@ -29,6 +29,7 @@ const DefaultHealScanInterval = 7 * 24 * time.Hour
 type erasureCodingPartStore struct {
 	*lifecycle.ValidatedLifecycle
 	partStores    []partstore.PartStore
+	partLocker    partLocker
 	dataShards    int
 	parityShards  int
 	totalShards   int
@@ -75,6 +76,7 @@ func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, pa
 	store := &erasureCodingPartStore{
 		ValidatedLifecycle: v,
 		partStores:         partStores,
+		partLocker:         newPartLocker(),
 		dataShards:         dataShards,
 		parityShards:       parityShards,
 		totalShards:        totalShards,
@@ -217,6 +219,9 @@ func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
 }
 
 func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+	unlock := e.partLocker.Lock(partId)
+	defer unlock()
+
 	enc, err := reedsolomon.New(e.dataShards, e.parityShards)
 	if err != nil {
 		return err
@@ -301,6 +306,15 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId
 }
 
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+	unlock := e.partLocker.Lock(partId)
+	unlockOnError := true
+	defer func() {
+		if unlockOnError {
+			// Prevent leaked locks when setup fails.
+			unlock()
+		}
+	}()
+
 	readers := make([]io.ReadCloser, e.totalShards)
 	healShards := make([]bool, e.totalShards)
 	for i := 0; i < e.totalShards; i++ {
@@ -490,19 +504,26 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 		}
 	}()
 
-	return &readCloserWithWait{ReadCloser: pr, done: done}, nil
+	// Keep lock for stream lifetime so Windows cannot delete the shard mid-read.
+	unlockOnError = false
+	return &readCloserWithWait{ReadCloser: pr, done: done, unlock: unlock}, nil
 }
 
 type readCloserWithWait struct {
 	io.ReadCloser
 	done chan struct{}
 	once sync.Once
+	unlock func()
 }
 
 func (r *readCloserWithWait) Close() error {
 	err := r.ReadCloser.Close()
 	r.once.Do(func() {
 		<-r.done
+		if r.unlock != nil {
+			// Unlock only after read loop exits to avoid Windows file-in-use delete races.
+			r.unlock()
+		}
 	})
 	return err
 }
@@ -528,6 +549,9 @@ func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]
 }
 
 func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+	unlock := e.partLocker.Lock(partId)
+	defer unlock()
+
 	for i := 0; i < e.totalShards; i++ {
 		if err := e.partStores[i].DeletePart(ctx, tx, partId); err != nil {
 			return err
