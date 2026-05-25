@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -225,16 +226,19 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId
 
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	readers := make([]io.ReadCloser, e.totalShards)
+	healShards := make([]bool, e.totalShards)
 	for i := 0; i < e.totalShards; i++ {
 		rc, err := e.partStores[i].GetPart(ctx, tx, partId)
 		if err != nil {
 			if errors.Is(err, partstore.ErrPartNotFound) {
 				readers[i] = nil
+				healShards[i] = true
 				continue
 			}
 			return nil, err
 		}
 		if rc == nil {
+			healShards[i] = true
 			continue
 		}
 		head := make([]byte, shardHeaderSize)
@@ -242,19 +246,29 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 		if err != nil {
 			_ = rc.Close()
 			readers[i] = nil
+			healShards[i] = true
 			continue
 		}
 		d, t, idx, stripe, err := parseShardHeader(head)
 		if err != nil || d != e.dataShards || t != e.totalShards || idx != i || stripe != e.stripeShardSz {
 			_ = rc.Close()
 			readers[i] = nil
+			healShards[i] = true
 			continue
 		}
 		readers[i] = rc
 	}
 
 	pr, pw := io.Pipe()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
+		closeReaderAt := func(i int) {
+			if readers[i] != nil {
+				_ = readers[i].Close()
+				readers[i] = nil
+			}
+		}
 		defer func() {
 			for _, rc := range readers {
 				if rc != nil {
@@ -262,8 +276,46 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 				}
 			}
 		}()
+
+		healPipeWriters := make([]*io.PipeWriter, e.totalShards)
+		healErrCh := make(chan error, e.totalShards)
+		healingShardCount := 0
+		for i := 0; i < e.totalShards; i++ {
+			if !healShards[i] {
+				continue
+			}
+			prHeal, pwHeal := io.Pipe()
+			healPipeWriters[i] = pwHeal
+			healingShardCount++
+			go func(idx int, reader *io.PipeReader) {
+				healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
+			}(i, prHeal)
+			if _, err := pwHeal.Write(e.shardHeader(i)); err != nil {
+				_ = pwHeal.CloseWithError(err)
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
+
+		closeHealingWriters := func(closeErr error) {
+			for i := 0; i < e.totalShards; i++ {
+				if healPipeWriters[i] == nil {
+					continue
+				}
+				if closeErr != nil {
+					_ = healPipeWriters[i].CloseWithError(closeErr)
+					continue
+				}
+				_ = healPipeWriters[i].Close()
+			}
+			for i := 0; i < healingShardCount; i++ {
+				_ = <-healErrCh
+			}
+		}
+
 		enc, err := reedsolomon.New(e.dataShards, e.parityShards)
 		if err != nil {
+			closeHealingWriters(err)
 			_ = pw.CloseWithError(err)
 			return
 		}
@@ -280,26 +332,32 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 				_, err := io.ReadFull(readers[i], fh)
 				if err != nil {
 					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-						readers[i] = nil
+						closeReaderAt(i)
+						healShards[i] = true
 						continue
 					}
+					closeHealingWriters(err)
 					_ = pw.CloseWithError(err)
 					return
 				}
 				seenAny = true
 				fIdx, fDataBytes, payloadLen, expectedHash, err := parseFrameHeader(fh)
 				if err != nil || fIdx != stripeIndex {
-					readers[i] = nil
+					closeReaderAt(i)
+					healShards[i] = true
 					continue
 				}
 				payload := make([]byte, payloadLen)
 				_, err = io.ReadFull(readers[i], payload)
 				if err != nil {
-					readers[i] = nil
+					closeReaderAt(i)
+					healShards[i] = true
 					continue
 				}
 				h := sha256.Sum256(payload)
 				if !bytes.Equal(expectedHash, h[:]) {
+					closeReaderAt(i)
+					healShards[i] = true
 					continue
 				}
 				if dataBytes == 0 {
@@ -309,16 +367,36 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 				available++
 			}
 			if !seenAny {
+				closeHealingWriters(nil)
 				_ = pw.Close()
 				return
 			}
 			if available < e.dataShards {
+				err := fmt.Errorf("insufficient shards in stripe %d", stripeIndex)
+				closeHealingWriters(err)
 				_ = pw.CloseWithError(fmt.Errorf("insufficient shards in stripe %d", stripeIndex))
 				return
 			}
 			if err := enc.ReconstructData(shards); err != nil {
+				closeHealingWriters(err)
 				_ = pw.CloseWithError(err)
 				return
+			}
+			for i := 0; i < e.totalShards; i++ {
+				if !healShards[i] || healPipeWriters[i] == nil {
+					continue
+				}
+				fh := encodeFrameHeader(stripeIndex, dataBytes, shards[i])
+				if _, err := healPipeWriters[i].Write(fh); err != nil {
+					closeHealingWriters(err)
+					_ = pw.CloseWithError(err)
+					return
+				}
+				if _, err := healPipeWriters[i].Write(shards[i]); err != nil {
+					closeHealingWriters(err)
+					_ = pw.CloseWithError(err)
+					return
+				}
 			}
 			buf := bytes.NewBuffer(nil)
 			for i := 0; i < e.dataShards; i++ {
@@ -329,13 +407,28 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 				out = out[:dataBytes]
 			}
 			if _, err := pw.Write(out); err != nil {
+				closeHealingWriters(err)
 				_ = pw.CloseWithError(err)
 				return
 			}
 		}
 	}()
 
-	return pr, nil
+	return &readCloserWithWait{ReadCloser: pr, done: done}, nil
+}
+
+type readCloserWithWait struct {
+	io.ReadCloser
+	done chan struct{}
+	once sync.Once
+}
+
+func (r *readCloserWithWait) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(func() {
+		<-r.done
+	})
+	return err
 }
 
 func (e *erasureCodingPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
