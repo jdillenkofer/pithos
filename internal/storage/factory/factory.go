@@ -29,7 +29,7 @@ const (
 	EncryptionTypeTink EncryptionType = "tink"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
+func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, enablePartStoreCompression bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -72,10 +72,12 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 		}
 	}
 
-	partStore, err = entropyCompressionPartStoreMiddleware.New(partStore)
-	if err != nil {
-		slog.Error(fmt.Sprint("Error during NewEntropyCompressionPartStoreMiddleware: ", err))
-		os.Exit(1)
+	if enablePartStoreCompression {
+		partStore, err = entropyCompressionPartStoreMiddleware.New(partStore)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error during NewEntropyCompressionPartStoreMiddleware: ", err))
+			os.Exit(1)
+		}
 	}
 
 	// Apply encryption middleware based on encryption type

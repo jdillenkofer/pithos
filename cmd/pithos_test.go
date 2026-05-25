@@ -496,8 +496,8 @@ func setupTestDatabases(ctx context.Context, dbType database.DatabaseType, useRe
 	return result, nil
 }
 
-func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool) (storage.Storage, error) {
-	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
+func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (storage.Storage, error) {
+	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
 
 	primaryS3Client := setupS3Client(baseEndpoint, primaryListenerAddr, usePathStyle)
 	s3ClientStorage, err := s3client.NewStorage(primaryS3Client)
@@ -533,11 +533,11 @@ func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, 
 	return store2, nil
 }
 
-func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
-	return setupTestServerWithAuthorizer(mustRequestAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
+	return setupTestServerWithAuthorizer(mustRequestAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 }
 
-func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthorizer, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
+func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthorizer, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
 	ctx := context.Background()
 	registry := prometheus.NewRegistry()
 	cleanups := make([]func(), 0, 8)
@@ -563,7 +563,7 @@ func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthor
 	if encryptionType != storageFactory.EncryptionTypeNone {
 		encryptionPassword = partStoreEncryptionPassword
 	}
-	store := storageFactory.CreateStorage(storagePath, dbs.primary, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
+	store := storageFactory.CreateStorage(storagePath, dbs.primary, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
 
 	if !useReplication {
 		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
@@ -587,7 +587,7 @@ func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthor
 
 		addDatabaseCleanup(addCleanup, dbs.secondary, dbs.secondaryCleanup, "Couldn't close secondary database")
 
-		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, dbs.secondary, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
+		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, dbs.secondary, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, usePartStoreCompression)
 		mustNoErr(err, "Couldn't set up replicated storage")
 		addCleanup(func() {
 			err := store2.Stop(ctx)
@@ -611,7 +611,7 @@ func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthor
 	return
 }
 
-func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool)) {
+func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool)) {
 	testutils.SkipIfNotIntegration(t)
 
 	// Determine selected DB type
@@ -679,12 +679,14 @@ func runIntegrationTest(t *testing.T, testFunc func(t *testing.T, testSuffix str
 
 	baseSuffix := dbTypeSuffix + pathStyleSuffix + replicationSuffix + partStoreSuffix + encryptSuffix
 
+	usePartStoreCompression := encryptionType != storageFactory.EncryptionTypeNone
+
 	for _, wrapPartStoreWithOutbox := range []bool{false, true} {
 		testSuffix := baseSuffix
 		if wrapPartStoreWithOutbox {
 			testSuffix += " (using transactional outbox)"
 		}
-		testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+		testFunc(t, testSuffix, selectedDBType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 	}
 }
 
@@ -693,9 +695,9 @@ func TestCreateBucket(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should create a bucket"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -709,7 +711,7 @@ func TestCreateBucket(t *testing.T) {
 		})
 
 		t.Run("it should not be able to create the same bucket twice"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -740,9 +742,9 @@ func TestHeadBucket(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should be able to see an existing bucket"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -769,9 +771,9 @@ func TestListBuckets(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should be able to list all buckets"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -794,7 +796,7 @@ func TestListBuckets(t *testing.T) {
 		})
 
 		t.Run("it should list all buckets"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -826,9 +828,9 @@ func TestPutObject(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should allow uploading an object"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -851,7 +853,7 @@ func TestPutObject(t *testing.T) {
 
 		for _, checksumAlgorithm := range []types.ChecksumAlgorithm{"CRC32", "CRC32C", "CRC64NVME", "SHA1", "SHA256"} {
 			t.Run("it should allow uploading an object with checksumAlgorithm "+string(checksumAlgorithm)+testSuffix, func(t *testing.T) {
-				s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+				s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -882,7 +884,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		t.Run("it should allow uploading an object with a presigned url"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -912,7 +914,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should allow uploading an object with a presigned url and preprovided body"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -944,7 +946,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should allow uploading an object a second time"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -976,7 +978,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should allow uploads with if-none-match when object is absent"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -999,7 +1001,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject uploads with if-none-match when object already exists"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1037,7 +1039,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject non-star if-none-match values"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1065,7 +1067,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should allow at most one concurrent create-if-absent upload"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1117,7 +1119,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should allow if-match when etag matches"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1151,7 +1153,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject if-match when etag mismatches"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1188,7 +1190,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject if-match when object is missing"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1216,7 +1218,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject stale if-match updates during concurrent writes"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1279,7 +1281,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should reject putobject when if-match and if-none-match are both set"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1308,7 +1310,7 @@ func TestPutObject(t *testing.T) {
 		})
 
 		t.Run("it should hit the upload limit when uploading an object that is too large"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1343,9 +1345,9 @@ func TestMultipartUpload(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should allow multipart uploads"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1440,7 +1442,7 @@ func TestMultipartUpload(t *testing.T) {
 
 		for _, checksumAlgorithm := range []types.ChecksumAlgorithm{"CRC32", "CRC32C", "CRC64NVME", "SHA1", "SHA256"} {
 			t.Run("it should allow multipart uploads using checksumAlgorithm "+string(checksumAlgorithm)+testSuffix, func(t *testing.T) {
-				s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+				s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 				t.Cleanup(cleanup)
 				createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 					Bucket: bucketName,
@@ -1508,7 +1510,7 @@ func TestMultipartUpload(t *testing.T) {
 		}
 
 		t.Run("it should allow listing multipart uploads"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1551,7 +1553,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow listing two multipart uploads"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1626,7 +1628,7 @@ func TestMultipartUpload(t *testing.T) {
 				t.Fatalf("Could not create LuaAuthorizer: %v", err)
 			}
 
-			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -1644,7 +1646,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow multipart uploads with two parts"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1735,7 +1737,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow listing parts of multipart uploads"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -1935,7 +1937,7 @@ func TestMultipartUpload(t *testing.T) {
 				t.Fatalf("Could not create LuaAuthorizer: %v", err)
 			}
 
-			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -1958,7 +1960,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow cancellation of multipart uploads"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2031,7 +2033,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow two multipart uploads on same key after complete first"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2174,7 +2176,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should allow two multipart uploads on same key after abort first"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2315,7 +2317,7 @@ func TestMultipartUpload(t *testing.T) {
 		})
 
 		t.Run("it should hit the upload limit when uploading a part that is too large"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2367,9 +2369,9 @@ func TestGetObject(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should allow downloading the object"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2411,7 +2413,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should allow downloading the object with a presigned url"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2454,7 +2456,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should allow downloading the object with byte range"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2490,7 +2492,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should allow downloading the object with byte range without end"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2526,7 +2528,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should allow downloading the object with suffix byte range"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2562,7 +2564,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should return 206 and clamp range end when it exceeds object size"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2601,7 +2603,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should allow downloading the object with multi byte range"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2667,7 +2669,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should return 200 for GetObject with matching If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2689,7 +2691,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should return 412 for GetObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2714,7 +2716,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should return an error for GetObject with matching If-None-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2741,7 +2743,7 @@ func TestGetObject(t *testing.T) {
 		})
 
 		t.Run("it should return 200 for GetObject with non-matching If-None-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2768,9 +2770,9 @@ func TestDeleteObject(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should allow deleting an object"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2801,7 +2803,7 @@ func TestDeleteObject(t *testing.T) {
 		})
 
 		t.Run("it should allow deleting an object with a presigned url"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2840,7 +2842,7 @@ func TestDeleteObject(t *testing.T) {
 		})
 
 		t.Run("it should return 204 for DeleteObject with matching If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2866,7 +2868,7 @@ func TestDeleteObject(t *testing.T) {
 		})
 
 		t.Run("it should return 412 for DeleteObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2901,9 +2903,9 @@ func TestHeadObject(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should allow head an object"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -2941,7 +2943,7 @@ func TestHeadObject(t *testing.T) {
 		})
 
 		t.Run("it should return 200 for HeadObject with matching If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2963,7 +2965,7 @@ func TestHeadObject(t *testing.T) {
 		})
 
 		t.Run("it should return 412 for HeadObject with mismatched If-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -2989,7 +2991,7 @@ func TestHeadObject(t *testing.T) {
 		})
 
 		t.Run("it should return an error for HeadObject with matching If-None-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -3016,7 +3018,7 @@ func TestHeadObject(t *testing.T) {
 		})
 
 		t.Run("it should return 200 for HeadObject with non-matching If-None-Match"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
@@ -3043,9 +3045,9 @@ func TestDeleteBucket(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should delete an existing bucket"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3065,7 +3067,7 @@ func TestDeleteBucket(t *testing.T) {
 		})
 
 		t.Run("it should delete an existing bucket with a presigned url"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3093,7 +3095,7 @@ func TestDeleteBucket(t *testing.T) {
 		})
 
 		t.Run("it should fail when deleting non existing bucket"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			_, err := s3Client.DeleteBucket(context.Background(), &s3.DeleteBucketInput{
 				Bucket: aws.String("test2"),
@@ -3110,7 +3112,7 @@ func TestDeleteBucket(t *testing.T) {
 		})
 
 		t.Run("it should not see the bucket after deletion anymore"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3139,7 +3141,7 @@ func TestDeleteBucket(t *testing.T) {
 		})
 
 		t.Run("it should not allow deleting a bucket with objects in it"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3179,10 +3181,10 @@ func TestListObjects(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		// Test ListObjectsV1 (deprecated but still supported)
 		t.Run("it should list no objects V1"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3205,7 +3207,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should list a single object V1"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3246,7 +3248,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should truncate when listing objects V1"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3313,7 +3315,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should list a single object V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3355,7 +3357,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should truncate and paginate with continuation token V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3459,7 +3461,7 @@ func TestListObjects(t *testing.T) {
 				t.Fatalf("Could not create LuaAuthorizer: %v", err)
 			}
 
-			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -3530,7 +3532,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should handle StartAfter parameter V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3580,7 +3582,7 @@ func TestListObjects(t *testing.T) {
 
 		// Continue with existing tests for prefixes and delimiters...
 		t.Run("it should list objects with prefix and delimiter V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3629,7 +3631,7 @@ func TestListObjects(t *testing.T) {
 
 		// Test ListObjectsV2 (recommended)
 		t.Run("it should list no objects V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3653,7 +3655,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should list a single object V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3695,7 +3697,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should truncate and paginate with continuation token V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3785,7 +3787,7 @@ func TestListObjects(t *testing.T) {
 		})
 
 		t.Run("it should handle StartAfter parameter V2"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			createBucketResult, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
 				Bucket: bucketName,
@@ -3840,9 +3842,9 @@ func TestBucketWebsite(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should put and get website configuration"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -3878,7 +3880,7 @@ func TestBucketWebsite(t *testing.T) {
 		})
 
 		t.Run("it should put website configuration with error document"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -3916,7 +3918,7 @@ func TestBucketWebsite(t *testing.T) {
 		})
 
 		t.Run("it should delete website configuration"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -3961,7 +3963,7 @@ func TestBucketWebsite(t *testing.T) {
 		})
 
 		t.Run("it should return error getting website config for unconfigured bucket"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -3985,7 +3987,7 @@ func TestBucketWebsite(t *testing.T) {
 		})
 
 		t.Run("it should overwrite existing website configuration"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
@@ -4043,10 +4045,10 @@ func TestWebsiteHosting(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		// Helper: set up a bucket with website config, policy, and content for website tests.
 		setupWebsiteBucket := func(t *testing.T) (httpClient *http.Client, listenerAddr string) {
-			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			ctx := context.Background()
@@ -4193,7 +4195,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should return default HTML 404 when no error document configured"+testSuffix, func(t *testing.T) {
-			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			ctx := context.Background()
 
@@ -4246,7 +4248,7 @@ func TestWebsiteHosting(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Could not create deny-anon authorizer: %v", err)
 			}
-			s3Client, addr, cleanup := setupTestServerWithAuthorizer(denyAnonAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, addr, cleanup := setupTestServerWithAuthorizer(denyAnonAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			ctx := context.Background()
 
@@ -4296,7 +4298,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should return error for bucket without website config"+testSuffix, func(t *testing.T) {
-			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 			ctx := context.Background()
 
@@ -4377,7 +4379,7 @@ func TestWebsiteHosting(t *testing.T) {
 		})
 
 		t.Run("it should return 404 for nonexistent bucket via website endpoint"+testSuffix, func(t *testing.T) {
-			_, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			_, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			httpClient := buildWebsiteHttpClient(addr)
@@ -4400,10 +4402,10 @@ func TestDeleteObjects(t *testing.T) {
 
 	t.Parallel()
 
-	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool) {
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
 		t.Run("it should delete multiple existing objects"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4454,7 +4456,7 @@ func TestDeleteObjects(t *testing.T) {
 				t.Fatalf("Could not create LuaAuthorizer: %v", err)
 			}
 
-			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4486,7 +4488,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should treat a missing key as successfully deleted"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4508,7 +4510,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should suppress deleted entries in quiet mode"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4540,7 +4542,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should return an error entry for objects with a VersionId"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4568,7 +4570,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should return 404 when the bucket does not exist"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.DeleteObjects(context.Background(), &s3.DeleteObjectsInput{
@@ -4587,7 +4589,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should handle an empty delete list"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4606,7 +4608,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should partially succeed when some keys exist and some do not"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4638,7 +4640,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should delete object when ETag matches in DeleteObjects"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
@@ -4669,7 +4671,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		t.Run("it should return an error entry when ETag mismatches in DeleteObjects"+testSuffix, func(t *testing.T) {
 			t.Parallel()
-			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox)
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 			t.Cleanup(cleanup)
 
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
