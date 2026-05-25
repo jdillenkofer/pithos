@@ -1,4 +1,4 @@
-package entropy
+package compression
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"math"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -23,7 +22,6 @@ const (
 	headerSize        = 6
 	defaultSampleSize = 64 * 1024
 	defaultAlgorithm  = AlgorithmZstd
-	defaultMaxEntropy = 7.5
 	defaultMaxRatio   = 0.95
 	minCompressSize   = 1024
 )
@@ -43,16 +41,14 @@ const (
 type Config struct {
 	SampleSize          int
 	Algorithm           Algorithm
-	MaxEntropy          float64
 	MaxCompressionRatio float64
 }
 
-type EntropyCompressionPartStoreMiddleware struct {
+type PartStoreMiddleware struct {
 	innerPartStore partstore.PartStore
 	sampleSize     int
 	algorithm      Algorithm
 	minSize        int
-	entropyCutoff  float64
 	maxRatio       float64
 }
 
@@ -81,14 +77,6 @@ func NewWithConfig(innerPartStore partstore.PartStore, config Config) (partstore
 		return nil, fmt.Errorf("unsupported compression algorithm: %s", algorithm)
 	}
 
-	entropyCutoff := config.MaxEntropy
-	if entropyCutoff == 0 {
-		entropyCutoff = defaultMaxEntropy
-	}
-	if entropyCutoff < 0 || entropyCutoff > 8 {
-		return nil, fmt.Errorf("max entropy must be in range [0, 8]")
-	}
-
 	maxRatio := config.MaxCompressionRatio
 	if maxRatio == 0 {
 		maxRatio = defaultMaxRatio
@@ -97,25 +85,24 @@ func NewWithConfig(innerPartStore partstore.PartStore, config Config) (partstore
 		return nil, fmt.Errorf("max compression ratio must be in range (0, 1]")
 	}
 
-	return &EntropyCompressionPartStoreMiddleware{
+	return &PartStoreMiddleware{
 		innerPartStore: innerPartStore,
 		sampleSize:     sampleSize,
 		algorithm:      algorithm,
 		minSize:        minCompressSize,
-		entropyCutoff:  entropyCutoff,
 		maxRatio:       maxRatio,
 	}, nil
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) Start(ctx context.Context) error {
+func (mw *PartStoreMiddleware) Start(ctx context.Context) error {
 	return mw.innerPartStore.Start(ctx)
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) Stop(ctx context.Context) error {
+func (mw *PartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
 	sample := make([]byte, mw.sampleSize)
 	n, err := io.ReadFull(reader, sample)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -123,7 +110,7 @@ func (mw *EntropyCompressionPartStoreMiddleware) PutPart(ctx context.Context, tx
 	}
 	sample = sample[:n]
 
-	shouldCompress := len(sample) >= mw.minSize && calculateEntropy(sample) <= mw.entropyCutoff
+	shouldCompress := len(sample) >= mw.minSize
 	if shouldCompress {
 		ratio, err := mw.estimateSampleCompressionRatio(sample)
 		if err != nil {
@@ -174,7 +161,7 @@ func (mw *EntropyCompressionPartStoreMiddleware) PutPart(ctx context.Context, tx
 	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (float64, error) {
+func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (float64, error) {
 	if len(sample) == 0 {
 		return 1, nil
 	}
@@ -194,7 +181,7 @@ func (mw *EntropyCompressionPartStoreMiddleware) estimateSampleCompressionRatio(
 	return float64(compressed.Len()) / float64(len(sample)), nil
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	rc, err := mw.innerPartStore.GetPart(ctx, tx, partId)
 	if err != nil {
 		return nil, err
@@ -233,7 +220,7 @@ func (mw *EntropyCompressionPartStoreMiddleware) GetPart(ctx context.Context, tx
 	return ioutils.NewReadCloserWithCloseHook(decompressReader, rc.Close), nil
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) newCompressionWriter(algorithm Algorithm, w io.Writer) (io.WriteCloser, error) {
+func (mw *PartStoreMiddleware) newCompressionWriter(algorithm Algorithm, w io.Writer) (io.WriteCloser, error) {
 	switch algorithm {
 	case AlgorithmGzip:
 		return gzip.NewWriter(w), nil
@@ -244,7 +231,7 @@ func (mw *EntropyCompressionPartStoreMiddleware) newCompressionWriter(algorithm 
 	}
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) newDecompressionReader(algorithm Algorithm, r io.Reader) (io.ReadCloser, error) {
+func (mw *PartStoreMiddleware) newDecompressionReader(algorithm Algorithm, r io.Reader) (io.ReadCloser, error) {
 	switch algorithm {
 	case AlgorithmGzip:
 		return gzip.NewReader(r)
@@ -272,35 +259,12 @@ func (z *zstdReadCloser) Close() error {
 	return nil
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (mw *PartStoreMiddleware) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
 	return mw.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (mw *EntropyCompressionPartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
-}
-
-func calculateEntropy(sample []byte) float64 {
-	if len(sample) == 0 {
-		return 0
-	}
-
-	var counts [256]int
-	for _, b := range sample {
-		counts[b]++
-	}
-
-	length := float64(len(sample))
-	entropy := 0.0
-	for _, count := range counts {
-		if count == 0 {
-			continue
-		}
-		probability := float64(count) / length
-		entropy -= probability * math.Log2(probability)
-	}
-
-	return entropy
 }
 
 func algorithmToId(algorithm Algorithm) byte {

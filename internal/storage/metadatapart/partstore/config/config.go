@@ -14,7 +14,7 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
-	entropyCompression "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression/entropy"
+	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
@@ -26,7 +26,7 @@ import (
 
 const (
 	filesystemPartStoreType               = "FilesystemPartStore"
-	entropyCompressionMiddlewareType       = "EntropyCompressionPartStoreMiddleware"
+	compressionMiddlewareType             = "CompressionPartStoreMiddleware"
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
@@ -82,19 +82,18 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-type EntropyCompressionPartStoreMiddlewareConfiguration struct {
-	SampleSizeBytes           internalConfig.Int64Provider `json:"sampleSizeBytes,omitempty"`
-	CompressionAlgorithm      internalConfig.StringProvider `json:"compressionAlgorithm,omitempty"`
-	MaxEntropy                internalConfig.Float64Provider `json:"maxEntropy,omitempty"`
-	MaxCompressionRatio       internalConfig.Float64Provider `json:"maxCompressionRatio,omitempty"`
-	InnerPartStoreInstantiator PartStoreInstantiator `json:"-"`
-	RawInnerPartStore          json.RawMessage       `json:"innerPartStore"`
+type CompressionPartStoreMiddlewareConfiguration struct {
+	SampleSizeBytes            internalConfig.Int64Provider   `json:"sampleSizeBytes,omitempty"`
+	CompressionAlgorithm       internalConfig.StringProvider  `json:"compressionAlgorithm,omitempty"`
+	MaxCompressionRatio        internalConfig.Float64Provider `json:"maxCompressionRatio,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator          `json:"-"`
+	RawInnerPartStore          json.RawMessage                `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
 }
 
-func (e *EntropyCompressionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type entropyCompressionPartStoreMiddlewareConfiguration EntropyCompressionPartStoreMiddlewareConfiguration
-	err := json.Unmarshal(b, (*entropyCompressionPartStoreMiddlewareConfiguration)(e))
+func (e *CompressionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type compressionPartStoreMiddlewareConfiguration CompressionPartStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*compressionPartStoreMiddlewareConfiguration)(e))
 	if err != nil {
 		return err
 	}
@@ -105,21 +104,20 @@ func (e *EntropyCompressionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []b
 	return nil
 }
 
-func (e *EntropyCompressionPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+func (e *CompressionPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	return e.InnerPartStoreInstantiator.RegisterReferences(diCollection)
 }
 
-func (e *EntropyCompressionPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+func (e *CompressionPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
 	innerPartStore, err := e.InnerPartStoreInstantiator.Instantiate(diProvider)
 	if err != nil {
 		return nil, err
 	}
 
 	algorithm := e.CompressionAlgorithm.Value()
-	return entropyCompression.NewWithConfig(innerPartStore, entropyCompression.Config{
+	return compressionPartStoreMiddleware.NewWithConfig(innerPartStore, compressionPartStoreMiddleware.Config{
 		SampleSize:          int(e.SampleSizeBytes.Value()),
-		Algorithm:           entropyCompression.Algorithm(algorithm),
-		MaxEntropy:          e.MaxEntropy.Value(),
+		Algorithm:           compressionPartStoreMiddleware.Algorithm(algorithm),
 		MaxCompressionRatio: e.MaxCompressionRatio.Value(),
 	})
 }
@@ -432,8 +430,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 	switch bc.Type {
 	case filesystemPartStoreType:
 		bi = &FilesystemPartStoreConfiguration{}
-	case entropyCompressionMiddlewareType:
-		bi = &EntropyCompressionPartStoreMiddlewareConfiguration{}
+	case compressionMiddlewareType:
+		bi = &CompressionPartStoreMiddlewareConfiguration{}
 	case tinkEncryptionPartStoreMiddlewareType:
 		bi = &TinkEncryptionPartStoreMiddlewareConfiguration{}
 	case outboxPartStoreType:

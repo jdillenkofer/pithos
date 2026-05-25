@@ -14,7 +14,7 @@ import (
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
-	entropyCompressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression/entropy"
+	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	tinkEncryptionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	outboxPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
@@ -73,9 +73,9 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 	}
 
 	if enablePartStoreCompression {
-		partStore, err = entropyCompressionPartStoreMiddleware.New(partStore)
+		partStore, err = compressionPartStoreMiddleware.New(partStore)
 		if err != nil {
-			slog.Error(fmt.Sprint("Error during NewEntropyCompressionPartStoreMiddleware: ", err))
+			slog.Error(fmt.Sprint("Error during NewCompressionPartStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	}

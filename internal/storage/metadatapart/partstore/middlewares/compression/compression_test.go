@@ -1,4 +1,4 @@
-package entropy
+package compression
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEntropyCompressionPartStoreMiddleware_CompressibleContent(t *testing.T) {
+func TestCompressionPartStoreMiddleware_CompressibleContent(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {
@@ -54,7 +54,7 @@ func TestEntropyCompressionPartStoreMiddleware_CompressibleContent(t *testing.T)
 	assert.Nil(t, err)
 }
 
-func TestEntropyCompressionPartStoreMiddleware_IncompressibleContent(t *testing.T) {
+func TestCompressionPartStoreMiddleware_IncompressibleContent(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {
@@ -95,20 +95,7 @@ func TestEntropyCompressionPartStoreMiddleware_IncompressibleContent(t *testing.
 	assert.Nil(t, err)
 }
 
-func TestCalculateEntropy(t *testing.T) {
-	lowEntropy := bytes.Repeat([]byte{0x00}, 4096)
-	highEntropy := make([]byte, 4096)
-	rng := rand.New(rand.NewSource(99))
-	_, err := rng.Read(highEntropy)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assert.Less(t, calculateEntropy(lowEntropy), 1.0)
-	assert.Greater(t, calculateEntropy(highEntropy), 7.0)
-}
-
-func TestEntropyCompressionPartStoreMiddleware_Zstd(t *testing.T) {
+func TestCompressionPartStoreMiddleware_Zstd(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {
@@ -143,7 +130,7 @@ func TestEntropyCompressionPartStoreMiddleware_Zstd(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestEntropyCompressionPartStoreMiddleware_InvalidAlgorithm(t *testing.T) {
+func TestCompressionPartStoreMiddleware_InvalidAlgorithm(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {
@@ -160,24 +147,7 @@ func TestEntropyCompressionPartStoreMiddleware_InvalidAlgorithm(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
-func TestEntropyCompressionPartStoreMiddleware_InvalidMaxEntropy(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(storagePath)
-
-	inner, err := filesystemPartStore.New(storagePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = NewWithConfig(inner, Config{MaxEntropy: 8.1})
-	assert.NotNil(t, err)
-}
-
-func TestEntropyCompressionPartStoreMiddleware_InvalidMaxCompressionRatio(t *testing.T) {
+func TestCompressionPartStoreMiddleware_InvalidMaxCompressionRatio(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {
@@ -211,7 +181,7 @@ func TestEstimateSampleCompressionRatio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mw := store.(*EntropyCompressionPartStoreMiddleware)
+	mw := store.(*PartStoreMiddleware)
 
 	compressible := bytes.Repeat([]byte("abcabcabcabc"), 1024)
 	ratio, err := mw.estimateSampleCompressionRatio(compressible)
@@ -221,7 +191,7 @@ func TestEstimateSampleCompressionRatio(t *testing.T) {
 	assert.Less(t, ratio, 0.95)
 }
 
-func TestEntropyCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
+func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
 	if err != nil {

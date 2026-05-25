@@ -154,7 +154,7 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
-func TestCanCreateEntropyCompressionPartStoreMiddlewareFromJson(t *testing.T) {
+func TestCanCreateCompressionPartStoreMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
@@ -162,7 +162,7 @@ func TestCanCreateEntropyCompressionPartStoreMiddlewareFromJson(t *testing.T) {
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-				 "type": "EntropyCompressionPartStoreMiddleware",
+				 "type": "CompressionPartStoreMiddleware",
 				 "innerPartStore": {
 					 "type": "FilesystemPartStore",
 					 "root": %s
@@ -174,7 +174,7 @@ func TestCanCreateEntropyCompressionPartStoreMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
-func TestCanCreateEntropyCompressionPartStoreMiddlewareWithOptionsFromJson(t *testing.T) {
+func TestCanCreateCompressionPartStoreMiddlewareWithOptionsFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
 	assert.Nil(t, err)
@@ -182,10 +182,9 @@ func TestCanCreateEntropyCompressionPartStoreMiddlewareWithOptionsFromJson(t *te
 
 	storagePath := *tempDir
 	jsonData := fmt.Sprintf(`{
-				 "type": "EntropyCompressionPartStoreMiddleware",
+				 "type": "CompressionPartStoreMiddleware",
 				 "sampleSizeBytes": 32768,
 				 "compressionAlgorithm": "zstd",
-				 "maxEntropy": 7.4,
 				 "maxCompressionRatio": 0.93,
 				 "innerPartStore": {
 					 "type": "FilesystemPartStore",
