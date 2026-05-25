@@ -306,15 +306,35 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId
 }
 
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
-	unlock := e.partLocker.Lock(partId)
-	unlockOnError := true
-	defer func() {
-		if unlockOnError {
-			// Prevent leaked locks when setup fails.
-			unlock()
-		}
-	}()
+	unlock := e.partLocker.RLock(partId)
+	readers, healShards, err := e.openPartReaders(ctx, tx, partId)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	if hasHealShards(healShards) {
+		closePartReaders(readers)
+		unlock()
+		return e.getPartWithHealing(ctx, tx, partId)
+	}
 
+	// Healthy reads hold only a shared lock, so concurrent readers of the same
+	// part can proceed while writes/deletes/repairs remain serialized.
+	return e.newPartReader(ctx, tx, partId, readers, healShards, false, unlock), nil
+}
+
+func (e *erasureCodingPartStore) getPartWithHealing(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+	unlock := e.partLocker.Lock(partId)
+	readers, healShards, err := e.openPartReaders(ctx, tx, partId)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+
+	return e.newPartReader(ctx, tx, partId, readers, healShards, true, unlock), nil
+}
+
+func (e *erasureCodingPartStore) openPartReaders(ctx context.Context, tx *sql.Tx, partId partstore.PartId) ([]io.ReadCloser, []bool, error) {
 	readers := make([]io.ReadCloser, e.totalShards)
 	healShards := make([]bool, e.totalShards)
 	for i := 0; i < e.totalShards; i++ {
@@ -325,7 +345,8 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 				healShards[i] = true
 				continue
 			}
-			return nil, err
+			closePartReaders(readers)
+			return nil, nil, err
 		}
 		if rc == nil {
 			healShards[i] = true
@@ -348,7 +369,27 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 		}
 		readers[i] = rc
 	}
+	return readers, healShards, nil
+}
 
+func hasHealShards(healShards []bool) bool {
+	for _, heal := range healShards {
+		if heal {
+			return true
+		}
+	}
+	return false
+}
+
+func closePartReaders(readers []io.ReadCloser) {
+	for _, rc := range readers {
+		if rc != nil {
+			_ = rc.Close()
+		}
+	}
+}
+
+func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx *sql.Tx, partId partstore.PartId, readers []io.ReadCloser, healShards []bool, healMissing bool, unlock func()) io.ReadCloser {
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
@@ -370,20 +411,22 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 		healPipeWriters := make([]*io.PipeWriter, e.totalShards)
 		healErrCh := make(chan error, e.totalShards)
 		healingShardCount := 0
-		for i := 0; i < e.totalShards; i++ {
-			if !healShards[i] {
-				continue
-			}
-			prHeal, pwHeal := io.Pipe()
-			healPipeWriters[i] = pwHeal
-			healingShardCount++
-			go func(idx int, reader *io.PipeReader) {
-				healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
-			}(i, prHeal)
-			if _, err := pwHeal.Write(e.shardHeader(i)); err != nil {
-				_ = pwHeal.CloseWithError(err)
-				_ = pw.CloseWithError(err)
-				return
+		if healMissing {
+			for i := 0; i < e.totalShards; i++ {
+				if !healShards[i] {
+					continue
+				}
+				prHeal, pwHeal := io.Pipe()
+				healPipeWriters[i] = pwHeal
+				healingShardCount++
+				go func(idx int, reader *io.PipeReader) {
+					healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
+				}(i, prHeal)
+				if _, err := pwHeal.Write(e.shardHeader(i)); err != nil {
+					_ = pwHeal.CloseWithError(err)
+					_ = pw.CloseWithError(err)
+					return
+				}
 			}
 		}
 
@@ -504,15 +547,13 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId
 		}
 	}()
 
-	// Keep lock for stream lifetime so Windows cannot delete the shard mid-read.
-	unlockOnError = false
-	return &readCloserWithWait{ReadCloser: pr, done: done, unlock: unlock}, nil
+	return &readCloserWithWait{ReadCloser: pr, done: done, unlock: unlock}
 }
 
 type readCloserWithWait struct {
 	io.ReadCloser
-	done chan struct{}
-	once sync.Once
+	done   chan struct{}
+	once   sync.Once
 	unlock func()
 }
 
@@ -521,7 +562,7 @@ func (r *readCloserWithWait) Close() error {
 	r.once.Do(func() {
 		<-r.done
 		if r.unlock != nil {
-			// Unlock only after read loop exits to avoid Windows file-in-use delete races.
+			// Unlock only after the read loop exits so writes/deletes cannot race the stream.
 			r.unlock()
 		}
 	})

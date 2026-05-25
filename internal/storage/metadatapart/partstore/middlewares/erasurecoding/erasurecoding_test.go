@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -132,6 +133,60 @@ func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
 		}
 		return bytes.Equal(out, data)
 	}, 2*time.Second, 40*time.Millisecond)
+}
+
+func TestErasureCodingPartStoreAllowsConcurrentHealthyReads(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	store, _, db := createTestStore(t, 3)
+	ctx := context.Background()
+	assert.Nil(t, store.Start(ctx))
+	defer store.Stop(ctx)
+
+	partId, _ := partstore.NewRandomPartId()
+	data := bytes.Repeat([]byte("concurrent-read"), 10000)
+
+	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err := store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+	assert.Nil(t, err)
+	assert.Nil(t, tx.Commit())
+
+	firstReader, err := store.GetPart(ctx, nil, *partId)
+	if !assert.Nil(t, err) {
+		return
+	}
+	defer firstReader.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		secondReader, err := store.GetPart(ctx, nil, *partId)
+		if err != nil {
+			done <- err
+			return
+		}
+		out, err := io.ReadAll(secondReader)
+		closeErr := secondReader.Close()
+		if err != nil {
+			done <- err
+			return
+		}
+		if closeErr != nil {
+			done <- closeErr
+			return
+		}
+		if !bytes.Equal(out, data) {
+			done <- fmt.Errorf("second read returned %d bytes, want %d", len(out), len(data))
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		assert.Nil(t, err)
+	case <-time.After(2 * time.Second):
+		assert.Fail(t, "second read did not complete while first read was still open")
+	}
 }
 
 func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
