@@ -10,17 +10,17 @@ import (
 )
 
 type Repository interface {
-	Count(ctx context.Context, tx *sql.Tx) (int, error)
-	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
-	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
-	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
-	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
-	FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*Entity, error)
-	FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*Entity, error)
-	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*ContentChunk, error)
-	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *Entity) error
+	Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error)
+	FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
+	FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
+	FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*Entity, error)
+	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*Entity, error)
+	FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*Entity, error)
+	FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*Entity, error)
+	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
+	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, storageOutboxEntry *Entity) error
 	SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
-	DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error
+	DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error
 }
 
 type Entity struct {

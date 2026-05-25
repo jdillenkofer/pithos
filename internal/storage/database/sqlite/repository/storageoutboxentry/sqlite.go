@@ -14,27 +14,27 @@ type sqliteRepository struct {
 }
 
 const (
-	countStorageOutboxEntriesStmt            = "SELECT COUNT(*) FROM storage_outbox_entries"
-	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 AND (key = '' OR key = $2) ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 AND (key = '' OR key = $2) ORDER BY id DESC LIMIT 1"
-	findStorageOutboxEntryChunksByIdStmt     = "SELECT outbox_entry_id, chunk_index, content FROM storage_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
-	insertStorageOutboxEntryStmt             = "INSERT INTO storage_outbox_entries (id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7)"
-	updateStorageOutboxEntryByIdStmt         = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6"
+	countStorageOutboxEntriesStmt            = "SELECT COUNT(*) FROM storage_outbox_entries WHERE outbox_id = $1"
+	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
+	findStorageOutboxEntryChunksByIdStmt     = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	insertStorageOutboxEntryStmt             = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
+	updateStorageOutboxEntryByIdStmt         = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6 AND outbox_id = $7"
 	upsertStorageOutboxContentChunkStmt      = "INSERT OR REPLACE INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
-	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = $1"
+	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2"
 )
 
 func NewRepository() (storageoutboxentry.Repository, error) {
 	return &sqliteRepository{}, nil
 }
 
-func (sor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+func (sor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, countStorageOutboxEntriesStmt).Scan(&count)
+	err := tx.QueryRowContext(ctx, countStorageOutboxEntriesStmt, outboxId).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -68,8 +68,8 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	}, nil
 }
 
-func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt)
+func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt, outboxId)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -77,8 +77,8 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt)
+func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt, outboxId)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -86,8 +86,8 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntry(ctx context.Context, tx 
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, bucketName.String())
+func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -95,8 +95,8 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Co
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucketName.String())
+func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -104,8 +104,8 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucket(ctx context.Con
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, bucketName.String(), key)
+func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, outboxId, bucketName.String(), key)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -113,8 +113,8 @@ func (sor *sqliteRepository) FindFirstStorageOutboxEntryForBucketAndKeyIncluding
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, bucketName.String(), key)
+func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, outboxId, bucketName.String(), key)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -122,8 +122,8 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingG
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *sqliteRepository) FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*storageoutboxentry.ContentChunk, error) {
-	rows, err := tx.QueryContext(ctx, findStorageOutboxEntryChunksByIdStmt, id.String())
+func (sor *sqliteRepository) FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*storageoutboxentry.ContentChunk, error) {
+	rows, err := tx.QueryContext(ctx, findStorageOutboxEntryChunksByIdStmt, id.String(), outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -147,18 +147,18 @@ func (sor *sqliteRepository) FindStorageOutboxEntryChunksById(ctx context.Contex
 	return chunks, nil
 }
 
-func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *storageoutboxentry.Entity) error {
+func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, storageOutboxEntry *storageoutboxentry.Entity) error {
 	if storageOutboxEntry.Id == nil {
 		id := ulid.Make()
 		storageOutboxEntry.Id = &id
 		storageOutboxEntry.CreatedAt = time.Now().UTC()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), outboxId, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	storageOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String(), outboxId)
 	return err
 }
 
@@ -167,7 +167,7 @@ func (sor *sqliteRepository) SaveStorageOutboxContentChunk(ctx context.Context, 
 	return err
 }
 
-func (sor *sqliteRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String())
+func (sor *sqliteRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String(), outboxId)
 	return err
 }

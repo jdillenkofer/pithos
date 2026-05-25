@@ -14,24 +14,24 @@ type sqliteRepository struct {
 }
 
 const (
-	countPartOutboxEntriesStmt                 = "SELECT COUNT(*) FROM part_outbox_entries"
-	findLastPartOutboxEntryByPartIdStmt        = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT e.id, e.operation, e.part_id, e.created_at, e.updated_at FROM part_outbox_entries e INNER JOIN ( SELECT part_id, MAX(id) as max_id FROM part_outbox_entries GROUP BY part_id) m ON e.part_id = m.part_id AND e.id = m.max_id"
-	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
-	findPartOutboxEntryChunksByIdStmt          = "SELECT outbox_entry_id, chunk_index, content FROM part_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
-	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
-	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4"
+	countPartOutboxEntriesStmt                 = "SELECT COUNT(*) FROM part_outbox_entries WHERE outbox_id = $1"
+	findLastPartOutboxEntryByPartIdStmt        = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE outbox_id = $1 AND part_id = $2 ORDER BY id DESC LIMIT 1"
+	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT e.id, e.operation, e.part_id, e.created_at, e.updated_at FROM part_outbox_entries e INNER JOIN ( SELECT part_id, MAX(id) as max_id FROM part_outbox_entries WHERE outbox_id = $1 GROUP BY part_id) m ON e.part_id = m.part_id AND e.id = m.max_id WHERE e.outbox_id = $1"
+	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findPartOutboxEntryChunksByIdStmt          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
+	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
 	upsertPartOutboxContentChunkStmt           = "INSERT OR REPLACE INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
-	deletePartOutboxEntryByIdStmt              = "DELETE FROM part_outbox_entries WHERE id = $1"
+	deletePartOutboxEntryByIdStmt              = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2"
 )
 
 func NewRepository() (partoutboxentry.Repository, error) {
 	return &sqliteRepository{}, nil
 }
 
-func (bor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+func (bor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt).Scan(&count)
+	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt, outboxId).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -83,13 +83,13 @@ func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxen
 	}, nil
 }
 
-func (bor *sqliteRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, partId.String())
+func (bor *sqliteRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, outboxId, partId.String())
 	return convertRowToPartOutboxEntryEntity(row)
 }
 
-func (bor *sqliteRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]partoutboxentry.Entity, error) {
-	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt)
+func (bor *sqliteRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]partoutboxentry.Entity, error) {
+	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt, outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +105,8 @@ func (bor *sqliteRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.
 	return partOutboxEntryEntities, nil
 }
 
-func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt)
+func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId)
 	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -114,8 +114,8 @@ func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *s
 	return partOutboxEntryEntity, nil
 }
 
-func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
-	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String())
+func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
+	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String(), outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +139,18 @@ func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, 
 	return chunks, nil
 }
 
-func (bor *sqliteRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, partOutboxEntry *partoutboxentry.Entity) error {
+func (bor *sqliteRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *partoutboxentry.Entity) error {
 	if partOutboxEntry.Id == nil {
 		id := ulid.Make()
 		partOutboxEntry.Id = &id
 		partOutboxEntry.CreatedAt = time.Now().UTC()
 		partOutboxEntry.UpdatedAt = partOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), outboxId, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	partOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String(), outboxId)
 	return err
 }
 
@@ -159,7 +159,7 @@ func (bor *sqliteRepository) SavePartOutboxContentChunk(ctx context.Context, tx 
 	return err
 }
 
-func (bor *sqliteRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String())
+func (bor *sqliteRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String(), outboxId)
 	return err
 }

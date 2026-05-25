@@ -14,24 +14,24 @@ type pgxRepository struct {
 }
 
 const (
-	countPartOutboxEntriesStmt                    = "SELECT COUNT(*) FROM part_outbox_entries"
-	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY part_id, id DESC"
-	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
-	findPartOutboxEntryChunksByIdStmt             = "SELECT outbox_entry_id, chunk_index, content FROM part_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
-	insertPartOutboxEntryStmt                     = "INSERT INTO part_outbox_entries (id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
-	updatePartOutboxEntryByIdStmt                 = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4"
+	countPartOutboxEntriesStmt                    = "SELECT COUNT(*) FROM part_outbox_entries WHERE outbox_id = $1"
+	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE outbox_id = $1 AND part_id = $2 ORDER BY id DESC LIMIT 1"
+	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY part_id, id DESC"
+	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findPartOutboxEntryChunksByIdStmt             = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	insertPartOutboxEntryStmt                     = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
+	updatePartOutboxEntryByIdStmt                 = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
 	upsertPartOutboxContentChunkStmt              = "INSERT INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
-	deletePartOutboxEntryByIdStmt                 = "DELETE FROM part_outbox_entries WHERE id = $1"
+	deletePartOutboxEntryByIdStmt                 = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2"
 )
 
 func NewRepository() (partoutboxentry.Repository, error) {
 	return &pgxRepository{}, nil
 }
 
-func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt).Scan(&count)
+	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt, outboxId).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -83,13 +83,13 @@ func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxen
 	}, nil
 }
 
-func (bor *pgxRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, partId.String())
+func (bor *pgxRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, outboxId, partId.String())
 	return convertRowToPartOutboxEntryEntity(row)
 }
 
-func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]partoutboxentry.Entity, error) {
-	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt)
+func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]partoutboxentry.Entity, error) {
+	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt, outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +105,8 @@ func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Con
 	return partOutboxEntryEntities, nil
 }
 
-func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt)
+func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId)
 	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -114,8 +114,8 @@ func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.
 	return partOutboxEntryEntity, nil
 }
 
-func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
-	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String())
+func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
+	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String(), outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +139,18 @@ func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx 
 	return chunks, nil
 }
 
-func (bor *pgxRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, partOutboxEntry *partoutboxentry.Entity) error {
+func (bor *pgxRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *partoutboxentry.Entity) error {
 	if partOutboxEntry.Id == nil {
 		id := ulid.Make()
 		partOutboxEntry.Id = &id
 		partOutboxEntry.CreatedAt = time.Now().UTC()
 		partOutboxEntry.UpdatedAt = partOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), outboxId, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	partOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String(), outboxId)
 	return err
 }
 
@@ -159,7 +159,7 @@ func (bor *pgxRepository) SavePartOutboxContentChunk(ctx context.Context, tx *sq
 	return err
 }
 
-func (bor *pgxRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String())
+func (bor *pgxRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
+	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String(), outboxId)
 	return err
 }

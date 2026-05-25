@@ -52,7 +52,7 @@ func TestOutboxPartStore(t *testing.T) {
 		os.Exit(1)
 	}
 	reg := prometheus.NewRegistry()
-	outboxPartStore, err := New(db, filesystemPartStore, partOutboxEntryRepository, reg)
+	outboxPartStore, err := New(db, "default", filesystemPartStore, partOutboxEntryRepository, reg)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxPartStore: %s", err))
 		os.Exit(1)

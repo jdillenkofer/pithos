@@ -203,6 +203,66 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 > **Deployment note:** Place each `root` on a different physical disk or failure domain to get real resilience benefits.
 
+### Multiple Outbox Instances
+
+You can run multiple `OutboxStorage` and `OutboxPartStore` instances against the same database by setting a unique `outboxId` per instance. All outbox SQL operations are scoped to that ID, so each instance only reads and mutates its own rows.
+
+If `outboxId` is omitted, Pithos uses `"default"` for backward compatibility.
+
+```json
+{
+  "type": "MetadataPartStorage",
+  "db": {
+    "type": "RegisterDatabaseReference",
+    "refName": "db",
+    "db": {
+      "type": "SqliteDatabase",
+      "dbPath": "./data/pithos.db"
+    }
+  },
+  "metadataStore": {
+    "type": "SqlMetadataStore",
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
+  },
+  "partStore": {
+    "type": "OutboxPartStore",
+    "outboxId": "node-a-part-outbox",
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    },
+    "innerPartStore": {
+      "type": "SqlPartStore",
+      "db": {
+        "type": "DatabaseReference",
+        "refName": "db"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "type": "OutboxStorage",
+  "outboxId": "node-a-storage-outbox",
+  "db": {
+    "type": "DatabaseReference",
+    "refName": "db"
+  },
+  "innerStorage": {
+    "type": "S3ClientStorage",
+    "endpoint": "http://127.0.0.1:9000",
+    "region": "us-east-1",
+    "accessKey": "your-access-key",
+    "secretKey": "your-secret-key"
+  }
+}
+```
+
 ## Storage Migration
 
 Pithos supports storage migration through the `migrate-storage` subcommand:

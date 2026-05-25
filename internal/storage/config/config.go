@@ -37,6 +37,7 @@ import (
 )
 
 const (
+	defaultOutboxId                  = "default"
 	cacheStorageType                 = "CacheStorage"
 	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
@@ -430,6 +431,7 @@ type OutboxStorageConfiguration struct {
 	RawDatabase              json.RawMessage                     `json:"db"`
 	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
 	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
+	OutboxId                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -471,6 +473,10 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
+	outboxId := o.OutboxId.Value()
+	if outboxId == "" {
+		outboxId = defaultOutboxId
+	}
 	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -480,7 +486,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
 }
 
 type ReplicationStorageConfiguration struct {

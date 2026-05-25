@@ -27,6 +27,7 @@ import (
 )
 
 const (
+	defaultOutboxId                        = "default"
 	filesystemPartStoreType               = "FilesystemPartStore"
 	compressionMiddlewareType             = "CompressionPartStoreMiddleware"
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
@@ -292,6 +293,7 @@ type OutboxPartStoreConfiguration struct {
 	RawDatabase                json.RawMessage                     `json:"db"`
 	InnerPartStoreInstantiator PartStoreInstantiator               `json:"-"`
 	RawInnerPartStore          json.RawMessage                     `json:"innerPartStore"`
+	OutboxId                   internalConfig.StringProvider       `json:"outboxId,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -330,6 +332,10 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
+	outboxId := o.OutboxId.Value()
+	if outboxId == "" {
+		outboxId = defaultOutboxId
+	}
 	partOutboxEntryRepository, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -343,7 +349,7 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	return outbox.New(db, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
 }
 
 type SftpPartStoreConfiguration struct {
