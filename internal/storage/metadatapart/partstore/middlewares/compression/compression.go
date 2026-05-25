@@ -5,7 +5,9 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"hash/crc64"
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
@@ -14,28 +16,34 @@ import (
 )
 
 const (
-	headerMagic       = "PTHC"
 	headerVersion     = byte(1)
-	flagCompressed    = byte(1)
-	algorithmMask     = byte(0x0E)
-	algorithmShift    = 1
-	headerSize        = 6
+	headerSize        = 32
+	headerPrefixSize  = 24
+	headerChecksumPos = 24
+	headerFlagsPos    = 18
 	defaultSampleSize = 64 * 1024
 	defaultAlgorithm  = AlgorithmZstd
 	defaultMaxRatio   = 0.95
 	minCompressSize   = 1024
 )
 
+var (
+	headerMagic = [16]byte{0x4d, 0x2b, 0x0a, 0xdc, 0xee, 0x7c, 0x44, 0xa8, 0xb0, 0x49, 0x98, 0x06, 0x7b, 0x5b, 0x84, 0x50}
+	crc64Table  = crc64.MakeTable(crc64.ECMA)
+)
+
 type Algorithm string
 
 const (
+	AlgorithmNone Algorithm = "none"
 	AlgorithmGzip Algorithm = "gzip"
 	AlgorithmZstd Algorithm = "zstd"
 )
 
 const (
-	algorithmIdGzip byte = 0
-	algorithmIdZstd byte = 1
+	algorithmIdNone byte = 0
+	algorithmIdGzip byte = 1
+	algorithmIdZstd byte = 2
 )
 
 type Config struct {
@@ -124,12 +132,13 @@ func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId p
 	go func() {
 		defer pipeWriter.Close()
 
-		header := []byte{headerMagic[0], headerMagic[1], headerMagic[2], headerMagic[3], headerVersion, 0}
+		algorithm := AlgorithmNone
 		if shouldCompress {
-			header[5] = flagCompressed | (algorithmToId(mw.algorithm) << algorithmShift)
+			algorithm = mw.algorithm
 		}
 
-		if _, err := pipeWriter.Write(header); err != nil {
+		header := newHeader(algorithm)
+		if _, err := pipeWriter.Write(header[:]); err != nil {
 			pipeWriter.CloseWithError(err)
 			return
 		}
@@ -188,27 +197,26 @@ func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId p
 	}
 
 	header := make([]byte, headerSize)
-	if _, err := io.ReadFull(rc, header); err != nil {
-		rc.Close()
-		return nil, err
+	n, err := io.ReadFull(rc, header)
+	if err != nil {
+		if err != io.EOF && err != io.ErrUnexpectedEOF {
+			rc.Close()
+			return nil, err
+		}
+		return ioutils.NewReadCloserWithCloseHook(io.NopCloser(io.MultiReader(bytes.NewReader(header[:n]), rc)), rc.Close), nil
 	}
 
-	if string(header[:4]) != headerMagic {
-		rc.Close()
-		return nil, fmt.Errorf("invalid compression header")
-	}
-	if header[4] != headerVersion {
-		rc.Close()
-		return nil, fmt.Errorf("unsupported compression header version: %d", header[4])
-	}
-
-	if header[5]&flagCompressed == 0 {
-		return rc, nil
-	}
-	algorithm, err := algorithmFromFlags(header[5])
+	algorithm, ok, err := parseHeader(header)
 	if err != nil {
 		rc.Close()
 		return nil, err
+	}
+	if !ok {
+		return ioutils.NewReadCloserWithCloseHook(io.NopCloser(io.MultiReader(bytes.NewReader(header), rc)), rc.Close), nil
+	}
+
+	if algorithm == AlgorithmNone {
+		return rc, nil
 	}
 
 	decompressReader, err := mw.newDecompressionReader(algorithm, rc)
@@ -269,6 +277,8 @@ func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partI
 
 func algorithmToId(algorithm Algorithm) byte {
 	switch algorithm {
+	case AlgorithmNone:
+		return algorithmIdNone
 	case AlgorithmGzip:
 		return algorithmIdGzip
 	case AlgorithmZstd:
@@ -278,9 +288,10 @@ func algorithmToId(algorithm Algorithm) byte {
 	}
 }
 
-func algorithmFromFlags(flags byte) (Algorithm, error) {
-	id := (flags & algorithmMask) >> algorithmShift
+func algorithmFromId(id byte) (Algorithm, error) {
 	switch id {
+	case algorithmIdNone:
+		return AlgorithmNone, nil
 	case algorithmIdGzip:
 		return AlgorithmGzip, nil
 	case algorithmIdZstd:
@@ -288,4 +299,49 @@ func algorithmFromFlags(flags byte) (Algorithm, error) {
 	default:
 		return "", fmt.Errorf("unsupported compression algorithm id: %d", id)
 	}
+}
+
+func newHeader(algorithm Algorithm) [headerSize]byte {
+	var header [headerSize]byte
+	copy(header[:16], headerMagic[:])
+	header[16] = headerVersion
+	header[17] = algorithmToId(algorithm)
+	header[headerFlagsPos] = 0
+
+	checksum := crc64.Checksum(header[:headerPrefixSize], crc64Table)
+	binary.BigEndian.PutUint64(header[headerChecksumPos:], checksum)
+
+	return header
+}
+
+func parseHeader(header []byte) (Algorithm, bool, error) {
+	if len(header) != headerSize {
+		return "", false, fmt.Errorf("invalid compression header size: %d", len(header))
+	}
+	if !bytes.Equal(header[:16], headerMagic[:]) {
+		return "", false, nil
+	}
+	if header[16] != headerVersion {
+		return "", false, nil
+	}
+	if header[headerFlagsPos] != 0 {
+		return "", false, nil
+	}
+	for i := 19; i < headerPrefixSize; i++ {
+		if header[i] != 0 {
+			return "", false, nil
+		}
+	}
+
+	expectedChecksum := crc64.Checksum(header[:headerPrefixSize], crc64Table)
+	actualChecksum := binary.BigEndian.Uint64(header[headerChecksumPos:])
+	if expectedChecksum != actualChecksum {
+		return "", false, nil
+	}
+
+	algorithm, err := algorithmFromId(header[17])
+	if err != nil {
+		return "", false, nil
+	}
+	return algorithm, true, nil
 }

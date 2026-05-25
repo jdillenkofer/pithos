@@ -270,3 +270,149 @@ func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 
 	assert.Equal(t, content, got)
 }
+
+func TestCompressionPartStoreMiddleware_ReadsLegacyPlainDataWithoutHeader(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(storagePath)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err = db.Close()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Could not close database %s", err))
+		}
+	}()
+
+	inner, err := filesystemPartStore.New(storagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := New(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	partId, err := partstore.NewRandomPartId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("legacy-data-without-compression-header")
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := store.GetPart(ctx, tx, *partId)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, content, got)
+}
+
+func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	storagePath, err := os.MkdirTemp("", "pithos-test-compression-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(storagePath)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		err = db.Close()
+		if err != nil {
+			slog.Error(fmt.Sprintf("Could not close database %s", err))
+		}
+	}()
+
+	inner, err := filesystemPartStore.New(storagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := New(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	partId, err := partstore.NewRandomPartId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	header := newHeader(AlgorithmZstd)
+	header[31] ^= 0xFF
+	payload := []byte("payload-following-invalid-header")
+	content := append(header[:], payload...)
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := store.GetPart(ctx, tx, *partId)
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, content, got)
+}
