@@ -14,6 +14,7 @@ import (
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	tinkEncryptionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	outboxPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
@@ -28,7 +29,7 @@ const (
 	EncryptionTypeTink EncryptionType = "tink"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
+func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, enablePartStoreCompression bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -67,6 +68,14 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 		partStore, err = sqlPartStore.New(db, partContentRepository)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewSqlPartStore: ", err))
+			os.Exit(1)
+		}
+	}
+
+	if enablePartStoreCompression {
+		partStore, err = compressionPartStoreMiddleware.New(partStore)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error during NewCompressionPartStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	}

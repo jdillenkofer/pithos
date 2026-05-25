@@ -29,6 +29,9 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 ### Part Store Middleware
 
+- **CompressionPartStoreMiddleware**: Compresses parts based on sample compression ratio checks
+  - Supported `compressionAlgorithm` values: `gzip`, `zstd`
+  - Defaults: `sampleSizeBytes=65536`, `compressionAlgorithm="zstd"`, `maxCompressionRatio=0.95`
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and TPM 2.0
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)
@@ -117,6 +120,21 @@ Pithos supports multiple storage backends that can be configured in the storage 
 ```
 
 > **Note:** `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256` (default), `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` or `aes-256` (default). `tpmPassword` is optional; when set, it provides password-based authorization for TPM key access.
+
+### Compression
+
+```json
+{
+  "type": "CompressionPartStoreMiddleware",
+  "sampleSizeBytes": 65536,
+  "compressionAlgorithm": "zstd",
+    "maxCompressionRatio": 0.95,
+  "innerPartStore": {
+    "type": "FilesystemPartStore",
+    "root": "./data/parts"
+  }
+}
+```
 
 ### Post-Quantum Encryption
 

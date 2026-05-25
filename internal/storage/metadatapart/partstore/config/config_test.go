@@ -154,6 +154,49 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateCompressionPartStoreMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "CompressionPartStoreMiddleware",
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestCanCreateCompressionPartStoreMiddlewareWithOptionsFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+				 "type": "CompressionPartStoreMiddleware",
+				 "sampleSizeBytes": 32768,
+				 "compressionAlgorithm": "zstd",
+				 "maxCompressionRatio": 0.93,
+				 "innerPartStore": {
+					 "type": "FilesystemPartStore",
+					 "root": %s
+				 }
+			 }`, strconv.Quote(storagePath))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
 func TestTinkEncryptionPartStoreMiddlewareRequiresKeyURIForAWS(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
