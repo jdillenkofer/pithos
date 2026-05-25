@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -392,6 +393,7 @@ type ErasureCodedPartStoreMiddlewareConfiguration struct {
 	DataShards             int64                        `json:"dataShards"`
 	ParityShards           int64                        `json:"parityShards"`
 	StreamBlockSize        internalConfig.Int64Provider `json:"streamBlockSize"`
+	HealScanIntervalSecs   *internalConfig.Int64Provider `json:"healScanIntervalSeconds,omitempty"`
 	PartStoreInstantiators []PartStoreInstantiator      `json:"-"`
 	RawPartStores          []json.RawMessage            `json:"partStores"`
 	internalConfig.DynamicJsonType
@@ -446,7 +448,21 @@ func (e *ErasureCodedPartStoreMiddlewareConfiguration) Instantiate(diProvider de
 		}
 		stores = append(stores, store)
 	}
-	return erasurecoding.NewWithPartStores(int(e.DataShards), int(e.ParityShards), int(blockSize), stores)
+	healScanInterval := erasurecoding.DefaultHealScanInterval
+	if e.HealScanIntervalSecs != nil {
+		healScanIntervalSecs := e.HealScanIntervalSecs.Value()
+		if healScanIntervalSecs < 0 {
+			return nil, errors.New("healScanIntervalSeconds must be >= 0")
+		}
+		healScanInterval = time.Duration(healScanIntervalSecs) * time.Second
+	}
+	return erasurecoding.NewWithPartStores(
+		int(e.DataShards),
+		int(e.ParityShards),
+		int(blockSize),
+		stores,
+		erasurecoding.WithHealScanInterval(healScanInterval),
+	)
 }
 
 func (s *SqlPartStoreConfiguration) UnmarshalJSON(b []byte) error {

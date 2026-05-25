@@ -716,3 +716,54 @@ func TestErasureCodedPartStoreMiddlewareRejectsWrongPartStoreCount(t *testing.T)
 	assert.Nil(t, partStore)
 	assert.Contains(t, err.Error(), "partStores length must equal dataShards + parityShards")
 }
+
+func TestCanCreateErasureCodedPartStoreMiddlewareWithDisabledHealScan(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+		"type": "ErasureCodedPartStoreMiddleware",
+		"dataShards": 2,
+		"parityShards": 1,
+		"healScanIntervalSeconds": 0,
+		"streamBlockSize": 65536,
+		"partStores": [
+			{"type": "FilesystemPartStore", "root": %s},
+			{"type": "FilesystemPartStore", "root": %s},
+			{"type": "FilesystemPartStore", "root": %s}
+		]
+	}`, strconv.Quote(filepath.Join(storagePath, "p0")), strconv.Quote(filepath.Join(storagePath, "p1")), strconv.Quote(filepath.Join(storagePath, "p2")))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestErasureCodedPartStoreMiddlewareRejectsNegativeHealScanInterval(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	jsonData := fmt.Sprintf(`{
+		"type": "ErasureCodedPartStoreMiddleware",
+		"dataShards": 2,
+		"parityShards": 1,
+		"healScanIntervalSeconds": -1,
+		"streamBlockSize": 65536,
+		"partStores": [
+			{"type": "FilesystemPartStore", "root": %s},
+			{"type": "FilesystemPartStore", "root": %s},
+			{"type": "FilesystemPartStore", "root": %s}
+		]
+	}`, strconv.Quote(filepath.Join(storagePath, "p0")), strconv.Quote(filepath.Join(storagePath, "p1")), strconv.Quote(filepath.Join(storagePath, "p2")))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, partStore)
+	assert.Contains(t, err.Error(), "healScanIntervalSeconds must be >= 0")
+}

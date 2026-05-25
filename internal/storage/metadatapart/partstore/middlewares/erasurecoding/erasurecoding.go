@@ -9,10 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/klauspost/reedsolomon"
 )
 
@@ -20,6 +24,7 @@ const shardMagic = "PEC1"
 const shardHeaderVersion = uint8(1)
 const shardHeaderSize = 4 + 1 + 2 + 2 + 2 + 4
 const frameHeaderSize = 8 + 4 + 4 + 32
+const DefaultHealScanInterval = 7 * 24 * time.Hour
 
 type erasureCodingPartStore struct {
 	*lifecycle.ValidatedLifecycle
@@ -28,11 +33,25 @@ type erasureCodingPartStore struct {
 	parityShards  int
 	totalShards   int
 	stripeShardSz int
+	healScanEvery time.Duration
+	healTask      *task.TaskHandle
+}
+
+type Option func(*erasureCodingPartStore) error
+
+func WithHealScanInterval(interval time.Duration) Option {
+	return func(e *erasureCodingPartStore) error {
+		if interval < 0 {
+			return errors.New("heal scan interval must be >= 0")
+		}
+		e.healScanEvery = interval
+		return nil
+	}
 }
 
 var _ partstore.PartStore = (*erasureCodingPartStore)(nil)
 
-func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, partStores []partstore.PartStore) (partstore.PartStore, error) {
+func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, partStores []partstore.PartStore, opts ...Option) (partstore.PartStore, error) {
 	if dataShards < 1 {
 		return nil, errors.New("dataShards must be >= 1")
 	}
@@ -53,14 +72,21 @@ func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, pa
 	if err != nil {
 		return nil, err
 	}
-	return &erasureCodingPartStore{
+	store := &erasureCodingPartStore{
 		ValidatedLifecycle: v,
 		partStores:         partStores,
 		dataShards:         dataShards,
 		parityShards:       parityShards,
 		totalShards:        totalShards,
 		stripeShardSz:      stripeShardSize,
-	}, nil
+		healScanEvery:      DefaultHealScanInterval,
+	}
+	for _, opt := range opts {
+		if err := opt(store); err != nil {
+			return nil, err
+		}
+	}
+	return store, nil
 }
 
 func (e *erasureCodingPartStore) Start(ctx context.Context) error {
@@ -72,6 +98,11 @@ func (e *erasureCodingPartStore) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if e.healScanEvery > 0 {
+		e.healTask = task.Start(func(cancelTask *atomic.Bool) {
+			e.healScanLoop(cancelTask)
+		})
+	}
 	return nil
 }
 
@@ -79,12 +110,57 @@ func (e *erasureCodingPartStore) Stop(ctx context.Context) error {
 	if err := e.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
+	if e.healTask != nil {
+		e.healTask.Cancel()
+		e.healTask.Join()
+		e.healTask = nil
+	}
 	for _, store := range e.partStores {
 		if err := store.Stop(ctx); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (e *erasureCodingPartStore) healScanLoop(cancelTask *atomic.Bool) {
+	ctx := context.Background()
+	e.healScanOnce(ctx, cancelTask)
+	ticker := time.NewTicker(e.healScanEvery)
+	defer ticker.Stop()
+	for {
+		if cancelTask.Load() {
+			return
+		}
+		select {
+		case <-ticker.C:
+			e.healScanOnce(ctx, cancelTask)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func (e *erasureCodingPartStore) healScanOnce(ctx context.Context, cancelTask *atomic.Bool) {
+	partIds, err := e.GetPartIds(ctx, nil)
+	if err != nil {
+		slog.Warn("erasurecoding heal scan failed to list part ids", "err", err)
+		return
+	}
+	for _, partId := range partIds {
+		if cancelTask.Load() {
+			return
+		}
+		rc, err := e.GetPart(ctx, nil, partId)
+		if err != nil {
+			slog.Warn("erasurecoding heal scan failed to open part", "partId", partId.String(), "err", err)
+			continue
+		}
+		_, err = io.Copy(io.Discard, rc)
+		_ = rc.Close()
+		if err != nil {
+			slog.Warn("erasurecoding heal scan failed to read part", "partId", partId.String(), "err", err)
+		}
+	}
 }
 
 func (e *erasureCodingPartStore) shardHeader(shardIndex int) []byte {

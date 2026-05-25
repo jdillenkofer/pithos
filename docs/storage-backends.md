@@ -163,6 +163,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   "type": "ErasureCodedPartStoreMiddleware",
   "dataShards": 4,
   "parityShards": 2,
+  "healScanIntervalSeconds": 604800,
   "streamBlockSize": 65536,
   "partStores": [
     { "type": "FilesystemPartStore", "root": "./data/parts-shard-0" },
@@ -181,6 +182,8 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 > **`streamBlockSize`:** Per-shard stripe size in bytes used during streaming encode/decode. Larger values usually improve throughput but increase peak memory usage. Default is `65536` when omitted.
 
+> **`healScanIntervalSeconds` (optional):** Background full-part heal scan interval in seconds. Default is `604800` (7 days) when omitted. Set to `0` to disable background scanning.
+
 ### Erasure-Coded Filesystem (2+1)
 
 ```json
@@ -188,6 +191,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   "type": "ErasureCodedPartStoreMiddleware",
   "dataShards": 2,
   "parityShards": 1,
+  "healScanIntervalSeconds": 86400,
   "streamBlockSize": 65536,
   "partStores": [
     { "type": "FilesystemPartStore", "root": "/mnt/disk-a/pithos/parts" },

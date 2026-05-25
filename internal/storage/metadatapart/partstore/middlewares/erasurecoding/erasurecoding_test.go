@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
@@ -56,14 +57,21 @@ func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	rc, err := store.GetPart(ctx, tx, *partId)
-	assert.Nil(t, err)
-	out, err := io.ReadAll(rc)
-	_ = rc.Close()
-	assert.Nil(t, err)
-	assert.Equal(t, data, out)
-	assert.Nil(t, tx.Commit())
+	assert.Eventually(t, func() bool {
+		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		rc, err := store.GetPart(ctx, tx, *partId)
+		if err != nil {
+			_ = tx.Commit()
+			return false
+		}
+		out, err := io.ReadAll(rc)
+		_ = rc.Close()
+		_ = tx.Commit()
+		if err != nil {
+			return false
+		}
+		return bytes.Equal(out, data)
+	}, 2*time.Second, 40*time.Millisecond)
 }
 
 func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
@@ -124,5 +132,84 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	_, err = io.ReadAll(rc)
 	_ = rc.Close()
 	assert.Nil(t, err)
+	assert.Nil(t, tx.Commit())
+}
+
+func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
+	assert.Nil(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(storagePath) })
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	assert.Nil(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	shardStores := make([]partstore.PartStore, 0, 3)
+	for i := 0; i < 3; i++ {
+		root := filepath.Join(storagePath, "parts", string(rune('a'+i)))
+		s, err := filesystem.New(root)
+		assert.Nil(t, err)
+		shardStores = append(shardStores, s)
+	}
+	store, err := NewWithPartStores(2, 1, 64*1024, shardStores, WithHealScanInterval(30*time.Millisecond))
+	assert.Nil(t, err)
+	ctx := context.Background()
+	assert.Nil(t, store.Start(ctx))
+	defer store.Stop(ctx)
+
+	partId, _ := partstore.NewRandomPartId()
+	data := bytes.Repeat([]byte("scan-heal"), 20000)
+
+	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+	assert.Nil(t, err)
+	assert.Nil(t, tx.Commit())
+
+	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = shardStores[0].DeletePart(ctx, tx, *partId)
+	assert.Nil(t, err)
+	assert.Nil(t, tx.Commit())
+
+	assert.Eventually(t, func() bool {
+		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		rc, err := shardStores[0].GetPart(ctx, tx, *partId)
+		if err != nil {
+			_ = tx.Commit()
+			return false
+		}
+		_, err = io.ReadAll(rc)
+		_ = rc.Close()
+		_ = tx.Commit()
+		return err == nil
+	}, 2*time.Second, 40*time.Millisecond)
+
+	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = shardStores[1].DeletePart(ctx, tx, *partId)
+	assert.Nil(t, err)
+	assert.Nil(t, tx.Commit())
+
+	assert.Eventually(t, func() bool {
+		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		rc, err := shardStores[1].GetPart(ctx, tx, *partId)
+		if err != nil {
+			_ = tx.Commit()
+			return false
+		}
+		_, err = io.ReadAll(rc)
+		_ = rc.Close()
+		_ = tx.Commit()
+		return err == nil
+	}, 2*time.Second, 40*time.Millisecond)
+
+	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	rc, err := store.GetPart(ctx, tx, *partId)
+	assert.Nil(t, err)
+	out, err := io.ReadAll(rc)
+	_ = rc.Close()
+	assert.Nil(t, err)
+	assert.Equal(t, data, out)
 	assert.Nil(t, tx.Commit())
 }
