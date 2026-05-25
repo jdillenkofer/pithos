@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"hash/crc64"
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/klauspost/compress/zstd"
 )
@@ -110,7 +110,7 @@ func (mw *PartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	sample := make([]byte, mw.sampleSize)
 	n, err := io.ReadFull(reader, sample)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -190,7 +190,7 @@ func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (fl
 	return float64(compressed.Len()) / float64(len(sample)), nil
 }
 
-func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	rc, err := mw.innerPartStore.GetPart(ctx, tx, partId)
 	if err != nil {
 		return nil, err
@@ -267,11 +267,11 @@ func (z *zstdReadCloser) Close() error {
 	return nil
 }
 
-func (mw *PartStoreMiddleware) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (mw *PartStoreMiddleware) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	return mw.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
 }
 

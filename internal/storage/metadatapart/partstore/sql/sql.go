@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"database/sql"
 	"io"
 
 	"go.opentelemetry.io/otel"
@@ -39,12 +38,12 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (bs *sqlPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
 
 	// Delete existing content first to avoid stale chunks if overwriting
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx, partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
 	if err != nil {
 		return err
 	}
@@ -63,7 +62,7 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstor
 				ChunkIndex: chunkIndex,
 				Content:    content,
 			}
-			err = bs.partContentRepository.SavePartContent(ctx, tx, &partContentEntity)
+			err = bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), &partContentEntity)
 			if err != nil {
 				return err
 			}
@@ -80,11 +79,11 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstor
 	return nil
 }
 
-func (bs *sqlPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (bs *sqlPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPart")
 	defer span.End()
 
-	chunks, err := bs.partContentRepository.FindPartContentChunksById(ctx, tx, partId)
+	chunks, err := bs.partContentRepository.FindPartContentChunksById(ctx, tx.SqlTx(), partId)
 	if err != nil {
 		return nil, err
 	}
@@ -100,17 +99,17 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstor
 	return io.NopCloser(io.MultiReader(readers...)), nil
 }
 
-func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPartIds")
 	defer span.End()
 
-	return bs.partContentRepository.FindPartContentIds(ctx, tx)
+	return bs.partContentRepository.FindPartContentIds(ctx, tx.SqlTx())
 }
 
-func (bs *sqlPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (bs *sqlPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.DeletePart")
 	defer span.End()
 
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx, partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
 	return err
 }

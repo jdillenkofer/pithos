@@ -2,7 +2,6 @@ package sftp
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -191,7 +191,7 @@ func (s *sftpPartStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sftpPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *sftpPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.PutPart")
 	defer span.End()
 
@@ -210,7 +210,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstor
 	return nil
 }
 
-func (s *sftpPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (s *sftpPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPart")
 	defer span.End()
 
@@ -234,7 +234,7 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstor
 	return f, nil
 }
 
-func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPartIds")
 	defer span.End()
 
@@ -256,7 +256,7 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore
 	return partIds, nil
 }
 
-func (s *sftpPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (s *sftpPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.DeletePart")
 	defer span.End()
 

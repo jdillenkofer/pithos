@@ -15,9 +15,6 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 ### Enhancement Layers
 
-- **CacheStorage**: Adds caching capabilities to any storage backend
-  - Configurable cache policies (LFU, etc.)
-  - Support for both in-memory and persistent caching
 - **ReplicationStorage**: Enables replication across multiple storage backends
   - Supports primary-replica configuration
 
@@ -26,12 +23,20 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **ConditionalStorage**: Conditional forwarding to different storage backends based on bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 - **AuditStorage**: Provides cryptographically signed audit logs (see [Audit Logging](audit-logging.md))
+- **ObjectCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
+  - Caches `GetObject` full-object reads and `HeadObject` metadata
+  - Invalidates cache entries on successful object mutation operations (`PutObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
+  - Bypasses cache for ranged `GetObject` requests
 
 ### Part Store Middleware
 
 - **CompressionPartStoreMiddleware**: Compresses parts based on sample compression ratio checks
   - Supported `compressionAlgorithm` values: `gzip`, `zstd`
   - Defaults: `sampleSizeBytes=65536`, `compressionAlgorithm="zstd"`, `maxCompressionRatio=0.95`
+- **CachePartStore**: Adds caching capabilities to part storage
+  - Configurable cache policies (LFU, etc.)
+  - Support for both in-memory and persistent caching
+  - Skips caching oversized parts via `maxPartSizeBytes` hinting
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and TPM 2.0
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)
@@ -131,13 +136,73 @@ Pithos supports multiple storage backends that can be configured in the storage 
   "type": "CompressionPartStoreMiddleware",
   "sampleSizeBytes": 65536,
   "compressionAlgorithm": "zstd",
-    "maxCompressionRatio": 0.95,
+  "maxCompressionRatio": 0.95,
   "innerPartStore": {
     "type": "FilesystemPartStore",
     "root": "./data/parts"
   }
 }
 ```
+
+### Object Cache Middleware
+
+```json
+{
+  "type": "ObjectCacheStorageMiddleware",
+  "maxObjectSizeBytes": 67108864,
+  "cacheReadErrorsAsMiss": true,
+  "cache": {
+    "type": "GenericCache",
+    "cachePersistor": {
+      "type": "InMemoryPersistor"
+    },
+    "cacheEvictionPolicy": {
+      "type": "LfuEvictionPolicy",
+      "evictionCheckers": [
+        {
+          "type": "FixedSizeLimit",
+          "maxSizeLimit": 2147483648
+        }
+      ]
+    }
+  },
+  "innerStorage": {
+    "type": "S3ClientStorage",
+    "baseEndpoint": "https://s3.amazonaws.com",
+    "region": "us-east-1",
+    "accessKeyId": "${AWS_ACCESS_KEY_ID}",
+    "secretAccessKey": "${AWS_SECRET_ACCESS_KEY}",
+    "usePathStyle": false
+  }
+}
+```
+
+> **Note:** This middleware currently caches only full-object reads. Ranged reads are always fetched from the inner storage. Concurrent cache misses for the same object are coalesced to avoid duplicate backend reads.
+
+### Cache Part Store
+
+```json
+{
+  "type": "CachePartStore",
+  "maxPartSizeBytes": 67108864,
+  "cacheReadErrorsAsMiss": true,
+  "cache": {
+    "type": "GenericCache",
+    "cachePersistor": {
+      "type": "InMemoryPersistor"
+    },
+    "cacheEvictionPolicy": {
+      "type": "EvictNothingEvictionPolicy"
+    }
+  },
+  "innerPartStore": {
+    "type": "FilesystemPartStore",
+    "root": "./data/parts"
+  }
+}
+```
+
+> **Note:** Parts larger than `maxPartSizeBytes` are read/written through the inner store and marked as oversized to avoid repeated cache write attempts.
 
 ### Post-Quantum Encryption
 

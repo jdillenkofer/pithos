@@ -48,7 +48,7 @@ func (f *faultyPartStore) markAvailable(partId partstore.PartId) {
 	delete(f.missing, partId.String())
 }
 
-func (f *faultyPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (f *faultyPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	f.mu.RLock()
 	_, isMissing := f.missing[partId.String()]
 	f.mu.RUnlock()
@@ -59,7 +59,7 @@ func (f *faultyPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partst
 	return f.PartStore.GetPart(ctx, tx, partId)
 }
 
-func (f *faultyPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (f *faultyPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	err := f.PartStore.PutPart(ctx, tx, partId, reader)
 	if err == nil {
 		f.markAvailable(partId)
@@ -67,7 +67,7 @@ func (f *faultyPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partst
 	return err
 }
 
-func (f *faultyPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (f *faultyPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	err := f.PartStore.DeletePart(ctx, tx, partId)
 	if err == nil {
 		f.markAvailable(partId)
@@ -116,18 +116,18 @@ func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
 	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	err := store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	assert.Eventually(t, func() bool {
 		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		rc, err := store.GetPart(ctx, tx, *partId)
 		if err != nil {
-			_ = tx.Commit()
+			_ = tx.Commit(ctx)
 			return false
 		}
 		out, err := io.ReadAll(rc)
 		_ = rc.Close()
-		_ = tx.Commit()
+		_ = tx.Commit(ctx)
 		if err != nil {
 			return false
 		}
@@ -149,7 +149,7 @@ func TestErasureCodingPartStoreAllowsConcurrentHealthyReads(t *testing.T) {
 	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	err := store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	firstReader, err := store.GetPart(ctx, nil, *partId)
 	if !assert.Nil(t, err) {
@@ -203,7 +203,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	err := store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	shardStores[0].markMissing(*partId)
 
@@ -214,7 +214,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	_ = rc.Close()
 	assert.Nil(t, err)
 	assert.Equal(t, data, out)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err = shardStores[0].GetPart(ctx, tx, *partId)
@@ -222,7 +222,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	_, err = io.ReadAll(rc)
 	_ = rc.Close()
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	shardStores[1].markMissing(*partId)
 
@@ -233,7 +233,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	_ = rc.Close()
 	assert.Nil(t, err)
 	assert.Equal(t, data, out)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err = shardStores[1].GetPart(ctx, tx, *partId)
@@ -241,7 +241,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	_, err = io.ReadAll(rc)
 	_ = rc.Close()
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 }
 
 func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing.T) {
@@ -278,7 +278,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 	err = store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
 	assert.Nil(t, err)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 
 	shardStores[0].markMissing(*partId)
 
@@ -286,12 +286,12 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		rc, err := shardStores[0].GetPart(ctx, tx, *partId)
 		if err != nil {
-			_ = tx.Commit()
+			_ = tx.Commit(ctx)
 			return false
 		}
 		_, err = io.ReadAll(rc)
 		_ = rc.Close()
-		_ = tx.Commit()
+		_ = tx.Commit(ctx)
 		return err == nil
 	}, 2*time.Second, 40*time.Millisecond)
 
@@ -301,12 +301,12 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		rc, err := shardStores[1].GetPart(ctx, tx, *partId)
 		if err != nil {
-			_ = tx.Commit()
+			_ = tx.Commit(ctx)
 			return false
 		}
 		_, err = io.ReadAll(rc)
 		_ = rc.Close()
-		_ = tx.Commit()
+		_ = tx.Commit(ctx)
 		return err == nil
 	}, 2*time.Second, 40*time.Millisecond)
 
@@ -317,5 +317,5 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	_ = rc.Close()
 	assert.Nil(t, err)
 	assert.Equal(t, data, out)
-	assert.Nil(t, tx.Commit())
+	assert.Nil(t, tx.Commit(ctx))
 }

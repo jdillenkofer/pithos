@@ -2,7 +2,6 @@ package filesystem
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
@@ -77,7 +77,7 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	return bs.ensureRootDir()
 }
 
-func (bs *filesystemPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (bs *filesystemPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.PutPart")
 	defer span.End()
 
@@ -96,7 +96,7 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId p
 	return nil
 }
 
-func (bs *filesystemPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (bs *filesystemPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.GetPart")
 	defer span.End()
 
@@ -111,7 +111,7 @@ func (bs *filesystemPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId p
 	return f, err
 }
 
-func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.GetPartIds")
 	defer span.End()
 
@@ -131,7 +131,7 @@ func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]pa
 	return partIds, nil
 }
 
-func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.DeletePart")
 	defer span.End()
 

@@ -132,13 +132,13 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	pendingCount, err := os.storageOutboxEntryRepository.Count(ctx, tx, os.outboxId)
+	pendingCount, err := os.storageOutboxEntryRepository.Count(ctx, tx.SqlTx(), os.outboxId)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return
 	}
 	os.metrics.pendingEntries.Set(float64(pendingCount))
-	tx.Commit()
+	tx.Commit(ctx)
 
 	for {
 		var entry *storageOutboxEntry.Entity
@@ -149,21 +149,22 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			os.metrics.errorsCounter.Inc()
 			return
 		}
-		entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx, os.outboxId)
+		entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			os.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
 		if entry == nil {
-			tx.Commit()
+			tx.Commit(ctx)
 			break
 		}
-		if entry.Operation == storageOutboxEntry.PutObjectStorageOperation {
-			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx, os.outboxId, *entry.Id)
+		switch entry.Operation {
+		case storageOutboxEntry.PutObjectStorageOperation:
+			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
 			if err != nil {
-				tx.Rollback()
+				tx.Rollback(ctx)
 				os.metrics.errorsCounter.Inc()
 				time.Sleep(5 * time.Second)
 				return
@@ -173,7 +174,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				putObjectReaders[i] = bytes.NewReader(chunk.Content)
 			}
 		}
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
 			return
@@ -219,15 +220,15 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			os.metrics.errorsCounter.Inc()
 			return
 		}
-		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx, os.outboxId, *entry.Id)
+		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			os.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
 
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		if err != nil {
 			return
 		}
@@ -283,13 +284,13 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *database.TxContext, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucketName,
 		Key:       key,
 	}
-	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx, os.outboxId, &entry)
+	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId, &entry)
 	if err != nil {
 		return nil, err
 	}
@@ -313,10 +314,10 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	}
 	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "")
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -333,10 +334,10 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	}
 	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "")
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -348,12 +349,12 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 	if err != nil {
 		return err
 	}
-	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(ctx, tx.SqlTx(), os.outboxId, bucketName)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -368,12 +369,12 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 		if err != nil {
 			return err
 		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
+		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(ctx, tx.SqlTx(), os.outboxId, bucketName)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			return err
 		}
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		if err != nil {
 			return err
 		}
@@ -392,12 +393,12 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ct
 	if err != nil {
 		return err
 	}
-	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, os.outboxId, bucketName, key.String())
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx.SqlTx(), os.outboxId, bucketName, key.String())
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -412,12 +413,12 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ct
 		if err != nil {
 			return err
 		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, os.outboxId, bucketName, key.String())
+		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx.SqlTx(), os.outboxId, bucketName, key.String())
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			return err
 		}
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		if err != nil {
 			return err
 		}
@@ -436,12 +437,12 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(ctx, tx, os.outboxId)
+	lastStorageOutboxEntry, err := os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -456,12 +457,12 @@ func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx, os.outboxId)
+		entry, err := os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			return err
 		}
-		err = tx.Commit()
+		err = tx.Commit(ctx)
 		if err != nil {
 			return err
 		}
@@ -572,7 +573,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 					ChunkIndex:    chunkIndex,
 					Content:       content,
 				}
-				err = os.storageOutboxEntryRepository.SaveStorageOutboxContentChunk(ctx, tx, &chunk)
+				err = os.storageOutboxEntryRepository.SaveStorageOutboxContentChunk(ctx, tx.SqlTx(), &chunk)
 				if err != nil {
 					return err
 				}
@@ -588,17 +589,17 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 		return nil
 	})
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
 	err = metadatastore.ValidateChecksums(checksumInput, *calculatedChecksums)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return nil, err
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -636,10 +637,10 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	}
 	_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		return err
 	}
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return err
 	}
@@ -658,12 +659,12 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	for _, entry := range entries {
 		_, err = os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String())
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			return nil, err
 		}
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
 	}

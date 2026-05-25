@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/pkg/vault"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/hkdf"
@@ -396,7 +396,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.PutPart")
 	defer span.End()
 
@@ -494,7 +494,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *sq
 	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPart")
 	defer span.End()
 
@@ -609,14 +609,14 @@ func (c *compositeReadCloser) Close() error {
 	return c.closer.Close()
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (mw *TinkEncryptionPartStoreMiddleware) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPartIds")
 	defer span.End()
 
 	return mw.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.DeletePart")
 	defer span.End()
 

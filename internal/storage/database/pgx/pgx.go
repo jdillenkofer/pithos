@@ -1,6 +1,7 @@
 package pgx
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"time"
@@ -63,6 +64,14 @@ type ConnectionPoolConfiguration struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
+}
+
+func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxContext, error) {
+	tx, err := d.DB.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return database.NewTxContext(tx), nil
 }
 
 func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {

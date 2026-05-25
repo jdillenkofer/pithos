@@ -6,6 +6,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
@@ -19,6 +20,10 @@ import (
 
 //go:embed migrations/*.sql
 var migrationsFilesystem embed.FS
+
+// SQLite open/setup is serialized to avoid intermittent cgo crashes when
+// multiple test goroutines initialize sqlite connections concurrently.
+var openDatabaseMu sync.Mutex
 
 // In auto-vacuum full mode freelist pages are moved to the end of the file
 // end the file is truncated
@@ -97,11 +102,19 @@ type sqliteDatabase struct {
 	writeableDb *sql.DB
 }
 
-func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxContext, error) {
 	if opts != nil && opts.ReadOnly {
-		return sdb.readOnlyDb.BeginTx(ctx, opts)
+		tx, err := sdb.readOnlyDb.BeginTx(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		return database.NewTxContext(tx), nil
 	}
-	return sdb.writeableDb.BeginTx(ctx, opts)
+	tx, err := sdb.writeableDb.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return database.NewTxContext(tx), nil
 }
 
 func (sdb *sqliteDatabase) PingContext(ctx context.Context) error {
@@ -125,6 +138,9 @@ func (sdb *sqliteDatabase) GetDatabaseType() database.DatabaseType {
 }
 
 func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
+	openDatabaseMu.Lock()
+	defer openDatabaseMu.Unlock()
+
 	storagePath := filepath.Dir(dbPath)
 	err := os.MkdirAll(storagePath, os.ModePerm)
 	if err != nil {
