@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +19,62 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func createTestStore(t *testing.T, shardCount int) (partstore.PartStore, []partstore.PartStore, database.Database) {
+type faultyPartStore struct {
+	partstore.PartStore
+
+	mu      sync.RWMutex
+	missing map[string]struct{}
+}
+
+func newFaultyPartStore(inner partstore.PartStore) *faultyPartStore {
+	return &faultyPartStore{
+		PartStore: inner,
+		missing:   make(map[string]struct{}),
+	}
+}
+
+func (f *faultyPartStore) markMissing(partId partstore.PartId) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.missing[partId.String()] = struct{}{}
+}
+
+func (f *faultyPartStore) markAvailable(partId partstore.PartId) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	delete(f.missing, partId.String())
+}
+
+func (f *faultyPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+	f.mu.RLock()
+	_, isMissing := f.missing[partId.String()]
+	f.mu.RUnlock()
+	if isMissing {
+		return nil, partstore.ErrPartNotFound
+	}
+
+	return f.PartStore.GetPart(ctx, tx, partId)
+}
+
+func (f *faultyPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+	err := f.PartStore.PutPart(ctx, tx, partId, reader)
+	if err == nil {
+		f.markAvailable(partId)
+	}
+	return err
+}
+
+func (f *faultyPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+	err := f.PartStore.DeletePart(ctx, tx, partId)
+	if err == nil {
+		f.markAvailable(partId)
+	}
+	return err
+}
+
+func createTestStore(t *testing.T, shardCount int) (partstore.PartStore, []*faultyPartStore, database.Database) {
 	t.Helper()
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
 	assert.Nil(t, err)
@@ -33,39 +86,19 @@ func createTestStore(t *testing.T, shardCount int) (partstore.PartStore, []parts
 	t.Cleanup(func() { _ = db.Close() })
 
 	stores := make([]partstore.PartStore, 0, shardCount)
+	faultyStores := make([]*faultyPartStore, 0, shardCount)
 	for i := 0; i < shardCount; i++ {
 		root := filepath.Join(storagePath, "parts", string(rune('a'+i)))
 		s, err := filesystem.New(root)
 		assert.Nil(t, err)
-		stores = append(stores, s)
+		faultyStore := newFaultyPartStore(s)
+		stores = append(stores, faultyStore)
+		faultyStores = append(faultyStores, faultyStore)
 	}
-	// Disable background healing here because these tests delete shard files directly,
-	// bypassing middleware locks and otherwise introducing timing-dependent races.
+	// Disable background healing here so only the tested read path performs repairs.
 	ec, err := NewWithPartStores(2, 1, 64*1024, stores, WithHealScanInterval(0))
 	assert.Nil(t, err)
-	return ec, stores, db
-}
-
-func deleteShardPartWithRetry(t *testing.T, ctx context.Context, db database.Database, shardStore partstore.PartStore, partId partstore.PartId) {
-	t.Helper()
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for {
-		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		err := shardStore.DeletePart(ctx, tx, partId)
-		if err == nil {
-			assert.Nil(t, tx.Commit())
-			return
-		}
-		_ = tx.Rollback()
-
-		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(32)) && time.Now().Before(deadline) {
-			time.Sleep(20 * time.Millisecond)
-			continue
-		}
-		assert.Nil(t, err)
-		return
-	}
+	return ec, faultyStores, db
 }
 
 func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
@@ -117,9 +150,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	// Background healing reads shards concurrently; on Windows this can briefly
-	// block direct file deletion, so retry to keep this test deterministic.
-	deleteShardPartWithRetry(t, ctx, db, shardStores[0], *partId)
+	shardStores[0].markMissing(*partId)
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err := store.GetPart(ctx, tx, *partId)
@@ -138,8 +169,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	// Same rationale as above: direct shard deletion races active heal reads.
-	deleteShardPartWithRetry(t, ctx, db, shardStores[1], *partId)
+	shardStores[1].markMissing(*partId)
 
 	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	rc, err = store.GetPart(ctx, tx, *partId)
@@ -171,14 +201,17 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	assert.Nil(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	shardStores := make([]partstore.PartStore, 0, 3)
+	stores := make([]partstore.PartStore, 0, 3)
+	shardStores := make([]*faultyPartStore, 0, 3)
 	for i := 0; i < 3; i++ {
 		root := filepath.Join(storagePath, "parts", string(rune('a'+i)))
 		s, err := filesystem.New(root)
 		assert.Nil(t, err)
-		shardStores = append(shardStores, s)
+		faultyStore := newFaultyPartStore(s)
+		stores = append(stores, faultyStore)
+		shardStores = append(shardStores, faultyStore)
 	}
-	store, err := NewWithPartStores(2, 1, 64*1024, shardStores, WithHealScanInterval(30*time.Millisecond))
+	store, err := NewWithPartStores(2, 1, 64*1024, stores, WithHealScanInterval(30*time.Millisecond))
 	assert.Nil(t, err)
 	ctx := context.Background()
 	assert.Nil(t, store.Start(ctx))
@@ -192,7 +225,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	assert.Nil(t, err)
 	assert.Nil(t, tx.Commit())
 
-	deleteShardPartWithRetry(t, ctx, db, shardStores[0], *partId)
+	shardStores[0].markMissing(*partId)
 
 	assert.Eventually(t, func() bool {
 		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -207,7 +240,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 		return err == nil
 	}, 2*time.Second, 40*time.Millisecond)
 
-	deleteShardPartWithRetry(t, ctx, db, shardStores[1], *partId)
+	shardStores[1].markMissing(*partId)
 
 	assert.Eventually(t, func() bool {
 		tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})

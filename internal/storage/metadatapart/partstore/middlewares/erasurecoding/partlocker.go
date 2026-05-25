@@ -1,5 +1,3 @@
-//go:build windows
-
 package erasurecoding
 
 import (
@@ -12,7 +10,7 @@ type partLocker interface {
 	Lock(partstore.PartId) func()
 }
 
-type windowsPartLocker struct {
+type serialPartLocker struct {
 	mu    sync.Mutex
 	locks map[string]*partLockEntry
 }
@@ -23,10 +21,10 @@ type partLockEntry struct {
 }
 
 func newPartLocker() partLocker {
-	return &windowsPartLocker{locks: make(map[string]*partLockEntry)}
+	return &serialPartLocker{locks: make(map[string]*partLockEntry)}
 }
 
-func (l *windowsPartLocker) Lock(partId partstore.PartId) func() {
+func (l *serialPartLocker) Lock(partId partstore.PartId) func() {
 	key := partId.String()
 
 	l.mu.Lock()
