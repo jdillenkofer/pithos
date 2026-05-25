@@ -10,14 +10,14 @@ import (
 )
 
 type Repository interface {
-	Count(ctx context.Context, tx *sql.Tx) (int, error)
-	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*Entity, error)
-	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]Entity, error)
-	FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx) (*Entity, error)
-	FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*ContentChunk, error)
-	SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, partOutboxEntry *Entity) error
+	Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error)
+	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*Entity, error)
+	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]Entity, error)
+	FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
+	FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
+	SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *Entity) error
 	SavePartOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
-	DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error
+	DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error
 }
 
 type Entity struct {

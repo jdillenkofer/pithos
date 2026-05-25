@@ -113,7 +113,7 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 
 	}
 	reg := prometheus.NewRegistry()
-	outboxStorage, err := NewStorage(db2, metadataPartStorage, storageOutboxEntryRepository, reg)
+	outboxStorage, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, reg)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
 		os.Exit(1)

@@ -510,7 +510,7 @@ func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, 
 		return nil, err
 	}
 
-	outboxStorage, err := outbox.NewStorage(db2, s3ClientStorage, storageOutboxEntryRepository, registry)
+	outboxStorage, err := outbox.NewStorage(db2, "default", s3ClientStorage, storageOutboxEntryRepository, registry)
 	if err != nil {
 		return nil, err
 	}

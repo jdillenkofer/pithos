@@ -105,7 +105,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 			slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 			os.Exit(1)
 		}
-		partStore, err = outboxPartStore.New(db, partStore, partOutboxEntryRepository, registerer)
+		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, registerer)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewOutboxPartStore: ", err))
 			os.Exit(1)
