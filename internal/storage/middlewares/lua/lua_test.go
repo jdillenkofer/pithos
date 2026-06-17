@@ -23,13 +23,17 @@ type testStorage struct {
 	putOpts        *storage.PutObjectOptions
 	headOpts       *storage.HeadObjectOptions
 	getRanges      []storage.ByteRange
+	startCount     int
+	stopCount      int
 }
 
 func (s *testStorage) Start(ctx context.Context) error {
+	s.startCount++
 	return nil
 }
 
 func (s *testStorage) Stop(ctx context.Context) error {
+	s.stopCount++
 	return nil
 }
 
@@ -107,6 +111,27 @@ func TestMissingLuaFunctionDelegatesToInnerStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, inner.createdBuckets, 1)
 	assert.True(t, storage.MustNewBucketName("bucket").Equals(inner.createdBuckets[0]))
+}
+
+func TestLifecycleMethodsDelegateToInnerStorageWithoutLuaHooks(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function Start(ctx)
+  return "NoSuchBucket"
+end
+
+function Stop(ctx)
+  return "NoSuchBucket"
+end
+`)
+	require.NoError(t, err)
+
+	err = store.Start(context.Background())
+	require.NoError(t, err)
+	err = store.Stop(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.startCount)
+	assert.Equal(t, 1, inner.stopCount)
 }
 
 func TestMissingPutObjectFunctionDelegatesTypedNilArgumentsToInnerStorage(t *testing.T) {
