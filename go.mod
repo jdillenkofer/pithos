@@ -8,8 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.27
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.3
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.28
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
 	github.com/aws/smithy-go v1.27.2
 	github.com/cloudflare/circl v1.6.3
 	github.com/golang-migrate/migrate/v4 v4.19.1
@@ -19,7 +19,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.18.6
-	github.com/klauspost/reedsolomon v1.14.0
+	github.com/klauspost/reedsolomon v1.14.1
 	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pkg/sftp v1.13.10
