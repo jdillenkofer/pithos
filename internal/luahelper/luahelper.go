@@ -8,13 +8,22 @@ import (
 	"github.com/Shopify/go-lua"
 )
 
+type PushOverride func(L *lua.State, value interface{}) bool
+
 func LowerCamel(name string) string {
 	return strings.ToLower(name[:1]) + name[1:]
 }
 
 func PushGoValue(L *lua.State, value interface{}) {
+	PushGoValueWith(L, value, nil)
+}
+
+func PushGoValueWith(L *lua.State, value interface{}, override PushOverride) {
 	if isNilValue(reflect.ValueOf(value)) {
 		L.PushNil()
+		return
+	}
+	if override != nil && override(L, value) {
 		return
 	}
 	switch v := value.(type) {
@@ -43,7 +52,7 @@ func PushGoValue(L *lua.State, value interface{}) {
 	case time.Time:
 		L.PushString(v.Format(time.RFC3339Nano))
 	default:
-		pushReflectValue(L, reflect.ValueOf(value))
+		pushReflectValue(L, reflect.ValueOf(value), override)
 	}
 }
 
@@ -91,7 +100,7 @@ func pushNullableBoolean(L *lua.State, value *bool) {
 	L.PushBoolean(*value)
 }
 
-func pushReflectValue(L *lua.State, value reflect.Value) {
+func pushReflectValue(L *lua.State, value reflect.Value, override PushOverride) {
 	if !value.IsValid() {
 		L.PushNil()
 		return
@@ -101,7 +110,7 @@ func pushReflectValue(L *lua.State, value reflect.Value) {
 			L.PushNil()
 			return
 		}
-		PushGoValue(L, value.Elem().Interface())
+		PushGoValueWith(L, value.Elem().Interface(), override)
 		return
 	}
 	switch value.Kind() {
@@ -110,7 +119,7 @@ func pushReflectValue(L *lua.State, value reflect.Value) {
 		for i := 0; i < value.Len(); i++ {
 			item := value.Index(i)
 			if item.CanInterface() {
-				PushGoValue(L, item.Interface())
+				PushGoValueWith(L, item.Interface(), override)
 				L.RawSetInt(-2, i+1)
 			}
 		}
@@ -121,8 +130,8 @@ func pushReflectValue(L *lua.State, value reflect.Value) {
 		for _, key := range value.MapKeys() {
 			mapValue := value.MapIndex(key)
 			if key.CanInterface() && mapValue.CanInterface() {
-				PushGoValue(L, key.Interface())
-				PushGoValue(L, mapValue.Interface())
+				PushGoValueWith(L, key.Interface(), override)
+				PushGoValueWith(L, mapValue.Interface(), override)
 				L.SetTable(-3)
 			}
 		}
@@ -135,7 +144,7 @@ func pushReflectValue(L *lua.State, value reflect.Value) {
 			if !field.IsExported() || !fieldValue.CanInterface() {
 				continue
 			}
-			PushGoValue(L, fieldValue.Interface())
+			PushGoValueWith(L, fieldValue.Interface(), override)
 			L.SetField(-2, LowerCamel(field.Name))
 		}
 	default:
