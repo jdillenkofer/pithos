@@ -69,6 +69,16 @@ func TestMissingLuaFunctionDelegatesToInnerStorage(t *testing.T) {
 	assert.True(t, storage.MustNewBucketName("bucket").Equals(inner.createdBuckets[0]))
 }
 
+func TestMissingPutObjectFunctionDelegatesTypedNilArgumentsToInnerStorage(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, ``)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), nil, strings.NewReader("content"), nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "content", inner.putContent)
+}
+
 func TestLuaFunctionCanRewriteArguments(t *testing.T) {
 	inner := &testStorage{}
 	store, err := NewStorageMiddleware(inner, `
