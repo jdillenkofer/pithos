@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"reflect"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
+	luaMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/lua"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -43,6 +45,7 @@ const (
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
 	auditStorageMiddlewareType       = "AuditStorageMiddleware"
+	luaStorageMiddlewareType         = "LuaStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
@@ -245,6 +248,39 @@ type AuditStorageMiddlewareConfiguration struct {
 	Signing                  *SigningConfiguration                 `json:"signing"`
 
 	internalConfig.DynamicJsonType
+}
+
+type LuaStorageMiddlewareConfiguration struct {
+	InnerStorageInstantiator StorageInstantiator           `json:"-"`
+	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
+	ScriptPath               internalConfig.StringProvider `json:"scriptPath"`
+	internalConfig.DynamicJsonType
+}
+
+func (l *LuaStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type luaStorageMiddlewareConfiguration LuaStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*luaStorageMiddlewareConfiguration)(l))
+	if err != nil {
+		return err
+	}
+	l.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(l.RawInnerStorage)
+	return err
+}
+
+func (l *LuaStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return l.InnerStorageInstantiator.RegisterReferences(diCollection)
+}
+
+func (l *LuaStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	innerStorage, err := l.InnerStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	code, err := os.ReadFile(l.ScriptPath.Value())
+	if err != nil {
+		return nil, err
+	}
+	return luaMiddleware.NewStorageMiddleware(innerStorage, string(code))
 }
 
 func (a *AuditStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -608,6 +644,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &PrometheusStorageMiddlewareConfiguration{}
 	case auditStorageMiddlewareType:
 		si = &AuditStorageMiddlewareConfiguration{}
+	case luaStorageMiddlewareType:
+		si = &LuaStorageMiddlewareConfiguration{}
 	case outboxStorageType:
 		si = &OutboxStorageConfiguration{}
 	case replicationStorageType:
