@@ -20,6 +20,14 @@ type projectionTestStruct struct {
 	hidden  string
 }
 
+type overrideTestValue struct {
+	Value string
+}
+
+type overrideTestStruct struct {
+	Items []overrideTestValue
+}
+
 func newTestState() *lua.State {
 	L := lua.NewState()
 	lua.Require(L, "_G", lua.BaseOpen, true)
@@ -162,4 +170,32 @@ func TestPushGoValueStructUsesLowerCamelExportedFields(t *testing.T) {
 
 	L.Field(-1, "hidden")
 	assert.True(t, L.IsNil(-1))
+}
+
+func TestPushGoValueWithOverrideRecursesThroughStructsAndSlices(t *testing.T) {
+	L := newTestState()
+	PushGoValueWith(L, overrideTestStruct{
+		Items: []overrideTestValue{{Value: "a"}, {Value: "b"}},
+	}, func(L *lua.State, value interface{}) bool {
+		item, ok := value.(overrideTestValue)
+		if !ok {
+			return false
+		}
+		L.PushString("override-" + item.Value)
+		return true
+	})
+
+	require.True(t, L.IsTable(-1))
+	L.Field(-1, "items")
+	require.True(t, L.IsTable(-1))
+	L.RawGetInt(-1, 1)
+	first, ok := L.ToString(-1)
+	require.True(t, ok)
+	assert.Equal(t, "override-a", first)
+	L.Pop(1)
+
+	L.RawGetInt(-1, 2)
+	second, ok := L.ToString(-1)
+	require.True(t, ok)
+	assert.Equal(t, "override-b", second)
 }

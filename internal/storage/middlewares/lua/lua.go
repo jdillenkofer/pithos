@@ -173,17 +173,18 @@ func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
 }
 
 func pushLuaValue(L *golua.State, value interface{}) error {
-	if value == nil {
-		L.PushNil()
-		return nil
-	}
+	luahelper.PushGoValueWith(L, value, pushStorageLuaValue)
+	return nil
+}
+
+func pushStorageLuaValue(L *golua.State, value interface{}) bool {
 	if err, ok := value.(error); ok {
 		if err == nil {
 			L.PushNil()
 		} else {
 			L.PushString(err.Error())
 		}
-		return nil
+		return true
 	}
 	switch v := value.(type) {
 	case context.Context:
@@ -198,85 +199,10 @@ func pushLuaValue(L *golua.State, value interface{}) error {
 		pushReaderTable(L, v, v)
 	case io.Reader:
 		pushReaderTable(L, v, nil)
-	case time.Time:
-		L.PushString(v.Format(time.RFC3339Nano))
-	case string:
-		L.PushString(v)
-	case bool:
-		L.PushBoolean(v)
-	case int:
-		L.PushInteger(v)
-	case int32:
-		L.PushInteger(int(v))
-	case int64:
-		L.PushNumber(float64(v))
 	default:
-		return pushReflectValue(L, reflect.ValueOf(value))
+		return false
 	}
-	return nil
-}
-
-func pushReflectValue(L *golua.State, value reflect.Value) error {
-	if !value.IsValid() {
-		L.PushNil()
-		return nil
-	}
-	if value.Kind() == reflect.Ptr {
-		if value.IsNil() {
-			L.PushNil()
-			return nil
-		}
-		return pushLuaValue(L, value.Elem().Interface())
-	}
-	switch value.Kind() {
-	case reflect.Slice, reflect.Array:
-		if value.Type() == readCloserSlice {
-			L.NewTable()
-			for i := 0; i < value.Len(); i++ {
-				if err := pushLuaValue(L, value.Index(i).Interface()); err != nil {
-					return err
-				}
-				L.RawSetInt(-2, i+1)
-			}
-			return nil
-		}
-		L.NewTable()
-		for i := 0; i < value.Len(); i++ {
-			if err := pushLuaValue(L, value.Index(i).Interface()); err != nil {
-				return err
-			}
-			L.RawSetInt(-2, i+1)
-		}
-	case reflect.Struct:
-		if value.Type() == timeType {
-			L.PushString(value.Interface().(time.Time).Format(time.RFC3339Nano))
-			return nil
-		}
-		L.NewTable()
-		t := value.Type()
-		for i := 0; i < value.NumField(); i++ {
-			field := t.Field(i)
-			fieldValue := value.Field(i)
-			if !field.IsExported() || !fieldValue.CanInterface() {
-				continue
-			}
-			if err := pushLuaValue(L, fieldValue.Interface()); err != nil {
-				return err
-			}
-			L.SetField(-2, luahelper.LowerCamel(field.Name))
-		}
-	case reflect.String:
-		L.PushString(value.String())
-	case reflect.Bool:
-		L.PushBoolean(value.Bool())
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32:
-		L.PushInteger(int(value.Int()))
-	case reflect.Int64:
-		L.PushNumber(float64(value.Int()))
-	default:
-		L.PushUserData(value.Interface())
-	}
-	return nil
+	return true
 }
 
 func luaValueToGo(L *golua.State, index int, targetType reflect.Type) (interface{}, error) {
