@@ -14,6 +14,7 @@ import (
 
 	golua "github.com/Shopify/go-lua"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/luahelper"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"go.opentelemetry.io/otel"
@@ -80,19 +81,6 @@ func NewStorageMiddleware(innerStorage storage.Storage, code string) (storage.St
 	}, nil
 }
 
-func newLuaState() *golua.State {
-	L := golua.NewState()
-	golua.Require(L, "_G", golua.BaseOpen, true)
-	L.Pop(1)
-	golua.Require(L, "table", golua.TableOpen, true)
-	L.Pop(1)
-	golua.Require(L, "string", golua.StringOpen, true)
-	L.Pop(1)
-	golua.Require(L, "math", golua.MathOpen, true)
-	L.Pop(1)
-	return L
-}
-
 func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args []interface{}, fallback func() []interface{}) ([]interface{}, error) {
 	_, span := m.tracer.Start(ctx, "LuaStorageMiddleware."+methodName)
 	defer span.End()
@@ -134,6 +122,12 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 	}
 	L.Pop(returnCount)
 	return results, nil
+}
+
+func newLuaState() *golua.State {
+	L := golua.NewState()
+	golua.OpenLibraries(L)
+	return L
 }
 
 func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
@@ -269,7 +263,7 @@ func pushReflectValue(L *golua.State, value reflect.Value) error {
 			if err := pushLuaValue(L, fieldValue.Interface()); err != nil {
 				return err
 			}
-			L.SetField(-2, lowerCamel(field.Name))
+			L.SetField(-2, luahelper.LowerCamel(field.Name))
 		}
 	case reflect.String:
 		L.PushString(value.String())
@@ -450,7 +444,7 @@ func luaTableToStruct(L *golua.State, index int, targetType reflect.Type) (inter
 		if !field.IsExported() {
 			continue
 		}
-		L.Field(index, lowerCamel(field.Name))
+		L.Field(index, luahelper.LowerCamel(field.Name))
 		if L.IsNil(-1) {
 			L.Pop(1)
 			continue
@@ -509,10 +503,6 @@ func luaValueToError(L *golua.State, index int) error {
 		return err
 	}
 	return errors.New(s)
-}
-
-func lowerCamel(name string) string {
-	return strings.ToLower(name[:1]) + name[1:]
 }
 
 func pushReaderTable(L *golua.State, reader io.Reader, closer io.Closer) {

@@ -6,12 +6,11 @@ import (
 	"log/slog"
 	"net"
 	"net/textproto"
-	"reflect"
 	"strings"
-	"time"
 
 	"github.com/Shopify/go-lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	"github.com/jdillenkofer/pithos/internal/luahelper"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -220,119 +219,6 @@ func (authorizer *LuaAuthorizer) resolveClientIPAndScheme(httpRequest authorizat
 	return clientIP, scheme
 }
 
-func pushNullableString(L *lua.State, str *string) {
-	if str != nil {
-		L.PushString(*str)
-	} else {
-		L.PushNil()
-	}
-}
-
-func pushNullableInt(L *lua.State, num *int) {
-	if num != nil {
-		L.PushInteger(*num)
-	} else {
-		L.PushNil()
-	}
-}
-
-func pushNullableNumber(L *lua.State, num *float64) {
-	if num != nil {
-		L.PushNumber(*num)
-	} else {
-		L.PushNil()
-	}
-}
-
-func pushNullableBoolean(L *lua.State, b *bool) {
-	if b != nil {
-		L.PushBoolean(*b)
-	} else {
-		L.PushNil()
-	}
-}
-
-func pushGoType(L *lua.State, obj interface{}) {
-	if obj == nil {
-		L.PushNil()
-		return
-	}
-	switch v := obj.(type) {
-	case string:
-		pushNullableString(L, &v)
-	case *string:
-		pushNullableString(L, v)
-	case int:
-		pushNullableInt(L, &v)
-	case *int:
-		pushNullableInt(L, v)
-	case float64:
-		pushNullableNumber(L, &v)
-	case *float64:
-		pushNullableNumber(L, v)
-	case bool:
-		pushNullableBoolean(L, &v)
-	case *bool:
-		pushNullableBoolean(L, v)
-	case time.Duration:
-		var i int = int(v)
-		pushNullableInt(L, &i)
-	default:
-		t := reflect.TypeOf(v)
-
-		// If it's a pointer, get the underlying type
-		if t.Kind() == reflect.Ptr {
-			t = t.Elem()
-		}
-
-		if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
-			L.NewTable()
-			val := reflect.ValueOf(v)
-			if val.Kind() == reflect.Ptr {
-				val = val.Elem()
-			}
-			for i := 0; i < val.Len(); i++ {
-				item := val.Index(i)
-				if item.CanInterface() {
-					pushGoType(L, item.Interface())
-					L.RawSetInt(-2, i+1) // Lua arrays are 1-indexed
-				}
-			}
-			// Put the length of the array at index 0
-			L.PushInteger(val.Len())
-			L.RawSetInt(-2, 0)
-		} else if t.Kind() == reflect.Map {
-			L.NewTable()
-			val := reflect.ValueOf(v)
-			for _, key := range val.MapKeys() {
-				value := val.MapIndex(key)
-				if key.CanInterface() && value.CanInterface() {
-					pushGoType(L, key.Interface())
-					pushGoType(L, value.Interface())
-					L.SetTable(-3)
-				}
-			}
-		} else if t.Kind() == reflect.Struct {
-			L.NewTable()
-			val := reflect.ValueOf(v)
-			if val.Kind() == reflect.Ptr {
-				val = val.Elem()
-			}
-			for i := 0; i < t.NumField(); i++ {
-				field := t.Field(i)
-				fieldValue := val.Field(i)
-				if fieldValue.CanInterface() {
-					fieldName := strings.ToLower(field.Name[:1]) + field.Name[1:]
-					pushGoType(L, fieldValue.Interface())
-					L.SetField(-2, fieldName)
-				}
-			}
-		} else {
-			L.PushNil() // Unsupported type
-		}
-	}
-}
-
 func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
 	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
 }
@@ -361,16 +247,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
 
-	L := lua.NewState()
-	// Load only necessary libraries
-	lua.Require(L, "_G", lua.BaseOpen, true)
-	L.Pop(1)
-	lua.Require(L, "table", lua.TableOpen, true)
-	L.Pop(1)
-	lua.Require(L, "string", lua.StringOpen, true)
-	L.Pop(1)
-	lua.Require(L, "math", lua.MathOpen, true)
-	L.Pop(1)
+	L := newLuaState()
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
@@ -387,7 +264,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	authorizer.pushRequest(L, request)
 	argCount := 1 + len(args)
 	for _, arg := range args {
-		pushGoType(L, arg)
+		luahelper.PushGoValue(L, arg)
 	}
 	err = L.ProtectedCall(argCount, 1, 0)
 	if err != nil {
@@ -416,7 +293,7 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 	request.HttpRequest.ClientIP = clientIP
 	request.HttpRequest.Scheme = scheme
 
-	pushGoType(L, request)
+	luahelper.PushGoValue(L, request)
 	L.Field(-1, "httpRequest")
 	if L.IsTable(-1) {
 		L.PushGoFunction(func(L *lua.State) int {
@@ -744,4 +621,17 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		return 1
 	})
 	L.SetField(-2, "keyHasSuffix")
+}
+
+func newLuaState() *lua.State {
+	L := lua.NewState()
+	lua.Require(L, "_G", lua.BaseOpen, true)
+	L.Pop(1)
+	lua.Require(L, "table", lua.TableOpen, true)
+	L.Pop(1)
+	lua.Require(L, "string", lua.StringOpen, true)
+	L.Pop(1)
+	lua.Require(L, "math", lua.MathOpen, true)
+	L.Pop(1)
+	return L
 }
