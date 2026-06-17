@@ -98,9 +98,7 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 		return fallback(), nil
 	}
 	for _, arg := range args {
-		if err := pushLuaValue(L, arg); err != nil {
-			return nil, err
-		}
+		pushLuaValue(L, arg)
 	}
 
 	method := reflect.ValueOf(m.Next).MethodByName(methodName)
@@ -160,11 +158,7 @@ func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
 					}
 					continue
 				}
-				if err := pushLuaValue(L, result.Interface()); err != nil {
-					L.PushString(err.Error())
-					L.Error()
-					return 0
-				}
+				pushLuaValue(L, result.Interface())
 			}
 			return len(results)
 		})
@@ -172,9 +166,8 @@ func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
 	}
 }
 
-func pushLuaValue(L *golua.State, value interface{}) error {
+func pushLuaValue(L *golua.State, value interface{}) {
 	luahelper.PushGoValueWith(L, value, pushStorageLuaValue)
-	return nil
 }
 
 func pushStorageLuaValue(L *golua.State, value interface{}) bool {
