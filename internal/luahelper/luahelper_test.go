@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Shopify/go-lua"
+	_ "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
