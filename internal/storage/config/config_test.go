@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -515,6 +516,53 @@ func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
 				}
 			}
 		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
+func TestCanCreateLuaStorageMiddlewareFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	scriptPath := filepath.Join(storagePath, "storage.lua")
+	err = os.WriteFile(scriptPath, []byte(`function CreateBucket(ctx, bucketName)
+  return innerStorage.CreateBucket(ctx, bucketName)
+end`), 0600)
+	assert.Nil(t, err)
+
+	jsonData := fmt.Sprintf(`{
+			"type": "LuaStorageMiddleware",
+			"scriptPath": %s,
+			"innerStorage": {
+				"type": "MetadataPartStorage",
+				"db": {
+					"type": "RegisterDatabaseReference",
+					"refName": "db",
+					"db": {
+						"type": "SqliteDatabase",
+						"dbPath": %s
+					}
+				},
+				"metadataStore": {
+					"type": "SqlMetadataStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				},
+				"partStore": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			}
+		}`, strconv.Quote(scriptPath), strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)

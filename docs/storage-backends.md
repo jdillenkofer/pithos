@@ -27,6 +27,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **ConditionalStorage**: Conditional forwarding to different storage backends based on bucket name
 - **PrometheusStorage**: Adds Prometheus metrics for storage operations
 - **AuditStorage**: Provides cryptographically signed audit logs (see [Audit Logging](audit-logging.md))
+- **LuaStorageMiddleware**: Allows optional Lua overrides for any storage method
 - **ObjectCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
   - Caches `GetObject` full-object reads and `HeadObject` metadata
   - Invalidates cache entries on successful object mutation operations (`PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
@@ -308,6 +309,51 @@ prefix: `pending_entries` and `dead_lettered_entries` gauges, and
     "root": "./data/parts"
   }
 }
+```
+
+### Lua Storage Middleware
+
+Lua storage middleware wraps another storage backend and lets `storage.lua` override any storage method. Function names and argument order match the Go `storage.Storage` interface. Every function is optional; when a function is missing, Pithos calls `innerStorage` directly.
+
+```json
+{
+  "type": "LuaStorageMiddleware",
+  "scriptPath": "./storage.lua",
+  "innerStorage": {
+    "type": "MetadataPartStorage"
+  }
+}
+```
+
+The wrapped storage is available as the global `innerStorage` table:
+
+```lua
+function CreateBucket(ctx, bucketName)
+  if bucketName == "blocked" then
+    return "InvalidBucketName"
+  end
+  return innerStorage.CreateBucket(ctx, bucketName)
+end
+```
+
+Object streams are exposed as chunked reader tables, so scripts can transform data without loading a whole object into memory:
+
+```lua
+function PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
+  local mapped = {
+    read = function(self, size)
+      local chunk, err = data:read(size)
+      if chunk == nil then
+        return nil, err
+      end
+      return string.upper(chunk), nil
+    end,
+    close = function(self)
+      return data:close()
+    end
+  }
+  return innerStorage.PutObject(ctx, bucketName, key, contentType, mapped, checksumInput, opts)
+end
 ```
 
 ### Object Cache Middleware
