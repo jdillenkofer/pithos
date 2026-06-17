@@ -627,11 +627,11 @@ func (m *luaStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.Tx
 }
 
 func (m *luaStorageMiddleware) Start(ctx context.Context) error {
-	return oneResult(m.call(ctx, "Start", ctx))
+	return m.Next.Start(ctx)
 }
 
 func (m *luaStorageMiddleware) Stop(ctx context.Context) error {
-	return oneResult(m.call(ctx, "Stop", ctx))
+	return m.Next.Stop(ctx)
 }
 
 func (m *luaStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
