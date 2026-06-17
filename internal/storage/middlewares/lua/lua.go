@@ -81,9 +81,14 @@ func NewStorageMiddleware(innerStorage storage.Storage, code string) (storage.St
 	}, nil
 }
 
-func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args []interface{}, fallback func() []interface{}) ([]interface{}, error) {
+func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args ...interface{}) ([]interface{}, error) {
 	_, span := m.tracer.Start(ctx, "LuaStorageMiddleware."+methodName)
 	defer span.End()
+
+	method, err := m.lookupNextMethod(methodName)
+	if err != nil {
+		return nil, err
+	}
 
 	L := newLuaState()
 	m.pushInnerStorage(L)
@@ -95,16 +100,12 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 	L.Global(methodName)
 	if !L.IsFunction(-1) {
 		L.Pop(1)
-		return fallback(), nil
+		return m.callNextMethod(method, args)
 	}
 	for _, arg := range args {
 		pushLuaValue(L, arg)
 	}
 
-	method := reflect.ValueOf(m.Next).MethodByName(methodName)
-	if !method.IsValid() {
-		return nil, fmt.Errorf("storage method %s not found", methodName)
-	}
 	returnCount := method.Type().NumOut()
 	if err := L.ProtectedCall(len(args), returnCount, 0); err != nil {
 		return nil, err
@@ -120,6 +121,38 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 	}
 	L.Pop(returnCount)
 	return results, nil
+}
+
+func (m *luaStorageMiddleware) lookupNextMethod(methodName string) (reflect.Value, error) {
+	method := reflect.ValueOf(m.Next).MethodByName(methodName)
+	if !method.IsValid() {
+		return reflect.Value{}, fmt.Errorf("storage method %s not found", methodName)
+	}
+	return method, nil
+}
+
+func (m *luaStorageMiddleware) callNextMethod(method reflect.Value, args []interface{}) ([]interface{}, error) {
+	methodType := method.Type()
+	if len(args) != methodType.NumIn() {
+		return nil, fmt.Errorf("expected %d args got %d", methodType.NumIn(), len(args))
+	}
+	values := make([]reflect.Value, len(args))
+	for i, arg := range args {
+		values[i] = reflect.ValueOf(arg)
+	}
+	return reflectResultsToInterfaces(method.Call(values)), nil
+}
+
+func reflectResultsToInterfaces(results []reflect.Value) []interface{} {
+	interfaces := make([]interface{}, len(results))
+	for i, result := range results {
+		if result.Type().Implements(errorType) && result.IsNil() {
+			interfaces[i] = nil
+			continue
+		}
+		interfaces[i] = result.Interface()
+	}
+	return interfaces
 }
 
 func newLuaState() *golua.State {
@@ -148,19 +181,10 @@ func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
 				}
 				args[argIndex] = reflect.ValueOf(arg)
 			}
-			results := methodValue.Call(args)
-			for _, result := range results {
-				if result.Type().Implements(errorType) {
-					if result.IsNil() {
-						L.PushNil()
-					} else {
-						L.PushString(result.Interface().(error).Error())
-					}
-					continue
-				}
-				pushLuaValue(L, result.Interface())
+			for _, result := range reflectResultsToInterfaces(methodValue.Call(args)) {
+				pushLuaValue(L, result)
 			}
-			return len(results)
+			return methodType.NumOut()
 		})
 		L.SetField(-2, methodName)
 	}
@@ -603,34 +627,23 @@ func (m *luaStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.Tx
 }
 
 func (m *luaStorageMiddleware) Start(ctx context.Context) error {
-	return oneResult(m.call(ctx, "Start", []interface{}{ctx}, func() []interface{} {
-		return []interface{}{m.Next.Start(ctx)}
-	}))
+	return oneResult(m.call(ctx, "Start", ctx))
 }
 
 func (m *luaStorageMiddleware) Stop(ctx context.Context) error {
-	return oneResult(m.call(ctx, "Stop", []interface{}{ctx}, func() []interface{} {
-		return []interface{}{m.Next.Stop(ctx)}
-	}))
+	return oneResult(m.call(ctx, "Stop", ctx))
 }
 
 func (m *luaStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	return oneResult(m.call(ctx, "CreateBucket", []interface{}{ctx, bucketName}, func() []interface{} {
-		return []interface{}{m.Next.CreateBucket(ctx, bucketName)}
-	}))
+	return oneResult(m.call(ctx, "CreateBucket", ctx, bucketName))
 }
 
 func (m *luaStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	return oneResult(m.call(ctx, "DeleteBucket", []interface{}{ctx, bucketName}, func() []interface{} {
-		return []interface{}{m.Next.DeleteBucket(ctx, bucketName)}
-	}))
+	return oneResult(m.call(ctx, "DeleteBucket", ctx, bucketName))
 }
 
 func (m *luaStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
-	results, err := m.call(ctx, "ListBuckets", []interface{}{ctx}, func() []interface{} {
-		buckets, err := m.Next.ListBuckets(ctx)
-		return []interface{}{buckets, err}
-	})
+	results, err := m.call(ctx, "ListBuckets", ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -638,10 +651,7 @@ func (m *luaStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucke
 }
 
 func (m *luaStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
-	results, err := m.call(ctx, "HeadBucket", []interface{}{ctx, bucketName}, func() []interface{} {
-		bucket, err := m.Next.HeadBucket(ctx, bucketName)
-		return []interface{}{bucket, err}
-	})
+	results, err := m.call(ctx, "HeadBucket", ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -649,10 +659,7 @@ func (m *luaStorageMiddleware) HeadBucket(ctx context.Context, bucketName storag
 }
 
 func (m *luaStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
-	results, err := m.call(ctx, "GetBucketWebsiteConfiguration", []interface{}{ctx, bucketName}, func() []interface{} {
-		config, err := m.Next.GetBucketWebsiteConfiguration(ctx, bucketName)
-		return []interface{}{config, err}
-	})
+	results, err := m.call(ctx, "GetBucketWebsiteConfiguration", ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -660,22 +667,15 @@ func (m *luaStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context
 }
 
 func (m *luaStorageMiddleware) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
-	return oneResult(m.call(ctx, "PutBucketWebsiteConfiguration", []interface{}{ctx, bucketName, config}, func() []interface{} {
-		return []interface{}{m.Next.PutBucketWebsiteConfiguration(ctx, bucketName, config)}
-	}))
+	return oneResult(m.call(ctx, "PutBucketWebsiteConfiguration", ctx, bucketName, config))
 }
 
 func (m *luaStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	return oneResult(m.call(ctx, "DeleteBucketWebsiteConfiguration", []interface{}{ctx, bucketName}, func() []interface{} {
-		return []interface{}{m.Next.DeleteBucketWebsiteConfiguration(ctx, bucketName)}
-	}))
+	return oneResult(m.call(ctx, "DeleteBucketWebsiteConfiguration", ctx, bucketName))
 }
 
 func (m *luaStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
-	results, err := m.call(ctx, "ListObjects", []interface{}{ctx, bucketName, opts}, func() []interface{} {
-		result, err := m.Next.ListObjects(ctx, bucketName, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "ListObjects", ctx, bucketName, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -683,10 +683,7 @@ func (m *luaStorageMiddleware) ListObjects(ctx context.Context, bucketName stora
 }
 
 func (m *luaStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
-	results, err := m.call(ctx, "HeadObject", []interface{}{ctx, bucketName, key, opts}, func() []interface{} {
-		object, err := m.Next.HeadObject(ctx, bucketName, key, opts)
-		return []interface{}{object, err}
-	})
+	results, err := m.call(ctx, "HeadObject", ctx, bucketName, key, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -694,10 +691,7 @@ func (m *luaStorageMiddleware) HeadObject(ctx context.Context, bucketName storag
 }
 
 func (m *luaStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
-	results, err := m.call(ctx, "GetObject", []interface{}{ctx, bucketName, key, ranges, opts}, func() []interface{} {
-		object, readers, err := m.Next.GetObject(ctx, bucketName, key, ranges, opts)
-		return []interface{}{object, readers, err}
-	})
+	results, err := m.call(ctx, "GetObject", ctx, bucketName, key, ranges, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -705,10 +699,7 @@ func (m *luaStorageMiddleware) GetObject(ctx context.Context, bucketName storage
 }
 
 func (m *luaStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
-	results, err := m.call(ctx, "PutObject", []interface{}{ctx, bucketName, key, contentType, data, checksumInput, opts}, func() []interface{} {
-		result, err := m.Next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "PutObject", ctx, bucketName, key, contentType, data, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -716,10 +707,7 @@ func (m *luaStorageMiddleware) PutObject(ctx context.Context, bucketName storage
 }
 
 func (m *luaStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
-	results, err := m.call(ctx, "AppendObject", []interface{}{ctx, bucketName, key, data, checksumInput, opts}, func() []interface{} {
-		result, err := m.Next.AppendObject(ctx, bucketName, key, data, checksumInput, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "AppendObject", ctx, bucketName, key, data, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -727,16 +715,11 @@ func (m *luaStorageMiddleware) AppendObject(ctx context.Context, bucketName stor
 }
 
 func (m *luaStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
-	return oneResult(m.call(ctx, "DeleteObject", []interface{}{ctx, bucketName, key, opts}, func() []interface{} {
-		return []interface{}{m.Next.DeleteObject(ctx, bucketName, key, opts)}
-	}))
+	return oneResult(m.call(ctx, "DeleteObject", ctx, bucketName, key, opts))
 }
 
 func (m *luaStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
-	results, err := m.call(ctx, "DeleteObjects", []interface{}{ctx, bucketName, entries}, func() []interface{} {
-		result, err := m.Next.DeleteObjects(ctx, bucketName, entries)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "DeleteObjects", ctx, bucketName, entries)
 	if err != nil {
 		return nil, err
 	}
@@ -744,10 +727,7 @@ func (m *luaStorageMiddleware) DeleteObjects(ctx context.Context, bucketName sto
 }
 
 func (m *luaStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	results, err := m.call(ctx, "CreateMultipartUpload", []interface{}{ctx, bucketName, key, contentType, checksumType}, func() []interface{} {
-		result, err := m.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "CreateMultipartUpload", ctx, bucketName, key, contentType, checksumType)
 	if err != nil {
 		return nil, err
 	}
@@ -755,10 +735,7 @@ func (m *luaStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucket
 }
 
 func (m *luaStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	results, err := m.call(ctx, "UploadPart", []interface{}{ctx, bucketName, key, uploadId, partNumber, data, checksumInput}, func() []interface{} {
-		result, err := m.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "UploadPart", ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		return nil, err
 	}
@@ -766,10 +743,7 @@ func (m *luaStorageMiddleware) UploadPart(ctx context.Context, bucketName storag
 }
 
 func (m *luaStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
-	results, err := m.call(ctx, "CompleteMultipartUpload", []interface{}{ctx, bucketName, key, uploadId, checksumInput, opts}, func() []interface{} {
-		result, err := m.Next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "CompleteMultipartUpload", ctx, bucketName, key, uploadId, checksumInput, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -777,16 +751,11 @@ func (m *luaStorageMiddleware) CompleteMultipartUpload(ctx context.Context, buck
 }
 
 func (m *luaStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	return oneResult(m.call(ctx, "AbortMultipartUpload", []interface{}{ctx, bucketName, key, uploadId}, func() []interface{} {
-		return []interface{}{m.Next.AbortMultipartUpload(ctx, bucketName, key, uploadId)}
-	}))
+	return oneResult(m.call(ctx, "AbortMultipartUpload", ctx, bucketName, key, uploadId))
 }
 
 func (m *luaStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
-	results, err := m.call(ctx, "ListMultipartUploads", []interface{}{ctx, bucketName, opts}, func() []interface{} {
-		result, err := m.Next.ListMultipartUploads(ctx, bucketName, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "ListMultipartUploads", ctx, bucketName, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -794,10 +763,7 @@ func (m *luaStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketN
 }
 
 func (m *luaStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
-	results, err := m.call(ctx, "ListParts", []interface{}{ctx, bucketName, key, uploadId, opts}, func() []interface{} {
-		result, err := m.Next.ListParts(ctx, bucketName, key, uploadId, opts)
-		return []interface{}{result, err}
-	})
+	results, err := m.call(ctx, "ListParts", ctx, bucketName, key, uploadId, opts)
 	if err != nil {
 		return nil, err
 	}
