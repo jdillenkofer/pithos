@@ -89,6 +89,8 @@ type outboxStorage struct {
 	triggerChannel               chan struct{}
 	triggerChannelClosed         bool
 	outboxId                     string
+	claimOwner                   string
+	claimLeaseDuration           time.Duration
 	outboxProcessingTaskHandle   *task.TaskHandle
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
@@ -99,10 +101,16 @@ type outboxStorage struct {
 // Compile-time check to ensure outboxStorage implements storage.Storage
 var _ storage.Storage = (*outboxStorage)(nil)
 
-func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer) (storage.Storage, error) {
+const defaultClaimLeaseDuration = 30 * time.Second
+
+func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration ...time.Duration) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
+	}
+	leaseDuration := defaultClaimLeaseDuration
+	if len(claimLeaseDuration) > 0 && claimLeaseDuration[0] > 0 {
+		leaseDuration = claimLeaseDuration[0]
 	}
 	os := &outboxStorage{
 		ValidatedLifecycle:           lifecycle,
@@ -110,12 +118,130 @@ func NewStorage(db database.Database, outboxId string, innerStorage storage.Stor
 		triggerChannel:               make(chan struct{}, 16),
 		triggerChannelClosed:         false,
 		outboxId:                     outboxId,
+		claimOwner:                   outboxId + ":" + ulid.Make().String(),
+		claimLeaseDuration:           leaseDuration,
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		tracer:                       otel.Tracer("internal/storage/outbox"),
 		metrics:                      newOutboxMetrics(registerer),
 	}
 	return os, nil
+}
+
+func (os *outboxStorage) claimNextOutboxEntry(ctx context.Context) (*storageOutboxEntry.Entity, bool, error) {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return nil, false, err
+	}
+	now := time.Now().UTC()
+	entry, claimed, err := os.storageOutboxEntryRepository.ClaimFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId, os.claimOwner, now, now.Add(os.claimLeaseDuration))
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return entry, claimed, nil
+}
+
+func (os *outboxStorage) readStorageOutboxChunks(ctx context.Context, entry *storageOutboxEntry.Entity) ([]io.Reader, error) {
+	if entry.Operation != storageOutboxEntry.PutObjectStorageOperation {
+		return nil, nil
+	}
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	readers := make([]io.Reader, len(chunks))
+	for i, chunk := range chunks {
+		readers[i] = bytes.NewReader(chunk.Content)
+	}
+	return readers, nil
+}
+
+func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return false, err
+	}
+	deleted, err := os.storageOutboxEntryRepository.DeleteStorageOutboxEntryByClaimOwner(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+func (os *outboxStorage) releaseStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
+	tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return false, err
+	}
+	released, err := os.storageOutboxEntryRepository.ReleaseStorageOutboxEntryClaim(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner, time.Now().UTC())
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return released, nil
+}
+
+func (os *outboxStorage) startStorageOutboxHeartbeat(ctx context.Context, entry *storageOutboxEntry.Entity) func() {
+	interval := os.claimLeaseDuration / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now().UTC()
+				tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+				if err != nil {
+					slog.WarnContext(ctx, "Failed to start storage outbox heartbeat transaction", "error", err)
+					continue
+				}
+				extended, err := os.storageOutboxEntryRepository.ExtendStorageOutboxEntryClaim(ctx, tx.SqlTx(), os.outboxId, *entry.Id, os.claimOwner, now, now.Add(os.claimLeaseDuration))
+				if err != nil {
+					_ = tx.Rollback(ctx)
+					slog.WarnContext(ctx, "Failed to extend storage outbox claim", "error", err)
+					continue
+				}
+				if err = tx.Commit(ctx); err != nil {
+					slog.WarnContext(ctx, "Failed to commit storage outbox heartbeat", "error", err)
+					continue
+				}
+				if !extended {
+					slog.WarnContext(ctx, "Storage outbox heartbeat lost claim", "entryId", entry.Id.String())
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
 func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
@@ -144,92 +270,55 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		var entry *storageOutboxEntry.Entity
 		var putObjectReaders []io.Reader
 
-		tx, err := os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
-			os.metrics.errorsCounter.Inc()
-			return
-		}
-		entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
-		if err != nil {
-			tx.Rollback(ctx)
 			os.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
-		if entry == nil {
-			tx.Commit(ctx)
+		if entry == nil || !claimed {
 			break
 		}
-		switch entry.Operation {
-		case storageOutboxEntry.PutObjectStorageOperation:
-			chunks, err := os.storageOutboxEntryRepository.FindStorageOutboxEntryChunksById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
-			if err != nil {
-				tx.Rollback(ctx)
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-			putObjectReaders = make([]io.Reader, len(chunks))
-			for i, chunk := range chunks {
-				putObjectReaders[i] = bytes.NewReader(chunk.Content)
-			}
-		}
-		err = tx.Commit(ctx)
+
+		putObjectReaders, err = os.readStorageOutboxChunks(ctx, entry)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
+			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
+			time.Sleep(5 * time.Second)
 			return
 		}
 
+		stopHeartbeat := os.startStorageOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
 		case storageOutboxEntry.CreateBucketStorageOperation:
 			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
-			if err != nil {
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		case storageOutboxEntry.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
-			if err != nil {
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		case storageOutboxEntry.PutObjectStorageOperation:
 			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(putObjectReaders...), nil, nil)
-			if err != nil {
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
 			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
-			if err != nil {
-				os.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		default:
 			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-			time.Sleep(5 * time.Second)
-			return
+			err = fmt.Errorf("invalid storage outbox operation: %s", entry.Operation)
 		}
-
-		tx, err = os.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		stopHeartbeat()
 		if err != nil {
-			os.metrics.errorsCounter.Inc()
-			return
-		}
-		err = os.storageOutboxEntryRepository.DeleteStorageOutboxEntryById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
-		if err != nil {
-			tx.Rollback(ctx)
+			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
 			os.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
 
-		err = tx.Commit(ctx)
+		deleted, err := os.finalizeStorageOutboxEntry(ctx, entry)
 		if err != nil {
+			os.metrics.errorsCounter.Inc()
+			time.Sleep(5 * time.Second)
+			return
+		}
+		if !deleted {
+			os.metrics.errorsCounter.Inc()
+			slog.Warn("Storage outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}
 		processedOutboxEntryCount += 1

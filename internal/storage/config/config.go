@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"crypto/sha512"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -383,6 +384,7 @@ type OutboxStorageConfiguration struct {
 	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
 	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
 	OutboxId                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -428,6 +430,14 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if outboxId == "" {
 		outboxId = defaultOutboxId
 	}
+	claimLeaseDuration := 30 * time.Second
+	if o.ClaimLeaseDurationSecs != nil {
+		claimLeaseDurationSecs := o.ClaimLeaseDurationSecs.Value()
+		if claimLeaseDurationSecs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(claimLeaseDurationSecs) * time.Second
+	}
 	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -437,7 +447,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
 }
 
 type ReplicationStorageConfiguration struct {

@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	defaultOutboxId                        = "default"
+	defaultOutboxId                       = "default"
 	filesystemPartStoreType               = "FilesystemPartStore"
 	compressionMiddlewareType             = "CompressionPartStoreMiddleware"
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
@@ -297,6 +297,7 @@ type OutboxPartStoreConfiguration struct {
 	InnerPartStoreInstantiator PartStoreInstantiator               `json:"-"`
 	RawInnerPartStore          json.RawMessage                     `json:"innerPartStore"`
 	OutboxId                   internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs     *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -339,6 +340,14 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if outboxId == "" {
 		outboxId = defaultOutboxId
 	}
+	claimLeaseDuration := 30 * time.Second
+	if o.ClaimLeaseDurationSecs != nil {
+		claimLeaseDurationSecs := o.ClaimLeaseDurationSecs.Value()
+		if claimLeaseDurationSecs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(claimLeaseDurationSecs) * time.Second
+	}
 	partOutboxEntryRepository, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -352,7 +361,7 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
 }
 
 type SftpPartStoreConfiguration struct {
@@ -399,12 +408,12 @@ type SqlPartStoreConfiguration struct {
 }
 
 type ErasureCodedPartStoreMiddlewareConfiguration struct {
-	DataShards             int64                        `json:"dataShards"`
-	ParityShards           int64                        `json:"parityShards"`
-	StreamBlockSize        internalConfig.Int64Provider `json:"streamBlockSize"`
+	DataShards             int64                         `json:"dataShards"`
+	ParityShards           int64                         `json:"parityShards"`
+	StreamBlockSize        internalConfig.Int64Provider  `json:"streamBlockSize"`
 	HealScanIntervalSecs   *internalConfig.Int64Provider `json:"healScanIntervalSeconds,omitempty"`
-	PartStoreInstantiators []PartStoreInstantiator      `json:"-"`
-	RawPartStores          []json.RawMessage            `json:"partStores"`
+	PartStoreInstantiators []PartStoreInstantiator       `json:"-"`
+	RawPartStores          []json.RawMessage             `json:"partStores"`
 	internalConfig.DynamicJsonType
 }
 
