@@ -19,6 +19,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/oklog/ulid/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -191,11 +192,69 @@ func (s *sftpPartStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sftpPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.PutPart")
 	defer span.End()
 
 	filename := s.getFilename(partId)
+	if tx != nil {
+		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
+		f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
+			return s.client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		}, maxStpRetries, s.reconnectSftpClient, nil)
+		if err != nil {
+			return err
+		}
+		if _, err = f.ReadFrom(reader); err != nil {
+			_ = f.Close()
+			_ = s.client.Remove(tempName)
+			return err
+		}
+		if err = f.Close(); err != nil {
+			_ = s.client.Remove(tempName)
+			return err
+		}
+
+		backupName := filename + ".txbackup." + ulid.Make().String()
+		backupCreated := false
+		published := false
+		tx.OnPreCommit(func(context.Context) error {
+			if err := s.client.Rename(filename, backupName); err == nil {
+				backupCreated = true
+			} else if !isNotFoundError(err) {
+				return err
+			}
+			if err := s.client.Rename(tempName, filename); err != nil {
+				if backupCreated {
+					_ = s.client.Rename(backupName, filename)
+					backupCreated = false
+				}
+				return err
+			}
+			published = true
+			return nil
+		})
+		tx.OnAfterCommit(func(context.Context) error {
+			if backupCreated {
+				return s.client.Remove(backupName)
+			}
+			return nil
+		})
+		tx.OnRollback(func(context.Context) error {
+			if published {
+				_ = s.client.Remove(filename)
+				if backupCreated {
+					return s.client.Rename(backupName, filename)
+				}
+			}
+			if !published {
+				_ = s.client.Remove(tempName)
+			}
+			return nil
+		})
+		return nil
+	}
+
 	f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
 		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	}, maxStpRetries, s.reconnectSftpClient, nil)
@@ -210,7 +269,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx *database.TxContext, par
 	return nil
 }
 
-func (s *sftpPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPart")
 	defer span.End()
 
@@ -234,7 +293,7 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx *database.TxContext, par
 	return f, nil
 }
 
-func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPartIds")
 	defer span.End()
 
@@ -256,11 +315,39 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) 
 	return partIds, nil
 }
 
-func (s *sftpPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.DeletePart")
 	defer span.End()
 
 	filename := s.getFilename(partId)
+	if tx != nil {
+		backupName := filename + ".txbackup." + ulid.Make().String()
+		backupCreated := false
+		tx.OnPreCommit(func(context.Context) error {
+			if err := s.client.Rename(filename, backupName); err == nil {
+				backupCreated = true
+				return nil
+			} else if isNotFoundError(err) {
+				return nil
+			} else {
+				return err
+			}
+		})
+		tx.OnAfterCommit(func(context.Context) error {
+			if backupCreated {
+				return s.client.Remove(backupName)
+			}
+			return nil
+		})
+		tx.OnRollback(func(context.Context) error {
+			if backupCreated {
+				return s.client.Rename(backupName, filename)
+			}
+			return nil
+		})
+		return nil
+	}
+
 	_, err := doRetriableOperation(ctx, func() (*struct{}, error) {
 		return nil, s.client.Remove(filename)
 	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
@@ -275,4 +362,8 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx *database.TxContext, 
 		return err
 	}
 	return nil
+}
+
+func isNotFoundError(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
 }

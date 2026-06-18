@@ -70,7 +70,7 @@ func newMemoryPartStore() *memoryPartStore {
 func (s *memoryPartStore) Start(ctx context.Context) error { return nil }
 func (s *memoryPartStore) Stop(ctx context.Context) error  { return nil }
 
-func (s *memoryPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (s *memoryPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -79,7 +79,7 @@ func (s *memoryPartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 	return nil
 }
 
-func (s *memoryPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (s *memoryPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	s.getPartCall++
 	data, ok := s.parts[partId]
 	if !ok {
@@ -88,7 +88,7 @@ func (s *memoryPartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
-func (s *memoryPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (s *memoryPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ids := make([]partstore.PartId, 0, len(s.parts))
 	for id := range s.parts {
 		ids = append(ids, id)
@@ -96,7 +96,7 @@ func (s *memoryPartStore) GetPartIds(ctx context.Context, tx *database.TxContext
 	return ids, nil
 }
 
-func (s *memoryPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (s *memoryPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	delete(s.parts, partId)
 	return nil
 }
@@ -190,7 +190,7 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	sqlTx, err := db.BeginTx(ctx, nil)
 	assert.NoError(t, err)
 	defer sqlTx.Rollback()
-	tx := database.NewTxContext(sqlTx)
+	tx := database.NewTx(sqlTx)
 
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
@@ -216,7 +216,7 @@ func TestCachePartStore_AppliesPendingMutationsOnTxCommit(t *testing.T) {
 	defer db.Close()
 	sqlTx, err := db.BeginTx(ctx, nil)
 	assert.NoError(t, err)
-	tx := database.NewTxContext(sqlTx)
+	tx := database.NewTx(sqlTx)
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
@@ -245,7 +245,7 @@ func TestCachePartStore_DropsPendingMutationsOnTxRollback(t *testing.T) {
 	defer db.Close()
 	sqlTx, err := db.BeginTx(ctx, nil)
 	assert.NoError(t, err)
-	tx := database.NewTxContext(sqlTx)
+	tx := database.NewTx(sqlTx)
 
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)

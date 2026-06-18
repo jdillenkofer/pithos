@@ -24,16 +24,16 @@ type mockPartStore struct{}
 
 func (m *mockPartStore) Start(ctx context.Context) error { return nil }
 func (m *mockPartStore) Stop(ctx context.Context) error  { return nil }
-func (m *mockPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (m *mockPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	return nil
 }
-func (m *mockPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (m *mockPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	return nil, nil
 }
-func (m *mockPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (m *mockPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	return nil, nil
 }
-func (m *mockPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (m *mockPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	return nil
 }
 

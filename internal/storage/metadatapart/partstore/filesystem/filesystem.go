@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
@@ -77,11 +78,66 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	return bs.ensureRootDir()
 }
 
-func (bs *filesystemPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.PutPart")
 	defer span.End()
 
 	filename := bs.getFilename(partId)
+	if tx != nil {
+		tempFile, err := os.CreateTemp(bs.root, "."+filepath.Base(filename)+".*.tmp")
+		if err != nil {
+			return err
+		}
+		tempName := tempFile.Name()
+		if _, err = ioutils.Copy(tempFile, reader); err != nil {
+			_ = tempFile.Close()
+			_ = os.Remove(tempName)
+			return err
+		}
+		if err = tempFile.Close(); err != nil {
+			_ = os.Remove(tempName)
+			return err
+		}
+
+		backupName := filename + ".txbackup." + ulid.Make().String()
+		backupCreated := false
+		published := false
+		tx.OnPreCommit(func(context.Context) error {
+			if err := os.Rename(filename, backupName); err == nil {
+				backupCreated = true
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+			if err := os.Rename(tempName, filename); err != nil {
+				if backupCreated {
+					_ = os.Rename(backupName, filename)
+					backupCreated = false
+				}
+				return err
+			}
+			published = true
+			return nil
+		})
+		tx.OnAfterCommit(func(context.Context) error {
+			if backupCreated {
+				return os.Remove(backupName)
+			}
+			return nil
+		})
+		tx.OnRollback(func(context.Context) error {
+			if published {
+				_ = os.Remove(filename)
+				if backupCreated {
+					return os.Rename(backupName, filename)
+				}
+			}
+			if !published {
+				_ = os.Remove(tempName)
+			}
+			return nil
+		})
+		return nil
+	}
 
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -96,7 +152,7 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx *database.TxConte
 	return nil
 }
 
-func (bs *filesystemPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (bs *filesystemPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.GetPart")
 	defer span.End()
 
@@ -111,7 +167,7 @@ func (bs *filesystemPartStore) GetPart(ctx context.Context, tx *database.TxConte
 	return f, err
 }
 
-func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.GetPartIds")
 	defer span.End()
 
@@ -131,11 +187,39 @@ func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx *database.TxCo
 	return partIds, nil
 }
 
-func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.DeletePart")
 	defer span.End()
 
 	filename := bs.getFilename(partId)
+	if tx != nil {
+		backupName := filename + ".txbackup." + ulid.Make().String()
+		backupCreated := false
+		tx.OnPreCommit(func(context.Context) error {
+			if err := os.Rename(filename, backupName); err == nil {
+				backupCreated = true
+				return nil
+			} else if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			} else {
+				return err
+			}
+		})
+		tx.OnAfterCommit(func(context.Context) error {
+			if backupCreated {
+				return os.Remove(backupName)
+			}
+			return nil
+		})
+		tx.OnRollback(func(context.Context) error {
+			if backupCreated {
+				return os.Rename(backupName, filename)
+			}
+			return nil
+		})
+		return nil
+	}
+
 	err := os.Remove(filename)
 	if err != nil {
 		e, ok := err.(*os.PathError)

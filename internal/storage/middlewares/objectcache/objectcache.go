@@ -3,6 +3,7 @@ package objectcache
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,13 +44,14 @@ type inflightGet struct {
 	err  error
 }
 
-type cachedObject struct {
-	Object storage.Object `json:"object"`
-}
-
 var errObjectLargerThanCacheThreshold = errors.New("object larger than cache threshold")
 
 var _ storage.Storage = (*objectCacheStorageMiddleware)(nil)
+var _ storage.TransactionalStorage = (*objectCacheStorageMiddleware)(nil)
+
+func (m *objectCacheStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, m.Next, m, fn)
+}
 
 func NewStorageMiddleware(innerStorage storage.Storage, cache cachepkg.Cache, opts Options) (storage.Storage, error) {
 	maxObjectSizeBytes := opts.MaxObjectSizeBytes

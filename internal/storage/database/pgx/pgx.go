@@ -66,12 +66,15 @@ type ConnectionPoolConfiguration struct {
 	ConnMaxIdleTime time.Duration
 }
 
-func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxContext, error) {
+func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
+	if tx, ok := database.TxControllerFromContext(ctx); ok && tx.DBHandle() == d {
+		return tx.Child(), nil
+	}
 	tx, err := d.DB.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return database.NewTxContext(tx), nil
+	return database.NewTxController(tx, d), nil
 }
 
 func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {

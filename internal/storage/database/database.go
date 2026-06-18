@@ -15,7 +15,7 @@ const (
 )
 
 type Database interface {
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*TxContext, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*TxController, error)
 	PingContext(ctx context.Context) error
 	Close() error
 	GetDatabaseType() DatabaseType
