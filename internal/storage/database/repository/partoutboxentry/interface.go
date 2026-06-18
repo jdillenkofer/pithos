@@ -13,11 +13,9 @@ type Repository interface {
 	Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error)
 	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*Entity, error)
 	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]Entity, error)
-	FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
 	FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
 	SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *Entity) error
 	SavePartOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
-	DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error
 	ClaimFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*Entity, bool, error)
 	DeletePartOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error)
 	ReleasePartOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error)
