@@ -45,16 +45,9 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	part := ioutils.NewByteReadSeekCloser(content)
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
-	err = partStore.PutPart(ctx, tx, *partId, part)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	err = tx.Commit(ctx)
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.PutPart(ctx, tx, *partId, part)
+	})
 	if err != nil {
 		return err
 	}
@@ -64,30 +57,20 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 		return err
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
-	err = partStore.PutPart(ctx, tx, *partId, part)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	err = tx.Commit(ctx)
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.PutPart(ctx, tx, *partId, part)
+	})
 	if err != nil {
 		return err
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
+	var partReader io.ReadCloser
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		partReader, err = partStore.GetPart(ctx, tx, *partId)
 		return err
-	}
-	partReader, err := partStore.GetPart(ctx, tx, *partId)
+	})
 	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
 
@@ -100,34 +83,23 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 		return errors.New("read result returned invalid content")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
-	err = partStore.DeletePart(ctx, tx, *partId)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	err = tx.Commit(ctx)
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.DeletePart(ctx, tx, *partId)
+	})
 	if err != nil {
 		return err
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		partReader, err = partStore.GetPart(ctx, tx, *partId)
 		return err
-	}
-	partReader, err = partStore.GetPart(ctx, tx, *partId)
+	})
 	if err != ErrPartNotFound {
 		if partReader != nil {
 			partReader.Close()
 		}
-		_ = tx.Rollback(ctx)
 		return errors.New("expected ErrPartNotFound")
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return err
 	}
 
 	return nil

@@ -121,17 +121,15 @@ func New(db database.Database, outboxId string, innerPartStore partstore.PartSto
 }
 
 func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutboxEntry.Entity, bool, error) {
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	var entry *partOutboxEntry.Entity
+	var claimed bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		now := time.Now().UTC()
+		var err error
+		entry, claimed, err = obs.partOutboxEntryRepository.ClaimFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+		return err
+	})
 	if err != nil {
-		return nil, false, err
-	}
-	now := time.Now().UTC()
-	entry, claimed, err := obs.partOutboxEntryRepository.ClaimFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, false, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return nil, false, err
 	}
 	return entry, claimed, nil
@@ -141,16 +139,13 @@ func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *pa
 	if entry.Operation != partOutboxEntry.PutPartOperation {
 		return nil, nil
 	}
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	var chunks []*partOutboxEntry.ContentChunk
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		chunks, err = obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
+		return err
+	})
 	if err != nil {
-		return nil, err
-	}
-	chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	readers := make([]io.Reader, len(chunks))
@@ -161,32 +156,26 @@ func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *pa
 }
 
 func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	var deleted bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		deleted, err = obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
+		return err
+	})
 	if err != nil {
-		return false, err
-	}
-	deleted, err := obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return false, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return deleted, nil
 }
 
 func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	var released bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		released, err = obs.partOutboxEntryRepository.ReleasePartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, time.Now().UTC())
+		return err
+	})
 	if err != nil {
-		return false, err
-	}
-	released, err := obs.partOutboxEntryRepository.ReleasePartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, time.Now().UTC())
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return false, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return released, nil
@@ -207,18 +196,13 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 			select {
 			case <-ticker.C:
 				now := time.Now().UTC()
-				tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+				var extended bool
+				err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+					var err error
+					extended, err = obs.partOutboxEntryRepository.ExtendPartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+					return err
+				})
 				if err != nil {
-					slog.WarnContext(ctx, "Failed to start part outbox heartbeat transaction", "error", err)
-					continue
-				}
-				extended, err := obs.partOutboxEntryRepository.ExtendPartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
-				if err != nil {
-					_ = tx.Rollback(ctx)
-					slog.WarnContext(ctx, "Failed to extend part outbox claim", "error", err)
-					continue
-				}
-				if err = tx.Commit(ctx); err != nil {
 					slog.WarnContext(ctx, "Failed to commit part outbox heartbeat", "error", err)
 					continue
 				}
@@ -249,18 +233,15 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}()
 
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return
-	}
-
-	pendingCount, err := obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
-	if err != nil {
-		_ = tx.Rollback(ctx)
+	var pendingCount int
+	if err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		pendingCount, err = obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
+		return err
+	}); err != nil {
 		return
 	}
 	obs.metrics.pendingEntries.Set(float64(pendingCount))
-	_ = tx.Commit(ctx)
 
 	for {
 		var entry *partOutboxEntry.Entity
@@ -284,36 +265,23 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 
-		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		if err != nil {
-			_, _ = obs.releasePartOutboxEntry(ctx, entry)
-			obs.metrics.errorsCounter.Inc()
-			return
-		}
-		rollback := func() { _ = tx.Rollback(ctx) }
-
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
-		switch entry.Operation {
-		case partOutboxEntry.PutPartOperation:
-			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
-		case partOutboxEntry.DeletePartOperation:
-			err = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
-		default:
-			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-			err = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
-		}
+		err = database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			switch entry.Operation {
+			case partOutboxEntry.PutPartOperation:
+				return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
+			case partOutboxEntry.DeletePartOperation:
+				return obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
+			default:
+				slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
+				return fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
+			}
+		})
 		if err != nil {
-			rollback()
 			stopHeartbeat()
 			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
-			return
-		}
-		if err = tx.Commit(ctx); err != nil {
-			stopHeartbeat()
-			_, _ = obs.releasePartOutboxEntry(ctx, entry)
-			obs.metrics.errorsCounter.Inc()
 			return
 		}
 		stopHeartbeat()
