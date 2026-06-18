@@ -67,14 +67,18 @@ type ConnectionPoolConfiguration struct {
 }
 
 func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
+	readOnly := opts != nil && opts.ReadOnly
 	if tx, ok := database.TxControllerFromContext(ctx); ok && tx.DBHandle() == d {
+		if !readOnly && tx.ReadOnly() {
+			return nil, database.ErrWriteInReadOnlyTransaction
+		}
 		return tx.Child(), nil
 	}
 	tx, err := d.DB.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return database.NewTxController(tx, d), nil
+	return database.NewTxController(tx, d, readOnly), nil
 }
 
 func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {
