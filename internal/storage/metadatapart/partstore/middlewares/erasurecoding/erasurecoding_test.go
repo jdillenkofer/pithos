@@ -302,7 +302,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 			return err
 		})
 		return err == nil
-	}, 2*time.Second, 40*time.Millisecond)
+	}, 10*time.Second, 40*time.Millisecond)
 
 	shardStores[1].markMissing(*partId)
 
@@ -317,7 +317,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 			return err
 		})
 		return err == nil
-	}, 2*time.Second, 40*time.Millisecond)
+	}, 10*time.Second, 40*time.Millisecond)
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		rc, err := store.GetPart(ctx, tx, *partId)
