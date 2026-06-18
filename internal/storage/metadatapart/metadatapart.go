@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -476,74 +475,58 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
-	tx, err := mbs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
-	if err != nil {
-		tx.Rollback(ctx)
-		return nil, nil, err
-	}
-
-	if opts != nil {
-		if opts.IfMatchETag != nil {
-			if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
-				tx.Rollback(ctx)
-				return nil, nil, storage.ErrPreconditionFailed
-			}
-		}
-		if opts.IfNoneMatchETag != nil {
-			if *opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag {
-				tx.Rollback(ctx)
-				return nil, nil, storage.ErrNotModified
-			}
-		}
-	}
-
-	// Default to full object if no ranges specified
-	if len(ranges) == 0 {
-		ranges = []storage.ByteRange{{Start: nil, End: nil}}
-	}
-
-	// Normalize suffix ranges and validate
-	ranges, err = normalizeAndValidateRanges(ranges, object.Size)
-	if err != nil {
-		tx.Rollback(ctx)
-		return nil, nil, err
-	}
-
-	// Create readers for each range
-	var readers []io.ReadCloser
-	for _, byteRange := range ranges {
-		reader, err := mbs.createRangeReader(ctx, tx, object, byteRange)
+	var storageObject storage.Object
+	readers, err := database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+		object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 		if err != nil {
-			for _, r := range readers {
-				r.Close()
-			}
-			tx.Rollback(ctx)
-			return nil, nil, err
+			return nil, err
 		}
-		readers = append(readers, reader)
-	}
 
-	remainingReaders := int64(len(readers))
-	if remainingReaders == 0 {
-		tx.Rollback(ctx)
-	} else {
-		for i := range readers {
-			inner := readers[i]
-			readers[i] = ioutils.NewReadCloserWithCloseHook(inner, func() error {
-				if atomic.AddInt64(&remainingReaders, -1) == 0 {
-					return tx.Rollback(ctx)
+		if opts != nil {
+			if opts.IfMatchETag != nil {
+				if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
+					return nil, storage.ErrPreconditionFailed
 				}
-				return nil
-			})
+			}
+			if opts.IfNoneMatchETag != nil {
+				if *opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag {
+					return nil, storage.ErrNotModified
+				}
+			}
 		}
+
+		// Default to full object if no ranges specified
+		effectiveRanges := ranges
+		if len(effectiveRanges) == 0 {
+			effectiveRanges = []storage.ByteRange{{Start: nil, End: nil}}
+		}
+
+		// Normalize suffix ranges and validate
+		effectiveRanges, err = normalizeAndValidateRanges(effectiveRanges, object.Size)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create readers for each range
+		var readers []io.ReadCloser
+		for _, byteRange := range effectiveRanges {
+			reader, err := mbs.createRangeReader(ctx, tx, object, byteRange)
+			if err != nil {
+				for _, r := range readers {
+					r.Close()
+				}
+				return nil, err
+			}
+			readers = append(readers, reader)
+		}
+
+		storageObject = convertObject(*object)
+		return readers, nil
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
-	storageObject := convertObject(*object)
 	return &storageObject, readers, nil
 }
 
