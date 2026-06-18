@@ -3,9 +3,11 @@ package lua
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -16,19 +18,45 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/luahelper"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/webhookoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
+	"github.com/jdillenkofer/pithos/internal/storage/webhook"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type luaStorageMiddleware struct {
 	delegator.DelegatingStorage
-	code   string
-	tracer trace.Tracer
+	code       string
+	db         database.Database
+	dispatcher *webhook.Dispatcher
+	tracer     trace.Tracer
 }
 
 var _ storage.Storage = (*luaStorageMiddleware)(nil)
 var _ storage.TransactionalStorage = (*luaStorageMiddleware)(nil)
+
+// mutatingMethods are the storage operations the middleware wraps in a
+// read-write transaction when webhooks are enabled, so a Lua override and any
+// webhooks it enqueues commit (or roll back) atomically with the operation.
+// Read/streaming methods (e.g. GetObject) are intentionally excluded: their
+// readers are bound to the transaction and would be invalidated by an early
+// commit.
+var mutatingMethods = map[string]bool{
+	"CreateBucket":                     true,
+	"DeleteBucket":                     true,
+	"PutObject":                        true,
+	"AppendObject":                     true,
+	"DeleteObject":                     true,
+	"DeleteObjects":                    true,
+	"CreateMultipartUpload":            true,
+	"UploadPart":                       true,
+	"CompleteMultipartUpload":          true,
+	"AbortMultipartUpload":             true,
+	"PutBucketWebsiteConfiguration":    true,
+	"DeleteBucketWebsiteConfiguration": true,
+}
 
 var (
 	contextType      = reflect.TypeOf((*context.Context)(nil)).Elem()
@@ -70,6 +98,17 @@ var storageErrorByName = map[string]error{
 }
 
 func NewStorageMiddleware(innerStorage storage.Storage, code string) (storage.Storage, error) {
+	return NewStorageMiddlewareWithWebhooks(innerStorage, code, nil, nil)
+}
+
+// NewStorageMiddlewareWithWebhooks builds the Lua middleware with webhook
+// support. When db and dispatcher are non-nil, mutating Lua overrides run inside
+// a read-write transaction and the script gains a global `webhooks.enqueue(ctx,
+// evt)` that persists a webhook in the same transaction and delivers it after
+// commit. db must be the same database.Database instance used by the storage
+// below this middleware, so the webhook row and the storage write share one SQL
+// transaction.
+func NewStorageMiddlewareWithWebhooks(innerStorage storage.Storage, code string, db database.Database, dispatcher *webhook.Dispatcher) (storage.Storage, error) {
 	L := newLuaState()
 	if err := golua.DoString(L, code); err != nil {
 		return nil, err
@@ -77,8 +116,14 @@ func NewStorageMiddleware(innerStorage storage.Storage, code string) (storage.St
 	return &luaStorageMiddleware{
 		DelegatingStorage: delegator.Wrap(innerStorage),
 		code:              code,
+		db:                db,
+		dispatcher:        dispatcher,
 		tracer:            otel.Tracer("internal/storage/middlewares/lua"),
 	}, nil
+}
+
+func (m *luaStorageMiddleware) webhooksEnabled() bool {
+	return m.db != nil && m.dispatcher != nil
 }
 
 func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args ...interface{}) ([]interface{}, error) {
@@ -93,6 +138,10 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 	L := newLuaState()
 	m.pushInnerStorage(L)
 	L.SetGlobal("innerStorage")
+	if m.webhooksEnabled() {
+		m.pushWebhooks(L)
+		L.SetGlobal("webhooks")
+	}
 	if err := golua.DoString(L, m.code); err != nil {
 		return nil, err
 	}
@@ -102,6 +151,34 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 		L.Pop(1)
 		return m.callNextMethod(method, args)
 	}
+
+	if m.webhooksEnabled() && mutatingMethods[methodName] {
+		var results []interface{}
+		err := database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(txCtx context.Context, tx database.Tx) error {
+			txArgs := make([]interface{}, len(args))
+			copy(txArgs, args)
+			if len(txArgs) > 0 {
+				txArgs[0] = txCtx
+			}
+			var invokeErr error
+			results, invokeErr = m.invokeLuaFunction(L, method, txArgs)
+			if invokeErr != nil {
+				return invokeErr
+			}
+			// Propagate a storage error returned by the Lua override so the
+			// transaction rolls back (and any enqueued webhook is discarded).
+			return firstErrorResult(results)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return results, nil
+	}
+
+	return m.invokeLuaFunction(L, method, args)
+}
+
+func (m *luaStorageMiddleware) invokeLuaFunction(L *golua.State, method reflect.Value, args []interface{}) ([]interface{}, error) {
 	for _, arg := range args {
 		pushLuaValue(L, arg)
 	}
@@ -121,6 +198,16 @@ func (m *luaStorageMiddleware) call(ctx context.Context, methodName string, args
 	}
 	L.Pop(returnCount)
 	return results, nil
+}
+
+// firstErrorResult returns the first non-nil error among decoded Lua results.
+func firstErrorResult(results []interface{}) error {
+	for _, result := range results {
+		if err, ok := result.(error); ok && err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *luaStorageMiddleware) lookupNextMethod(methodName string) (reflect.Value, error) {
@@ -188,6 +275,123 @@ func (m *luaStorageMiddleware) pushInnerStorage(L *golua.State) {
 		})
 		L.SetField(-2, methodName)
 	}
+}
+
+func (m *luaStorageMiddleware) pushWebhooks(L *golua.State) {
+	L.NewTable()
+	L.PushGoFunction(func(L *golua.State) int {
+		ctx, ok := L.ToUserData(1).(context.Context)
+		if !ok {
+			L.PushString("webhooks.enqueue requires a context as the first argument")
+			L.Error()
+			return 0
+		}
+		tx, ok := database.TxControllerFromContext(ctx)
+		if !ok {
+			L.PushString("webhooks.enqueue must be called inside a mutating operation")
+			L.Error()
+			return 0
+		}
+		entry, err := readWebhookEntry(L, 2)
+		if err != nil {
+			L.PushString(err.Error())
+			L.Error()
+			return 0
+		}
+		if err := m.dispatcher.Enqueue(ctx, tx, entry); err != nil {
+			L.PushString(err.Error())
+			L.Error()
+			return 0
+		}
+		return 0
+	})
+	L.SetField(-2, "enqueue")
+}
+
+func readWebhookEntry(L *golua.State, index int) (*webhookoutboxentry.Entity, error) {
+	if !L.IsTable(index) {
+		return nil, errors.New("webhooks.enqueue requires a table as the second argument")
+	}
+	index = L.AbsIndex(index)
+
+	url, err := requireStringField(L, index, "url")
+	if err != nil {
+		return nil, err
+	}
+
+	method := optionalStringField(L, index, "method")
+	if method == "" {
+		method = http.MethodPost
+	}
+
+	var body []byte
+	L.Field(index, "body")
+	if !L.IsNil(-1) {
+		s, ok := L.ToString(-1)
+		if !ok {
+			L.Pop(1)
+			return nil, errors.New("webhooks.enqueue body must be a string")
+		}
+		body = []byte(s)
+	}
+	L.Pop(1)
+
+	headers, err := readWebhookHeaders(L, index)
+	if err != nil {
+		return nil, err
+	}
+
+	return &webhookoutboxentry.Entity{
+		Url:     url,
+		Method:  method,
+		Headers: headers,
+		Body:    body,
+	}, nil
+}
+
+func readWebhookHeaders(L *golua.State, index int) (*string, error) {
+	L.Field(index, "headers")
+	defer L.Pop(1)
+	if !L.IsTable(-1) {
+		return nil, nil
+	}
+	headersIndex := L.AbsIndex(-1)
+	headers := map[string]string{}
+	L.PushNil()
+	for L.Next(headersIndex) {
+		key, keyOk := L.ToString(-2)
+		value, valueOk := L.ToString(-1)
+		if keyOk && valueOk {
+			headers[key] = value
+		}
+		L.Pop(1) // pop value, keep key for the next iteration
+	}
+	if len(headers) == 0 {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(headers)
+	if err != nil {
+		return nil, err
+	}
+	s := string(encoded)
+	return &s, nil
+}
+
+func requireStringField(L *golua.State, index int, name string) (string, error) {
+	L.Field(index, name)
+	defer L.Pop(1)
+	s, ok := L.ToString(-1)
+	if !ok || s == "" {
+		return "", fmt.Errorf("webhooks.enqueue requires a non-empty string %q field", name)
+	}
+	return s, nil
+}
+
+func optionalStringField(L *golua.State, index int, name string) string {
+	L.Field(index, name)
+	defer L.Pop(1)
+	s, _ := L.ToString(-1)
+	return s
 }
 
 func pushLuaValue(L *golua.State, value interface{}) {
@@ -627,10 +831,20 @@ func (m *luaStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.Tx
 }
 
 func (m *luaStorageMiddleware) Start(ctx context.Context) error {
+	if m.dispatcher != nil {
+		if err := m.dispatcher.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return m.Next.Start(ctx)
 }
 
 func (m *luaStorageMiddleware) Stop(ctx context.Context) error {
+	if m.dispatcher != nil {
+		if err := m.dispatcher.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	return m.Next.Stop(ctx)
 }
 

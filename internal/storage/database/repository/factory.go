@@ -10,18 +10,21 @@ import (
 	postgresBucket "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/bucket"
 	postgresObject "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/object"
 	postgresStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/storageoutboxentry"
+	postgresWebhookOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/webhookoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/webhookoutboxentry"
 	sqlitePart "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/part"
 	sqlitePartContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partcontent"
 	sqlitePartOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partoutboxentry"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
 	sqliteStorageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/storageoutboxentry"
+	sqliteWebhookOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/webhookoutboxentry"
 )
 
 var errUnknownDatabaseType = errors.New("unknown database type")
@@ -33,6 +36,17 @@ func NewStorageOutboxEntryRepository(db database.Database) (storageoutboxentry.R
 		return postgresStorageOutboxEntry.NewRepository()
 	case database.DB_TYPE_SQLITE:
 		return sqliteStorageOutboxEntry.NewRepository()
+	}
+	return nil, errUnknownDatabaseType
+}
+
+func NewWebhookOutboxEntryRepository(db database.Database) (webhookoutboxentry.Repository, error) {
+	dbType := db.GetDatabaseType()
+	switch dbType {
+	case database.DB_TYPE_POSTGRES:
+		return postgresWebhookOutboxEntry.NewRepository()
+	case database.DB_TYPE_SQLITE:
+		return sqliteWebhookOutboxEntry.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
+	"github.com/jdillenkofer/pithos/internal/storage/webhook"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -251,9 +252,14 @@ type AuditStorageMiddlewareConfiguration struct {
 }
 
 type LuaStorageMiddlewareConfiguration struct {
-	InnerStorageInstantiator StorageInstantiator           `json:"-"`
-	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
-	ScriptPath               internalConfig.StringProvider `json:"scriptPath"`
+	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
+	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
+	ScriptPath               internalConfig.StringProvider       `json:"scriptPath"`
+	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase              json.RawMessage                     `json:"db,omitempty"`
+	OutboxId                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
+	HttpTimeoutSecs          *internalConfig.Int64Provider       `json:"httpTimeoutSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -264,10 +270,24 @@ func (l *LuaStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	l.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(l.RawInnerStorage)
-	return err
+	if err != nil {
+		return err
+	}
+	if len(l.RawDatabase) > 0 {
+		l.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(l.RawDatabase)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (l *LuaStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	if l.DatabaseInstantiator != nil {
+		if err := l.DatabaseInstantiator.RegisterReferences(diCollection); err != nil {
+			return err
+		}
+	}
 	return l.InnerStorageInstantiator.RegisterReferences(diCollection)
 }
 
@@ -280,7 +300,53 @@ func (l *LuaStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinj
 	if err != nil {
 		return nil, err
 	}
-	return luaMiddleware.NewStorageMiddleware(innerStorage, string(code))
+
+	// Webhooks are opt-in: only when a database is configured. The database must
+	// be the same instance used by the storage below this middleware (use a
+	// DatabaseReference) so a webhook row and the storage write share one
+	// transaction.
+	if l.DatabaseInstantiator == nil {
+		return luaMiddleware.NewStorageMiddleware(innerStorage, string(code))
+	}
+
+	db, err := l.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	outboxId := l.OutboxId.Value()
+	if outboxId == "" {
+		outboxId = defaultOutboxId
+	}
+	claimLeaseDuration := time.Duration(0)
+	if l.ClaimLeaseDurationSecs != nil {
+		claimLeaseDurationSecs := l.ClaimLeaseDurationSecs.Value()
+		if claimLeaseDurationSecs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(claimLeaseDurationSecs) * time.Second
+	}
+	httpTimeout := time.Duration(0)
+	if l.HttpTimeoutSecs != nil {
+		httpTimeoutSecs := l.HttpTimeoutSecs.Value()
+		if httpTimeoutSecs <= 0 {
+			return nil, errors.New("httpTimeoutSeconds must be > 0")
+		}
+		httpTimeout = time.Duration(httpTimeoutSecs) * time.Second
+	}
+	webhookOutboxEntryRepository, err := repositoryFactory.NewWebhookOutboxEntryRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	t := reflect.TypeOf((*prometheus.Registerer)(nil))
+	prometheusRegisterer, err := diProvider.LookupByType(t)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher, err := webhook.NewDispatcher(db, outboxId, webhookOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration, httpTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return luaMiddleware.NewStorageMiddlewareWithWebhooks(innerStorage, string(code), db, dispatcher)
 }
 
 func (a *AuditStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
