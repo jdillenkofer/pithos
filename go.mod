@@ -1,6 +1,6 @@
 module github.com/jdillenkofer/pithos
 
-go 1.25.5
+go 1.26.4
 
 require (
 	github.com/Shopify/go-lua v0.0.0-20250718183320-1e37f32ad7d0
