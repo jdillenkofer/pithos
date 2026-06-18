@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"sync"
 
@@ -25,6 +26,7 @@ type replicationStorage struct {
 }
 
 var _ storage.Storage = (*replicationStorage)(nil)
+var _ storage.TransactionalStorage = (*replicationStorage)(nil)
 
 func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
 	lc, err := lifecycle.NewValidatedLifecycle("ReplicationStorage")
@@ -40,6 +42,16 @@ func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Sto
 		mapMutex:                            sync.Mutex{},
 		tracer:                              otel.Tracer("internal/storage/replication"),
 	}, nil
+}
+
+func (rs *replicationStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	txPrimary, ok := rs.Next.(storage.TransactionalStorage)
+	if !ok {
+		return fn(ctx, rs)
+	}
+	return txPrimary.WithTransaction(ctx, opts, func(ctx context.Context, _ storage.Storage) error {
+		return fn(ctx, rs)
+	})
 }
 
 func (rs *replicationStorage) Start(ctx context.Context) error {

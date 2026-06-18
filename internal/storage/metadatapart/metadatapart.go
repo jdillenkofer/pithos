@@ -34,7 +34,7 @@ type partRange struct {
 
 type lazyPartSequenceReadCloser struct {
 	ctx       context.Context
-	tx        *database.TxContext
+	tx        database.Tx
 	partStore partstore.PartStore
 	parts     []partRange
 
@@ -121,6 +121,7 @@ type metadataPartStorage struct {
 
 // Compile-time check to ensure metadataPartStorage implements storage.Storage
 var _ storage.Storage = (*metadataPartStorage)(nil)
+var _ storage.TransactionalStorage = (*metadataPartStorage)(nil)
 
 func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, partStore partstore.PartStore) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("MetadataPartStorage")
@@ -140,6 +141,12 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 		gcTaskHandle:       nil,
 		tracer:             otel.Tracer("internal/storage/metadatapart"),
 	}, nil
+}
+
+func (mbs *metadataPartStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return database.WithTx(ctx, mbs.db, opts, func(ctx context.Context, tx database.Tx) error {
+		return fn(ctx, mbs)
+	})
 }
 
 func (mbs *metadataPartStorage) Start(ctx context.Context) error {
@@ -485,7 +492,7 @@ func normalizeAndValidateRanges(ranges []storage.ByteRange, objectSize int64) ([
 }
 
 // createRangeReader creates a reader for a specific byte range of an object.
-func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx *database.TxContext, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
+func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx database.Tx, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
 	startByte := byteRange.Start
 	endByte := byteRange.End
 

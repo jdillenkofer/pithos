@@ -100,6 +100,7 @@ type outboxStorage struct {
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
 var _ storage.Storage = (*outboxStorage)(nil)
+var _ storage.TransactionalStorage = (*outboxStorage)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
@@ -126,6 +127,12 @@ func NewStorage(db database.Database, outboxId string, innerStorage storage.Stor
 		metrics:                      newOutboxMetrics(registerer),
 	}
 	return os, nil
+}
+
+func (os *outboxStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return database.WithTx(ctx, os.db, opts, func(ctx context.Context, tx database.Tx) error {
+		return fn(ctx, os)
+	})
 }
 
 func (os *outboxStorage) claimNextOutboxEntry(ctx context.Context) (*storageOutboxEntry.Entity, bool, error) {
@@ -373,7 +380,7 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *database.TxContext, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx database.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation: operation,
 		Bucket:    bucketName,
@@ -384,11 +391,14 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx *databa
 		return nil, err
 	}
 
-	// Put struct{} in the channel unless it is full
-	select {
-	case os.triggerChannel <- struct{}{}:
-	default:
-	}
+	tx.OnAfterCommit(func(context.Context) error {
+		// Put struct{} in the channel unless it is full.
+		select {
+		case os.triggerChannel <- struct{}{}:
+		default:
+		}
+		return nil
+	})
 
 	return entry.Id, nil
 }

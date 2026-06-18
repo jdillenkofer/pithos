@@ -48,7 +48,7 @@ func (f *faultyPartStore) markAvailable(partId partstore.PartId) {
 	delete(f.missing, partId.String())
 }
 
-func (f *faultyPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (f *faultyPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	f.mu.RLock()
 	_, isMissing := f.missing[partId.String()]
 	f.mu.RUnlock()
@@ -59,7 +59,7 @@ func (f *faultyPartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	return f.PartStore.GetPart(ctx, tx, partId)
 }
 
-func (f *faultyPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (f *faultyPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	err := f.PartStore.PutPart(ctx, tx, partId, reader)
 	if err == nil {
 		f.markAvailable(partId)
@@ -67,7 +67,7 @@ func (f *faultyPartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 	return err
 }
 
-func (f *faultyPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (f *faultyPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	err := f.PartStore.DeletePart(ctx, tx, partId)
 	if err == nil {
 		f.markAvailable(partId)

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"time"
 
@@ -28,6 +29,12 @@ type AuditLogMiddleware struct {
 	mu          sync.Mutex
 }
 
+var _ storage.TransactionalStorage = (*AuditLogMiddleware)(nil)
+
+func (m *AuditLogMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, m.Next, m, fn)
+}
+
 type auditResource struct {
 	bucket     string
 	key        string
@@ -46,11 +53,11 @@ func (m *AuditLogMiddleware) run(ctx context.Context, op auditlog.Operation, res
 func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.Signer, mlDsaSigner signing.Signer, lastHash []byte, initialHashBuffer [][]byte) *AuditLogMiddleware {
 	m := &AuditLogMiddleware{
 		DelegatingStorage: delegator.Wrap(next),
-		sink:        sink,
-		signer:      signer,
-		mlDsaSigner: mlDsaSigner,
-		lastHash:    lastHash,
-		hashBuffer:  initialHashBuffer,
+		sink:              sink,
+		signer:            signer,
+		mlDsaSigner:       mlDsaSigner,
+		lastHash:          lastHash,
+		hashBuffer:        initialHashBuffer,
 	}
 
 	if m.hashBuffer == nil {

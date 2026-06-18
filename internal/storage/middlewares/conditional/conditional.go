@@ -2,6 +2,7 @@ package conditional
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"slices"
 	"strings"
@@ -23,6 +24,11 @@ type conditionalStorageMiddleware struct {
 
 // Compile-time check to ensure conditionalStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*conditionalStorageMiddleware)(nil)
+var _ storage.TransactionalStorage = (*conditionalStorageMiddleware)(nil)
+
+func (csm *conditionalStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, csm.Next, csm, fn)
+}
 
 func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, defaultStorage storage.Storage) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("ConditionalStorageMiddleware")

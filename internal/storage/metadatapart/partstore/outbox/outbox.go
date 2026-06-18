@@ -377,7 +377,7 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *database.TxContext, operation string, partId partstore.PartId) (*ulid.ULID, error) {
+func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx database.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
 	entry := partOutboxEntry.Entity{
 		Operation: operation,
 		PartId:    partId,
@@ -387,16 +387,19 @@ func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *databa
 		return nil, err
 	}
 
-	// Put struct{} in the channel unless it is full
-	select {
-	case obs.triggerChannel <- struct{}{}:
-	default:
-	}
+	tx.OnAfterCommit(func(context.Context) error {
+		// Put struct{} in the channel unless it is full.
+		select {
+		case obs.triggerChannel <- struct{}{}:
+		default:
+		}
+		return nil
+	})
 
 	return entry.Id, nil
 }
 
-func (obs *outboxPartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.PutPart")
 	defer span.End()
 
@@ -435,7 +438,7 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx *database.TxContext,
 	return nil
 }
 
-func (obs *outboxPartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPart")
 	defer span.End()
 
@@ -463,7 +466,7 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx *database.TxContext,
 	return obs.innerPartStore.GetPart(ctx, tx, partId)
 }
 
-func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPartIds")
 	defer span.End()
 
@@ -504,7 +507,7 @@ func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx *database.TxConte
 	return partIds, nil
 }
 
-func (obs *outboxPartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (obs *outboxPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.DeletePart")
 	defer span.End()
 

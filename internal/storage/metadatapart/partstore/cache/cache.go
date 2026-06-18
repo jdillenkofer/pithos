@@ -64,7 +64,7 @@ func (ps *cachePartStore) Stop(ctx context.Context) error {
 	return ps.innerPartStore.Stop(ctx)
 }
 
-func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId, reader io.Reader) error {
+func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.PutPart")
 	defer span.End()
 
@@ -78,7 +78,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 		return err
 	}
 	if tx != nil {
-		tx.RegisterOnCommit(func(opCtx context.Context) error {
+		tx.OnAfterCommit(func(opCtx context.Context) error {
 			if teed.cacheEligible {
 				ps.clearOversizedHint(cacheKey)
 				if setErr := ps.cache.Set(cacheKey, bytes.NewReader(buf), int64(len(buf))); setErr != nil {
@@ -112,7 +112,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx *database.TxContext, p
 	return nil
 }
 
-func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) (io.ReadCloser, error) {
+func (ps *cachePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPart")
 	defer span.End()
 
@@ -164,14 +164,14 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx *database.TxContext, p
 	}, nil
 }
 
-func (ps *cachePartStore) GetPartIds(ctx context.Context, tx *database.TxContext) ([]partstore.PartId, error) {
+func (ps *cachePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPartIds")
 	defer span.End()
 
 	return ps.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext, partId partstore.PartId) error {
+func (ps *cachePartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.DeletePart")
 	defer span.End()
 
@@ -181,7 +181,7 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext
 	}
 	if tx != nil {
 		cacheKey := getPartCacheKey(partId)
-		tx.RegisterOnCommit(func(opCtx context.Context) error {
+		tx.OnAfterCommit(func(opCtx context.Context) error {
 			ps.clearOversizedHint(cacheKey)
 			if removeErr := ps.cache.Remove(cacheKey); removeErr != nil {
 				slog.DebugContext(opCtx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", removeErr)
@@ -196,11 +196,6 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx *database.TxContext
 	if err := ps.cache.Remove(cacheKey); err != nil {
 		slog.DebugContext(ctx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", err)
 	}
-	return nil
-}
-
-func (ps *cachePartStore) OnTxCommit(ctx context.Context, tx *database.TxContext) error { return nil }
-func (ps *cachePartStore) OnTxRollback(ctx context.Context, tx *database.TxContext) error {
 	return nil
 }
 

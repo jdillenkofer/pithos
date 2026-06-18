@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -46,6 +47,11 @@ func (psm *prometheusStorageMiddleware) run(ctx context.Context, spanName string
 
 // Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*prometheusStorageMiddleware)(nil)
+var _ storage.TransactionalStorage = (*prometheusStorageMiddleware)(nil)
+
+func (psm *prometheusStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, psm.Next, psm, fn)
+}
 
 func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Registerer) (storage.Storage, error) {
 	failedApiOpsCounter := prometheus.NewCounterVec(

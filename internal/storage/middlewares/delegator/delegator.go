@@ -2,6 +2,7 @@ package delegator
 
 import (
 	"context"
+	"database/sql"
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -16,6 +17,21 @@ func Wrap(next storage.Storage) DelegatingStorage {
 }
 
 var _ storage.Storage = (*DelegatingStorage)(nil)
+var _ storage.TransactionalStorage = (*DelegatingStorage)(nil)
+
+func (d *DelegatingStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return WithTransaction(ctx, opts, d.Next, d, fn)
+}
+
+func WithTransaction(ctx context.Context, opts *sql.TxOptions, next storage.Storage, outer storage.Storage, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	txStorage, ok := next.(storage.TransactionalStorage)
+	if !ok {
+		return fn(ctx, outer)
+	}
+	return txStorage.WithTransaction(ctx, opts, func(ctx context.Context, _ storage.Storage) error {
+		return fn(ctx, outer)
+	})
+}
 
 func (d *DelegatingStorage) Start(ctx context.Context) error {
 	return d.Next.Start(ctx)

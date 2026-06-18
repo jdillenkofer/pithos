@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"strconv"
@@ -330,6 +331,11 @@ type Storage interface {
 	BucketWebsiteManager
 	ObjectManager
 	MultipartUploadManager
+}
+
+type TransactionalStorage interface {
+	Storage
+	WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage Storage) error) error
 }
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName BucketName) ([]Object, error) {
