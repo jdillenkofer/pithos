@@ -3,6 +3,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"io"
+	"sync/atomic"
+
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
 type Tx interface {
@@ -140,4 +144,47 @@ func WithTx(ctx context.Context, db Database, opts *sql.TxOptions, fn func(ctx c
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// WithTxReadClosers begins a transaction and invokes fn within it, exposing the
+// transaction through the context like WithTx does. Unlike WithTx, the
+// transaction is not finalized when fn returns: its lifetime is instead bound to
+// the io.ReadClosers fn produces. The transaction is rolled back once every
+// returned reader has been closed. If fn returns an error, or returns no
+// readers, the transaction is rolled back before WithTxReadClosers returns.
+//
+// This suits read-only streaming reads whose data is fetched lazily from the
+// transaction as the returned readers are consumed. fn is responsible for
+// closing any readers it already created when it returns an error.
+func WithTxReadClosers(ctx context.Context, db Database, opts *sql.TxOptions, fn func(ctx context.Context, tx Tx) ([]io.ReadCloser, error)) ([]io.ReadCloser, error) {
+	tx, err := db.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	ctx = ContextWithTx(ctx, tx)
+	readers, err := fn(ctx, tx)
+	if err != nil {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, rollbackErr
+		}
+		return nil, err
+	}
+
+	remaining := int64(len(readers))
+	if remaining == 0 {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+			return nil, rollbackErr
+		}
+		return readers, nil
+	}
+
+	for i := range readers {
+		readers[i] = ioutils.NewReadCloserWithCloseHook(readers[i], func() error {
+			if atomic.AddInt64(&remaining, -1) == 0 {
+				return tx.Rollback(ctx)
+			}
+			return nil
+		})
+	}
+	return readers, nil
 }
