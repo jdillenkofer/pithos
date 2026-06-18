@@ -25,7 +25,6 @@ const (
 	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
 	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6 AND outbox_id = $7"
 	upsertStorageOutboxContentChunkStmt                           = "INSERT INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
-	deleteStorageOutboxEntryByIdStmt                              = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2"
 	claimStorageOutboxEntryStmt                                   = "UPDATE storage_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
 	deleteStorageOutboxEntryByClaimOwnerStmt                      = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
 	releaseStorageOutboxEntryClaimStmt                            = "UPDATE storage_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
@@ -174,11 +173,6 @@ func (sor *pgxRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 
 func (sor *pgxRepository) SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *storageoutboxentry.ContentChunk) error {
 	_, err := tx.ExecContext(ctx, upsertStorageOutboxContentChunkStmt, chunk.OutboxEntryId.String(), chunk.ChunkIndex, chunk.Content)
-	return err
-}
-
-func (sor *pgxRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String(), outboxId)
 	return err
 }
 

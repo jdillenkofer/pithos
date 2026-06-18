@@ -22,7 +22,6 @@ const (
 	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
 	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
 	upsertPartOutboxContentChunkStmt           = "INSERT INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
-	deletePartOutboxEntryByIdStmt              = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2"
 	claimPartOutboxEntryStmt                   = "UPDATE part_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
 	deletePartOutboxEntryByClaimOwnerStmt      = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
 	releasePartOutboxEntryClaimStmt            = "UPDATE part_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
@@ -121,7 +120,7 @@ func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Con
 	return partOutboxEntryEntities, nil
 }
 
-func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+func (bor *pgxRepository) findFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
 	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId)
 	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
 	if err != nil {
@@ -175,13 +174,8 @@ func (bor *pgxRepository) SavePartOutboxContentChunk(ctx context.Context, tx *sq
 	return err
 }
 
-func (bor *pgxRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String(), outboxId)
-	return err
-}
-
 func (bor *pgxRepository) ClaimFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*partoutboxentry.Entity, bool, error) {
-	entry, err := bor.FindFirstPartOutboxEntry(ctx, tx, outboxId)
+	entry, err := bor.findFirstPartOutboxEntry(ctx, tx, outboxId)
 	if err != nil || entry == nil {
 		return entry, false, err
 	}
