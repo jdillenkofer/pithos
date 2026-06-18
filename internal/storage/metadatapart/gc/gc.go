@@ -91,46 +91,37 @@ func (partGC *partGC) runGC() error {
 		span.AddEvent("Released lock")
 	}()
 
-	tx, err := partGC.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
-
-	existingPartIds, err := partGC.partStore.GetPartIds(ctx, tx)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-
-	inUsePartIdMap := make(map[partstore.PartId]struct{})
-	inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx.SqlTx())
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return err
-	}
-	for _, inUsePartId := range inUsePartIds {
-		inUsePartIdMap[inUsePartId] = struct{}{}
-	}
-
 	numDeletedParts := 0
-
-	for _, existingPartId := range existingPartIds {
-		if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
-			err = partGC.partStore.DeletePart(ctx, tx, existingPartId)
-			if err != nil {
-				_ = tx.Rollback(ctx)
-				return err
-			}
-
-			numDeletedParts += 1
+	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		existingPartIds, err := partGC.partStore.GetPartIds(ctx, tx)
+		if err != nil {
+			return err
 		}
-	}
 
-	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
+		inUsePartIdMap := make(map[partstore.PartId]struct{})
+		inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		for _, inUsePartId := range inUsePartIds {
+			inUsePartIdMap[inUsePartId] = struct{}{}
+		}
 
-	err = tx.Commit(ctx)
+		for _, existingPartId := range existingPartIds {
+			if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
+				err = partGC.partStore.DeletePart(ctx, tx, existingPartId)
+				if err != nil {
+					return err
+				}
+
+				numDeletedParts += 1
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
+	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
 	return nil
 }
