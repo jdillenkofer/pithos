@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -555,18 +556,19 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 	objectChecksums, err := checksumutils.CalculateMultipartChecksums(partChecksumsList, checksumutils.ChecksumTypeFullObject)
 	require.NoError(t, err)
 
-	tx, err := st.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	for _, p := range parts {
-		require.NoError(t, st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)))
-	}
-	err = st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
-		Key:   key,
-		ETag:  *objectChecksums.ETag,
-		Size:  int64(maxParts) * int64(len(partData)),
-		Parts: parts,
-	}, nil)
-	require.NoError(t, tx.Commit(ctx))
+	err = database.WithTx(ctx, st.db, nil, func(ctx context.Context, tx database.Tx) error {
+		for _, p := range parts {
+			if err := st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)); err != nil {
+				return err
+			}
+		}
+		return st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+			Key:   key,
+			ETag:  *objectChecksums.ETag,
+			Size:  int64(maxParts) * int64(len(partData)),
+			Parts: parts,
+		}, nil)
+	})
 	require.NoError(t, err)
 
 	// The next append must fail with ErrTooManyParts.

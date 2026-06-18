@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
@@ -237,34 +238,22 @@ func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 	}
 	content := bytes.Repeat([]byte("cross-algo-content-"), 4096)
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := gzipStore.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return gzipStore.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+	}); err != nil {
 		t.Fatal(err)
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc, err := zstdStore.GetPart(ctx, tx, *partId)
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	got, err := io.ReadAll(rc)
-	rc.Close()
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	var got []byte
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		rc, err := zstdStore.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		got, err = io.ReadAll(rc)
+		rc.Close()
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,34 +297,22 @@ func TestCompressionPartStoreMiddleware_ReadsLegacyPlainDataWithoutHeader(t *tes
 	}
 	content := []byte("legacy-data-without-compression-header")
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return inner.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+	}); err != nil {
 		t.Fatal(err)
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc, err := store.GetPart(ctx, tx, *partId)
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	got, err := io.ReadAll(rc)
-	rc.Close()
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	var got []byte
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		rc, err := store.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		got, err = io.ReadAll(rc)
+		rc.Close()
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -383,34 +360,22 @@ func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *tes
 	payload := []byte("payload-following-invalid-header")
 	content := append(header[:], payload...)
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.PutPart(ctx, tx, *partId, bytes.NewReader(content)); err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return inner.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+	}); err != nil {
 		t.Fatal(err)
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc, err := store.GetPart(ctx, tx, *partId)
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	got, err := io.ReadAll(rc)
-	rc.Close()
-	if err != nil {
-		tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	var got []byte
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		rc, err := store.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		got, err = io.ReadAll(rc)
+		rc.Close()
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 

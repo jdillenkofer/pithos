@@ -3,14 +3,15 @@ package cache
 import (
 	"bytes"
 	"context"
-	"database/sql"
+	"fmt"
 	"io"
+	"path/filepath"
 	"testing"
 
 	cachepkg "github.com/jdillenkofer/pithos/internal/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -184,24 +185,23 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	inner := newMemoryPartStore()
 	partId, _ := partstore.NewRandomPartId()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "pithos.db"))
 	assert.NoError(t, err)
 	defer db.Close()
-	sqlTx, err := db.BeginTx(ctx, nil)
-	assert.NoError(t, err)
-	defer sqlTx.Rollback()
-	tx := database.NewTx(sqlTx)
 
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
-	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
-	assert.NoError(t, err)
+	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+			return err
+		}
 
-	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
-	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
+		_, err := readAllCacheEntry(cache, getPartCacheKey(*partId))
+		assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 
-	err = store.DeletePart(ctx, tx, *partId)
+		return store.DeletePart(ctx, tx, *partId)
+	})
 	assert.NoError(t, err)
 }
 
@@ -211,22 +211,22 @@ func TestCachePartStore_AppliesPendingMutationsOnTxCommit(t *testing.T) {
 	inner := newMemoryPartStore()
 	partId, _ := partstore.NewRandomPartId()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "pithos.db"))
 	assert.NoError(t, err)
 	defer db.Close()
-	sqlTx, err := db.BeginTx(ctx, nil)
-	assert.NoError(t, err)
-	tx := database.NewTx(sqlTx)
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
-	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
-	assert.NoError(t, err)
+	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+			return err
+		}
 
-	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
-	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
+		_, err := readAllCacheEntry(cache, getPartCacheKey(*partId))
+		assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
 
-	err = tx.Commit(ctx)
+		return nil
+	})
 	assert.NoError(t, err)
 
 	data, err := readAllCacheEntry(cache, getPartCacheKey(*partId))
@@ -240,21 +240,21 @@ func TestCachePartStore_DropsPendingMutationsOnTxRollback(t *testing.T) {
 	inner := newMemoryPartStore()
 	partId, _ := partstore.NewRandomPartId()
 
-	db, err := sql.Open("sqlite3", ":memory:")
+	db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "pithos.db"))
 	assert.NoError(t, err)
 	defer db.Close()
-	sqlTx, err := db.BeginTx(ctx, nil)
-	assert.NoError(t, err)
-	tx := database.NewTx(sqlTx)
 
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
-	err = store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1")))
-	assert.NoError(t, err)
-
-	err = tx.Rollback(ctx)
-	assert.NoError(t, err)
+	errRollback := fmt.Errorf("rollback")
+	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+			return err
+		}
+		return errRollback
+	})
+	assert.ErrorIs(t, err, errRollback)
 
 	_, err = readAllCacheEntry(cache, getPartCacheKey(*partId))
 	assert.ErrorIs(t, err, cachepkg.ErrCacheMiss)
