@@ -103,14 +103,14 @@ var _ storage.Storage = (*outboxStorage)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
-func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration ...time.Duration) (storage.Storage, error) {
+func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
 	}
 	leaseDuration := defaultClaimLeaseDuration
-	if len(claimLeaseDuration) > 0 && claimLeaseDuration[0] > 0 {
-		leaseDuration = claimLeaseDuration[0]
+	if claimLeaseDuration > 0 {
+		leaseDuration = claimLeaseDuration
 	}
 	os := &outboxStorage{
 		ValidatedLifecycle:           lifecycle,

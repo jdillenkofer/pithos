@@ -100,10 +100,10 @@ var _ partstore.PartStore = (*outboxPartStore)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
-func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration ...time.Duration) (partstore.PartStore, error) {
+func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
 	leaseDuration := defaultClaimLeaseDuration
-	if len(claimLeaseDuration) > 0 && claimLeaseDuration[0] > 0 {
-		leaseDuration = claimLeaseDuration[0]
+	if claimLeaseDuration > 0 {
+		leaseDuration = claimLeaseDuration
 	}
 	obs := &outboxPartStore{
 		db:                        db,

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
@@ -113,7 +114,7 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 
 	}
 	reg := prometheus.NewRegistry()
-	outboxStorage, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, reg)
+	outboxStorage, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, reg, 30*time.Second)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
 		os.Exit(1)

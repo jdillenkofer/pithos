@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -105,7 +106,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 			slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 			os.Exit(1)
 		}
-		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, registerer)
+		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, registerer, 30*time.Second)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewOutboxPartStore: ", err))
 			os.Exit(1)
