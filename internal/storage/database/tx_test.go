@@ -119,6 +119,43 @@ func TestWithTxPreCommitErrorRollsBackAndRunsRollbackHooks(t *testing.T) {
 	}
 }
 
+func TestNestedWritableTxInsideReadOnlyTxIsRejected(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	execTx(t, ctx, db, "CREATE TABLE tx_ro_guard (id INTEGER PRIMARY KEY)")
+
+	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, _ database.Tx) error {
+		_, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		return err
+	})
+	if !errors.Is(err, database.ErrWriteInReadOnlyTransaction) {
+		t.Fatalf("expected ErrWriteInReadOnlyTransaction, got %v", err)
+	}
+}
+
+func TestNestedReadOnlyTxInsideReadOnlyTxIsAllowed(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	execTx(t, ctx, db, "CREATE TABLE tx_ro_nested (id INTEGER PRIMARY KEY)")
+
+	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, outer database.Tx) error {
+		inner, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		if inner.SqlTx() != outer.SqlTx() {
+			t.Fatal("expected nested read-only transaction to reuse active SQL transaction")
+		}
+		return inner.Commit(ctx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNestedBeginTxReusesActiveTransactionWithoutOwningCommit(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

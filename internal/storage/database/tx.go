@@ -3,11 +3,19 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"sync/atomic"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
+
+// ErrWriteInReadOnlyTransaction is returned by BeginTx when a writable
+// transaction is requested while a read-only transaction is already active on
+// the same database in the context. Reusing the read-only transaction for
+// writes would fail with an opaque driver error (and on SQLite would target the
+// read-only connection pool), so the mismatch is rejected up front.
+var ErrWriteInReadOnlyTransaction = errors.New("cannot begin writable transaction inside read-only transaction")
 
 type Tx interface {
 	SqlTx() *sql.Tx
@@ -24,23 +32,29 @@ type TxController struct {
 	onRollback       []func(context.Context) error
 	finalized        bool
 	ownsFinalization bool
+	readOnly         bool
 	dbHandle         any
 	root             *TxController
 }
 
 func NewTx(tx *sql.Tx) *TxController {
-	return NewTxController(tx, nil)
+	return NewTxController(tx, nil, false)
 }
 
-func NewTxController(tx *sql.Tx, dbHandle any) *TxController {
-	t := &TxController{tx: tx, ownsFinalization: true, dbHandle: dbHandle}
+func NewTxController(tx *sql.Tx, dbHandle any, readOnly bool) *TxController {
+	t := &TxController{tx: tx, ownsFinalization: true, readOnly: readOnly, dbHandle: dbHandle}
 	t.root = t
 	return t
 }
 
 func (t *TxController) Child() *TxController {
 	root := t.rootTx()
-	return &TxController{tx: t.tx, ownsFinalization: false, dbHandle: root.dbHandle, root: root}
+	return &TxController{tx: t.tx, ownsFinalization: false, readOnly: root.readOnly, dbHandle: root.dbHandle, root: root}
+}
+
+// ReadOnly reports whether the active (root) transaction was begun read-only.
+func (t *TxController) ReadOnly() bool {
+	return t.rootTx().readOnly
 }
 
 func (t *TxController) rootTx() *TxController {
