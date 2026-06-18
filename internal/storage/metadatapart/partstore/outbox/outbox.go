@@ -86,6 +86,8 @@ type outboxPartStore struct {
 	triggerChannel             chan struct{}
 	triggerChannelClosed       bool
 	outboxId                   string
+	claimOwner                 string
+	claimLeaseDuration         time.Duration
 	outboxProcessingTaskHandle *task.TaskHandle
 	innerPartStore             partstore.PartStore
 	partOutboxEntryRepository  partOutboxEntry.Repository
@@ -96,18 +98,142 @@ type outboxPartStore struct {
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*outboxPartStore)(nil)
 
-func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer) (partstore.PartStore, error) {
+const defaultClaimLeaseDuration = 30 * time.Second
+
+func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration ...time.Duration) (partstore.PartStore, error) {
+	leaseDuration := defaultClaimLeaseDuration
+	if len(claimLeaseDuration) > 0 && claimLeaseDuration[0] > 0 {
+		leaseDuration = claimLeaseDuration[0]
+	}
 	obs := &outboxPartStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
 		outboxId:                  outboxId,
+		claimOwner:                outboxId + ":" + ulid.Make().String(),
+		claimLeaseDuration:        leaseDuration,
 		innerPartStore:            innerPartStore,
 		partOutboxEntryRepository: partOutboxEntryRepository,
 		tracer:                    otel.Tracer("internal/storage/metadatapart/partstore/outbox"),
 		metrics:                   newPartOutboxMetrics(registerer),
 	}
 	return obs, nil
+}
+
+func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutboxEntry.Entity, bool, error) {
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return nil, false, err
+	}
+	now := time.Now().UTC()
+	entry, claimed, err := obs.partOutboxEntryRepository.ClaimFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return entry, claimed, nil
+}
+
+func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *partOutboxEntry.Entity) (io.Reader, error) {
+	if entry.Operation != partOutboxEntry.PutPartOperation {
+		return nil, nil
+	}
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	readers := make([]io.Reader, len(chunks))
+	for i, chunk := range chunks {
+		readers[i] = bytes.NewReader(chunk.Content)
+	}
+	return io.MultiReader(readers...), nil
+}
+
+func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return false, err
+	}
+	deleted, err := obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
+	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	if err != nil {
+		return false, err
+	}
+	released, err := obs.partOutboxEntryRepository.ReleasePartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, time.Now().UTC())
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		return false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return released, nil
+}
+
+func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry *partOutboxEntry.Entity) func() {
+	interval := obs.claimLeaseDuration / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now().UTC()
+				tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+				if err != nil {
+					slog.WarnContext(ctx, "Failed to start part outbox heartbeat transaction", "error", err)
+					continue
+				}
+				extended, err := obs.partOutboxEntryRepository.ExtendPartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+				if err != nil {
+					_ = tx.Rollback(ctx)
+					slog.WarnContext(ctx, "Failed to extend part outbox claim", "error", err)
+					continue
+				}
+				if err = tx.Commit(ctx); err != nil {
+					slog.WarnContext(ctx, "Failed to commit part outbox heartbeat", "error", err)
+					continue
+				}
+				if !extended {
+					slog.WarnContext(ctx, "Part outbox heartbeat lost claim", "entryId", entry.Id.String())
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
 func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
@@ -140,88 +266,70 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		var entry *partOutboxEntry.Entity
 		var putPartReader io.Reader
 
-		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			time.Sleep(5 * time.Second)
+			return
+		}
+		if entry == nil || !claimed {
+			break
+		}
+
+		putPartReader, err = obs.readPartOutboxContent(ctx, entry)
+		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
+			time.Sleep(5 * time.Second)
+			return
+		}
+
+		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		if err != nil {
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
 			return
 		}
 		rollback := func() { _ = tx.Rollback(ctx) }
 
-		entry, err = obs.partOutboxEntryRepository.FindFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId)
-		if err != nil {
-			rollback()
-			obs.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
-			return
-		}
-		if entry == nil {
-			_ = tx.Commit(ctx)
-			break
-		}
-		switch entry.Operation {
-		case partOutboxEntry.PutPartOperation:
-			chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
-			if err != nil {
-				rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-			readers := make([]io.Reader, len(chunks))
-			for i, chunk := range chunks {
-				readers[i] = bytes.NewReader(chunk.Content)
-			}
-			putPartReader = io.MultiReader(readers...)
-		}
-		err = tx.Commit(ctx)
-		if err != nil {
-			obs.metrics.errorsCounter.Inc()
-			return
-		}
-
-		tx, err = obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		if err != nil {
-			obs.metrics.errorsCounter.Inc()
-			return
-		}
-
+		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
 		case partOutboxEntry.PutPartOperation:
 			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
-			if err != nil {
-				rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		case partOutboxEntry.DeletePartOperation:
 			err = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
-			if err != nil {
-				rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
 		default:
 			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
+			err = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
+		}
+		if err != nil {
 			rollback()
+			stopHeartbeat()
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
-		err = obs.partOutboxEntryRepository.DeletePartOutboxEntryById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
+		if err = tx.Commit(ctx); err != nil {
+			stopHeartbeat()
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
+			obs.metrics.errorsCounter.Inc()
+			return
+		}
+		stopHeartbeat()
+
+		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
 		if err != nil {
-			rollback()
 			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
+			return
+		}
+		if !deleted {
+			obs.metrics.errorsCounter.Inc()
+			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}
 		processedOutboxEntryCount += 1
-
-		if err = tx.Commit(ctx); err != nil {
-			obs.metrics.errorsCounter.Inc()
-			return
-		}
 	}
 	if processedOutboxEntryCount > 0 {
 		slog.Info(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))

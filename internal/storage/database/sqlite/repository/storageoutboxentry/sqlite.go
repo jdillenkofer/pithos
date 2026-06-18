@@ -14,18 +14,22 @@ type sqliteRepository struct {
 }
 
 const (
-	countStorageOutboxEntriesStmt            = "SELECT COUNT(*) FROM storage_outbox_entries WHERE outbox_id = $1"
-	findFirstStorageOutboxEntryStmt          = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryStmt           = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
-	findStorageOutboxEntryChunksByIdStmt     = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
-	insertStorageOutboxEntryStmt             = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
-	updateStorageOutboxEntryByIdStmt         = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6 AND outbox_id = $7"
-	upsertStorageOutboxContentChunkStmt      = "INSERT OR REPLACE INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
-	deleteStorageOutboxEntryByIdStmt         = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2"
+	countStorageOutboxEntriesStmt                                 = "SELECT COUNT(*) FROM storage_outbox_entries WHERE outbox_id = $1"
+	findFirstStorageOutboxEntryStmt                               = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryStmt                                = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketStmt                      = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketStmt                       = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
+	findStorageOutboxEntryChunksByIdStmt                          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
+	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6 AND outbox_id = $7"
+	upsertStorageOutboxContentChunkStmt                           = "INSERT OR REPLACE INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
+	deleteStorageOutboxEntryByIdStmt                              = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2"
+	claimStorageOutboxEntryStmt                                   = "UPDATE storage_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
+	deleteStorageOutboxEntryByClaimOwnerStmt                      = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
+	releaseStorageOutboxEntryClaimStmt                            = "UPDATE storage_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
+	extendStorageOutboxEntryClaimStmt                             = "UPDATE storage_outbox_entries SET claim_until = $1, version = version + 1, updated_at = $2 WHERE id = $3 AND outbox_id = $4 AND claim_owner = $5"
 )
 
 func NewRepository() (storageoutboxentry.Repository, error) {
@@ -49,7 +53,10 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	var contentType *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &contentType, &createdAt, &updatedAt)
+	var claimOwner *string
+	var claimUntil *time.Time
+	var version int64
+	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &contentType, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -65,6 +72,9 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 		ContentType: contentType,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+		ClaimOwner:  claimOwner,
+		ClaimUntil:  claimUntil,
+		Version:     version,
 	}, nil
 }
 
@@ -170,4 +180,54 @@ func (sor *sqliteRepository) SaveStorageOutboxContentChunk(ctx context.Context, 
 func (sor *sqliteRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) error {
 	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String(), outboxId)
 	return err
+}
+
+func (sor *sqliteRepository) ClaimFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*storageoutboxentry.Entity, bool, error) {
+	entry, err := sor.FindFirstStorageOutboxEntry(ctx, tx, outboxId)
+	if err != nil || entry == nil {
+		return entry, false, err
+	}
+	result, err := tx.ExecContext(ctx, claimStorageOutboxEntryStmt, owner, claimUntil, now, entry.Id.String(), outboxId, entry.Version, now)
+	if err != nil {
+		return nil, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	if affected != 1 {
+		return nil, false, nil
+	}
+	entry.ClaimOwner = &owner
+	entry.ClaimUntil = &claimUntil
+	entry.Version += 1
+	entry.UpdatedAt = now
+	return entry, true, nil
+}
+
+func (sor *sqliteRepository) DeleteStorageOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error) {
+	result, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByClaimOwnerStmt, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (sor *sqliteRepository) ReleaseStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, releaseStorageOutboxEntryClaimStmt, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (sor *sqliteRepository) ExtendStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time, claimUntil time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, extendStorageOutboxEntryClaimStmt, claimUntil, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }
