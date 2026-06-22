@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
@@ -27,6 +28,11 @@ type Tx interface {
 
 type TxController struct {
 	tx               *sql.Tx
+	// hooksMu guards the hook slices on the root controller; a single tx can be
+	// shared across fan-out goroutines (e.g. erasure-coding PutPart writes each
+	// shard concurrently), so OnPreCommit/OnAfterCommit/OnRollback may register
+	// hooks in parallel.
+	hooksMu          sync.Mutex
 	onPreCommit      []func(context.Context) error
 	onAfterCommit    []func(context.Context) error
 	onRollback       []func(context.Context) error
@@ -74,16 +80,22 @@ func (t *TxController) DBHandle() any {
 
 func (t *TxController) OnPreCommit(fn func(context.Context) error) {
 	root := t.rootTx()
+	root.hooksMu.Lock()
+	defer root.hooksMu.Unlock()
 	root.onPreCommit = append(root.onPreCommit, fn)
 }
 
 func (t *TxController) OnAfterCommit(fn func(context.Context) error) {
 	root := t.rootTx()
+	root.hooksMu.Lock()
+	defer root.hooksMu.Unlock()
 	root.onAfterCommit = append(root.onAfterCommit, fn)
 }
 
 func (t *TxController) OnRollback(fn func(context.Context) error) {
 	root := t.rootTx()
+	root.hooksMu.Lock()
+	defer root.hooksMu.Unlock()
 	root.onRollback = append(root.onRollback, fn)
 }
 
