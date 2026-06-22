@@ -64,18 +64,19 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 		return err
 	}
 
-	var partReader io.ReadCloser
+	// Read inside the transaction: a part store reader may stream lazily from the
+	// store (e.g. the SQL store queries chunks on demand), so its lifetime is
+	// bound to the transaction. Production reads honor this via WithTxReadClosers.
+	var getPartResult []byte
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		partReader, err = partStore.GetPart(ctx, tx, *partId)
+		partReader, err := partStore.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		defer partReader.Close()
+		getPartResult, err = io.ReadAll(partReader)
 		return err
 	})
-	if err != nil {
-		return err
-	}
-
-	getPartResult, err := io.ReadAll(partReader)
-	partReader.Close()
 	if err != nil {
 		return err
 	}
@@ -91,14 +92,14 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		partReader, err = partStore.GetPart(ctx, tx, *partId)
-		return err
+		partReader, err := partStore.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		partReader.Close()
+		return nil
 	})
 	if err != ErrPartNotFound {
-		if partReader != nil {
-			partReader.Close()
-		}
 		return errors.New("expected ErrPartNotFound")
 	}
 

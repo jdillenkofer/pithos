@@ -1,13 +1,13 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"io"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -101,20 +101,75 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPart")
 	defer span.End()
 
-	chunks, err := bs.partContentRepository.FindPartContentChunksById(ctx, tx.SqlTx(), partId)
+	// Fetch the first chunk eagerly to preserve ErrPartNotFound semantics; the
+	// remaining chunks are loaded lazily so we never hold more than one chunk in
+	// memory at a time.
+	firstChunk, err := bs.partContentRepository.FindPartContentChunkByIndex(ctx, tx.SqlTx(), partId, 0)
 	if err != nil {
 		return nil, err
 	}
-	if len(chunks) == 0 {
+	if firstChunk == nil {
 		return nil, partstore.ErrPartNotFound
 	}
 
-	readers := make([]io.Reader, len(chunks))
-	for i, chunk := range chunks {
-		readers[i] = ioutils.NewByteReadSeekCloser(chunk.Content)
-	}
+	return &lazyChunkReadCloser{
+		ctx:       ctx,
+		tx:        tx,
+		repo:      bs.partContentRepository,
+		partId:    partId,
+		nextChunk: 1,
+		current:   bytes.NewReader(firstChunk.Content),
+	}, nil
+}
 
-	return io.NopCloser(io.MultiReader(readers...)), nil
+// lazyChunkReadCloser streams a part's chunks one at a time, querying the next
+// chunk from the repository only once the current one is exhausted. This keeps
+// the read path's memory proportional to a single chunk rather than the whole
+// part. It relies on the read transaction outliving the reader (GetObject binds
+// the tx lifetime to its returned readers).
+type lazyChunkReadCloser struct {
+	ctx       context.Context
+	tx        database.Tx
+	repo      partContent.Repository
+	partId    partstore.PartId
+	nextChunk int
+	current   *bytes.Reader
+	done      bool
+}
+
+func (l *lazyChunkReadCloser) Read(p []byte) (int, error) {
+	for {
+		if l.current != nil {
+			n, err := l.current.Read(p)
+			if err == io.EOF {
+				l.current = nil
+				if n > 0 {
+					return n, nil
+				}
+				continue
+			}
+			return n, err
+		}
+		if l.done {
+			return 0, io.EOF
+		}
+		chunk, err := l.repo.FindPartContentChunkByIndex(l.ctx, l.tx.SqlTx(), l.partId, l.nextChunk)
+		if err != nil {
+			return 0, err
+		}
+		if chunk == nil {
+			l.done = true
+			return 0, io.EOF
+		}
+		l.nextChunk++
+		l.current = bytes.NewReader(chunk.Content)
+	}
+}
+
+func (l *lazyChunkReadCloser) Close() error {
+	l.done = true
+	l.current = nil
+	return nil
 }
 
 func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
