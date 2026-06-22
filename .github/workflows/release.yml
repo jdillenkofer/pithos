@@ -265,7 +265,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Cosign
-        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.1'
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
       - name: Login to DockerHub
@@ -287,17 +289,23 @@ jobs:
             jdillenkofer/pithos:latest
           build-args: |
             SKIP_TESTS=true
-      - name: Sign the published Docker image
+      - name: Sign and verify the published Docker image
         if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          COSIGN_EXPERIMENTAL: "true"
         run: |
           # Sign by immutable digest rather than mutable tags. Both tags
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
           # one signature covers them; signing by tag also fails on Docker Hub
           # with a 404 during the recursive tag->digest resolution.
           cosign sign --yes jdillenkofer/pithos@${DIGEST}
+          # Verify the signature we just produced before publishing the
+          # release, asserting it was issued to this repo's release workflow
+          # via keyless OIDC (Fulcio identity + GitHub Actions issuer).
+          cosign verify \
+            --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            jdillenkofer/pithos@${DIGEST}
 
   release:
     name: Create Release
@@ -312,7 +320,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Cosign
-        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.1'
       - name: Download Binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -330,10 +340,19 @@ jobs:
           cd dist
           sha256sum * > checksums.txt
           
-          # Sign the checksums file
+          # Sign the checksums file, writing a single Sigstore bundle
+          # (signature + Fulcio certificate + Rekor entry) in the protobuf
+          # bundle format that is the default in Cosign v3.
           cosign sign-blob --yes \
-            --output-certificate checksums.txt.pem \
-            --output-signature checksums.txt.sig \
+            --bundle checksums.txt.bundle \
+            checksums.txt
+
+          # Verify the bundle before publishing so a broken signature fails
+          # the release instead of shipping unverifiable artifacts.
+          cosign verify-blob \
+            --bundle checksums.txt.bundle \
+            --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             checksums.txt
       - name: Create Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
