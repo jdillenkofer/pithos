@@ -45,7 +45,6 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 		tracer:            otel.Tracer("internal/http/server"),
 	}
 	apiMux := http.NewServeMux()
-	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	apiMux.HandleFunc("GET /", server.listBucketsHandler)
 	apiMux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
 	apiMux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
