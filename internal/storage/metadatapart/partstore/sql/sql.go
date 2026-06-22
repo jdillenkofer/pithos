@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -38,30 +39,6 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-const readChunkInitialCap = 128 * 1024 // 128KB
-
-// readChunk reads up to max bytes from r into a freshly allocated, caller-owned
-// slice. The buffer grows geometrically up to max so small parts don't allocate
-// the full chunk size. It returns io.EOF once r is exhausted; a nil error means
-// max bytes were read and more may remain.
-func readChunk(r io.Reader, max int) ([]byte, error) {
-	buf := make([]byte, 0, min(readChunkInitialCap, max))
-	for len(buf) < max {
-		if len(buf) == cap(buf) {
-			newCap := min(cap(buf)*2, max)
-			grown := make([]byte, len(buf), newCap)
-			copy(grown, buf)
-			buf = grown
-		}
-		n, err := r.Read(buf[len(buf):cap(buf)])
-		buf = buf[:len(buf)+n]
-		if err != nil {
-			return buf, err
-		}
-	}
-	return buf, nil
-}
-
 func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
@@ -74,7 +51,7 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 
 	chunkIndex := 0
 	for {
-		content, err := readChunk(reader, chunkSize)
+		content, err := ioutils.ReadChunk(reader, chunkSize)
 		if len(content) > 0 {
 			partContentEntity := partContent.Entity{
 				Id:         ptrutils.ToPtr(partId),
