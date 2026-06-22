@@ -17,6 +17,18 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
+// crcNvmePolynomial is the CRC-64/NVME polynomial (reversed representation).
+const crcNvmePolynomial = 0x9a6c9329ac4bc9b5
+
+// CRC tables are built once at package init and reused across calls. The
+// stdlib caches its IEEE/Castagnoli CRC32 tables internally, but an arbitrary
+// CRC64 polynomial like NVME is not special-cased, so crc64.MakeTable would
+// otherwise allocate and recompute a 256-entry table on every invocation.
+var (
+	crc32CastagnoliTable = crc32.MakeTable(crc32.Castagnoli)
+	crc64NvmeTable       = crc64.MakeTable(crcNvmePolynomial)
+)
+
 // This was ported over from localstack and allows you to efficiently combine crc checksums
 // https://github.com/localstack/localstack/blob/ea0a194102807b59c44e74dc355ef1dd07981ed8/localstack-core/localstack/services/s3/utils.py#L256
 
@@ -169,8 +181,8 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	// Create a TeeReader that writes to all hash functions simultaneously
 	etagHash := md5.New()
 	crc32Hash := crc32.NewIEEE()
-	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	crc64nvmeHash := crc64.New(crc64.MakeTable(0x9a6c9329ac4bc9b5))
+	crc32cHash := crc32.New(crc32CastagnoliTable)
+	crc64nvmeHash := crc64.New(crc64NvmeTable)
 	sha1Hash := sha1.New()
 	sha256Hash := sha256.New()
 

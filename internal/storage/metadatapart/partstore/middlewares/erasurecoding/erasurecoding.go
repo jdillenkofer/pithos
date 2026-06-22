@@ -36,6 +36,9 @@ type erasureCodingPartStore struct {
 	stripeShardSz int
 	healScanEvery time.Duration
 	healTask      *task.TaskHandle
+	// enc is built once and reused; reedsolomon encoders depend only on the
+	// (fixed) shard counts and are safe for concurrent use across streams.
+	enc reedsolomon.Encoder
 }
 
 type Option func(*erasureCodingPartStore) error
@@ -73,6 +76,10 @@ func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, pa
 	if err != nil {
 		return nil, err
 	}
+	enc, err := reedsolomon.New(dataShards, parityShards)
+	if err != nil {
+		return nil, err
+	}
 	store := &erasureCodingPartStore{
 		ValidatedLifecycle: v,
 		partStores:         partStores,
@@ -82,6 +89,7 @@ func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, pa
 		totalShards:        totalShards,
 		stripeShardSz:      stripeShardSize,
 		healScanEvery:      DefaultHealScanInterval,
+		enc:                enc,
 	}
 	for _, opt := range opts {
 		if err := opt(store); err != nil {
@@ -222,10 +230,7 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, pa
 	unlock := e.partLocker.Lock(partId)
 	defer unlock()
 
-	enc, err := reedsolomon.New(e.dataShards, e.parityShards)
-	if err != nil {
-		return err
-	}
+	enc := e.enc
 
 	pipeReaders := make([]*io.PipeReader, e.totalShards)
 	pipeWriters := make([]*io.PipeWriter, e.totalShards)
@@ -446,12 +451,7 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 			}
 		}
 
-		enc, err := reedsolomon.New(e.dataShards, e.parityShards)
-		if err != nil {
-			closeHealingWriters(err)
-			_ = pw.CloseWithError(err)
-			return
-		}
+		enc := e.enc
 		for stripeIndex := uint64(0); ; stripeIndex++ {
 			shards := make([][]byte, e.totalShards)
 			available := 0
