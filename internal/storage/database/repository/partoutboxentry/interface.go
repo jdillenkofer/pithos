@@ -14,6 +14,11 @@ type Repository interface {
 	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*Entity, error)
 	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]Entity, error)
 	FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
+	// FindPartOutboxEntryChunkByIndex returns the chunk with the given index for
+	// the outbox entry, or (nil, nil) if no such chunk exists. It lets callers
+	// stream a part one chunk at a time instead of loading every chunk into
+	// memory at once.
+	FindPartOutboxEntryChunkByIndex(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, chunkIndex int) (*ContentChunk, error)
 	SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *Entity) error
 	SavePartOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
 	ClaimFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*Entity, bool, error)
