@@ -38,6 +38,30 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
+const readChunkInitialCap = 128 * 1024 // 128KB
+
+// readChunk reads up to max bytes from r into a freshly allocated, caller-owned
+// slice. The buffer grows geometrically up to max so small parts don't allocate
+// the full chunk size. It returns io.EOF once r is exhausted; a nil error means
+// max bytes were read and more may remain.
+func readChunk(r io.Reader, max int) ([]byte, error) {
+	buf := make([]byte, 0, min(readChunkInitialCap, max))
+	for len(buf) < max {
+		if len(buf) == cap(buf) {
+			newCap := min(cap(buf)*2, max)
+			grown := make([]byte, len(buf), newCap)
+			copy(grown, buf)
+			buf = grown
+		}
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err != nil {
+			return buf, err
+		}
+	}
+	return buf, nil
+}
+
 func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
@@ -48,28 +72,22 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		return err
 	}
 
-	buffer := make([]byte, chunkSize)
 	chunkIndex := 0
 	for {
-		n, err := io.ReadFull(reader, buffer)
-		if n > 0 {
-			// Create a copy of the read bytes to store
-			content := make([]byte, n)
-			copy(content, buffer[:n])
-
+		content, err := readChunk(reader, chunkSize)
+		if len(content) > 0 {
 			partContentEntity := partContent.Entity{
 				Id:         ptrutils.ToPtr(partId),
 				ChunkIndex: chunkIndex,
 				Content:    content,
 			}
-			err = bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), &partContentEntity)
-			if err != nil {
-				return err
+			if saveErr := bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), &partContentEntity); saveErr != nil {
+				return saveErr
 			}
 			chunkIndex++
 		}
 		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			if err == io.EOF {
 				break
 			}
 			return err
