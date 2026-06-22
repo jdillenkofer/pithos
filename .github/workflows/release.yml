@@ -290,10 +290,14 @@ jobs:
       - name: Sign the published Docker image
         if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
-          TAG: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
           COSIGN_EXPERIMENTAL: "true"
         run: |
-          cosign sign --yes jdillenkofer/pithos:${TAG} jdillenkofer/pithos:latest
+          # Sign by immutable digest rather than mutable tags. Both tags
+          # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
+          # one signature covers them; signing by tag also fails on Docker Hub
+          # with a 404 during the recursive tag->digest resolution.
+          cosign sign --yes jdillenkofer/pithos@${DIGEST}
 
   release:
     name: Create Release
