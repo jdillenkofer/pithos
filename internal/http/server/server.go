@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/corscache"
 )
 
 type Server struct {
@@ -41,8 +42,12 @@ type Server struct {
 func SetupServer(credentials []settings.Credentials, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
-		storage:           storage,
-		tracer:            otel.Tracer("internal/http/server"),
+		// CORS configuration is resolved on every Origin-bearing request, so wrap
+		// the storage in a cache that serves those reads without re-hitting the
+		// backend (and without flooding audit/metrics). Writes flow through the
+		// same wrapper, so it invalidates itself.
+		storage: corscache.NewStorageMiddleware(storage),
+		tracer:  otel.Tracer("internal/http/server"),
 	}
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /", server.listBucketsHandler)
@@ -59,8 +64,11 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	apiMux.HandleFunc("OPTIONS /{bucket}/{key...}", server.optionsObjectHandler)
 	var apiHandler http.Handler = apiMux
-	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
+	// CORS must be wrapped *inside* the virtual-host addressing middleware so that
+	// the CORS resolver sees the rewritten path (with the bucket prefix) for
+	// virtual-hosted-style requests. The outer middleware runs first.
 	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
+	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
 
 	websiteMux := http.NewServeMux()
 	websiteMux.HandleFunc("GET /{bucket}/{key...}", server.serveWebsiteGetObject)
@@ -369,6 +377,7 @@ type WebsiteConfigurationResponse struct {
 }
 
 type CORSConfigurationRule struct {
+	ID             *string  `xml:"ID,omitempty"`
 	AllowedOrigins []string `xml:"AllowedOrigin"`
 	AllowedMethods []string `xml:"AllowedMethod"`
 	AllowedHeaders []string `xml:"AllowedHeader,omitempty"`
@@ -586,6 +595,23 @@ func writeNoSuchCORSConfiguration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(404)
+	w.Write(xmlErrorResponse)
+}
+
+func writeInvalidRequest(w http.ResponseWriter, r *http.Request, message string) {
+	errResponse := ErrorResponse{
+		Code:      "InvalidRequest",
+		Message:   message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusBadRequest)
 	w.Write(xmlErrorResponse)
 }
 
@@ -2429,6 +2455,7 @@ func (s *Server) getBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, rule := range config.Rules {
 		response.Rules = append(response.Rules, CORSConfigurationRule{
+			ID:             rule.ID,
 			AllowedOrigins: rule.AllowedOrigins,
 			AllowedMethods: rule.AllowedMethods,
 			AllowedHeaders: rule.AllowedHeaders,
@@ -2475,6 +2502,7 @@ func (s *Server) putBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
 	rules := make([]storage.CORSRule, 0, len(request.Rules))
 	for _, rule := range request.Rules {
 		rules = append(rules, storage.CORSRule{
+			ID:             rule.ID,
 			AllowedOrigins: rule.AllowedOrigins,
 			AllowedMethods: rule.AllowedMethods,
 			AllowedHeaders: rule.AllowedHeaders,
@@ -2485,7 +2513,7 @@ func (s *Server) putBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
 
 	normalizedRules, err := httpmiddleware.NormalizeAndValidateCORSRules(rules)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writeInvalidRequest(w, r, err.Error())
 		return
 	}
 

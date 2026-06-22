@@ -10,13 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeAndValidateCORSRulesRejectsWildcardCredentials(t *testing.T) {
+func TestNormalizeAndValidateCORSRulesRejectsEmptyMethods(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	_, err := NormalizeAndValidateCORSRules([]CORSRule{{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET"},
-		AllowCredentials: true,
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: nil,
 	}})
 	require.Error(t, err)
 }

@@ -661,6 +661,7 @@ func (rs *s3ClientStorage) GetBucketCORSConfiguration(ctx context.Context, bucke
 			maxAge = &maxAgeValue
 		}
 		rules = append(rules, storage.CORSRule{
+			ID:             rule.ID,
 			AllowedOrigins: rule.AllowedOrigins,
 			AllowedMethods: rule.AllowedMethods,
 			AllowedHeaders: rule.AllowedHeaders,
@@ -684,6 +685,7 @@ func (rs *s3ClientStorage) PutBucketCORSConfiguration(ctx context.Context, bucke
 			maxAge = &maxAgeValue
 		}
 		rules = append(rules, types.CORSRule{
+			ID:             rule.ID,
 			AllowedOrigins: rule.AllowedOrigins,
 			AllowedMethods: rule.AllowedMethods,
 			AllowedHeaders: rule.AllowedHeaders,

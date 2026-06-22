@@ -20,7 +20,6 @@ const (
 	accessControlAllowHeadersHeader   = "Access-Control-Allow-Headers"
 	accessControlExposeHeadersHeader  = "Access-Control-Expose-Headers"
 	accessControlMaxAgeHeader         = "Access-Control-Max-Age"
-	accessControlAllowCredentials     = "Access-Control-Allow-Credentials"
 	varyHeader                        = "Vary"
 )
 
@@ -48,20 +47,16 @@ func NormalizeAndValidateCORSRules(rules []CORSRule) ([]CORSRule, error) {
 			}
 		}
 
-		if rule.AllowCredentials && slices.Contains(origins, "*") {
-			return nil, errors.New("cors rule " + strconv.Itoa(idx) + " cannot combine allowCredentials with wildcard origin")
-		}
-
 		headers := normalizeValues(rule.AllowedHeaders)
 		exposeHeaders := normalizeValues(rule.ExposeHeaders)
 
 		normalized = append(normalized, CORSRule{
-			AllowedOrigins:   origins,
-			AllowedMethods:   methods,
-			AllowedHeaders:   headers,
-			ExposeHeaders:    exposeHeaders,
-			MaxAgeSeconds:    rule.MaxAgeSeconds,
-			AllowCredentials: rule.AllowCredentials,
+			ID:             rule.ID,
+			AllowedOrigins: origins,
+			AllowedMethods: methods,
+			AllowedHeaders: headers,
+			ExposeHeaders:  exposeHeaders,
+			MaxAgeSeconds:  rule.MaxAgeSeconds,
 		})
 	}
 
@@ -124,9 +119,6 @@ func MakeCORSMiddlewareWithResolver(resolveRules CORSRulesResolver, next http.Ha
 
 		headers := w.Header()
 		headers.Set(accessControlAllowOriginHeader, allowOriginValue)
-		if matchedRule.AllowCredentials {
-			headers.Set(accessControlAllowCredentials, "true")
-		}
 
 		if isPreflightRequest(r) {
 			headers.Set(accessControlAllowMethodsHeader, strings.Join(matchedRule.AllowedMethods, ", "))

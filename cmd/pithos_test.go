@@ -4125,6 +4125,45 @@ func TestBucketCORS(t *testing.T) {
 			assert.Equal(t, "PUT", resp.Header.Get("Access-Control-Allow-Methods"))
 			assert.Equal(t, "content-type", resp.Header.Get("Access-Control-Allow-Headers"))
 		})
+
+		t.Run("it should apply cors headers to virtual-host-style preflight request"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketCors(context.Background(), &s3.PutBucketCorsInput{
+				Bucket: bucketName,
+				CORSConfiguration: &types.CORSConfiguration{
+					CORSRules: []types.CORSRule{{
+						AllowedOrigins: []string{"https://app.example.com"},
+						AllowedMethods: []string{"PUT"},
+						AllowedHeaders: []string{"content-type"},
+					}},
+				},
+			})
+			require.NoError(t, err)
+
+			// Virtual-hosted-style: the bucket is in the Host header, not the path.
+			// The CORS resolver must see the bucket after virtual-host rewriting.
+			client := buildWebsiteHttpClient(listenerAddr)
+			url := fmt.Sprintf("http://%s.%s/test-object", *bucketName, testAPIEndpoint)
+			req, err := http.NewRequest(http.MethodOptions, url, nil)
+			require.NoError(t, err)
+			req.Header.Set("Origin", "https://app.example.com")
+			req.Header.Set("Access-Control-Request-Method", "PUT")
+			req.Header.Set("Access-Control-Request-Headers", "content-type")
+
+			resp, err := client.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, "https://app.example.com", resp.Header.Get("Access-Control-Allow-Origin"))
+			assert.Equal(t, "PUT", resp.Header.Get("Access-Control-Allow-Methods"))
+			assert.Equal(t, "content-type", resp.Header.Get("Access-Control-Allow-Headers"))
+		})
 	})
 }
 

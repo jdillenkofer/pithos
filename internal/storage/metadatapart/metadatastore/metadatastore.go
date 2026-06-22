@@ -266,12 +266,12 @@ type WebsiteConfiguration struct {
 }
 
 type CORSRule struct {
-	AllowedOrigins   []string
-	AllowedMethods   []string
-	AllowedHeaders   []string
-	ExposeHeaders    []string
-	MaxAgeSeconds    *int
-	AllowCredentials bool
+	ID             *string
+	AllowedOrigins []string
+	AllowedMethods []string
+	AllowedHeaders []string
+	ExposeHeaders  []string
+	MaxAgeSeconds  *int
 }
 
 type BucketCORSConfiguration struct {
