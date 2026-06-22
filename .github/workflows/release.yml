@@ -265,9 +265,14 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install Cosign
+        # Pinned to Cosign v2 for Docker image signing. Cosign v3 signs through
+        # a sigstore signing config that mandates the new OCI 1.1 bundle format,
+        # which Docker Hub's incomplete Referrers API support hides from
+        # `cosign verify` ("no signatures found"). v2 defaults to the legacy
+        # sha256-<digest>.sig tag scheme that Docker Hub serves correctly.
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v3.1.1'
+          cosign-release: 'v2.6.3'
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
       - name: Login to DockerHub
@@ -299,12 +304,10 @@ jobs:
           # one signature covers them; signing by tag also fails on Docker Hub
           # with a 404 during the recursive tag->digest resolution.
           #
-          # --new-bundle-format=false keeps the legacy sha256-<digest>.sig tag
-          # scheme. Cosign v3 defaults to the new bundle format, which stores
-          # the signature as an OCI 1.1 referring artifact; Docker Hub's
-          # Referrers API support is incomplete, so the signature lands
-          # somewhere `cosign verify` can't discover ("no signatures found").
-          cosign sign --yes --new-bundle-format=false jdillenkofer/pithos@${DIGEST}
+          # Cosign v2 (pinned above) writes the signature as a legacy
+          # sha256-<digest>.sig tag, which Docker Hub's Referrers API serves
+          # correctly so `cosign verify` can discover it.
+          cosign sign --yes jdillenkofer/pithos@${DIGEST}
           # Verify the signature we just produced before publishing the
           # release, asserting it was issued to this repo's release workflow
           # via keyless OIDC (Fulcio identity + GitHub Actions issuer).
