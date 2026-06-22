@@ -298,7 +298,13 @@ jobs:
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
           # one signature covers them; signing by tag also fails on Docker Hub
           # with a 404 during the recursive tag->digest resolution.
-          cosign sign --yes jdillenkofer/pithos@${DIGEST}
+          #
+          # --new-bundle-format=false keeps the legacy sha256-<digest>.sig tag
+          # scheme. Cosign v3 defaults to the new bundle format, which stores
+          # the signature as an OCI 1.1 referring artifact; Docker Hub's
+          # Referrers API support is incomplete, so the signature lands
+          # somewhere `cosign verify` can't discover ("no signatures found").
+          cosign sign --yes --new-bundle-format=false jdillenkofer/pithos@${DIGEST}
           # Verify the signature we just produced before publishing the
           # release, asserting it was issued to this repo's release workflow
           # via keyless OIDC (Fulcio identity + GitHub Actions issuer).

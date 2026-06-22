@@ -2,9 +2,10 @@
 
 Pithos releases (Docker images and binaries) are signed using [Cosign](https://github.com/sigstore/cosign) (Sigstore). You can verify the authenticity of the artifacts using the following commands.
 
-> **Note:** Releases are signed with Cosign v3, which uses the Sigstore
-> protobuf bundle format. Install [Cosign v3 or later](https://github.com/sigstore/cosign/releases)
-> to verify them.
+> **Note:** Binaries are signed with Cosign v3 using the Sigstore protobuf
+> bundle format, so verifying them requires [Cosign v3 or later](https://github.com/sigstore/cosign/releases).
+> The Docker image is signed with the legacy tag-based format (for Docker Hub
+> compatibility) and can be verified with Cosign v2 or later.
 
 ## Verifying Docker Images
 
