@@ -19,6 +19,7 @@ const (
 	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY part_id, id DESC"
 	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
 	findPartOutboxEntryChunksByIdStmt          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	findPartOutboxEntryChunkByIndexStmt        = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 AND c.chunk_index = $3"
 	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
 	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
 	upsertPartOutboxContentChunkStmt           = "INSERT INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
@@ -152,6 +153,25 @@ func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx 
 		})
 	}
 	return chunks, nil
+}
+
+func (bor *pgxRepository) FindPartOutboxEntryChunkByIndex(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, chunkIndex int) (*partoutboxentry.ContentChunk, error) {
+	row := tx.QueryRowContext(ctx, findPartOutboxEntryChunkByIndexStmt, id.String(), outboxId, chunkIndex)
+	var entryIdStr string
+	var idx int
+	var content []byte
+	err := row.Scan(&entryIdStr, &idx, &content)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &partoutboxentry.ContentChunk{
+		OutboxEntryId: ulid.MustParse(entryIdStr),
+		ChunkIndex:    idx,
+		Content:       content,
+	}, nil
 }
 
 func (bor *pgxRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *partoutboxentry.Entity) error {
