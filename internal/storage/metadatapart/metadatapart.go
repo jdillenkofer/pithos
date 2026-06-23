@@ -445,8 +445,10 @@ func normalizeAndValidateRanges(ranges []storage.ByteRange, objectSize int64) ([
 // granularity (HTTP dates carry no sub-second component) to match S3 behaviour.
 // Returns storage.ErrPreconditionFailed when a precondition fails.
 func evaluateCopySourceConditions(conditions storage.CopySourceConditions, object *metadatastore.Object) error {
+	ifMatchPassed := false
 	if conditions.IfMatch != nil {
-		if *conditions.IfMatch != storage.ETagWildcard && *conditions.IfMatch != object.ETag {
+		ifMatchPassed = *conditions.IfMatch == storage.ETagWildcard || *conditions.IfMatch == object.ETag
+		if !ifMatchPassed {
 			return storage.ErrPreconditionFailed
 		}
 	}
@@ -456,7 +458,7 @@ func evaluateCopySourceConditions(conditions storage.CopySourceConditions, objec
 		}
 	}
 	lastModified := object.LastModified.Truncate(time.Second)
-	if conditions.IfUnmodifiedSince != nil && lastModified.After(*conditions.IfUnmodifiedSince) {
+	if conditions.IfUnmodifiedSince != nil && !(conditions.IfMatch != nil && ifMatchPassed) && lastModified.After(*conditions.IfUnmodifiedSince) {
 		return storage.ErrPreconditionFailed
 	}
 	if conditions.IfModifiedSince != nil && !lastModified.After(*conditions.IfModifiedSince) {

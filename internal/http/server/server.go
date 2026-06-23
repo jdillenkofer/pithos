@@ -594,6 +594,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 412
 	case storage.ErrNotModified:
 		statusCode = 304
+	case storage.ErrNotImplemented:
+		statusCode = http.StatusNotImplemented
+		errResponse.Code = "NotImplemented"
+		errResponse.Message = "NotImplemented"
 	default:
 		slog.ErrorContext(r.Context(), fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500

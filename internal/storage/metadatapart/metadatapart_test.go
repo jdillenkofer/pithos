@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
@@ -25,6 +26,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEvaluateCopySourceConditionsMatchesS3IfMatchAndUnmodifiedSincePrecedence(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	etag := "\"etag\""
+	lastModified := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	object := &metadatastore.Object{
+		ETag:         etag,
+		LastModified: lastModified,
+	}
+	beforeLastModified := lastModified.Add(-time.Hour)
+	afterLastModified := lastModified.Add(time.Hour)
+
+	err := evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfMatch:           ptrutils.ToPtr(etag),
+		IfUnmodifiedSince: &beforeLastModified,
+	}, object)
+	require.NoError(t, err)
+
+	err = evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfMatch:           ptrutils.ToPtr("\"different\""),
+		IfUnmodifiedSince: &afterLastModified,
+	}, object)
+	require.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	err = evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfUnmodifiedSince: &beforeLastModified,
+	}, object)
+	require.ErrorIs(t, err, storage.ErrPreconditionFailed)
+}
 
 func TestMetadataPartStorageWithSql(t *testing.T) {
 	testutils.SkipIfIntegration(t)

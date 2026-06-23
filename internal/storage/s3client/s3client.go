@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -307,6 +308,10 @@ func byteRangeToAWSRange(byteRange storage.ByteRange) string {
 	return ""
 }
 
+func copySourceValue(srcBucket storage.BucketName, srcKey storage.ObjectKey) string {
+	return srcBucket.String() + "/" + url.PathEscape(srcKey.String())
+}
+
 func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CopyObject")
 	defer span.End()
@@ -314,7 +319,7 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 	input := &s3.CopyObjectInput{
 		Bucket:     aws.String(dstBucket.String()),
 		Key:        aws.String(dstKey.String()),
-		CopySource: aws.String(srcBucket.String() + "/" + srcKey.String()),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
 	}
 	if opts != nil {
 		// Ranged CopyObject is a pithos extension that AWS CopyObject cannot
@@ -501,7 +506,7 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 		Key:        aws.String(dstKey.String()),
 		UploadId:   aws.String(uploadId.String()),
 		PartNumber: aws.Int32(partNumber),
-		CopySource: aws.String(srcBucket.String() + "/" + srcKey.String()),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
 	}
 	if opts != nil {
 		if opts.Range != nil {
