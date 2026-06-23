@@ -97,6 +97,10 @@ func (d *DelegatingStorage) PutObject(ctx context.Context, bucketName storage.Bu
 	return d.Next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
 }
 
+func (d *DelegatingStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	return d.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+}
+
 func (d *DelegatingStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	return d.Next.AppendObject(ctx, bucketName, key, data, checksumInput, opts)
 }
@@ -115,6 +119,10 @@ func (d *DelegatingStorage) CreateMultipartUpload(ctx context.Context, bucketNam
 
 func (d *DelegatingStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	return d.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
+}
+
+func (d *DelegatingStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	return d.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
 }
 
 func (d *DelegatingStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -103,6 +104,10 @@ var _ storage.Storage = (*outboxStorage)(nil)
 var _ storage.TransactionalStorage = (*outboxStorage)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
+
+// maxReplayMemoryCacheSize bounds how much of a replayed PutObject body is held
+// in memory before spilling to a temp file when wrapping it in a seekable reader.
+const maxReplayMemoryCacheSize = 10 * 1000 * 1000 // 10MB
 
 func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
@@ -284,7 +289,15 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		case storageOutboxEntry.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
 		case storageOutboxEntry.PutObjectStorageOperation:
-			_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, io.MultiReader(putObjectReaders...), nil, nil)
+			// Wrap the concatenated chunks in a seekable reader: an S3 backend (s3client)
+			// needs to seek the body to compute the request checksum when the connection
+			// is not over TLS, which a plain io.MultiReader cannot satisfy.
+			var body io.ReadSeekCloser
+			body, err = ioutils.NewSmartCachedReadSeekCloser(io.MultiReader(putObjectReaders...), maxReplayMemoryCacheSize)
+			if err == nil {
+				_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, body, nil, nil)
+				_ = body.Close()
+			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
 			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
 		default:
@@ -656,6 +669,21 @@ func (os *outboxStorage) AppendObject(ctx context.Context, bucketName storage.Bu
 	return os.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
 }
 
+func (os *outboxStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CopyObject")
+	defer span.End()
+
+	// The copy reads the source and writes the destination synchronously, so any
+	// pending outbox writes for either key must be flushed first.
+	if err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, srcBucket, srcKey); err != nil {
+		return nil, err
+	}
+	if err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, dstBucket, dstKey); err != nil {
+		return nil, err
+	}
+	return os.innerStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+}
+
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
@@ -713,6 +741,19 @@ func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.Buck
 	}
 
 	return os.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
+}
+
+func (os *outboxStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.UploadPartCopy")
+	defer span.End()
+
+	if err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, srcBucket, srcKey); err != nil {
+		return nil, err
+	}
+	if err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, dstBucket, dstKey); err != nil {
+		return nil, err
+	}
+	return os.innerStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
 }
 
 func (os *outboxStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {

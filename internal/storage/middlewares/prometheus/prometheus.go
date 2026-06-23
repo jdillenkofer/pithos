@@ -416,6 +416,32 @@ func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Contex
 	return result, err
 }
 
+func (psm *prometheusStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CopyObject")
+	defer span.End()
+
+	result, err := psm.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
+		return nil, err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
+	return result, nil
+}
+
+func (psm *prometheusStorageMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.UploadPartCopy")
+	defer span.End()
+
+	result, err := psm.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
+		return nil, err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
+	return result, nil
+}
+
 func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.UploadPart")
 	defer span.End()

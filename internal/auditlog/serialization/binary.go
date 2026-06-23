@@ -47,6 +47,14 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if err := binary.Write(w, binary.BigEndian, d.Resource.PartNumber); err != nil {
 			return err
 		}
+		if e.Version >= 3 {
+			if err := writeString(w, d.Resource.SourceBucket); err != nil {
+				return err
+			}
+			if err := writeString(w, d.Resource.SourceKey); err != nil {
+				return err
+			}
+		}
 
 		if e.Version <= 1 {
 			if err := writeString(w, d.Actor.CredentialID); err != nil {
@@ -186,6 +194,14 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		}
 		if err := binary.Read(d.r, binary.BigEndian, &dls.Resource.PartNumber); err != nil {
 			return nil, err
+		}
+		if e.Version >= 3 {
+			if dls.Resource.SourceBucket, err = readString(d.r); err != nil {
+				return nil, err
+			}
+			if dls.Resource.SourceKey, err = readString(d.r); err != nil {
+				return nil, err
+			}
 		}
 
 		if e.Version <= 1 {

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -193,6 +194,16 @@ const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
 const checksumSHA1Header = "x-amz-checksum-sha1"
 const checksumSHA256Header = "x-amz-checksum-sha256"
 const writeOffsetBytesHeader = "x-amz-write-offset-bytes"
+const copySourceHeader = "x-amz-copy-source"
+const copySourceRangeHeader = "x-amz-copy-source-range"
+const metadataDirectiveHeader = "x-amz-metadata-directive"
+const copySourceIfMatchHeader = "x-amz-copy-source-if-match"
+const copySourceIfNoneMatchHeader = "x-amz-copy-source-if-none-match"
+const copySourceIfModifiedSinceHeader = "x-amz-copy-source-if-modified-since"
+const copySourceIfUnmodifiedSinceHeader = "x-amz-copy-source-if-unmodified-since"
+
+const metadataDirectiveCopy = "COPY"
+const metadataDirectiveReplace = "REPLACE"
 
 const applicationXmlContentType = "application/xml"
 
@@ -423,6 +434,18 @@ type DeleteObjectsResult struct {
 	Errors  []*DeleteErrorEntry `xml:"Error"`
 }
 
+type CopyObjectResult struct {
+	XMLName      xml.Name `xml:"CopyObjectResult"`
+	ETag         string   `xml:"ETag"`
+	LastModified string   `xml:"LastModified"`
+}
+
+type CopyPartResult struct {
+	XMLName      xml.Name `xml:"CopyPartResult"`
+	ETag         string   `xml:"ETag"`
+	LastModified string   `xml:"LastModified"`
+}
+
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
 
 type ErrorResponse struct {
@@ -621,6 +644,32 @@ func writeInvalidRequest(w http.ResponseWriter, r *http.Request, message string)
 
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
+	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
+	if err != nil {
+		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
+		handleError(err, w, r)
+		return true
+	}
+	if !authorized {
+		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
+		if !isAuthenticated {
+			w.WriteHeader(401)
+		} else {
+			w.WriteHeader(403)
+		}
+		return true
+	}
+	return false
+}
+
+// authorizeCopyRequest authorizes a server-side copy operation (CopyObject or
+// UploadPartCopy). Bucket/Key identify the destination; SourceBucket/SourceKey
+// identify the copy source, so a policy can reason about both ends in a single
+// check.
+func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, srcBucket, srcKey, dstBucket, dstKey string, w http.ResponseWriter, r *http.Request) bool {
+	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
+	request.SourceBucket = ptrutils.ToPtr(srcBucket)
+	request.SourceKey = ptrutils.ToPtr(srcKey)
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
@@ -2167,9 +2216,19 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
-	// UploadPart
+	// UploadPart / UploadPartCopy
 	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
+		if r.Header.Get(copySourceHeader) != "" {
+			s.uploadPartCopyHandler(w, r)
+			return
+		}
 		s.uploadPartHandler(w, r)
+		return
+	}
+
+	// CopyObject (server-side copy).
+	if r.Header.Get(copySourceHeader) != "" {
+		s.copyObjectHandler(w, r)
 		return
 	}
 
@@ -2181,6 +2240,237 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 
 	// PutObject
 	s.putObjectHandler(w, r)
+}
+
+// parseCopySource parses the x-amz-copy-source header value into its source
+// bucket and object key. The expected form is "/sourceBucket/sourceKey" or
+// "sourceBucket/sourceKey"; the key portion is URL-encoded by S3 clients and is
+// decoded here. Any "?versionId=..." suffix is ignored as versioning is not
+// supported.
+func parseCopySource(value string) (bucket string, key string, err error) {
+	if value == "" {
+		return "", "", ErrInvalidRequest
+	}
+	if qIdx := strings.IndexByte(value, '?'); qIdx != -1 {
+		value = value[:qIdx]
+	}
+	value = strings.TrimPrefix(value, "/")
+	slashIdx := strings.IndexByte(value, '/')
+	if slashIdx <= 0 || slashIdx == len(value)-1 {
+		return "", "", ErrInvalidRequest
+	}
+	bucket = value[:slashIdx]
+	decodedKey, err := url.PathUnescape(value[slashIdx+1:])
+	if err != nil {
+		return "", "", ErrInvalidRequest
+	}
+	return bucket, decodedKey, nil
+}
+
+// parseCopySourceConditions extracts the x-amz-copy-source-if-* preconditions
+// from the request headers. Invalid HTTP dates are ignored (treated as absent),
+// matching lenient S3 behaviour.
+func parseCopySourceConditions(r *http.Request) storage.CopySourceConditions {
+	conditions := storage.CopySourceConditions{
+		IfMatch:     getHeaderAsPtr(r.Header, copySourceIfMatchHeader),
+		IfNoneMatch: getHeaderAsPtr(r.Header, copySourceIfNoneMatchHeader),
+	}
+	if ims := r.Header.Get(copySourceIfModifiedSinceHeader); ims != "" {
+		if t, err := http.ParseTime(ims); err == nil {
+			conditions.IfModifiedSince = &t
+		}
+	}
+	if ius := r.Header.Get(copySourceIfUnmodifiedSinceHeader); ius != "" {
+		if t, err := http.ParseTime(ius); err == nil {
+			conditions.IfUnmodifiedSince = &t
+		}
+	}
+	return conditions
+}
+
+// parseCopySourceRange parses the optional x-amz-copy-source-range header. It
+// returns (nil, nil) when the header is absent and an error for a malformed
+// value or anything other than a single byte range.
+func parseCopySourceRange(r *http.Request) (*storage.ByteRange, error) {
+	rangeValue := r.Header.Get(copySourceRangeHeader)
+	if rangeValue == "" {
+		return nil, nil
+	}
+	parsedRanges, err := parseRangeHeader(rangeValue)
+	if err != nil || len(parsedRanges) != 1 {
+		return nil, ErrInvalidRequest
+	}
+	return &parsedRanges[0], nil
+}
+
+// parseCopyHandlerSource parses and validates the destination path values and
+// the x-amz-copy-source header, writing the appropriate error response and
+// returning ok=false on failure.
+func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, ok bool) {
+	dstBucket, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	dstKey, err = storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcBucketStr, srcKeyStr, err := parseCopySource(r.Header.Get(copySourceHeader))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcBucket, err = storage.NewBucketName(srcBucketStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcKey, err = storage.NewObjectKey(srcKeyStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	return srcBucket, srcKey, dstBucket, dstKey, true
+}
+
+func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.copyObjectHandler")
+	defer span.End()
+
+	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	if !ok {
+		return
+	}
+
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationCopyObject, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	if shouldReturn {
+		return
+	}
+
+	metadataDirective := strings.ToUpper(r.Header.Get(metadataDirectiveHeader))
+	if metadataDirective == "" {
+		metadataDirective = metadataDirectiveCopy
+	}
+	if metadataDirective != metadataDirectiveCopy && metadataDirective != metadataDirectiveReplace {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	copyRange, err := parseCopySourceRange(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// Disallow a no-op self copy (same bucket+key, COPY directive, no range),
+	// matching S3 which rejects it as an illegal request.
+	if metadataDirective == metadataDirectiveCopy && copyRange == nil &&
+		srcBucketName.Equals(dstBucketName) && srcKey.Equals(dstKey) {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	opts := &storage.CopyObjectOptions{
+		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
+		Range:                copyRange,
+		CopySourceConditions: parseCopySourceConditions(r),
+	}
+	if opts.ReplaceMetadata {
+		opts.ContentType = getHeaderAsPtr(r.Header, contentTypeHeader)
+	}
+
+	slog.InfoContext(r.Context(), "Copying object",
+		"srcBucket", srcBucketName.String(), "srcKey", srcKey.String(),
+		"dstBucket", dstBucketName.String(), "dstKey", dstKey.String(),
+		"metadataDirective", metadataDirective)
+
+	result, err := s.storage.CopyObject(ctx, srcBucketName, srcKey, dstBucketName, dstKey, opts)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	copyObjectResult := CopyObjectResult{
+		ETag:         result.ETag,
+		LastModified: result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(copyObjectResult)
+	w.Write(out)
+}
+
+func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.uploadPartCopyHandler")
+	defer span.End()
+
+	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	if !ok {
+		return
+	}
+
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationUploadPartCopy, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	if shouldReturn {
+		return
+	}
+
+	query := r.URL.Query()
+	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
+		w.WriteHeader(400)
+		return
+	}
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	partNumberI64, err := strconv.ParseInt(query.Get(partNumberQuery), 10, 16)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	partNumberI32 := int32(partNumberI64)
+	if partNumberI32 < 1 || partNumberI32 > 10000 {
+		w.WriteHeader(400)
+		return
+	}
+
+	copyRange, err := parseCopySourceRange(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	opts := &storage.UploadPartCopyOptions{
+		Range:                copyRange,
+		CopySourceConditions: parseCopySourceConditions(r),
+	}
+
+	slog.InfoContext(r.Context(), "UploadPartCopy",
+		"srcBucket", srcBucketName.String(), "srcKey", srcKey.String(),
+		"dstBucket", dstBucketName.String(), "dstKey", dstKey.String(),
+		"uploadId", uploadId.String(), "partNumber", partNumberI32)
+
+	result, err := s.storage.UploadPartCopy(ctx, srcBucketName, srcKey, dstBucketName, dstKey, uploadId, partNumberI32, opts)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	copyPartResult := CopyPartResult{
+		ETag:         result.ETag,
+		LastModified: result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(copyPartResult)
+	w.Write(out)
 }
 
 func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {

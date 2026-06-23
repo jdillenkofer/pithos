@@ -303,6 +303,15 @@ func (m *objectCacheStorageMiddleware) finishInflightGet(cacheKey string, inflig
 	close(current.done)
 }
 
+func (m *objectCacheStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	// The copy is performed server-side without streaming through this middleware,
+	// so we cannot populate the cache from it; just invalidate the destination so
+	// the next read re-fetches the new object.
+	result, err := m.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	m.invalidateObjectCaches(ctx, dstBucket, dstKey)
+	return result, err
+}
+
 func (m *objectCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	objKey := objectCacheKey(bucketName, key)
 	headKey := headCacheKey(bucketName, key)
