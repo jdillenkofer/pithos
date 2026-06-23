@@ -69,6 +69,18 @@ func (d *DelegatingStorage) DeleteBucketWebsiteConfiguration(ctx context.Context
 	return d.Next.DeleteBucketWebsiteConfiguration(ctx, bucketName)
 }
 
+func (d *DelegatingStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	return d.Next.GetBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (d *DelegatingStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	return d.Next.PutBucketCORSConfiguration(ctx, bucketName, config)
+}
+
+func (d *DelegatingStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return d.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
+}
+
 func (d *DelegatingStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	return d.Next.ListObjects(ctx, bucketName, opts)
 }

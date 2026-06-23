@@ -240,6 +240,7 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 var ErrNoSuchWebsiteConfiguration error = metadatastore.ErrNoSuchWebsiteConfiguration
+var ErrNoSuchCORSConfiguration error = metadatastore.ErrNoSuchCORSConfiguration
 var ErrTooManyParts error = metadatastore.ErrTooManyParts
 var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
 var ErrCASFailure error = metadatastore.ErrCASFailure
@@ -290,10 +291,20 @@ type BucketManager interface {
 
 type WebsiteConfiguration = metadatastore.WebsiteConfiguration
 
+type CORSRule = metadatastore.CORSRule
+
+type BucketCORSConfiguration = metadatastore.BucketCORSConfiguration
+
 type BucketWebsiteManager interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName, config *WebsiteConfiguration) error
 	DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) error
+}
+
+type BucketCORSManager interface {
+	GetBucketCORSConfiguration(ctx context.Context, bucketName BucketName) (*BucketCORSConfiguration, error)
+	PutBucketCORSConfiguration(ctx context.Context, bucketName BucketName, config *BucketCORSConfiguration) error
+	DeleteBucketCORSConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
 // ObjectManager manages object operations
@@ -329,6 +340,7 @@ type Storage interface {
 	lifecycle.Manager
 	BucketManager
 	BucketWebsiteManager
+	BucketCORSManager
 	ObjectManager
 	MultipartUploadManager
 }

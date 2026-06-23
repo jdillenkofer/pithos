@@ -22,6 +22,7 @@ type Entity struct {
 	Name                       storage.BucketName
 	WebsiteIndexDocumentSuffix *string
 	WebsiteErrorDocumentKey    *string
+	CORSConfigurationJSON      *string
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }
