@@ -1,12 +1,15 @@
 package conditional
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
@@ -35,6 +38,56 @@ func (s *copyRecordingStorage) UploadPartCopy(ctx context.Context, srcBucket sto
 	return &storage.UploadPartCopyResult{}, nil
 }
 
+type copySourceStorage struct {
+	storage.Storage
+	body []byte
+}
+
+func (s *copySourceStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
+	return &storage.Object{
+		Key:          key,
+		LastModified: time.Now(),
+		ETag:         "\"source-etag\"",
+		Size:         int64(len(s.body)),
+	}, nil
+}
+
+func (s *copySourceStorage) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
+	obj, err := s.HeadObject(ctx, bucketName, key, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	return obj, []io.ReadCloser{io.NopCloser(bytes.NewReader(s.body))}, nil
+}
+
+type seekableDestinationStorage struct {
+	storage.Storage
+	putObjectSawSeekable  bool
+	uploadPartSawSeekable bool
+	receivedBody          []byte
+}
+
+func (s *seekableDestinationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
+	_, s.putObjectSawSeekable = data.(io.Seeker)
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return nil, err
+	}
+	s.receivedBody = body
+	etag := "\"dest-etag\""
+	return &storage.PutObjectResult{ETag: &etag}, nil
+}
+
+func (s *seekableDestinationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	_, s.uploadPartSawSeekable = data.(io.Seeker)
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return nil, err
+	}
+	s.receivedBody = body
+	return &storage.UploadPartResult{ETag: "\"part-etag\""}, nil
+}
+
 func TestConditionalStorageRoutesCopyOperationsByDestinationBucket(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
@@ -60,6 +113,42 @@ func TestConditionalStorageRoutesCopyOperationsByDestinationBucket(t *testing.T)
 	assert.Equal(t, 1, mappedStorage.uploadPartCopyCalls)
 	assert.Equal(t, 0, defaultStorage.copyObjectCalls)
 	assert.Equal(t, 0, defaultStorage.uploadPartCopyCalls)
+}
+
+func TestConditionalStorageCrossBackendCopyObjectUsesSeekableDestinationBody(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := []byte("cross-backend-copy")
+	srcStorage := &copySourceStorage{body: body}
+	dstStorage := &seekableDestinationStorage{}
+	conditionalStorage, err := NewStorageMiddleware(map[string]storage.Storage{
+		"src-bucket": srcStorage,
+	}, dstStorage)
+	assert.Nil(t, err)
+
+	_, err = conditionalStorage.CopyObject(context.Background(), storage.MustNewBucketName("src-bucket"), storage.MustNewObjectKey("src"), storage.MustNewBucketName("dst-bucket"), storage.MustNewObjectKey("dst"), nil)
+
+	assert.Nil(t, err)
+	assert.True(t, dstStorage.putObjectSawSeekable)
+	assert.Equal(t, body, dstStorage.receivedBody)
+}
+
+func TestConditionalStorageCrossBackendUploadPartCopyUsesSeekableDestinationBody(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := []byte("cross-backend-upload-part-copy")
+	srcStorage := &copySourceStorage{body: body}
+	dstStorage := &seekableDestinationStorage{}
+	conditionalStorage, err := NewStorageMiddleware(map[string]storage.Storage{
+		"src-bucket": srcStorage,
+	}, dstStorage)
+	assert.Nil(t, err)
+
+	_, err = conditionalStorage.UploadPartCopy(context.Background(), storage.MustNewBucketName("src-bucket"), storage.MustNewObjectKey("src"), storage.MustNewBucketName("dst-bucket"), storage.MustNewObjectKey("dst"), storage.MustNewUploadId("upload-id"), 1, nil)
+
+	assert.Nil(t, err)
+	assert.True(t, dstStorage.uploadPartSawSeekable)
+	assert.Equal(t, body, dstStorage.receivedBody)
 }
 
 func TestConditionalStorage(t *testing.T) {

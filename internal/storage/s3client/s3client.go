@@ -212,14 +212,8 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 		endByte := byteRange.End
 
 		var awsRange *string = nil
-		if startByte != nil && endByte != nil {
-			r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
-			awsRange = &r
-		} else if startByte != nil {
-			r := fmt.Sprintf("bytes=%d-", *startByte)
-			awsRange = &r
-		} else if endByte != nil {
-			r := fmt.Sprintf("bytes=-%d", *endByte-1)
+		if startByte != nil || endByte != nil {
+			r := byteRangeToAWSRange(byteRange)
 			awsRange = &r
 		}
 		getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{

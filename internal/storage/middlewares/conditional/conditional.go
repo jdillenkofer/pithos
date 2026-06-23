@@ -11,10 +11,13 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 )
+
+const maxCopyMemoryCacheSize = 10 * 1000 * 1000
 
 type conditionalStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
@@ -221,6 +224,10 @@ func multiReader(readers []io.ReadCloser) io.Reader {
 	return io.MultiReader(readerInterfaces...)
 }
 
+func cachedCopyBody(readers []io.ReadCloser) (io.ReadSeekCloser, error) {
+	return ioutils.NewSmartCachedReadSeekCloser(multiReader(readers), maxCopyMemoryCacheSize)
+}
+
 func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CopyObject")
 	defer span.End()
@@ -249,7 +256,13 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 	} else {
 		contentType = srcObject.ContentType
 	}
-	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, multiReader(readers), nil, nil)
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, body, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +336,13 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 	}
 	defer closeReaders(readers)
 
-	uploadResult, err := dstStorage.UploadPart(ctx, dstBucket, dstKey, uploadId, partNumber, multiReader(readers), nil)
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	uploadResult, err := dstStorage.UploadPart(ctx, dstBucket, dstKey, uploadId, partNumber, body, nil)
 	if err != nil {
 		return nil, err
 	}
