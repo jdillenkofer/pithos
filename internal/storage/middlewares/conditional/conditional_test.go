@@ -1,6 +1,7 @@
 package conditional
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,12 +12,55 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
-	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 )
+
+type copyRecordingStorage struct {
+	storage.Storage
+	copyObjectCalls     int
+	uploadPartCopyCalls int
+}
+
+func (s *copyRecordingStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	s.copyObjectCalls++
+	return &storage.CopyObjectResult{}, nil
+}
+
+func (s *copyRecordingStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	s.uploadPartCopyCalls++
+	return &storage.UploadPartCopyResult{}, nil
+}
+
+func TestConditionalStorageRoutesCopyOperationsByDestinationBucket(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	defaultStorage := &copyRecordingStorage{}
+	mappedStorage := &copyRecordingStorage{}
+	conditionalStorage, err := NewStorageMiddleware(map[string]storage.Storage{
+		"bucket": mappedStorage,
+	}, defaultStorage)
+	assert.Nil(t, err)
+
+	ctx := context.Background()
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	uploadId := storage.MustNewUploadId("upload-id")
+
+	_, err = conditionalStorage.CopyObject(ctx, bucket, srcKey, bucket, dstKey, nil)
+	assert.Nil(t, err)
+	_, err = conditionalStorage.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, uploadId, 1, nil)
+	assert.Nil(t, err)
+
+	assert.Equal(t, 1, mappedStorage.copyObjectCalls)
+	assert.Equal(t, 1, mappedStorage.uploadPartCopyCalls)
+	assert.Equal(t, 0, defaultStorage.copyObjectCalls)
+	assert.Equal(t, 0, defaultStorage.uploadPartCopyCalls)
+}
 
 func TestConditionalStorage(t *testing.T) {
 	testutils.SkipIfIntegration(t)
