@@ -64,9 +64,13 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	apiMux.HandleFunc("OPTIONS /{bucket}/{key...}", server.optionsObjectHandler)
 	var apiHandler http.Handler = apiMux
-	// CORS must be wrapped *inside* the virtual-host addressing middleware so that
-	// the CORS resolver sees the rewritten path (with the bucket prefix) for
-	// virtual-hosted-style requests. The outer middleware runs first.
+	// CORS must be wrapped *inside* the virtual-host addressing middleware so the
+	// resolver sees the rewritten path (with the bucket prefix) for virtual-hosted
+	// requests. This also places CORS inside SigV4 auth: anonymous preflights pass
+	// through and reach this handler, but a credentialed request that fails auth
+	// gets a 401 without Access-Control-* headers (an opaque CORS error in the
+	// browser). Acceptable, since cross-origin requests are no-credentials by
+	// default and the preflight already gates access.
 	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
 	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
 

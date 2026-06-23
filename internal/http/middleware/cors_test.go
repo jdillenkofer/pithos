@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -18,6 +19,57 @@ func TestNormalizeAndValidateCORSRulesRejectsEmptyMethods(t *testing.T) {
 		AllowedMethods: nil,
 	}})
 	require.Error(t, err)
+}
+
+func TestNormalizeAndValidateCORSRulesRejectsMultipleWildcards(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	_, err := NormalizeAndValidateCORSRules([]CORSRule{{
+		AllowedOrigins: []string{"https://*.*.example.com"},
+		AllowedMethods: []string{"GET"},
+	}})
+	require.Error(t, err)
+
+	_, err = NormalizeAndValidateCORSRules([]CORSRule{{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET"},
+		AllowedHeaders: []string{"x-*-*"},
+	}})
+	require.Error(t, err)
+}
+
+func TestNormalizeAndValidateCORSRulesValidatesID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tooLong := strings.Repeat("a", maxCORSRuleIDLength+1)
+	_, err := NormalizeAndValidateCORSRules([]CORSRule{{
+		ID:             &tooLong,
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET"},
+	}})
+	require.Error(t, err)
+
+	dup := "rule-1"
+	_, err = NormalizeAndValidateCORSRules([]CORSRule{
+		{ID: &dup, AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		{ID: &dup, AllowedOrigins: []string{"*"}, AllowedMethods: []string{"PUT"}},
+	})
+	require.Error(t, err)
+}
+
+func TestWildcardMatchTreatsMetacharsLiterally(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	// "?" and "[" must be matched literally, unlike path.Match.
+	assert.True(t, wildcardMatch("https://a?b.example.com", "https://a?b.example.com"))
+	assert.False(t, wildcardMatch("https://a?b.example.com", "https://axb.example.com"))
+	assert.True(t, wildcardMatch("https://[a].example.com", "https://[a].example.com"))
+
+	// Single "*" matches any (possibly empty) sequence on the right boundary.
+	assert.True(t, wildcardMatch("https://*.example.com", "https://app.example.com"))
+	assert.True(t, wildcardMatch("https://*.example.com", "https://.example.com"))
+	assert.False(t, wildcardMatch("https://*.example.com", "https://app.example.org"))
+	assert.True(t, wildcardMatch("*", "anything"))
 }
 
 func TestCORSMiddlewareHandlesPreflightAndActualRequest(t *testing.T) {

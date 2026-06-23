@@ -3,13 +3,15 @@ package middleware
 import (
 	"errors"
 	"net/http"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
+
+// maxCORSRuleIDLength matches the S3 limit on the optional CORS rule ID.
+const maxCORSRuleIDLength = 255
 
 const (
 	originHeader                      = "Origin"
@@ -31,10 +33,25 @@ type CORSRulesResolver func(r *http.Request) []CORSRule
 
 func NormalizeAndValidateCORSRules(rules []CORSRule) ([]CORSRule, error) {
 	normalized := make([]CORSRule, 0, len(rules))
+	seenIDs := map[string]struct{}{}
 	for idx, rule := range rules {
+		if rule.ID != nil {
+			id := *rule.ID
+			if len(id) > maxCORSRuleIDLength {
+				return nil, errors.New("cors rule " + strconv.Itoa(idx) + " has an ID longer than " + strconv.Itoa(maxCORSRuleIDLength) + " characters")
+			}
+			if _, ok := seenIDs[id]; ok {
+				return nil, errors.New("cors rule " + strconv.Itoa(idx) + " has a duplicate ID: " + id)
+			}
+			seenIDs[id] = struct{}{}
+		}
+
 		origins := normalizeValues(rule.AllowedOrigins)
 		if len(origins) == 0 {
 			return nil, errors.New("cors rule " + strconv.Itoa(idx) + " has no allowedOrigins")
+		}
+		if err := validateAtMostOneWildcard(idx, "allowedOrigin", origins); err != nil {
+			return nil, err
 		}
 
 		methods := normalizeMethods(rule.AllowedMethods)
@@ -48,6 +65,9 @@ func NormalizeAndValidateCORSRules(rules []CORSRule) ([]CORSRule, error) {
 		}
 
 		headers := normalizeValues(rule.AllowedHeaders)
+		if err := validateAtMostOneWildcard(idx, "allowedHeader", headers); err != nil {
+			return nil, err
+		}
 		exposeHeaders := normalizeValues(rule.ExposeHeaders)
 
 		normalized = append(normalized, CORSRule{
@@ -256,15 +276,31 @@ func normalizeMethods(methods []string) []string {
 	return normalized
 }
 
+// wildcardMatch implements S3 CORS wildcard semantics: a pattern may contain at
+// most one "*", which matches any (possibly empty) sequence of characters. All
+// other characters — including "?" and "[" — are matched literally, unlike
+// path.Match. Patterns with more than one "*" are rejected at validation time;
+// here only the first "*" is treated as a wildcard.
 func wildcardMatch(pattern string, value string) bool {
-	if pattern == "*" {
-		return true
+	starIdx := strings.IndexByte(pattern, '*')
+	if starIdx == -1 {
+		return pattern == value
 	}
-	matches, err := path.Match(pattern, value)
-	if err != nil {
+	prefix := pattern[:starIdx]
+	suffix := pattern[starIdx+1:]
+	if len(value) < len(prefix)+len(suffix) {
 		return false
 	}
-	return matches
+	return strings.HasPrefix(value, prefix) && strings.HasSuffix(value, suffix)
+}
+
+func validateAtMostOneWildcard(idx int, field string, values []string) error {
+	for _, value := range values {
+		if strings.Count(value, "*") > 1 {
+			return errors.New("cors rule " + strconv.Itoa(idx) + " has " + field + " with more than one wildcard: " + value)
+		}
+	}
+	return nil
 }
 
 func appendVary(headers http.Header, varyValue string) {
