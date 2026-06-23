@@ -312,6 +312,29 @@ func copySourceValue(srcBucket storage.BucketName, srcKey storage.ObjectKey) str
 	return srcBucket.String() + "/" + url.PathEscape(srcKey.String())
 }
 
+func translateS3CopyError(err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchBucket":
+			return storage.ErrNoSuchBucket
+		case "NoSuchKey":
+			return storage.ErrNoSuchKey
+		case "PreconditionFailed":
+			return storage.ErrPreconditionFailed
+		}
+	}
+	var notFoundError *types.NotFound
+	if errors.As(err, &notFoundError) {
+		return storage.ErrNoSuchBucket
+	}
+	var noSuchKeyError *types.NoSuchKey
+	if errors.As(err, &noSuchKeyError) {
+		return storage.ErrNoSuchKey
+	}
+	return err
+}
+
 func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CopyObject")
 	defer span.End()
@@ -340,15 +363,7 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 
 	copyObjectResult, err := rs.s3Client.CopyObject(ctx, input)
 	if err != nil {
-		var noSuchKeyError *types.NoSuchKey
-		if errors.As(err, &noSuchKeyError) {
-			return nil, storage.ErrNoSuchKey
-		}
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
-			return nil, storage.ErrPreconditionFailed
-		}
-		return nil, err
+		return nil, translateS3CopyError(err)
 	}
 
 	result := &storage.CopyObjectResult{}
@@ -520,15 +535,7 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 
 	uploadPartCopyResult, err := rs.s3Client.UploadPartCopy(ctx, input)
 	if err != nil {
-		var noSuchKeyError *types.NoSuchKey
-		if errors.As(err, &noSuchKeyError) {
-			return nil, storage.ErrNoSuchKey
-		}
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
-			return nil, storage.ErrPreconditionFailed
-		}
-		return nil, err
+		return nil, translateS3CopyError(err)
 	}
 
 	result := &storage.UploadPartCopyResult{}

@@ -1480,7 +1480,7 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 		rangeVal = strings.TrimSpace(rangeVal)
 		byteSplit := strings.SplitN(rangeVal, "-", 2)
 		if len(byteSplit) != 2 {
-			continue
+			return nil, errInvalidByteRange
 		}
 
 		var start *int64
@@ -1488,15 +1488,20 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 
 		if byteSplit[0] != "" {
 			startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
-			if err == nil {
-				start = &startByte
+			if err != nil {
+				return nil, errInvalidByteRange
 			}
+			start = &startByte
 		}
 		if byteSplit[1] != "" {
 			endByte, err := strconv.ParseInt(byteSplit[1], 10, 64)
-			if err == nil {
-				end = &endByte
+			if err != nil {
+				return nil, errInvalidByteRange
 			}
+			end = &endByte
+		}
+		if start == nil && end == nil {
+			return nil, errInvalidByteRange
 		}
 
 		if start == nil && end != nil {
