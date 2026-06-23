@@ -172,6 +172,22 @@ func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName stora
 	return appendObjectResult, nil
 }
 
+func (rs *replicationStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CopyObject")
+	defer span.End()
+
+	result, err := rs.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	if err != nil {
+		return nil, err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		if _, err = secondaryStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
 func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
 	defer span.End()
@@ -260,6 +276,27 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 		}
 	}
 	return uploadPartResult, nil
+}
+
+func (rs *replicationStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPartCopy")
+	defer span.End()
+
+	uploadPartCopyResult, err := rs.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	rs.mapMutex.Lock()
+	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
+	rs.mapMutex.Unlock()
+
+	for i, secondaryStorage := range rs.secondaryStorages {
+		if _, err = secondaryStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, secondaryUploadIds[i], partNumber, opts); err != nil {
+			return nil, err
+		}
+	}
+	return uploadPartCopyResult, nil
 }
 
 func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {

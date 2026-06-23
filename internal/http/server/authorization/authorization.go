@@ -34,7 +34,9 @@ const (
 	OperationCreateMultipartUpload   = "CreateMultipartUpload"
 	OperationCompleteMultipartUpload = "CompleteMultipartUpload"
 	OperationUploadPart              = "UploadPart"
+	OperationUploadPartCopy          = "UploadPartCopy"
 	OperationPutObject               = "PutObject"
+	OperationCopyObject              = "CopyObject"
 	OperationAppendObject            = "AppendObject"
 	OperationAbortMultipartUpload    = "AbortMultipartUpload"
 	OperationDeleteObject            = "DeleteObject"
@@ -52,7 +54,12 @@ type Request struct {
 	Authorization Authorization
 	Bucket        *string
 	Key           *string
-	HttpRequest   HTTPRequest
+	// SourceBucket and SourceKey identify the copy source for server-side copy
+	// operations (CopyObject and UploadPartCopy). They are nil for all other
+	// operations. Bucket/Key always refer to the destination.
+	SourceBucket *string
+	SourceKey    *string
+	HttpRequest  HTTPRequest
 }
 
 type RequestAuthorizer interface {

@@ -36,17 +36,19 @@ func (m *AuditLogMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOp
 }
 
 type auditResource struct {
-	bucket     string
-	key        string
-	uploadID   string
-	partNumber int32
+	bucket       string
+	key          string
+	uploadID     string
+	partNumber   int32
+	sourceBucket string
+	sourceKey    string
 }
 
 func (m *AuditLogMiddleware) run(ctx context.Context, op auditlog.Operation, resource auditResource, fn func(context.Context) error) error {
 	start := time.Now()
-	m.log(ctx, op, auditlog.PhaseStart, resource.bucket, resource.key, resource.uploadID, resource.partNumber, nil, 0, 0)
+	m.log(ctx, op, auditlog.PhaseStart, resource, nil, 0, 0)
 	err := fn(ctx)
-	m.log(ctx, op, auditlog.PhaseComplete, resource.bucket, resource.key, resource.uploadID, resource.partNumber, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	m.log(ctx, op, auditlog.PhaseComplete, resource, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return err
 }
 
@@ -90,7 +92,7 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 	return m
 }
 
-func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, phase auditlog.Phase, bucket string, key string, uploadId string, partNumber int32, err error, statusCode int32, durationMs int64) {
+func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, phase auditlog.Phase, resource auditResource, err error, statusCode int32, durationMs int64) {
 	credentialID := ""
 	if val := ctx.Value(authentication.AccessKeyIdContextKey{}); val != nil {
 		if s, ok := val.(string); ok {
@@ -147,10 +149,12 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 			Operation: op,
 			Phase:     phase,
 			Resource: auditlog.ResourceDetails{
-				Bucket:     bucket,
-				Key:        key,
-				UploadID:   uploadId,
-				PartNumber: partNumber,
+				Bucket:       resource.bucket,
+				Key:          resource.key,
+				UploadID:     resource.uploadID,
+				PartNumber:   resource.partNumber,
+				SourceBucket: resource.sourceBucket,
+				SourceKey:    resource.sourceKey,
 			},
 			Actor: auditlog.ActorDetails{
 				CredentialID: credentialID,
@@ -318,9 +322,10 @@ func (m *AuditLogMiddleware) HeadObject(ctx context.Context, bucketName storage.
 
 func (m *AuditLogMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	start := time.Now()
-	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil, 0, 0)
+	resource := auditResource{bucket: bucketName.String(), key: key.String()}
+	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseStart, resource, nil, 0, 0)
 	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, ranges, opts)
-	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseComplete, bucketName.String(), key.String(), "", 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseComplete, resource, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return obj, readers, err
 }
 
@@ -329,6 +334,16 @@ func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.B
 	err := m.run(ctx, auditlog.OpPutObject, auditResource{bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
+		return err
+	})
+	return result, err
+}
+
+func (m *AuditLogMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	var result *storage.CopyObjectResult
+	err := m.run(ctx, auditlog.OpCopyObject, auditResource{bucket: dstBucket.String(), key: dstKey.String(), sourceBucket: srcBucket.String(), sourceKey: srcKey.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
 		return err
 	})
 	return result, err
@@ -362,13 +377,13 @@ func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName stora
 
 func (m *AuditLogMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
 	start := time.Now()
-	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, bucketName.String(), key.String(), "", 0, nil, 0, 0)
+	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, auditResource{bucket: bucketName.String(), key: key.String()}, nil, 0, 0)
 	res, err := m.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
 	uid := ""
 	if res != nil {
 		uid = res.UploadId.String()
 	}
-	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseComplete, bucketName.String(), key.String(), uid, 0, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseComplete, auditResource{bucket: bucketName.String(), key: key.String(), uploadID: uid}, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return res, err
 }
 
@@ -377,6 +392,16 @@ func (m *AuditLogMiddleware) UploadPart(ctx context.Context, bucketName storage.
 	err := m.run(ctx, auditlog.OpUploadPart, auditResource{bucket: bucketName.String(), key: key.String(), uploadID: uploadId.String(), partNumber: partNumber}, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
+		return err
+	})
+	return result, err
+}
+
+func (m *AuditLogMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	var result *storage.UploadPartCopyResult
+	err := m.run(ctx, auditlog.OpUploadPartCopy, auditResource{bucket: dstBucket.String(), key: dstKey.String(), uploadID: uploadId.String(), partNumber: partNumber, sourceBucket: srcBucket.String(), sourceKey: srcKey.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
 		return err
 	})
 	return result, err

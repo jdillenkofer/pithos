@@ -121,6 +121,56 @@ type GetObjectOptions struct {
 	IfNoneMatchETag *string
 }
 
+// CopySourceConditions holds the x-amz-copy-source-if-* preconditions that are
+// evaluated against the source object of a server-side copy. A nil field means
+// the corresponding condition is absent. A failed precondition surfaces as
+// ErrPreconditionFailed.
+type CopySourceConditions struct {
+	// IfMatch requires the source ETag to equal this value (or "*" to match any
+	// existing object).
+	IfMatch *string
+	// IfNoneMatch requires the source ETag to differ from this value ("*" matches
+	// any existing object and therefore always fails).
+	IfNoneMatch *string
+	// IfModifiedSince requires the source to have been modified after this time.
+	IfModifiedSince *time.Time
+	// IfUnmodifiedSince requires the source to be unmodified since this time.
+	IfUnmodifiedSince *time.Time
+}
+
+// CopyObjectOptions holds options for a server-side CopyObject. A nil pointer is
+// equivalent to a plain COPY of the whole object with no preconditions.
+type CopyObjectOptions struct {
+	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
+	// ContentType is used for the destination instead of the source's content type.
+	ReplaceMetadata bool
+	// ContentType is the destination content type used when ReplaceMetadata is true.
+	ContentType *string
+	// Range, when non-nil, copies only the given byte range of the source into a
+	// single-part destination object.
+	Range *ByteRange
+	// CopySourceConditions holds preconditions evaluated against the source object.
+	CopySourceConditions CopySourceConditions
+}
+
+type CopyObjectResult struct {
+	ETag         string
+	LastModified time.Time
+}
+
+// UploadPartCopyOptions holds options for a server-side UploadPartCopy.
+type UploadPartCopyOptions struct {
+	// Range, when non-nil, copies only the given byte range of the source into the part.
+	Range *ByteRange
+	// CopySourceConditions holds preconditions evaluated against the source object.
+	CopySourceConditions CopySourceConditions
+}
+
+type UploadPartCopyResult struct {
+	ETag         string
+	LastModified time.Time
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId UploadId
 }
@@ -317,6 +367,11 @@ type ObjectManager interface {
 	// Returns the object metadata, a list of readers (one per range), and an error.
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange, opts *GetObjectOptions) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
+	// CopyObject performs a server-side copy of srcBucket/srcKey to dstBucket/dstKey.
+	// The whole copy is performed in a single transaction; for a full (non-ranged)
+	// copy the destination preserves the source's part structure and therefore its
+	// exact ETag. opts may be nil.
+	CopyObject(ctx context.Context, srcBucket BucketName, srcKey ObjectKey, dstBucket BucketName, dstKey ObjectKey, opts *CopyObjectOptions) (*CopyObjectResult, error)
 	// AppendObject appends data to an existing object. If the object does not exist,
 	// it behaves like PutObject and creates a new object with the provided data.
 	// The ETag in the result reflects the new whole-object ETag after the append.
@@ -329,6 +384,9 @@ type ObjectManager interface {
 type MultipartUploadManager interface {
 	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
+	// UploadPartCopy uploads a part of a multipart upload by copying data (optionally
+	// a byte range) from an existing source object, server-side. opts may be nil.
+	UploadPartCopy(ctx context.Context, srcBucket BucketName, srcKey ObjectKey, dstBucket BucketName, dstKey ObjectKey, uploadId UploadId, partNumber int32, opts *UploadPartCopyOptions) (*UploadPartCopyResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId) error
 	ListMultipartUploads(ctx context.Context, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)

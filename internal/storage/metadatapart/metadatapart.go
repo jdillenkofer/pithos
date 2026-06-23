@@ -440,6 +440,33 @@ func normalizeAndValidateRanges(ranges []storage.ByteRange, objectSize int64) ([
 	return normalized, nil
 }
 
+// evaluateCopySourceConditions enforces the x-amz-copy-source-if-* preconditions
+// against the source object of a server-side copy. Time comparisons use second
+// granularity (HTTP dates carry no sub-second component) to match S3 behaviour.
+// Returns storage.ErrPreconditionFailed when a precondition fails.
+func evaluateCopySourceConditions(conditions storage.CopySourceConditions, object *metadatastore.Object) error {
+	ifMatchPassed := false
+	if conditions.IfMatch != nil {
+		ifMatchPassed = *conditions.IfMatch == storage.ETagWildcard || *conditions.IfMatch == object.ETag
+		if !ifMatchPassed {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	if conditions.IfNoneMatch != nil {
+		if *conditions.IfNoneMatch == storage.ETagWildcard || *conditions.IfNoneMatch == object.ETag {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	lastModified := object.LastModified.Truncate(time.Second)
+	if conditions.IfUnmodifiedSince != nil && !(conditions.IfMatch != nil && ifMatchPassed) && lastModified.After(*conditions.IfUnmodifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	if conditions.IfModifiedSince != nil && !lastModified.After(*conditions.IfModifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	return nil
+}
+
 // createRangeReader creates a reader for a specific byte range of an object.
 func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx database.Tx, object *metadatastore.Object, byteRange storage.ByteRange) (io.ReadCloser, error) {
 	startByte := byteRange.Start
@@ -657,6 +684,142 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		ChecksumSHA1:      object.ChecksumSHA1,
 		ChecksumSHA256:    object.ChecksumSHA256,
 	}, nil
+}
+
+func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CopyObject")
+	defer span.End()
+
+	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
+	defer unblockGC()
+
+	var result storage.CopyObjectResult
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		srcObject, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), srcBucket, srcKey)
+		if err != nil {
+			return err
+		}
+
+		if opts != nil {
+			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
+				return err
+			}
+		}
+
+		lastModified := time.Now()
+		dstObject := metadatastore.Object{
+			Key:          dstKey,
+			LastModified: lastModified,
+		}
+
+		if opts != nil && opts.Range != nil {
+			// Ranged copy: produce a single-part destination object containing the
+			// requested byte range, with a freshly computed ETag.
+			normalizedRanges, err := normalizeAndValidateRanges([]storage.ByteRange{*opts.Range}, srcObject.Size)
+			if err != nil {
+				return err
+			}
+			rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+			if err != nil {
+				return err
+			}
+			defer rangeReader.Close()
+
+			newPartId, err := partstore.NewRandomPartId()
+			if err != nil {
+				return err
+			}
+			size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+				return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+			})
+			if err != nil {
+				return err
+			}
+			dstObject.ETag = *checksums.ETag
+			dstObject.ChecksumCRC32 = checksums.ChecksumCRC32
+			dstObject.ChecksumCRC32C = checksums.ChecksumCRC32C
+			dstObject.ChecksumCRC64NVME = checksums.ChecksumCRC64NVME
+			dstObject.ChecksumSHA1 = checksums.ChecksumSHA1
+			dstObject.ChecksumSHA256 = checksums.ChecksumSHA256
+			dstObject.ChecksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject)
+			dstObject.Size = *size
+			dstObject.Parts = []metadatastore.Part{
+				{
+					Id:                *newPartId,
+					ETag:              *checksums.ETag,
+					ChecksumCRC32:     checksums.ChecksumCRC32,
+					ChecksumCRC32C:    checksums.ChecksumCRC32C,
+					ChecksumCRC64NVME: checksums.ChecksumCRC64NVME,
+					ChecksumSHA1:      checksums.ChecksumSHA1,
+					ChecksumSHA256:    checksums.ChecksumSHA256,
+					Size:              *size,
+				},
+			}
+		} else {
+			// Full copy: duplicate every source part to a fresh part id, preserving
+			// the part structure and therefore the exact source ETag and checksums.
+			newParts := make([]metadatastore.Part, len(srcObject.Parts))
+			for i, srcPart := range srcObject.Parts {
+				newPartId, err := partstore.NewRandomPartId()
+				if err != nil {
+					return err
+				}
+				srcReader, err := mbs.partStore.GetPart(ctx, tx, srcPart.Id)
+				if err != nil {
+					return err
+				}
+				err = mbs.partStore.PutPart(ctx, tx, *newPartId, srcReader)
+				srcReader.Close()
+				if err != nil {
+					return err
+				}
+				newParts[i] = srcPart
+				newParts[i].Id = *newPartId
+			}
+			dstObject.ETag = srcObject.ETag
+			dstObject.ChecksumCRC32 = srcObject.ChecksumCRC32
+			dstObject.ChecksumCRC32C = srcObject.ChecksumCRC32C
+			dstObject.ChecksumCRC64NVME = srcObject.ChecksumCRC64NVME
+			dstObject.ChecksumSHA1 = srcObject.ChecksumSHA1
+			dstObject.ChecksumSHA256 = srcObject.ChecksumSHA256
+			dstObject.ChecksumType = srcObject.ChecksumType
+			dstObject.Size = srcObject.Size
+			dstObject.Parts = newParts
+		}
+
+		// Content type follows the metadata directive.
+		if opts != nil && opts.ReplaceMetadata {
+			dstObject.ContentType = opts.ContentType
+		} else {
+			dstObject.ContentType = srcObject.ContentType
+		}
+
+		// Remove the previous destination object's part content (if any) before
+		// overwriting. When the destination equals the source, the previous parts
+		// are the original part ids; the freshly copied parts use new ids and remain.
+		previousDst, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), dstBucket, dstKey)
+		if err != nil && err != storage.ErrNoSuchKey {
+			return err
+		}
+		if previousDst != nil {
+			for _, part := range previousDst.Parts {
+				if err := mbs.partStore.DeletePart(ctx, tx, part.Id); err != nil {
+					return err
+				}
+			}
+		}
+
+		if err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil); err != nil {
+			return err
+		}
+
+		result = storage.CopyObjectResult{ETag: dstObject.ETag, LastModified: lastModified}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
@@ -965,6 +1128,75 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
 		ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 	}, nil
+}
+
+func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.UploadPartCopy")
+	defer span.End()
+
+	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
+	defer unblockGC()
+
+	var result storage.UploadPartCopyResult
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		srcObject, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), srcBucket, srcKey)
+		if err != nil {
+			return err
+		}
+
+		if opts != nil {
+			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
+				return err
+			}
+		}
+
+		// Default to the whole source object when no range is given.
+		copyRange := storage.ByteRange{}
+		if opts != nil && opts.Range != nil {
+			copyRange = *opts.Range
+		}
+		normalizedRanges, err := normalizeAndValidateRanges([]storage.ByteRange{copyRange}, srcObject.Size)
+		if err != nil {
+			return err
+		}
+		rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+		if err != nil {
+			return err
+		}
+		defer rangeReader.Close()
+
+		newPartId, err := partstore.NewRandomPartId()
+		if err != nil {
+			return err
+		}
+		size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+			return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+		})
+		if err != nil {
+			return err
+		}
+
+		err = mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
+			Id:                *newPartId,
+			ETag:              *checksums.ETag,
+			ChecksumCRC32:     checksums.ChecksumCRC32,
+			ChecksumCRC32C:    checksums.ChecksumCRC32C,
+			ChecksumCRC64NVME: checksums.ChecksumCRC64NVME,
+			ChecksumSHA1:      checksums.ChecksumSHA1,
+			ChecksumSHA256:    checksums.ChecksumSHA256,
+			Size:              *size,
+		})
+		if err != nil {
+			return err
+		}
+
+		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now()}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipartUploadResult) storage.CompleteMultipartUploadResult {

@@ -2766,6 +2766,353 @@ func TestGetObject(t *testing.T) {
 	})
 }
 
+func TestCopyObject(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		setupSourceObject := func(s3Client *s3.Client, contentType *string) {
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:      bucketName,
+				Key:         key,
+				Body:        bytes.NewReader(body),
+				ContentType: contentType,
+			})
+			assert.Nil(t, err)
+		}
+
+		t.Run("it should copy an object preserving content, etag and content type"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, aws.String("text/plain"))
+
+			copyResult, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, copyResult.CopyObjectResult)
+			assert.Equal(t, "\"6cd3556deb0da54bca060b4c39479839\"", *copyResult.CopyObjectResult.ETag)
+			assert.NotNil(t, copyResult.CopyObjectResult.LastModified)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, "\"6cd3556deb0da54bca060b4c39479839\"", *getResult.ETag)
+			assert.Equal(t, "text/plain", *getResult.ContentType)
+		})
+
+		t.Run("it should copy an object across buckets"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, nil)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName2})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName2,
+				Key:        key,
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName2, Key: key})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+		})
+
+		t.Run("it should replace the content type when metadata directive is REPLACE"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, aws.String("text/plain"))
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:            bucketName,
+				Key:               key2,
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				MetadataDirective: types.MetadataDirectiveReplace,
+				ContentType:       aws.String("application/json"),
+			})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, "application/json", *getResult.ContentType)
+		})
+
+		t.Run("it should honor copy-source-if-match"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, nil)
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:            bucketName,
+				Key:               key2,
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				CopySourceIfMatch: aws.String("\"6cd3556deb0da54bca060b4c39479839\""),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:            bucketName,
+				Key:               key2,
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				CopySourceIfMatch: aws.String("\"does-not-match\""),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should fail copy-source-if-none-match when the etag matches"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, nil)
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:                bucketName,
+				Key:                   key2,
+				CopySource:            aws.String(*bucketName + "/" + *key),
+				CopySourceIfNoneMatch: aws.String("\"6cd3556deb0da54bca060b4c39479839\""),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should return NoSuchKey when the source does not exist"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				CopySource: aws.String(*bucketName + "/does-not-exist"),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "NoSuchKey", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should reject a no-op self copy"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, nil)
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        key,
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "InvalidRequest", apiErr.ErrorCode())
+			}
+		})
+
+		t.Run("it should allow a self copy that replaces metadata"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			setupSourceObject(s3Client, aws.String("text/plain"))
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:            bucketName,
+				Key:               key,
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				MetadataDirective: types.MetadataDirectiveReplace,
+				ContentType:       aws.String("application/json"),
+			})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+			assert.Equal(t, "application/json", *getResult.ContentType)
+		})
+
+		t.Run("it should forbid a copy when the destination write is denied"+testSuffix, func(t *testing.T) {
+			// Allow everything except the copy operation itself.
+			authorizationCode := `
+			function authorizeRequest(request)
+			  return request.operation ~= "CopyObject"
+			end
+			`
+			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(requestAuthorizer, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err = s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			// Authorization is checked before any storage access, so the copy is
+			// rejected with 403 regardless of whether the source exists.
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.NotNil(t, err)
+			var httpErr *awshttp.ResponseError
+			if assert.ErrorAs(t, err, &httpErr) {
+				assert.Equal(t, 403, httpErr.Response.StatusCode)
+			}
+		})
+	})
+}
+
+func TestUploadPartCopy(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		t.Run("it should copy a whole source object into a multipart part"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			uploadId := createResult.UploadId
+
+			copyPartResult, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				UploadId:   uploadId,
+				PartNumber: aws.Int32(1),
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.Nil(t, err)
+			assert.NotNil(t, copyPartResult.CopyPartResult)
+			assert.NotNil(t, copyPartResult.CopyPartResult.ETag)
+
+			_, err = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key2,
+				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: []types.CompletedPart{
+						{ETag: copyPartResult.CopyPartResult.ETag, PartNumber: aws.Int32(1)},
+					},
+				},
+			})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, body, objectBytes)
+		})
+
+		t.Run("it should copy a byte range of the source into a multipart part"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			uploadId := createResult.UploadId
+
+			// Copy "Hello," (bytes 0-5) as part 1 and "world!" (bytes 7-12) as part 2.
+			part1, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
+				Bucket:          bucketName,
+				Key:             key2,
+				UploadId:        uploadId,
+				PartNumber:      aws.Int32(1),
+				CopySource:      aws.String(*bucketName + "/" + *key),
+				CopySourceRange: aws.String("bytes=0-5"),
+			})
+			assert.Nil(t, err)
+			part2, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
+				Bucket:          bucketName,
+				Key:             key2,
+				UploadId:        uploadId,
+				PartNumber:      aws.Int32(2),
+				CopySource:      aws.String(*bucketName + "/" + *key),
+				CopySourceRange: aws.String("bytes=7-12"),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key2,
+				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: []types.CompletedPart{
+						{ETag: part1.CopyPartResult.ETag, PartNumber: aws.Int32(1)},
+						{ETag: part2.CopyPartResult.ETag, PartNumber: aws.Int32(2)},
+					},
+				},
+			})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			objectBytes, err := io.ReadAll(getResult.Body)
+			assert.Nil(t, err)
+			assert.Equal(t, []byte("Hello,world!"), objectBytes)
+		})
+
+		t.Run("it should honor copy-source-if-match for UploadPartCopy"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			uploadId := createResult.UploadId
+
+			_, err = s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
+				Bucket:            bucketName,
+				Key:               key2,
+				UploadId:          uploadId,
+				PartNumber:        aws.Int32(1),
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				CopySourceIfMatch: aws.String("\"does-not-match\""),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			if assert.ErrorAs(t, err, &apiErr) {
+				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
+			}
+		})
+	})
+}
+
 func TestDeleteObject(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

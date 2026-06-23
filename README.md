@@ -9,8 +9,8 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 
 - S3-compatible API with extensive operation support:
   - Bucket Operations: Create, Head, Delete, List buckets
-  - Object Operations: Head, Get, Put, Delete, List objects
-  - Multipart Upload Operations: Initiate, Upload, Complete, Abort, List
+  - Object Operations: Head, Get, Put, Copy, Delete, List objects
+  - Multipart Upload Operations: Initiate, Upload, Upload Part Copy, Complete, Abort, List
 - Authentication using AWS Signature Version 4
 - Authorization support via Lua scripts
 - Configurable storage backends (local filesystem, S3, etc.)

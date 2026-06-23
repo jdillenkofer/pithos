@@ -25,7 +25,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **AuditStorage**: Provides cryptographically signed audit logs (see [Audit Logging](audit-logging.md))
 - **ObjectCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
   - Caches `GetObject` full-object reads and `HeadObject` metadata
-  - Invalidates cache entries on successful object mutation operations (`PutObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
+  - Invalidates cache entries on successful object mutation operations (`PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
   - Bypasses cache for ranged `GetObject` requests
 
 ### Part Store Middleware

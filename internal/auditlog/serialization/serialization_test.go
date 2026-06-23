@@ -36,8 +36,10 @@ func TestSerializers(t *testing.T) {
 				Operation: auditlog.OpCreateBucket,
 				Phase:     auditlog.PhaseStart,
 				Resource: auditlog.ResourceDetails{
-					Bucket: "test-bucket",
-					Key:    "test-key",
+					Bucket:       "test-bucket",
+					Key:          "test-key",
+					SourceBucket: "source-bucket",
+					SourceKey:    "source-key",
 				},
 				Actor: auditlog.ActorDetails{
 					CredentialID: "test-actor",

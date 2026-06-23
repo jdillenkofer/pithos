@@ -6,14 +6,18 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 )
+
+const maxCopyMemoryCacheSize = 10 * 1000 * 1000
 
 type conditionalStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
@@ -162,6 +166,114 @@ func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketNa
 	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 }
 
+func copySourceConditionsSatisfied(conditions storage.CopySourceConditions, object *storage.Object) error {
+	ifMatchPassed := false
+	if conditions.IfMatch != nil {
+		ifMatchPassed = *conditions.IfMatch == storage.ETagWildcard || *conditions.IfMatch == object.ETag
+		if !ifMatchPassed {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	if conditions.IfNoneMatch != nil {
+		if *conditions.IfNoneMatch == storage.ETagWildcard || *conditions.IfNoneMatch == object.ETag {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	lastModified := object.LastModified.Truncate(time.Second)
+	if conditions.IfUnmodifiedSince != nil && !(conditions.IfMatch != nil && ifMatchPassed) && lastModified.After(*conditions.IfUnmodifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	if conditions.IfModifiedSince != nil && !lastModified.After(*conditions.IfModifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	return nil
+}
+
+func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
+	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := copySourceConditionsSatisfied(conditions, srcObject); err != nil {
+		return nil, nil, err
+	}
+
+	var ranges []storage.ByteRange
+	if copyRange != nil {
+		ranges = []storage.ByteRange{*copyRange}
+	}
+	getOpts := &storage.GetObjectOptions{IfMatchETag: &srcObject.ETag}
+	_, readers, err := srcStorage.GetObject(ctx, srcBucket, srcKey, ranges, getOpts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcObject, readers, nil
+}
+
+func closeReaders(readers []io.ReadCloser) {
+	for _, reader := range readers {
+		_ = reader.Close()
+	}
+}
+
+func multiReader(readers []io.ReadCloser) io.Reader {
+	readerInterfaces := make([]io.Reader, len(readers))
+	for i, reader := range readers {
+		readerInterfaces[i] = reader
+	}
+	return io.MultiReader(readerInterfaces...)
+}
+
+func cachedCopyBody(readers []io.ReadCloser) (io.ReadSeekCloser, error) {
+	return ioutils.NewSmartCachedReadSeekCloser(multiReader(readers), maxCopyMemoryCacheSize)
+}
+
+func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CopyObject")
+	defer span.End()
+
+	srcStorage := csm.lookupStorage(srcBucket)
+	dstStorage := csm.lookupStorage(dstBucket)
+	if srcStorage == dstStorage {
+		return dstStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	}
+
+	var copyRange *storage.ByteRange
+	var conditions storage.CopySourceConditions
+	var contentType *string
+	if opts != nil {
+		copyRange = opts.Range
+		conditions = opts.CopySourceConditions
+	}
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	if err != nil {
+		return nil, err
+	}
+	defer closeReaders(readers)
+
+	if opts != nil && opts.ReplaceMetadata {
+		contentType = opts.ContentType
+	} else {
+		contentType = srcObject.ContentType
+	}
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, body, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &storage.CopyObjectResult{LastModified: time.Now()}
+	if putResult.ETag != nil {
+		result.ETag = *putResult.ETag
+	}
+	return result, nil
+}
+
 func (csm *conditionalStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.AppendObject")
 	defer span.End()
@@ -200,6 +312,44 @@ func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketN
 
 	storage := csm.lookupStorage(bucketName)
 	return storage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
+}
+
+func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.UploadPartCopy")
+	defer span.End()
+
+	srcStorage := csm.lookupStorage(srcBucket)
+	dstStorage := csm.lookupStorage(dstBucket)
+	if srcStorage == dstStorage {
+		return dstStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	}
+
+	var copyRange *storage.ByteRange
+	var conditions storage.CopySourceConditions
+	if opts != nil {
+		copyRange = opts.Range
+		conditions = opts.CopySourceConditions
+	}
+	_, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	if err != nil {
+		return nil, err
+	}
+	defer closeReaders(readers)
+
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	uploadResult, err := dstStorage.UploadPart(ctx, dstBucket, dstKey, uploadId, partNumber, body, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &storage.UploadPartCopyResult{
+		ETag:         uploadResult.ETag,
+		LastModified: time.Now(),
+	}, nil
 }
 
 func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {

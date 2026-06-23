@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -211,14 +212,8 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 		endByte := byteRange.End
 
 		var awsRange *string = nil
-		if startByte != nil && endByte != nil {
-			r := fmt.Sprintf("bytes=%d-%d", *startByte, *endByte-1)
-			awsRange = &r
-		} else if startByte != nil {
-			r := fmt.Sprintf("bytes=%d-", *startByte)
-			awsRange = &r
-		} else if endByte != nil {
-			r := fmt.Sprintf("bytes=-%d", *endByte-1)
+		if startByte != nil || endByte != nil {
+			r := byteRangeToAWSRange(byteRange)
 			awsRange = &r
 		}
 		getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
@@ -290,6 +285,91 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	}, nil
+}
+
+// byteRangeToAWSRange converts a storage.ByteRange (exclusive end) into an S3
+// "bytes=start-end" (inclusive end) header value, mirroring GetObject.
+func byteRangeToAWSRange(byteRange storage.ByteRange) string {
+	if byteRange.Start != nil && byteRange.End != nil {
+		return fmt.Sprintf("bytes=%d-%d", *byteRange.Start, *byteRange.End-1)
+	}
+	if byteRange.Start != nil {
+		return fmt.Sprintf("bytes=%d-", *byteRange.Start)
+	}
+	if byteRange.End != nil {
+		return fmt.Sprintf("bytes=-%d", *byteRange.End)
+	}
+	return ""
+}
+
+func copySourceValue(srcBucket storage.BucketName, srcKey storage.ObjectKey) string {
+	return srcBucket.String() + "/" + url.PathEscape(srcKey.String())
+}
+
+func translateS3CopyError(err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchBucket":
+			return storage.ErrNoSuchBucket
+		case "NoSuchKey":
+			return storage.ErrNoSuchKey
+		case "PreconditionFailed":
+			return storage.ErrPreconditionFailed
+		}
+	}
+	var notFoundError *types.NotFound
+	if errors.As(err, &notFoundError) {
+		return storage.ErrNoSuchBucket
+	}
+	var noSuchKeyError *types.NoSuchKey
+	if errors.As(err, &noSuchKeyError) {
+		return storage.ErrNoSuchKey
+	}
+	return err
+}
+
+func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CopyObject")
+	defer span.End()
+
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(dstBucket.String()),
+		Key:        aws.String(dstKey.String()),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
+	}
+	if opts != nil {
+		// Ranged CopyObject is a pithos extension that AWS CopyObject cannot
+		// express (ranges only exist for UploadPartCopy), so it cannot be forwarded
+		// to a remote S3 backend.
+		if opts.Range != nil {
+			return nil, storage.ErrNotImplemented
+		}
+		if opts.ReplaceMetadata {
+			input.MetadataDirective = types.MetadataDirectiveReplace
+			input.ContentType = opts.ContentType
+		}
+		input.CopySourceIfMatch = opts.CopySourceConditions.IfMatch
+		input.CopySourceIfNoneMatch = opts.CopySourceConditions.IfNoneMatch
+		input.CopySourceIfModifiedSince = opts.CopySourceConditions.IfModifiedSince
+		input.CopySourceIfUnmodifiedSince = opts.CopySourceConditions.IfUnmodifiedSince
+	}
+
+	copyObjectResult, err := rs.s3Client.CopyObject(ctx, input)
+	if err != nil {
+		return nil, translateS3CopyError(err)
+	}
+
+	result := &storage.CopyObjectResult{}
+	if copyObjectResult.CopyObjectResult != nil {
+		if copyObjectResult.CopyObjectResult.ETag != nil {
+			result.ETag = *copyObjectResult.CopyObjectResult.ETag
+		}
+		if copyObjectResult.CopyObjectResult.LastModified != nil {
+			result.LastModified = *copyObjectResult.CopyObjectResult.LastModified
+		}
+	}
+	return result, nil
 }
 
 func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, _ io.Reader, _ *storage.ChecksumInput, _ *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
@@ -424,6 +504,44 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.Bu
 		ChecksumSHA1:      uploadPartResult.ChecksumSHA1,
 		ChecksumSHA256:    uploadPartResult.ChecksumSHA256,
 	}, nil
+}
+
+func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.UploadPartCopy")
+	defer span.End()
+
+	input := &s3.UploadPartCopyInput{
+		Bucket:     aws.String(dstBucket.String()),
+		Key:        aws.String(dstKey.String()),
+		UploadId:   aws.String(uploadId.String()),
+		PartNumber: aws.Int32(partNumber),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
+	}
+	if opts != nil {
+		if opts.Range != nil {
+			input.CopySourceRange = aws.String(byteRangeToAWSRange(*opts.Range))
+		}
+		input.CopySourceIfMatch = opts.CopySourceConditions.IfMatch
+		input.CopySourceIfNoneMatch = opts.CopySourceConditions.IfNoneMatch
+		input.CopySourceIfModifiedSince = opts.CopySourceConditions.IfModifiedSince
+		input.CopySourceIfUnmodifiedSince = opts.CopySourceConditions.IfUnmodifiedSince
+	}
+
+	uploadPartCopyResult, err := rs.s3Client.UploadPartCopy(ctx, input)
+	if err != nil {
+		return nil, translateS3CopyError(err)
+	}
+
+	result := &storage.UploadPartCopyResult{}
+	if uploadPartCopyResult.CopyPartResult != nil {
+		if uploadPartCopyResult.CopyPartResult.ETag != nil {
+			result.ETag = *uploadPartCopyResult.CopyPartResult.ETag
+		}
+		if uploadPartCopyResult.CopyPartResult.LastModified != nil {
+			result.LastModified = *uploadPartCopyResult.CopyPartResult.LastModified
+		}
+	}
+	return result, nil
 }
 
 func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {

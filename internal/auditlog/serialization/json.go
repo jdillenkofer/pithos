@@ -28,10 +28,12 @@ type jsonLogDetails struct {
 	Operation string `json:"operation"`
 	Phase     string `json:"phase"`
 	Resource  struct {
-		Bucket     string `json:"bucket"`
-		Key        string `json:"key,omitempty"`
-		UploadID   string `json:"upload_id,omitempty"`
-		PartNumber int32  `json:"part_number,omitempty"`
+		Bucket       string `json:"bucket"`
+		Key          string `json:"key,omitempty"`
+		UploadID     string `json:"upload_id,omitempty"`
+		PartNumber   int32  `json:"part_number,omitempty"`
+		SourceBucket string `json:"source_bucket,omitempty"`
+		SourceKey    string `json:"source_key,omitempty"`
 	} `json:"resource"`
 	Actor struct {
 		CredentialID string `json:"credential_id,omitempty"`
@@ -96,6 +98,8 @@ func (s *JsonSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 			payload.Resource.Key = d.Resource.Key
 			payload.Resource.UploadID = d.Resource.UploadID
 			payload.Resource.PartNumber = d.Resource.PartNumber
+			payload.Resource.SourceBucket = d.Resource.SourceBucket
+			payload.Resource.SourceKey = d.Resource.SourceKey
 			payload.Actor.CredentialID = d.Actor.CredentialID
 			payload.Actor.AuthType = string(d.Actor.AuthType)
 			payload.Request.RequestID = d.Request.RequestID
@@ -225,10 +229,12 @@ func (d *JsonDecoder) Decode() (*auditlog.Entry, error) {
 			Operation: auditlog.Operation(jd.Operation),
 			Phase:     auditlog.Phase(jd.Phase),
 			Resource: auditlog.ResourceDetails{
-				Bucket:     jd.Resource.Bucket,
-				Key:        jd.Resource.Key,
-				UploadID:   jd.Resource.UploadID,
-				PartNumber: jd.Resource.PartNumber,
+				Bucket:       jd.Resource.Bucket,
+				Key:          jd.Resource.Key,
+				UploadID:     jd.Resource.UploadID,
+				PartNumber:   jd.Resource.PartNumber,
+				SourceBucket: jd.Resource.SourceBucket,
+				SourceKey:    jd.Resource.SourceKey,
 			},
 			Actor: auditlog.ActorDetails{
 				CredentialID: jd.Actor.CredentialID,
