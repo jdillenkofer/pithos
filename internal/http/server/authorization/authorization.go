@@ -47,6 +47,9 @@ const (
 	OperationGetBucketWebsite        = "GetBucketWebsite"
 	OperationPutBucketWebsite        = "PutBucketWebsite"
 	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"
+	OperationGetObjectTagging        = "GetObjectTagging"
+	OperationPutObjectTagging        = "PutObjectTagging"
+	OperationDeleteObjectTagging     = "DeleteObjectTagging"
 )
 
 type Request struct {

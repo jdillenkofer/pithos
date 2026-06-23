@@ -173,6 +173,7 @@ const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
 const corsQuery = "cors"
 const appendQuery = "append"
+const taggingQuery = "tagging"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -204,6 +205,19 @@ const copySourceIfUnmodifiedSinceHeader = "x-amz-copy-source-if-unmodified-since
 
 const metadataDirectiveCopy = "COPY"
 const metadataDirectiveReplace = "REPLACE"
+
+const taggingHeader = "x-amz-tagging"
+const taggingDirectiveHeader = "x-amz-tagging-directive"
+
+// taggingCountHeader is the GetObject/HeadObject response header carrying the
+// object's tag count. The S3 REST API user-guide page lists this as
+// "x-amz-tag-count", but that is a documentation error: the canonical AWS API
+// model (and therefore every AWS SDK and the real service) uses
+// "x-amz-tagging-count".
+const taggingCountHeader = "x-amz-tagging-count"
+
+const taggingDirectiveCopy = "COPY"
+const taggingDirectiveReplace = "REPLACE"
 
 const applicationXmlContentType = "application/xml"
 
@@ -406,6 +420,17 @@ type CORSConfiguration struct {
 	Rules   []CORSConfigurationRule `xml:"CORSRule"`
 }
 
+type Tag struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
+}
+
+type Tagging struct {
+	XMLName xml.Name `xml:"Tagging"`
+	Xmlns   string   `xml:"xmlns,attr,omitempty"`
+	TagSet  []Tag    `xml:"TagSet>Tag"`
+}
+
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
@@ -476,6 +501,15 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 
 func setETagHeaderFromObject(headers http.Header, object *storage.Object) {
 	headers.Set(etagHeader, object.ETag)
+}
+
+// setTagCountHeaderFromObject sets the x-amz-tag-count header to the number of
+// tags on the object. Per S3, the header is only present when the object has at
+// least one tag.
+func setTagCountHeaderFromObject(headers http.Header, object *storage.Object) {
+	if len(object.Tags) > 0 {
+		headers.Set(taggingCountHeader, strconv.Itoa(len(object.Tags)))
+	}
 }
 
 func setChecksumType(headers http.Header, checksumType string) {
@@ -587,6 +621,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
 	case storage.ErrTooManyParts:
+		statusCode = 400
+	case storage.ErrInvalidTag:
 		statusCode = 400
 	case storage.ErrInvalidWriteOffset:
 		statusCode = 400
@@ -1423,6 +1459,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders := w.Header()
 	setETagHeaderFromObject(responseHeaders, object)
 	setChecksumHeadersFromObject(responseHeaders, object)
+	setTagCountHeaderFromObject(responseHeaders, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -1525,6 +1562,10 @@ func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Requ
 	query := r.URL.Query()
 	if query.Has(uploadIdQuery) {
 		s.listPartsHandler(w, r)
+		return
+	}
+	if query.Has(taggingQuery) {
+		s.getObjectTaggingHandler(w, r)
 		return
 	}
 	s.getObjectHandler(w, r)
@@ -1767,6 +1808,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	})()
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	setTagCountHeaderFromObject(responseHeaders, object)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()
@@ -1857,8 +1899,18 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
+
+	var tags map[string]string
+	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+		tags, err = storage.ParseTaggingHeader(taggingValue)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+	}
+
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
-	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, tags)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2126,6 +2178,18 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+		tags, err := storage.ParseTaggingHeader(taggingValue)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.Tags = tags
+	}
+
 	shouldReturn = validateMaxEntitySize(r, w)
 	if shouldReturn {
 		return
@@ -2244,6 +2308,12 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 	// AppendObject
 	if query.Has(appendQuery) {
 		s.appendObjectHandler(w, r)
+		return
+	}
+
+	// PutObjectTagging
+	if query.Has(taggingQuery) {
+		s.putObjectTaggingHandler(w, r)
 		return
 	}
 
@@ -2367,6 +2437,25 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	taggingDirective := strings.ToUpper(r.Header.Get(taggingDirectiveHeader))
+	if taggingDirective == "" {
+		taggingDirective = taggingDirectiveCopy
+	}
+	if taggingDirective != taggingDirectiveCopy && taggingDirective != taggingDirectiveReplace {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	var replaceTags map[string]string
+	if taggingDirective == taggingDirectiveReplace {
+		tags, err := storage.ParseTaggingHeader(r.Header.Get(taggingHeader))
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		replaceTags = tags
+	}
+
 	copyRange, err := parseCopySourceRange(r)
 	if err != nil {
 		handleError(err, w, r)
@@ -2385,6 +2474,8 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
 		Range:                copyRange,
 		CopySourceConditions: parseCopySourceConditions(r),
+		ReplaceTags:          taggingDirective == taggingDirectiveReplace,
+		Tags:                 replaceTags,
 	}
 	if opts.ReplaceMetadata {
 		opts.ContentType = getHeaderAsPtr(r.Header, contentTypeHeader)
@@ -2558,6 +2649,12 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 		return
 	}
 
+	// DeleteObjectTagging
+	if query.Has(taggingQuery) {
+		s.deleteObjectTaggingHandler(w, r)
+		return
+	}
+
 	// DeleteObject
 	s.deleteObjectHandler(w, r)
 }
@@ -2577,6 +2674,7 @@ const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
 const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
 const maxPutBucketWebsiteBodySize int64 = 128 * 1024
 const maxPutBucketCORSBodySize int64 = 128 * 1024
+const maxPutObjectTaggingBodySize int64 = 128 * 1024
 
 func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -2844,6 +2942,158 @@ func (s *Server) deleteBucketCORSHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	err = s.storage.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func writeMalformedXML(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:     "MalformedXML",
+		Message:  "The XML you provided was not well-formed or did not validate against our published schema",
+		Resource: r.URL.Path,
+	}
+	if requestID, ok := httpmiddleware.RequestIDFromContext(r.Context()); ok {
+		errResponse.RequestId = requestID
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+	w.WriteHeader(400)
+	w.Write(xmlErrorResponse)
+}
+
+// tagSetToMap converts a parsed Tagging XML body into a map, rejecting duplicate
+// keys with ErrInvalidTag.
+func tagSetToMap(tagging *Tagging) (map[string]string, error) {
+	tags := map[string]string{}
+	for _, t := range tagging.TagSet {
+		if _, exists := tags[t.Key]; exists {
+			return nil, storage.ErrInvalidTag
+		}
+		tags[t.Key] = t.Value
+	}
+	return tags, nil
+}
+
+func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getObjectTaggingHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	tags, err := s.storage.GetObjectTagging(ctx, bucketName, key)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := Tagging{
+		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
+		TagSet: make([]Tag, 0, len(tags)),
+	}
+	for k, v := range tags {
+		response.TagSet = append(response.TagSet, Tag{Key: k, Value: v})
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putObjectTaggingHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutObjectTaggingBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request Tagging
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		writeMalformedXML(w, r)
+		return
+	}
+
+	tags, err := tagSetToMap(&request)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	if err := storage.ValidateTags(tags); err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	err = s.storage.PutObjectTagging(ctx, bucketName, key, tags)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectTaggingHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteObjectTagging(ctx, bucketName, key)
 	if err != nil {
 		handleError(err, w, r)
 		return

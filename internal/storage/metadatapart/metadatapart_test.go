@@ -109,7 +109,12 @@ func TestMetadataPartStorageWithSql(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
@@ -172,7 +177,12 @@ func TestMetadataPartStorageWithFilesystem(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
@@ -209,7 +219,9 @@ func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	require.NoError(t, err)
 	partRepository, err := repositoryFactory.NewPartRepository(db)
 	require.NoError(t, err)
-	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	require.NoError(t, err)
+	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	require.NoError(t, err)
 	st, err := NewStorage(db, metaStore, partStore)
 	require.NoError(t, err)

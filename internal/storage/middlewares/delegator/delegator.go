@@ -81,6 +81,18 @@ func (d *DelegatingStorage) DeleteBucketCORSConfiguration(ctx context.Context, b
 	return d.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
 }
 
+func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	return d.Next.GetObjectTagging(ctx, bucketName, key)
+}
+
+func (d *DelegatingStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	return d.Next.PutObjectTagging(ctx, bucketName, key, tags)
+}
+
+func (d *DelegatingStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	return d.Next.DeleteObjectTagging(ctx, bucketName, key)
+}
+
 func (d *DelegatingStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	return d.Next.ListObjects(ctx, bucketName, opts)
 }
@@ -113,8 +125,8 @@ func (d *DelegatingStorage) DeleteObjects(ctx context.Context, bucketName storag
 	return d.Next.DeleteObjects(ctx, bucketName, entries)
 }
 
-func (d *DelegatingStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	return d.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+func (d *DelegatingStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
+	return d.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, tags)
 }
 
 func (d *DelegatingStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {

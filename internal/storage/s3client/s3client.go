@@ -451,7 +451,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 	return result, nil
 }
 
-func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateMultipartUpload")
 	defer span.End()
 
@@ -459,11 +459,20 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 	if checksumType != nil {
 		checksumTypeStr = types.ChecksumType(*checksumType)
 	}
+	var tagging *string
+	if len(tags) > 0 {
+		values := url.Values{}
+		for k, v := range tags {
+			values.Set(k, v)
+		}
+		tagging = aws.String(values.Encode())
+	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:       aws.String(bucketName.String()),
 		Key:          aws.String(key.String()),
 		ContentType:  contentType,
 		ChecksumType: checksumTypeStr,
+		Tagging:      tagging,
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -838,6 +847,74 @@ func (rs *s3ClientStorage) DeleteBucketCORSConfiguration(ctx context.Context, bu
 	var ae smithy.APIError
 	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
 		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObjectTagging")
+	defer span.End()
+
+	result, err := rs.s3Client.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucketName.String()),
+		Key:    aws.String(key.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
+		return nil, storage.ErrNoSuchKey
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	tags := map[string]string{}
+	for _, t := range result.TagSet {
+		tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	return tags, nil
+}
+
+func (rs *s3ClientStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutObjectTagging")
+	defer span.End()
+
+	tagSet := make([]types.Tag, 0, len(tags))
+	for k, v := range tags {
+		tagSet = append(tagSet, types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+
+	_, err := rs.s3Client.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+		Bucket:  aws.String(bucketName.String()),
+		Key:     aws.String(key.String()),
+		Tagging: &types.Tagging{TagSet: tagSet},
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
+		return storage.ErrNoSuchKey
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObjectTagging")
+	defer span.End()
+
+	_, err := rs.s3Client.DeleteObjectTagging(ctx, &s3.DeleteObjectTaggingInput{
+		Bucket: aws.String(bucketName.String()),
+		Key:    aws.String(key.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
+		return storage.ErrNoSuchKey
 	}
 	if err != nil {
 		return err

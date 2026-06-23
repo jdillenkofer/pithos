@@ -243,6 +243,7 @@ func TestIsReadOnlyReturnsTrueForReadOperations(t *testing.T) {
 		authorization.OperationListParts,
 		authorization.OperationGetObject,
 		authorization.OperationGetBucketWebsite,
+		authorization.OperationGetObjectTagging,
 	}
 	for _, op := range readOperations {
 		request := authorization.Request{
@@ -281,6 +282,8 @@ func TestIsReadOnlyReturnsFalseForWriteOperations(t *testing.T) {
 		authorization.OperationDeleteObjects,
 		authorization.OperationPutBucketWebsite,
 		authorization.OperationDeleteBucketWebsite,
+		authorization.OperationPutObjectTagging,
+		authorization.OperationDeleteObjectTagging,
 	}
 	for _, op := range writeOperations {
 		request := authorization.Request{
