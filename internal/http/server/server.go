@@ -684,6 +684,48 @@ func writeInvalidRequest(w http.ResponseWriter, r *http.Request, message string)
 
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
+	s.bindExistingObjectTagsResolver(request, bucket, key)
+	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// authorizeRequestWithRequestTags is like authorizeRequest but overrides the
+// request's tag set (s3:RequestObjectTag) with tags that are not derivable from
+// the request headers — e.g. the tags carried in the PutObjectTagging XML body.
+func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation string, bucket *string, key *string, requestTags map[string]string, w http.ResponseWriter, r *http.Request) bool {
+	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
+	request.RequestObjectTags = requestTags
+	s.bindExistingObjectTagsResolver(request, bucket, key)
+	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// bindExistingObjectTagsResolver attaches a lazy resolver that fetches the target
+// object's currently stored tags, so Lua policies can gate on s3:ExistingObjectTag.
+// A missing object resolves to an empty tag set; other lookup errors fail closed.
+func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, bucket *string, key *string) {
+	if bucket == nil || key == nil {
+		return
+	}
+	bucketName, errB := storage.NewBucketName(*bucket)
+	objectKey, errK := storage.NewObjectKey(*key)
+	if errB != nil || errK != nil {
+		return
+	}
+	request.ResolveExistingObjectTags = func(ctx context.Context) (map[string]string, error) {
+		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey)
+		if err == storage.ErrNoSuchKey {
+			return map[string]string{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return tags, nil
+	}
+}
+
+// runAuthorization invokes the configured authorizer and writes the appropriate
+// error/deny response. It returns true when the caller should stop handling the
+// request (error or denied).
+func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
@@ -710,22 +752,9 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
 	request.SourceBucket = ptrutils.ToPtr(srcBucket)
 	request.SourceKey = ptrutils.ToPtr(srcKey)
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
-	if err != nil {
-		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
-		handleError(err, w, r)
-		return true
-	}
-	if !authorized {
-		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
-		if !isAuthenticated {
-			w.WriteHeader(401)
-		} else {
-			w.WriteHeader(403)
-		}
-		return true
-	}
-	return false
+	// Existing object tags refer to the destination object being created/overwritten.
+	s.bindExistingObjectTagsResolver(request, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey))
+	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
 func makeAuthorizationRequest(ctx context.Context, operation string, bucket *string, key *string, r *http.Request) (*authorization.Request, bool) {
@@ -737,14 +766,25 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		accessKeyId = &keyStr
 	}
 
+	// Expose tags supplied via the x-amz-tagging header (PutObject, CopyObject
+	// REPLACE) as request tags (s3:RequestObjectTag). Malformed values are left
+	// unset here; the operation itself rejects them later.
+	var requestTags map[string]string
+	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+		if parsed, err := storage.ParseTaggingHeader(taggingValue); err == nil {
+			requestTags = parsed
+		}
+	}
+
 	request := &authorization.Request{
 		Operation: operation,
 		Authorization: authorization.Authorization{
 			AccessKeyId: accessKeyId,
 		},
-		Bucket:      bucket,
-		Key:         key,
-		HttpRequest: makeAuthorizationHTTPRequest(r),
+		Bucket:            bucket,
+		Key:               key,
+		HttpRequest:       makeAuthorizationHTTPRequest(r),
+		RequestObjectTags: requestTags,
 	}
 	return request, isAuthenticated
 }
@@ -762,6 +802,9 @@ func (s *Server) authorizeListObject(ctx context.Context, request *authorization
 	if !ok {
 		return true, nil
 	}
+	// Re-bind the existing-tags resolver to the object currently being filtered so
+	// authorizeListObject policies can gate each listed object on its own tags.
+	s.bindExistingObjectTagsResolver(request, request.Bucket, &key)
 	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
 }
 
@@ -3036,11 +3079,8 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
-	if shouldReturn {
-		return
-	}
-
+	// Parse and validate the tag set before authorizing so the tags being set are
+	// available to the authorizer as request tags (s3:RequestObjectTag).
 	data, err := readLimitedBody(r, w, maxPutObjectTaggingBodySize)
 	if err != nil {
 		handleError(err, w, r)
@@ -3062,6 +3102,11 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 
 	if err := storage.ValidateTags(tags); err != nil {
 		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequestWithRequestTags(ctx, authorization.OperationPutObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), tags, w, r)
+	if shouldReturn {
 		return
 	}
 

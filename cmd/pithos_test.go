@@ -3200,6 +3200,107 @@ func TestObjectTagging(t *testing.T) {
 	})
 }
 
+func TestTagBasedAuthorization(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		authorizationCode := `
+		function authorizeRequest(request)
+		  if request:isOperation("PutObjectTagging") then
+		    return request:requestTagEquals("team", "storage")
+		  end
+		  if request:isOperation("GetObject") then
+		    return request:objectTagEquals("team", "storage")
+		  end
+		  return true
+		end
+
+		function authorizeListObject(request, key)
+		  return request:objectTagEquals("team", "storage")
+		end
+		`
+		newAuthorizer := func() authorization.RequestAuthorizer {
+			ra, err := lua.NewLuaAuthorizer(authorizationCode)
+			if err != nil {
+				t.Fatalf("Could not create LuaAuthorizer: %v", err)
+			}
+			return ra
+		}
+
+		assertForbidden := func(t *testing.T, err error) {
+			assert.NotNil(t, err)
+			var httpErr *awshttp.ResponseError
+			if assert.ErrorAs(t, err, &httpErr) {
+				assert.Equal(t, 403, httpErr.Response.StatusCode)
+			}
+		}
+
+		t.Run("GetObject is allowed only for the matching existing object tag"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(newAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body), Tagging: aws.String("team=storage")})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key2, Body: bytes.NewReader(body), Tagging: aws.String("team=other")})
+			assert.Nil(t, err)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			io.ReadAll(getResult.Body)
+
+			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
+			assertForbidden(t, err)
+		})
+
+		t.Run("ListObjects is filtered by existing object tag"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(newAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body), Tagging: aws.String("team=storage")})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key2, Body: bytes.NewReader(body), Tagging: aws.String("team=other")})
+			assert.Nil(t, err)
+
+			list, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{Bucket: bucketName})
+			assert.Nil(t, err)
+			assert.Len(t, list.Contents, 1)
+			if len(list.Contents) == 1 {
+				assert.Equal(t, *key, *list.Contents[0].Key)
+			}
+		})
+
+		t.Run("PutObjectTagging is gated by the request tag being set"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServerWithAuthorizer(newAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObjectTagging(context.Background(), &s3.PutObjectTaggingInput{
+				Bucket:  bucketName,
+				Key:     key,
+				Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("team"), Value: aws.String("storage")}}},
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObjectTagging(context.Background(), &s3.PutObjectTaggingInput{
+				Bucket:  bucketName,
+				Key:     key,
+				Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String("team"), Value: aws.String("other")}}},
+			})
+			assertForbidden(t, err)
+		})
+	})
+}
+
 func TestUploadPartCopy(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

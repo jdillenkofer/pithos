@@ -384,7 +384,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 		}
 		return true, nil
 	}
-	authorizer.pushRequest(L, request)
+	authorizer.pushRequest(ctx, L, request)
 	argCount := 1 + len(args)
 	for _, arg := range args {
 		pushGoType(L, arg)
@@ -411,10 +411,38 @@ func isReadOnly(operation string) bool {
 	return isReadOnly
 }
 
-func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorization.Request) {
+func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, request *authorization.Request) {
 	clientIP, scheme := authorizer.resolveClientIPAndScheme(request.HttpRequest)
 	request.HttpRequest.ClientIP = clientIP
 	request.HttpRequest.Scheme = scheme
+
+	// loadExistingObjectTags lazily resolves the target object's stored tags via
+	// the resolver supplied by the server, memoizing the result so multiple tag
+	// predicates in one policy evaluation cause at most one storage lookup. A
+	// resolver error is surfaced to the caller, which raises a Lua error so the
+	// whole authorization fails closed.
+	var existingTags map[string]string
+	existingTagsLoaded := false
+	loadExistingObjectTags := func() (map[string]string, error) {
+		if existingTagsLoaded {
+			return existingTags, nil
+		}
+		if request.ResolveExistingObjectTags == nil {
+			existingTags = map[string]string{}
+			existingTagsLoaded = true
+			return existingTags, nil
+		}
+		tags, err := request.ResolveExistingObjectTags(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		existingTags = tags
+		existingTagsLoaded = true
+		return existingTags, nil
+	}
 
 	pushGoType(L, request)
 	L.Field(-1, "httpRequest")
@@ -744,4 +772,121 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		return 1
 	})
 	L.SetField(-2, "keyHasSuffix")
+
+	// Existing object tags (s3:ExistingObjectTag) — the tags currently stored on
+	// the target object, resolved lazily via loadExistingObjectTags.
+	pushTagTable := func(L *lua.State, tags map[string]string) {
+		L.NewTable()
+		for k, v := range tags {
+			L.PushString(v)
+			L.SetField(-2, k)
+		}
+	}
+	L.PushGoFunction(func(L *lua.State) int {
+		tags, err := loadExistingObjectTags()
+		if err != nil {
+			lua.Errorf(L, "failed to resolve existing object tags: %v", err)
+			return 0
+		}
+		pushTagTable(L, tags)
+		return 1
+	})
+	L.SetField(-2, "objectTags")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		if !ok {
+			L.PushNil()
+			return 1
+		}
+		tags, err := loadExistingObjectTags()
+		if err != nil {
+			lua.Errorf(L, "failed to resolve existing object tags: %v", err)
+			return 0
+		}
+		if value, exists := tags[key]; exists {
+			L.PushString(value)
+		} else {
+			L.PushNil()
+		}
+		return 1
+	})
+	L.SetField(-2, "objectTag")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		expectedValue, ok2 := L.ToString(3)
+		if !ok || !ok2 {
+			L.PushBoolean(false)
+			return 1
+		}
+		tags, err := loadExistingObjectTags()
+		if err != nil {
+			lua.Errorf(L, "failed to resolve existing object tags: %v", err)
+			return 0
+		}
+		value, exists := tags[key]
+		L.PushBoolean(exists && value == expectedValue)
+		return 1
+	})
+	L.SetField(-2, "objectTagEquals")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		tags, err := loadExistingObjectTags()
+		if err != nil {
+			lua.Errorf(L, "failed to resolve existing object tags: %v", err)
+			return 0
+		}
+		_, exists := tags[key]
+		L.PushBoolean(exists)
+		return 1
+	})
+	L.SetField(-2, "hasObjectTag")
+
+	// Request tags (s3:RequestObjectTag) — the tags supplied in the request
+	// itself; already in memory, no resolver needed.
+	L.PushGoFunction(func(L *lua.State) int {
+		pushTagTable(L, request.RequestObjectTags)
+		return 1
+	})
+	L.SetField(-2, "requestTags")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		if !ok {
+			L.PushNil()
+			return 1
+		}
+		if value, exists := request.RequestObjectTags[key]; exists {
+			L.PushString(value)
+		} else {
+			L.PushNil()
+		}
+		return 1
+	})
+	L.SetField(-2, "requestTag")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		expectedValue, ok2 := L.ToString(3)
+		if !ok || !ok2 {
+			L.PushBoolean(false)
+			return 1
+		}
+		value, exists := request.RequestObjectTags[key]
+		L.PushBoolean(exists && value == expectedValue)
+		return 1
+	})
+	L.SetField(-2, "requestTagEquals")
+	L.PushGoFunction(func(L *lua.State) int {
+		key, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		_, exists := request.RequestObjectTags[key]
+		L.PushBoolean(exists)
+		return 1
+	})
+	L.SetField(-2, "hasRequestTag")
 }
