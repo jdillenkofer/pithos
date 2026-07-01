@@ -69,6 +69,12 @@ type Request struct {
 	// implements it over the storage layer; the authorizer must only invoke it
 	// when a policy actually reads object tags. A returned error must fail closed.
 	ResolveExistingObjectTags func(ctx context.Context) (map[string]string, error)
+	// ResolveExistingSourceObjectTags is the counterpart of
+	// ResolveExistingObjectTags for the copy source (SourceBucket/SourceKey) of a
+	// CopyObject or UploadPartCopy request; AWS evaluates s3:ExistingObjectTag
+	// against the source object for the copy's read side. Nil when the request
+	// has no copy source.
+	ResolveExistingSourceObjectTags func(ctx context.Context) (map[string]string, error)
 	// RequestObjectTags holds the tags supplied in the request itself (the
 	// s3:RequestObjectTag condition) via the x-amz-tagging header or the
 	// PutObjectTagging body. Nil when the request carries no tags.

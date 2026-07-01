@@ -725,7 +725,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	return result, nil
 }
 
-func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
+func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateMultipartUpload")
 	defer span.End()
 
@@ -733,7 +733,7 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName s
 	if err != nil {
 		return nil, err
 	}
-	return os.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, tags)
+	return os.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 }
 
 func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {

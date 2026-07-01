@@ -221,6 +221,14 @@ type PutObjectOptions struct {
 	IfMatchETag     *string
 }
 
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
+}
+
 // AppendObjectOptions holds options for an AppendObject operation.
 type AppendObjectOptions struct {
 	// WriteOffset, when non-nil, specifies the expected current size of the
@@ -316,7 +324,7 @@ type ObjectStore interface {
 }
 
 type MultipartStore interface {
-	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)

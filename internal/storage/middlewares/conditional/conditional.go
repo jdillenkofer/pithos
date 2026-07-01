@@ -322,12 +322,12 @@ func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context
 	return s.DeleteObjectTagging(ctx, bucketName, key)
 }
 
-func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CreateMultipartUpload")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, tags)
+	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 }
 
 func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {

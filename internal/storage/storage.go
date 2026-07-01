@@ -71,6 +71,14 @@ type PutObjectOptions struct {
 	Tags map[string]string
 }
 
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
+}
+
 // AppendObjectOptions holds options for an AppendObject operation.
 type AppendObjectOptions struct {
 	// WriteOffset, when non-nil, specifies the expected current size of the
@@ -406,7 +414,7 @@ type ObjectManager interface {
 
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
-	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
 	// UploadPartCopy uploads a part of a multipart upload by copying data (optionally
 	// a byte range) from an existing source object, server-side. opts may be nil.

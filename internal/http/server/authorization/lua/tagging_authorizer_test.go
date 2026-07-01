@@ -204,3 +204,62 @@ func TestListObjectTagFilteringViaResource(t *testing.T) {
 	assert.Nil(t, err)
 	assert.False(t, allowed)
 }
+
+func TestSourceObjectTagPredicates(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request:sourceObjectTagEquals("team", "storage") and request:hasSourceObjectTag("team") and request:sourceObjectTag("team") == "storage" and request:sourceObjectTags()["team"] == "storage"
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := taggingRequest(nil, nil)
+	request.Operation = authorization.OperationCopyObject
+	request.SourceBucket = ptrutils.ToPtr("src-bucket")
+	request.SourceKey = ptrutils.ToPtr("src-key")
+	request.ResolveExistingSourceObjectTags = func(ctx context.Context) (map[string]string, error) {
+		return map[string]string{"team": "storage"}, nil
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), request)
+	assert.Nil(t, err)
+	assert.True(t, authorized)
+}
+
+func TestSourceObjectTagPredicatesFalseWhenResolverNil(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return (not request:hasSourceObjectTag("team")) and (request:sourceObjectTag("team") == nil) and (next(request:sourceObjectTags()) == nil)
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(nil, nil))
+	assert.Nil(t, err)
+	assert.True(t, authorized)
+}
+
+func TestSourceObjectTagsResolverErrorFailsClosed(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return not request:sourceObjectTagEquals("team", "storage")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	request := taggingRequest(nil, nil)
+	request.ResolveExistingSourceObjectTags = func(ctx context.Context) (map[string]string, error) {
+		return nil, errors.New("storage unavailable")
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), request)
+	assert.NotNil(t, err)
+	assert.False(t, authorized)
+}

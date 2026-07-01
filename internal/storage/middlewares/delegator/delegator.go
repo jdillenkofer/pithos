@@ -125,8 +125,8 @@ func (d *DelegatingStorage) DeleteObjects(ctx context.Context, bucketName storag
 	return d.Next.DeleteObjects(ctx, bucketName, entries)
 }
 
-func (d *DelegatingStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
-	return d.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, tags)
+func (d *DelegatingStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	return d.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 }
 
 func (d *DelegatingStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {

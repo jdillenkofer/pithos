@@ -861,7 +861,7 @@ func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx
 	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
 
@@ -894,8 +894,8 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 
 	// Persist any tags supplied via x-amz-tagging on the pending object. They are
 	// carried over when the upload is completed (the object row is reused).
-	if len(tags) > 0 {
-		if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, tags); err != nil {
+	if opts != nil && len(opts.Tags) > 0 {
+		if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, opts.Tags); err != nil {
 			return nil, err
 		}
 	}

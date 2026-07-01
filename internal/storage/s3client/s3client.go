@@ -451,7 +451,7 @@ func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage
 	return result, nil
 }
 
-func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, tags map[string]string) (*storage.InitiateMultipartUploadResult, error) {
+func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateMultipartUpload")
 	defer span.End()
 
@@ -460,9 +460,9 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		checksumTypeStr = types.ChecksumType(*checksumType)
 	}
 	var tagging *string
-	if len(tags) > 0 {
+	if opts != nil && len(opts.Tags) > 0 {
 		values := url.Values{}
-		for k, v := range tags {
+		for k, v := range opts.Tags {
 			values.Set(k, v)
 		}
 		tagging = aws.String(values.Encode())
