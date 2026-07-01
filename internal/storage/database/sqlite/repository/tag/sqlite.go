@@ -3,6 +3,8 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
@@ -48,6 +50,33 @@ func convertRowToTagEntity(tagRows *sql.Rows) (*tag.Entity, error) {
 
 func (tr *sqliteRepository) FindTagsByObjectIdOrderByKeyAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]tag.Entity, error) {
 	tagRows, err := tx.QueryContext(ctx, findTagsByObjectIdOrderByKeyAscStmt, objectId.String())
+	if err != nil {
+		return nil, err
+	}
+	defer tagRows.Close()
+	tags := []tag.Entity{}
+	for tagRows.Next() {
+		tagEntity, err := convertRowToTagEntity(tagRows)
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, *tagEntity)
+	}
+	return tags, nil
+}
+
+func (tr *sqliteRepository) FindTagsByObjectIdsOrderByObjectIdAndKeyAsc(ctx context.Context, tx *sql.Tx, objectIds []ulid.ULID) ([]tag.Entity, error) {
+	if len(objectIds) == 0 {
+		return []tag.Entity{}, nil
+	}
+	placeholders := make([]string, len(objectIds))
+	args := make([]any, len(objectIds))
+	for i, objectId := range objectIds {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = objectId.String()
+	}
+	query := "SELECT id, object_id, key, value, created_at, updated_at FROM object_tags WHERE object_id IN (" + strings.Join(placeholders, ", ") + ") ORDER BY object_id ASC, key ASC"
+	tagRows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

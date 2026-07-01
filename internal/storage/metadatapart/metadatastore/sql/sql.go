@@ -357,6 +357,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 	commonPrefixes := []string{}
 	objects := []metadatastore.Object{}
+	listedObjectIds := []ulid.ULID{}
 	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -406,8 +407,31 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					Size:              objectEntity.Size,
 					Parts:             parts,
 				})
+				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
 			}
 		}
+	}
+
+	// Load the tag sets of the whole page in one query, so per-object consumers
+	// (e.g. tag-based list filtering in the authorizer) don't need a storage
+	// lookup per key. Every listed object gets a non-nil map.
+	tagEntities, err := sms.tagRepository.FindTagsByObjectIdsOrderByObjectIdAndKeyAsc(ctx, tx, listedObjectIds)
+	if err != nil {
+		return nil, err
+	}
+	tagsByObjectId := map[ulid.ULID]map[string]string{}
+	for _, tagEntity := range tagEntities {
+		if tagsByObjectId[tagEntity.ObjectId] == nil {
+			tagsByObjectId[tagEntity.ObjectId] = map[string]string{}
+		}
+		tagsByObjectId[tagEntity.ObjectId][tagEntity.Key] = tagEntity.Value
+	}
+	for i, objectId := range listedObjectIds {
+		tags := tagsByObjectId[objectId]
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		objects[i].Tags = tags
 	}
 
 	listBucketResult := metadatastore.ListBucketResult{

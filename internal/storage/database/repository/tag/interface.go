@@ -10,6 +10,9 @@ import (
 
 type Repository interface {
 	FindTagsByObjectIdOrderByKeyAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]Entity, error)
+	// FindTagsByObjectIdsOrderByObjectIdAndKeyAsc returns the tags of all given
+	// objects in a single query.
+	FindTagsByObjectIdsOrderByObjectIdAndKeyAsc(ctx context.Context, tx *sql.Tx, objectIds []ulid.ULID) ([]Entity, error)
 	SaveTag(ctx context.Context, tx *sql.Tx, tag *Entity) error
 	DeleteTagsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
 }

@@ -32,7 +32,8 @@ type Object struct {
 	Size              int64
 	Parts             []Part
 	// Tags holds the object's tag set as key/value pairs. It is populated by
-	// HeadObject and applied (replacing any existing tags) by PutObject.
+	// HeadObject and ListObjects and applied (replacing any existing tags) by
+	// PutObject.
 	Tags map[string]string
 }
 

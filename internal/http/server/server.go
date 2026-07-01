@@ -829,14 +829,25 @@ func (s *Server) authorizeListBucket(ctx context.Context, request *authorization
 	return requestResourceAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
 }
 
-func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
+// authorizeListObject filters a single listed key. existingTags, when non-nil,
+// is the object's tag set already loaded by the list query; it is served to
+// tag predicates directly so filtering a page does not cost one storage lookup
+// per key. A nil existingTags (e.g. common prefixes, or backends whose list
+// results carry no tags) falls back to a lazy per-key lookup.
+func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string, existingTags map[string]string) (bool, error) {
 	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
 	if !ok {
 		return true, nil
 	}
 	// Re-bind the existing-tags resolver to the object currently being filtered so
 	// authorizeListObject policies can gate each listed object on its own tags.
-	s.bindExistingObjectTagsResolver(request, request.Bucket, &key)
+	if existingTags != nil {
+		request.ResolveExistingObjectTags = func(context.Context) (map[string]string, error) {
+			return existingTags, nil
+		}
+	} else {
+		s.bindExistingObjectTagsResolver(request, request.Bucket, &key)
+	}
 	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
 }
 
@@ -1277,7 +1288,7 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		for objectIndex, object := range result.Objects {
 			key := object.Key.String()
 			lastScanned = &key
-			allowed, err := s.authorizeListObject(ctx, baseRequest, key)
+			allowed, err := s.authorizeListObject(ctx, baseRequest, key, object.Tags)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1296,7 +1307,7 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		}
 		for _, commonPrefix := range result.CommonPrefixes {
 			lastScanned = &commonPrefix
-			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix)
+			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix, nil)
 			if err != nil {
 				return nil, nil, err
 			}
