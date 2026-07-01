@@ -757,6 +757,19 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
+// taggingHeaderApplies reports whether the x-amz-tagging header has any effect
+// for the given operation, i.e. whether the operation persists the header's
+// tags on the target object.
+func taggingHeaderApplies(operation string, r *http.Request) bool {
+	switch operation {
+	case authorization.OperationPutObject, authorization.OperationCreateMultipartUpload:
+		return true
+	case authorization.OperationCopyObject:
+		return strings.ToUpper(r.Header.Get(taggingDirectiveHeader)) == taggingDirectiveReplace
+	}
+	return false
+}
+
 func makeAuthorizationRequest(ctx context.Context, operation string, bucket *string, key *string, r *http.Request) (*authorization.Request, bool) {
 	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
 
@@ -766,13 +779,18 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		accessKeyId = &keyStr
 	}
 
-	// Expose tags supplied via the x-amz-tagging header (PutObject, CopyObject
-	// REPLACE) as request tags (s3:RequestObjectTag). Malformed values are left
-	// unset here; the operation itself rejects them later.
+	// Expose tags supplied via the x-amz-tagging header as request tags
+	// (s3:RequestObjectTag), but only for operations that actually store the
+	// header's tags — otherwise a policy could be satisfied by tags the
+	// operation ignores (e.g. CopyObject with the default COPY directive).
+	// Malformed values are left unset here; the operation itself rejects them
+	// later.
 	var requestTags map[string]string
-	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
-		if parsed, err := storage.ParseTaggingHeader(taggingValue); err == nil {
-			requestTags = parsed
+	if taggingHeaderApplies(operation, r) {
+		if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+			if parsed, err := storage.ParseTaggingHeader(taggingValue); err == nil {
+				requestTags = parsed
+			}
 		}
 	}
 

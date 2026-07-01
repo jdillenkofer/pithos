@@ -2,12 +2,34 @@ package server
 
 import (
 	"encoding/xml"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaggingHeaderAppliesOnlyToTagStoringOperations(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	plainRequest := httptest.NewRequest("PUT", "/bucket/key", nil)
+	require.True(t, taggingHeaderApplies(authorization.OperationPutObject, plainRequest))
+	require.True(t, taggingHeaderApplies(authorization.OperationCreateMultipartUpload, plainRequest))
+	require.False(t, taggingHeaderApplies(authorization.OperationGetObject, plainRequest))
+	require.False(t, taggingHeaderApplies(authorization.OperationPutObjectTagging, plainRequest))
+
+	// CopyObject only stores the header's tags with the REPLACE directive; the
+	// default (COPY) carries over the source tags and ignores the header.
+	require.False(t, taggingHeaderApplies(authorization.OperationCopyObject, plainRequest))
+	replaceRequest := httptest.NewRequest("PUT", "/bucket/key", nil)
+	replaceRequest.Header.Set(taggingDirectiveHeader, "replace")
+	require.True(t, taggingHeaderApplies(authorization.OperationCopyObject, replaceRequest))
+	copyRequest := httptest.NewRequest("PUT", "/bucket/key", nil)
+	copyRequest.Header.Set(taggingDirectiveHeader, "COPY")
+	require.False(t, taggingHeaderApplies(authorization.OperationCopyObject, copyRequest))
+}
 
 func TestUnmarshalTaggingParsesTagSet(t *testing.T) {
 	testutils.SkipIfIntegration(t)
