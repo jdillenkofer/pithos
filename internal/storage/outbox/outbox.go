@@ -375,11 +375,12 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx database.Tx, operation string, bucketName storage.BucketName, key string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx database.Tx, operation string, bucketName storage.BucketName, key string, contentType *string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
-		Operation: operation,
-		Bucket:    bucketName,
-		Key:       key,
+		Operation:   operation,
+		Bucket:      bucketName,
+		Key:         key,
+		ContentType: contentType,
 	}
 	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId, &entry)
 	if err != nil {
@@ -403,7 +404,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "")
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil)
 		return err
 	})
 }
@@ -413,7 +414,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "")
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil)
 		return err
 	})
 }
@@ -603,7 +604,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	var calculatedChecksums *checksumutils.ChecksumValues
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, c, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String())
+			entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), contentType)
 			if err != nil {
 				return err
 			}
@@ -689,7 +690,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String())
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), nil)
 		return err
 	})
 }
@@ -700,7 +701,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		for _, entry := range entries {
-			_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String())
+			_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), nil)
 			if err != nil {
 				return err
 			}
