@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
@@ -624,6 +626,86 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// Multiple pending uploads can share the same key, so the
+	// (keyMarker, uploadIdMarker) cursor must resume mid-key and return the
+	// remaining uploads of the marker key before moving to greater keys.
+	uploadKeys := []ObjectKey{
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-b"),
+		MustNewObjectKey("upload-c"),
+	}
+	expectedUploads := []Upload{}
+	for _, uploadKey := range uploadKeys {
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+			initiateResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, uploadKey, nil, nil, nil)
+			if err != nil {
+				return err
+			}
+			expectedUploads = append(expectedUploads, Upload{Key: uploadKey, UploadId: initiateResult.UploadId})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	slices.SortFunc(expectedUploads, func(a, b Upload) int {
+		if c := strings.Compare(a.Key.String(), b.Key.String()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.UploadId.String(), b.UploadId.String())
+	})
+
+	collectedUploads := []Upload{}
+	keyMarker := ""
+	uploadIdMarker := ""
+	for page := 0; ; page++ {
+		if page > len(expectedUploads) {
+			return errors.New("multipart upload pagination did not terminate")
+		}
+		var listMultipartUploadsResult *ListMultipartUploadsResult
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+			var err error
+			listMultipartUploadsResult, err = metadataStore.ListMultipartUploads(ctx, tx, bucketName, ListMultipartUploadsOptions{
+				KeyMarker:      &keyMarker,
+				UploadIdMarker: &uploadIdMarker,
+				MaxUploads:     2,
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if len(listMultipartUploadsResult.Uploads) > 2 {
+			return errors.New("expected at most 2 uploads per page got " + strconv.Itoa(len(listMultipartUploadsResult.Uploads)))
+		}
+		collectedUploads = append(collectedUploads, listMultipartUploadsResult.Uploads...)
+		if !listMultipartUploadsResult.IsTruncated {
+			break
+		}
+		keyMarker = listMultipartUploadsResult.NextKeyMarker
+		uploadIdMarker = listMultipartUploadsResult.NextUploadIdMarker
+	}
+	if len(collectedUploads) != len(expectedUploads) {
+		return errors.New("expected " + strconv.Itoa(len(expectedUploads)) + " paginated uploads got " + strconv.Itoa(len(collectedUploads)))
+	}
+	for idx, expectedUpload := range expectedUploads {
+		if !expectedUpload.Key.Equals(collectedUploads[idx].Key) || !expectedUpload.UploadId.Equals(collectedUploads[idx].UploadId) {
+			return errors.New("unexpected upload at index " + strconv.Itoa(idx))
+		}
+	}
+
+	for _, upload := range expectedUploads {
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+			_, err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, upload.Key, upload.UploadId)
+			return err
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
