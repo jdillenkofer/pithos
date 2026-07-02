@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
@@ -107,7 +109,7 @@ func migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx context.Con
 }
 
 func migrateSingleObject(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName, sourceObject storage.Object) error {
-	_, readers, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
+	srcObject, readers, err := source.GetObject(ctx, bucketName, sourceObject.Key, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -146,16 +148,62 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 	uploader := manager.NewUploader(adapter, func(u *manager.Uploader) {
 		u.Concurrency = 1
 	})
-	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket:  ptrutils.ToPtr(bucketName.String()),
-		Key:     ptrutils.ToPtr(sourceObject.Key.String()),
-		Body:    tempFile,
-		Tagging: encodeTaggingHeader(tags),
-	})
+	// Carry the source object's content type and metadata over to the
+	// destination alongside its tag set.
+	input := &s3.PutObjectInput{
+		Bucket:      ptrutils.ToPtr(bucketName.String()),
+		Key:         ptrutils.ToPtr(sourceObject.Key.String()),
+		Body:        tempFile,
+		Tagging:     encodeTaggingHeader(tags),
+		ContentType: srcObject.ContentType,
+	}
+	metadata := srcObject.Metadata
+	input.CacheControl = metadata.CacheControl
+	input.ContentDisposition = metadata.ContentDisposition
+	input.ContentEncoding = metadata.ContentEncoding
+	input.ContentLanguage = metadata.ContentLanguage
+	input.Expires = parseExpires(metadata.Expires)
+	input.WebsiteRedirectLocation = metadata.WebsiteRedirectLocation
+	input.Metadata = metadata.UserMetadata
+	_, err = uploader.Upload(ctx, input)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// parseExpires parses the stored raw Expires header value into a time.Time for
+// the AWS SDK input types. Unparseable values are dropped.
+func parseExpires(expires *string) *time.Time {
+	if expires == nil {
+		return nil
+	}
+	if t, err := http.ParseTime(*expires); err == nil {
+		return &t
+	}
+	return nil
+}
+
+// objectMetadataFromSDKInput reassembles a storage.ObjectMetadata from the
+// metadata fields of an SDK Put/CreateMultipartUpload input. Returns nil when
+// no metadata field is set.
+func objectMetadataFromSDKInput(cacheControl, contentDisposition, contentEncoding, contentLanguage *string, expires *time.Time, websiteRedirectLocation *string, userMetadata map[string]string) *storage.ObjectMetadata {
+	if cacheControl == nil && contentDisposition == nil && contentEncoding == nil && contentLanguage == nil && expires == nil && websiteRedirectLocation == nil && len(userMetadata) == 0 {
+		return nil
+	}
+	var expiresStr *string
+	if expires != nil {
+		expiresStr = ptrutils.ToPtr(expires.UTC().Format(http.TimeFormat))
+	}
+	return &storage.ObjectMetadata{
+		CacheControl:            cacheControl,
+		ContentDisposition:      contentDisposition,
+		ContentEncoding:         contentEncoding,
+		ContentLanguage:         contentLanguage,
+		Expires:                 expiresStr,
+		WebsiteRedirectLocation: websiteRedirectLocation,
+		UserMetadata:            userMetadata,
+	}
 }
 
 // encodeTaggingHeader encodes a tag set as an x-amz-tagging header value.
@@ -196,9 +244,10 @@ func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
+	metadata := objectMetadataFromSDKInput(input.CacheControl, input.ContentDisposition, input.ContentEncoding, input.ContentLanguage, input.Expires, input.WebsiteRedirectLocation, input.Metadata)
 	var createOpts *storage.CreateMultipartUploadOptions
-	if len(tags) > 0 {
-		createOpts = &storage.CreateMultipartUploadOptions{Tags: tags}
+	if len(tags) > 0 || metadata != nil {
+		createOpts = &storage.CreateMultipartUploadOptions{Tags: tags, Metadata: metadata}
 	}
 	result, err := a.storage.CreateMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, nil, createOpts)
 	if err != nil {
@@ -260,9 +309,10 @@ func (a *StorageToS3UploadAPIClientAdapter) PutObject(ctx context.Context, input
 	if err != nil {
 		return nil, err
 	}
+	metadata := objectMetadataFromSDKInput(input.CacheControl, input.ContentDisposition, input.ContentEncoding, input.ContentLanguage, input.Expires, input.WebsiteRedirectLocation, input.Metadata)
 	var putObjectOptions *storage.PutObjectOptions
-	if len(tags) > 0 {
-		putObjectOptions = &storage.PutObjectOptions{Tags: tags}
+	if len(tags) > 0 || metadata != nil {
+		putObjectOptions = &storage.PutObjectOptions{Tags: tags, Metadata: metadata}
 	}
 	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, input.Body, nil, putObjectOptions)
 	if err != nil {

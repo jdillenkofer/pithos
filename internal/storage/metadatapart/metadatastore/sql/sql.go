@@ -20,6 +20,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/usermetadata"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	sqlite3 "github.com/mattn/go-sqlite3"
@@ -45,28 +46,30 @@ func isUniqueConstraintViolation(err error) bool {
 
 type sqlMetadataStore struct {
 	*lifecycle.ValidatedLifecycle
-	bucketRepository bucket.Repository
-	objectRepository object.Repository
-	partRepository   part.Repository
-	tagRepository    tag.Repository
-	tracer           trace.Tracer
+	bucketRepository       bucket.Repository
+	objectRepository       object.Repository
+	partRepository         part.Repository
+	tagRepository          tag.Repository
+	userMetadataRepository usermetadata.Repository
+	tracer                 trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
 var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
-func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository) (metadatastore.MetadataStore, error) {
+func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository, userMetadataRepository usermetadata.Repository) (metadatastore.MetadataStore, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
 	if err != nil {
 		return nil, err
 	}
 	return &sqlMetadataStore{
-		ValidatedLifecycle: lifecycle,
-		bucketRepository:   bucketRepository,
-		objectRepository:   objectRepository,
-		partRepository:     partRepository,
-		tagRepository:      tagRepository,
-		tracer:             otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
+		ValidatedLifecycle:     lifecycle,
+		bucketRepository:       bucketRepository,
+		objectRepository:       objectRepository,
+		partRepository:         partRepository,
+		tagRepository:          tagRepository,
+		userMetadataRepository: userMetadataRepository,
+		tracer:                 otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
 	}, nil
 }
 
@@ -103,6 +106,65 @@ func (sms *sqlMetadataStore) replaceObjectTags(ctx context.Context, tx *sql.Tx, 
 		}
 	}
 	return nil
+}
+
+// loadObjectUserMetadata loads the user-defined metadata for the given object
+// id as a map. An object with no user metadata yields an empty (non-nil) map.
+func (sms *sqlMetadataStore) loadObjectUserMetadata(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (map[string]string, error) {
+	userMetadataEntities, err := sms.userMetadataRepository.FindUserMetadataByObjectIdOrderByKeyAsc(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+	userMetadata := map[string]string{}
+	for _, userMetadataEntity := range userMetadataEntities {
+		userMetadata[userMetadataEntity.Key] = userMetadataEntity.Value
+	}
+	return userMetadata, nil
+}
+
+// replaceObjectUserMetadata removes any existing user-defined metadata for the
+// object id and inserts the supplied entries.
+func (sms *sqlMetadataStore) replaceObjectUserMetadata(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, userMetadata map[string]string) error {
+	err := sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return err
+	}
+	for key, value := range userMetadata {
+		userMetadataEntity := usermetadata.Entity{
+			ObjectId: objectId,
+			Key:      key,
+			Value:    value,
+		}
+		err = sms.userMetadataRepository.SaveUserMetadata(ctx, tx, &userMetadataEntity)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applySystemMetadataToEntity copies the user-modifiable system metadata
+// headers onto the object entity's columns.
+func applySystemMetadataToEntity(objectEntity *object.Entity, metadata metadatastore.ObjectMetadata) {
+	objectEntity.CacheControl = metadata.CacheControl
+	objectEntity.ContentDisposition = metadata.ContentDisposition
+	objectEntity.ContentEncoding = metadata.ContentEncoding
+	objectEntity.ContentLanguage = metadata.ContentLanguage
+	objectEntity.Expires = metadata.Expires
+	objectEntity.WebsiteRedirectLocation = metadata.WebsiteRedirectLocation
+}
+
+// systemMetadataFromEntity reads the user-modifiable system metadata headers
+// from the object entity's columns.
+func systemMetadataFromEntity(objectEntity *object.Entity) metadatastore.ObjectMetadata {
+	return metadatastore.ObjectMetadata{
+		CacheControl:            objectEntity.CacheControl,
+		ContentDisposition:      objectEntity.ContentDisposition,
+		ContentEncoding:         objectEntity.ContentEncoding,
+		ContentLanguage:         objectEntity.ContentLanguage,
+		Expires:                 objectEntity.Expires,
+		WebsiteRedirectLocation: objectEntity.WebsiteRedirectLocation,
+	}
 }
 
 func (sms *sqlMetadataStore) GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
@@ -563,6 +625,12 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		return nil, err
 	}
 
+	metadata := systemMetadataFromEntity(objectEntity)
+	metadata.UserMetadata, err = sms.loadObjectUserMetadata(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	return &metadatastore.Object{
 		Key:               key,
 		ContentType:       objectEntity.ContentType,
@@ -577,6 +645,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		Size:              objectEntity.Size,
 		Parts:             parts,
 		Tags:              tags,
+		Metadata:          metadata,
 	}, nil
 }
 
@@ -606,6 +675,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		Size:              obj.Size,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
+	applySystemMetadataToEntity(&objectEntity, obj.Metadata)
 
 	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 	if err != nil {
@@ -679,9 +749,13 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		sequenceNumber += 1
 	}
 
-	// PutObject replaces the object entirely, so its tag set is replaced with the
-	// tags supplied on the new object (empty when none were provided).
+	// PutObject replaces the object entirely, so its tag set and user metadata
+	// are replaced with the values supplied on the new object (empty when none
+	// were provided).
 	if err := sms.replaceObjectTags(ctx, tx, *objectId, obj.Tags); err != nil {
+		return err
+	}
+	if err := sms.replaceObjectUserMetadata(ctx, tx, *objectId, obj.Metadata.UserMetadata); err != nil {
 		return err
 	}
 
@@ -717,6 +791,8 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			Size:         obj.Size,
 			UploadStatus: object.UploadStatusCompleted,
 		}
+		// Appends preserve the object's existing metadata (like its content type).
+		applySystemMetadataToEntity(&updatedEntity, systemMetadataFromEntity(oldObjectEntity))
 		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &updatedEntity, oldObjectEntity.OptimisticLockVersion)
 		if err != nil {
 			return err
@@ -763,6 +839,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		Size:         obj.Size,
 		UploadStatus: object.UploadStatusCompleted,
 	}
+	applySystemMetadataToEntity(&newEntity, obj.Metadata)
 	err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
 	if err != nil {
 		return err
@@ -843,6 +920,11 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return err
 			}
 
+			err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *lockedObjectEntity.Id)
+			if err != nil {
+				return err
+			}
+
 			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
 			if err != nil {
 				return err
@@ -857,6 +939,11 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 
 			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return err
+			}
+
+			err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *objectEntity.Id)
 			if err != nil {
 				return err
 			}
@@ -976,15 +1063,24 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		UploadId:     ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
 		UploadStatus: object.UploadStatusPending,
 	}
+	if opts != nil && opts.Metadata != nil {
+		applySystemMetadataToEntity(&objectEntity, *opts.Metadata)
+	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
 		return nil, err
 	}
 
-	// Persist any tags supplied via x-amz-tagging on the pending object. They are
-	// carried over when the upload is completed (the object row is reused).
+	// Persist any tags supplied via x-amz-tagging and any user-defined metadata
+	// on the pending object. They are carried over when the upload is completed
+	// (the object row is reused).
 	if opts != nil && len(opts.Tags) > 0 {
 		if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, opts.Tags); err != nil {
+			return nil, err
+		}
+	}
+	if opts != nil && opts.Metadata != nil && len(opts.Metadata.UserMetadata) > 0 {
+		if err := sms.replaceObjectUserMetadata(ctx, tx, *objectEntity.Id, opts.Metadata.UserMetadata); err != nil {
 			return nil, err
 		}
 	}
@@ -1144,6 +1240,11 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, err
 		}
 
+		err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
 		deletedParts = sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
 			return metadatastore.Part{
 				Id:                partEntity.PartId,
@@ -1235,6 +1336,11 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	}
 
 	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}

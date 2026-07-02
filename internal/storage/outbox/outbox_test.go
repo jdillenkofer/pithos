@@ -71,7 +71,12 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create UserMetadataRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)

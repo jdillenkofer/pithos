@@ -19,6 +19,11 @@ type Bucket struct {
 	CreationDate time.Time
 }
 
+// ObjectMetadata holds the user-controllable object metadata: the
+// user-modifiable system metadata headers and the user-defined x-amz-meta-*
+// key/value pairs. Content-Type is tracked separately.
+type ObjectMetadata = metadatastore.ObjectMetadata
+
 type Object struct {
 	Key               ObjectKey
 	ContentType       *string
@@ -33,6 +38,9 @@ type Object struct {
 	Size              int64
 	// Tags holds the object's tag set as key/value pairs.
 	Tags map[string]string
+	// Metadata holds the user-controllable object metadata. Populated by
+	// HeadObject and GetObject.
+	Metadata ObjectMetadata
 }
 
 // ByteRange represents a byte range for GetObject operations.
@@ -69,6 +77,10 @@ type PutObjectOptions struct {
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It
 	// replaces any previous tags on overwrite. Nil/empty means no tags.
 	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It replaces any previous metadata on overwrite. Nil
+	// means no metadata.
+	Metadata *ObjectMetadata
 }
 
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
@@ -77,6 +89,10 @@ type CreateMultipartUploadOptions struct {
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It is applied to the object when the upload completes.
+	// Nil means no metadata.
+	Metadata *ObjectMetadata
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -155,10 +171,15 @@ type CopySourceConditions struct {
 // equivalent to a plain COPY of the whole object with no preconditions.
 type CopyObjectOptions struct {
 	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
-	// ContentType is used for the destination instead of the source's content type.
+	// ContentType and Metadata are used for the destination instead of the
+	// source's content type and metadata.
 	ReplaceMetadata bool
 	// ContentType is the destination content type used when ReplaceMetadata is true.
 	ContentType *string
+	// Metadata is the destination object metadata used when ReplaceMetadata is
+	// true. Its WebsiteRedirectLocation is applied even with the COPY directive,
+	// because S3 never carries the redirect location over from the source.
+	Metadata *ObjectMetadata
 	// Range, when non-nil, copies only the given byte range of the source into a
 	// single-part destination object.
 	Range *ByteRange
