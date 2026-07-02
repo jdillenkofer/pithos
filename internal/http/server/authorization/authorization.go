@@ -50,6 +50,9 @@ const (
 	OperationGetObjectTagging        = "GetObjectTagging"
 	OperationPutObjectTagging        = "PutObjectTagging"
 	OperationDeleteObjectTagging     = "DeleteObjectTagging"
+	OperationGetBucketLifecycle      = "GetBucketLifecycle"
+	OperationPutBucketLifecycle      = "PutBucketLifecycle"
+	OperationDeleteBucketLifecycle   = "DeleteBucketLifecycle"
 )
 
 type Request struct {

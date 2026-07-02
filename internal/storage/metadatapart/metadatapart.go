@@ -321,6 +321,41 @@ func (mbs *metadataPartStorage) DeleteBucketCORSConfiguration(ctx context.Contex
 	})
 }
 
+func (mbs *metadataPartStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	var config *storage.BucketLifecycleConfiguration
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		config, err = mbs.metadataStore.GetBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.PutBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName, config)
+	})
+}
+
+func (mbs *metadataPartStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.DeleteBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
+	})
+}
+
 func (mbs *metadataPartStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObjectTagging")
 	defer span.End()

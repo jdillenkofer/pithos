@@ -172,6 +172,7 @@ const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
 const corsQuery = "cors"
+const lifecycleQuery = "lifecycle"
 const appendQuery = "append"
 const taggingQuery = "tagging"
 
@@ -418,6 +419,61 @@ type CORSConfiguration struct {
 	XMLName xml.Name                `xml:"CORSConfiguration"`
 	Xmlns   string                  `xml:"xmlns,attr,omitempty"`
 	Rules   []CORSConfigurationRule `xml:"CORSRule"`
+}
+
+type LifecycleConfigurationTag struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
+}
+
+type LifecycleConfigurationAndOperator struct {
+	Prefix                *string                     `xml:"Prefix"`
+	Tags                  []LifecycleConfigurationTag `xml:"Tag"`
+	ObjectSizeGreaterThan *int64                      `xml:"ObjectSizeGreaterThan"`
+	ObjectSizeLessThan    *int64                      `xml:"ObjectSizeLessThan"`
+}
+
+type LifecycleConfigurationFilter struct {
+	Prefix                *string                            `xml:"Prefix"`
+	Tag                   *LifecycleConfigurationTag         `xml:"Tag"`
+	ObjectSizeGreaterThan *int64                             `xml:"ObjectSizeGreaterThan"`
+	ObjectSizeLessThan    *int64                             `xml:"ObjectSizeLessThan"`
+	And                   *LifecycleConfigurationAndOperator `xml:"And"`
+}
+
+type LifecycleConfigurationExpiration struct {
+	// Date is kept as a string so that the ISO 8601 variants S3 accepts can be
+	// parsed explicitly (see parseLifecycleDate).
+	Days                      *int32  `xml:"Days"`
+	Date                      *string `xml:"Date"`
+	ExpiredObjectDeleteMarker *bool   `xml:"ExpiredObjectDeleteMarker"`
+}
+
+type LifecycleConfigurationAbortIncompleteMultipartUpload struct {
+	DaysAfterInitiation *int32 `xml:"DaysAfterInitiation"`
+}
+
+// lifecycleUnsupportedElement captures the presence of lifecycle rule elements
+// pithos does not support (transitions and versioning-dependent actions) so
+// the PUT handler can reject them explicitly instead of silently dropping them.
+type lifecycleUnsupportedElement struct{}
+
+type LifecycleConfigurationRule struct {
+	ID                             *string                                               `xml:"ID"`
+	Status                         string                                                `xml:"Status"`
+	Prefix                         *string                                               `xml:"Prefix"`
+	Filter                         *LifecycleConfigurationFilter                         `xml:"Filter"`
+	Expiration                     *LifecycleConfigurationExpiration                     `xml:"Expiration"`
+	AbortIncompleteMultipartUpload *LifecycleConfigurationAbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload"`
+	Transitions                    []lifecycleUnsupportedElement                         `xml:"Transition"`
+	NoncurrentVersionTransitions   []lifecycleUnsupportedElement                         `xml:"NoncurrentVersionTransition"`
+	NoncurrentVersionExpiration    *lifecycleUnsupportedElement                          `xml:"NoncurrentVersionExpiration"`
+}
+
+type LifecycleConfiguration struct {
+	XMLName xml.Name                     `xml:"LifecycleConfiguration"`
+	Xmlns   string                       `xml:"xmlns,attr,omitempty"`
+	Rules   []LifecycleConfigurationRule `xml:"Rule"`
 }
 
 type Tag struct {
@@ -1016,6 +1072,10 @@ func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 		s.getBucketCORSHandler(w, r)
 		return
 	}
+	if query.Has(lifecycleQuery) {
+		s.getBucketLifecycleHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
 		return
@@ -1424,6 +1484,10 @@ func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 		s.putBucketCORSHandler(w, r)
 		return
 	}
+	if query.Has(lifecycleQuery) {
+		s.putBucketLifecycleHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.putBucketWebsiteHandler(w, r)
 		return
@@ -1461,6 +1525,10 @@ func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request
 	query := r.URL.Query()
 	if query.Has(corsQuery) {
 		s.deleteBucketCORSHandler(w, r)
+		return
+	}
+	if query.Has(lifecycleQuery) {
+		s.deleteBucketLifecycleHandler(w, r)
 		return
 	}
 	if query.Has(websiteQuery) {
@@ -2763,6 +2831,11 @@ const maxPutBucketWebsiteBodySize int64 = 128 * 1024
 const maxPutBucketCORSBodySize int64 = 128 * 1024
 const maxPutObjectTaggingBodySize int64 = 128 * 1024
 
+// maxPutBucketLifecycleBodySize bounds the ?lifecycle request body. A
+// configuration may hold up to 1000 rules, so the limit is more generous than
+// for the other bucket subresources.
+const maxPutBucketLifecycleBodySize int64 = 1024 * 1024
+
 func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	data, err := io.ReadAll(r.Body)
@@ -3029,6 +3102,315 @@ func (s *Server) deleteBucketCORSHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	err = s.storage.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func writeNoSuchLifecycleConfiguration(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:      "NoSuchLifecycleConfiguration",
+		Message:   "The lifecycle configuration does not exist",
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(404)
+	w.Write(xmlErrorResponse)
+}
+
+func writeLifecycleValidationError(w http.ResponseWriter, r *http.Request, validationErr *storage.LifecycleValidationError) {
+	errResponse := ErrorResponse{
+		Code:      validationErr.Code,
+		Message:   validationErr.Message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusBadRequest)
+	w.Write(xmlErrorResponse)
+}
+
+func writeNotImplemented(w http.ResponseWriter, r *http.Request, message string) {
+	errResponse := ErrorResponse{
+		Code:      "NotImplemented",
+		Message:   message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusNotImplemented)
+	w.Write(xmlErrorResponse)
+}
+
+// lifecycleDateFormats are the ISO 8601 variants accepted for the Expiration
+// Date element. S3 always reports dates at midnight UTC.
+var lifecycleDateFormats = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05.000Z07:00",
+	"2006-01-02",
+}
+
+func parseLifecycleDate(value string) (*time.Time, error) {
+	for _, format := range lifecycleDateFormats {
+		parsed, err := time.Parse(format, value)
+		if err == nil {
+			parsed = parsed.UTC()
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid lifecycle date %q", value)
+}
+
+func convertLifecycleTagFromXML(tag *LifecycleConfigurationTag) *storage.LifecycleTag {
+	if tag == nil {
+		return nil
+	}
+	return &storage.LifecycleTag{Key: tag.Key, Value: tag.Value}
+}
+
+func convertLifecycleTagToXML(tag *storage.LifecycleTag) *LifecycleConfigurationTag {
+	if tag == nil {
+		return nil
+	}
+	return &LifecycleConfigurationTag{Key: tag.Key, Value: tag.Value}
+}
+
+// convertLifecycleConfigurationFromXML maps the parsed request body to the
+// storage model. It returns a *storage.LifecycleValidationError when a value
+// cannot be represented (e.g. a malformed Date).
+func convertLifecycleConfigurationFromXML(request *LifecycleConfiguration) (*storage.BucketLifecycleConfiguration, *storage.LifecycleValidationError) {
+	config := &storage.BucketLifecycleConfiguration{
+		Rules: make([]storage.LifecycleRule, 0, len(request.Rules)),
+	}
+	for _, rule := range request.Rules {
+		converted := storage.LifecycleRule{
+			ID:     rule.ID,
+			Status: rule.Status,
+			Prefix: rule.Prefix,
+		}
+		if rule.Filter != nil {
+			filter := &storage.LifecycleFilter{
+				Prefix:                rule.Filter.Prefix,
+				Tag:                   convertLifecycleTagFromXML(rule.Filter.Tag),
+				ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+			}
+			if rule.Filter.And != nil {
+				and := &storage.LifecycleFilterAnd{
+					Prefix:                rule.Filter.And.Prefix,
+					ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+					ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+				}
+				for _, tag := range rule.Filter.And.Tags {
+					and.Tags = append(and.Tags, storage.LifecycleTag{Key: tag.Key, Value: tag.Value})
+				}
+				filter.And = and
+			}
+			converted.Filter = filter
+		}
+		if rule.Expiration != nil {
+			expiration := &storage.LifecycleExpiration{
+				Days:                      rule.Expiration.Days,
+				ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+			}
+			if rule.Expiration.Date != nil {
+				date, err := parseLifecycleDate(*rule.Expiration.Date)
+				if err != nil {
+					return nil, &storage.LifecycleValidationError{
+						Code:    "InvalidArgument",
+						Message: "'Date' must be in ISO 8601 format",
+					}
+				}
+				expiration.Date = date
+			}
+			converted.Expiration = expiration
+		}
+		if rule.AbortIncompleteMultipartUpload != nil {
+			converted.AbortIncompleteMultipartUpload = &storage.LifecycleAbortIncompleteMultipartUpload{
+				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+			}
+		}
+		config.Rules = append(config.Rules, converted)
+	}
+	return config, nil
+}
+
+func convertLifecycleConfigurationToXML(config *storage.BucketLifecycleConfiguration) *LifecycleConfiguration {
+	response := &LifecycleConfiguration{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+		Rules: make([]LifecycleConfigurationRule, 0, len(config.Rules)),
+	}
+	for _, rule := range config.Rules {
+		converted := LifecycleConfigurationRule{
+			ID:     rule.ID,
+			Status: rule.Status,
+			Prefix: rule.Prefix,
+		}
+		if rule.Filter != nil {
+			filter := &LifecycleConfigurationFilter{
+				Prefix:                rule.Filter.Prefix,
+				Tag:                   convertLifecycleTagToXML(rule.Filter.Tag),
+				ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+			}
+			if rule.Filter.And != nil {
+				and := &LifecycleConfigurationAndOperator{
+					Prefix:                rule.Filter.And.Prefix,
+					ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+					ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+				}
+				for _, tag := range rule.Filter.And.Tags {
+					and.Tags = append(and.Tags, LifecycleConfigurationTag{Key: tag.Key, Value: tag.Value})
+				}
+				filter.And = and
+			}
+			converted.Filter = filter
+		}
+		if rule.Expiration != nil {
+			expiration := &LifecycleConfigurationExpiration{
+				Days:                      rule.Expiration.Days,
+				ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+			}
+			if rule.Expiration.Date != nil {
+				expiration.Date = ptrutils.ToPtr(rule.Expiration.Date.UTC().Format(time.RFC3339))
+			}
+			converted.Expiration = expiration
+		}
+		if rule.AbortIncompleteMultipartUpload != nil {
+			converted.AbortIncompleteMultipartUpload = &LifecycleConfigurationAbortIncompleteMultipartUpload{
+				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+			}
+		}
+		response.Rules = append(response.Rules, converted)
+	}
+	return response
+}
+
+func (s *Server) getBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	config, err := s.storage.GetBucketLifecycleConfiguration(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchLifecycleConfiguration {
+			writeNoSuchLifecycleConfiguration(w, r)
+			return
+		}
+		handleError(err, w, r)
+		return
+	}
+
+	response := convertLifecycleConfigurationToXML(config)
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutBucketLifecycleBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request LifecycleConfiguration
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		writeMalformedXML(w, r)
+		return
+	}
+
+	for _, rule := range request.Rules {
+		if len(rule.Transitions) > 0 || len(rule.NoncurrentVersionTransitions) > 0 {
+			writeNotImplemented(w, r, "Transition actions are not supported")
+			return
+		}
+		if rule.NoncurrentVersionExpiration != nil {
+			writeNotImplemented(w, r, "NoncurrentVersionExpiration requires bucket versioning, which is not supported")
+			return
+		}
+	}
+
+	config, validationErr := convertLifecycleConfigurationFromXML(&request)
+	if validationErr != nil {
+		writeLifecycleValidationError(w, r, validationErr)
+		return
+	}
+
+	if validationErr := storage.ValidateBucketLifecycleConfiguration(config); validationErr != nil {
+		writeLifecycleValidationError(w, r, validationErr)
+		return
+	}
+
+	err = s.storage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 	if err != nil {
 		handleError(err, w, r)
 		return

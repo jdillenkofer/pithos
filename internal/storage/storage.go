@@ -310,6 +310,7 @@ var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 var ErrNoSuchWebsiteConfiguration error = metadatastore.ErrNoSuchWebsiteConfiguration
 var ErrNoSuchCORSConfiguration error = metadatastore.ErrNoSuchCORSConfiguration
+var ErrNoSuchLifecycleConfiguration error = metadatastore.ErrNoSuchLifecycleConfiguration
 var ErrTooManyParts error = metadatastore.ErrTooManyParts
 var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
 var ErrCASFailure error = metadatastore.ErrCASFailure
@@ -364,6 +365,17 @@ type CORSRule = metadatastore.CORSRule
 
 type BucketCORSConfiguration = metadatastore.BucketCORSConfiguration
 
+const LifecycleRuleStatusEnabled = metadatastore.LifecycleRuleStatusEnabled
+const LifecycleRuleStatusDisabled = metadatastore.LifecycleRuleStatusDisabled
+
+type LifecycleTag = metadatastore.LifecycleTag
+type LifecycleFilterAnd = metadatastore.LifecycleFilterAnd
+type LifecycleFilter = metadatastore.LifecycleFilter
+type LifecycleExpiration = metadatastore.LifecycleExpiration
+type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
+type LifecycleRule = metadatastore.LifecycleRule
+type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
+
 type BucketWebsiteManager interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName, config *WebsiteConfiguration) error
@@ -374,6 +386,12 @@ type BucketCORSManager interface {
 	GetBucketCORSConfiguration(ctx context.Context, bucketName BucketName) (*BucketCORSConfiguration, error)
 	PutBucketCORSConfiguration(ctx context.Context, bucketName BucketName, config *BucketCORSConfiguration) error
 	DeleteBucketCORSConfiguration(ctx context.Context, bucketName BucketName) error
+}
+
+type BucketLifecycleManager interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) (*BucketLifecycleConfiguration, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName, config *BucketLifecycleConfiguration) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
 // TaggingManager manages object tagging operations.
@@ -431,6 +449,7 @@ type Storage interface {
 	BucketManager
 	BucketWebsiteManager
 	BucketCORSManager
+	BucketLifecycleManager
 	ObjectManager
 	MultipartUploadManager
 	TaggingManager

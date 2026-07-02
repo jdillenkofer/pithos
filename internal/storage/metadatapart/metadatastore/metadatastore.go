@@ -183,6 +183,7 @@ var ErrPreconditionFailed error = errors.New("PreconditionFailed")
 var ErrNotModified error = errors.New("NotModified")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
 var ErrNoSuchCORSConfiguration error = errors.New("NoSuchCORSConfiguration")
+var ErrNoSuchLifecycleConfiguration error = errors.New("NoSuchLifecycleConfiguration")
 var ErrTooManyParts error = errors.New("TooManyParts")
 var ErrInvalidWriteOffset error = errors.New("InvalidWriteOffset")
 
@@ -290,6 +291,74 @@ type BucketCORSConfiguration struct {
 	Rules []CORSRule
 }
 
+// LifecycleRuleStatus values as defined by the S3 API.
+const (
+	LifecycleRuleStatusEnabled  = "Enabled"
+	LifecycleRuleStatusDisabled = "Disabled"
+)
+
+// LifecycleTag is a single tag predicate of a lifecycle rule filter.
+type LifecycleTag struct {
+	Key   string
+	Value string
+}
+
+// LifecycleFilterAnd combines multiple lifecycle filter predicates; an object
+// must satisfy all of them for the rule to apply.
+type LifecycleFilterAnd struct {
+	Prefix                *string
+	Tags                  []LifecycleTag
+	ObjectSizeGreaterThan *int64
+	ObjectSizeLessThan    *int64
+}
+
+// LifecycleFilter selects the objects a lifecycle rule applies to. At most one
+// of the fields may be set; combinations must be expressed via And. An empty
+// filter applies the rule to all objects in the bucket.
+type LifecycleFilter struct {
+	Prefix                *string
+	Tag                   *LifecycleTag
+	ObjectSizeGreaterThan *int64
+	ObjectSizeLessThan    *int64
+	And                   *LifecycleFilterAnd
+}
+
+// LifecycleExpiration describes when objects expire. Exactly one of Days, Date
+// or ExpiredObjectDeleteMarker is set.
+type LifecycleExpiration struct {
+	// Days is the number of days after object creation when the object expires.
+	// Following S3 semantics, the effective expiry is rounded to the next
+	// midnight UTC after creation + Days.
+	Days *int32
+	// Date is the absolute expiry time; it must be midnight UTC.
+	Date *time.Time
+	// ExpiredObjectDeleteMarker only has an effect on versioned buckets and is
+	// accepted for compatibility; without versioning it is a no-op.
+	ExpiredObjectDeleteMarker *bool
+}
+
+// LifecycleAbortIncompleteMultipartUpload aborts multipart uploads that were
+// initiated more than DaysAfterInitiation days ago and never completed.
+type LifecycleAbortIncompleteMultipartUpload struct {
+	DaysAfterInitiation *int32
+}
+
+// LifecycleRule is a single rule of a bucket lifecycle configuration.
+type LifecycleRule struct {
+	ID     *string
+	Status string
+	// Prefix is the legacy top-level rule prefix (pre-Filter API). New
+	// configurations use Filter instead; exactly one of the two is set.
+	Prefix                         *string
+	Filter                         *LifecycleFilter
+	Expiration                     *LifecycleExpiration
+	AbortIncompleteMultipartUpload *LifecycleAbortIncompleteMultipartUpload
+}
+
+type BucketLifecycleConfiguration struct {
+	Rules []LifecycleRule
+}
+
 type BucketWebsiteStore interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *WebsiteConfiguration) error
@@ -300,6 +369,12 @@ type BucketCORSStore interface {
 	GetBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketCORSConfiguration, error)
 	PutBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketCORSConfiguration) error
 	DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
+type BucketLifecycleStore interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketLifecycleConfiguration, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketLifecycleConfiguration) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 }
 
 type ObjectStore interface {
@@ -339,6 +414,7 @@ type MetadataStore interface {
 	BucketStore
 	BucketWebsiteStore
 	BucketCORSStore
+	BucketLifecycleStore
 	ObjectStore
 	MultipartStore
 }
