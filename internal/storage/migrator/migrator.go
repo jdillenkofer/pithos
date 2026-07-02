@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -134,19 +135,49 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 		return err
 	}
 
+	// Carry the source object's tag set over to the destination. The tags are
+	// fetched explicitly because list results don't include them.
+	tags, err := source.GetObjectTagging(ctx, bucketName, sourceObject.Key)
+	if err != nil && err != storage.ErrNoSuchKey {
+		return err
+	}
+
 	adapter := NewStorageToS3UploadAPIClientAdapter(destination)
 	uploader := manager.NewUploader(adapter, func(u *manager.Uploader) {
 		u.Concurrency = 1
 	})
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: ptrutils.ToPtr(bucketName.String()),
-		Key:    ptrutils.ToPtr(sourceObject.Key.String()),
-		Body:   tempFile,
+		Bucket:  ptrutils.ToPtr(bucketName.String()),
+		Key:     ptrutils.ToPtr(sourceObject.Key.String()),
+		Body:    tempFile,
+		Tagging: encodeTaggingHeader(tags),
 	})
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// encodeTaggingHeader encodes a tag set as an x-amz-tagging header value.
+// Returns nil for an empty tag set.
+func encodeTaggingHeader(tags map[string]string) *string {
+	if len(tags) == 0 {
+		return nil
+	}
+	values := url.Values{}
+	for k, v := range tags {
+		values.Set(k, v)
+	}
+	return aws.String(values.Encode())
+}
+
+// decodeTaggingHeader parses an x-amz-tagging header value into a tag set.
+// Returns nil for a nil/empty header.
+func decodeTaggingHeader(tagging *string) (map[string]string, error) {
+	if tagging == nil || *tagging == "" {
+		return nil, nil
+	}
+	return storage.ParseTaggingHeader(*tagging)
 }
 
 // Adapter from storage to manager.UploadAPIClient
@@ -161,7 +192,15 @@ func NewStorageToS3UploadAPIClientAdapter(storage storage.Storage) *StorageToS3U
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CreateMultipartUpload(ctx context.Context, input *s3.CreateMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
-	result, err := a.storage.CreateMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, nil)
+	tags, err := decodeTaggingHeader(input.Tagging)
+	if err != nil {
+		return nil, err
+	}
+	var createOpts *storage.CreateMultipartUploadOptions
+	if len(tags) > 0 {
+		createOpts = &storage.CreateMultipartUploadOptions{Tags: tags}
+	}
+	result, err := a.storage.CreateMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, nil, createOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +256,15 @@ func (a *StorageToS3UploadAPIClientAdapter) AbortMultipartUpload(ctx context.Con
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, input.Body, nil, nil)
+	tags, err := decodeTaggingHeader(input.Tagging)
+	if err != nil {
+		return nil, err
+	}
+	var putObjectOptions *storage.PutObjectOptions
+	if len(tags) > 0 {
+		putObjectOptions = &storage.PutObjectOptions{Tags: tags}
+	}
+	result, err := a.storage.PutObject(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), input.ContentType, input.Body, nil, putObjectOptions)
 	if err != nil {
 		return nil, err
 	}

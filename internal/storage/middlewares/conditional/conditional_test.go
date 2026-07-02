@@ -214,7 +214,12 @@ func TestConditionalStorage(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
@@ -242,12 +247,17 @@ func TestConditionalStorage(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create ObjectRepository 2: %s", err))
 		os.Exit(1)
 	}
+	tagRepository2, err := repositoryFactory.NewTagRepository(db2)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
 	partRepository2, err := repositoryFactory.NewPartRepository(db2)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create PartRepository 2: %s", err))
 		os.Exit(1)
 	}
-	metadataStore2, err := sqlMetadataStore.New(db2, bucketRepository2, objectRepository2, partRepository2)
+	metadataStore2, err := sqlMetadataStore.New(db2, bucketRepository2, objectRepository2, partRepository2, tagRepository2)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore 2: %s", err))
 		os.Exit(1)

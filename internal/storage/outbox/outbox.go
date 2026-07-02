@@ -593,7 +593,11 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
 
-	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil) {
+	// Options that an outbox entry cannot represent must bypass the outbox:
+	// conditional-write preconditions have to be evaluated now, and tag sets are
+	// not persisted with the entry (replay would drop them). Drain the outbox
+	// and write through to the inner storage instead.
+	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0) {
 		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 		if err != nil {
 			return nil, err
@@ -721,7 +725,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	return result, nil
 }
 
-func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateMultipartUpload")
 	defer span.End()
 
@@ -729,7 +733,7 @@ func (os *outboxStorage) CreateMultipartUpload(ctx context.Context, bucketName s
 	if err != nil {
 		return nil, err
 	}
-	return os.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	return os.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 }
 
 func (os *outboxStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
@@ -875,4 +879,40 @@ func (os *outboxStorage) DeleteBucketCORSConfiguration(ctx context.Context, buck
 	}
 
 	return os.innerStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObjectTagging")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetObjectTagging(ctx, bucketName, key)
+}
+
+func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObjectTagging")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutObjectTagging(ctx, bucketName, key, tags)
+}
+
+func (os *outboxStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjectTagging")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.DeleteObjectTagging(ctx, bucketName, key)
 }

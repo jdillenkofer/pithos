@@ -312,6 +312,20 @@ func (m *objectCacheStorageMiddleware) CopyObject(ctx context.Context, srcBucket
 	return result, err
 }
 
+func (m *objectCacheStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	// Cached Object metadata includes the tag set (and drives the
+	// x-amz-tagging-count header), so tag mutations must invalidate it.
+	err := m.Next.PutObjectTagging(ctx, bucketName, key, tags)
+	m.invalidateObjectCaches(ctx, bucketName, key)
+	return err
+}
+
+func (m *objectCacheStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	err := m.Next.DeleteObjectTagging(ctx, bucketName, key)
+	m.invalidateObjectCaches(ctx, bucketName, key)
+	return err
+}
+
 func (m *objectCacheStorageMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	objKey := objectCacheKey(bucketName, key)
 	headKey := headCacheKey(bucketName, key)

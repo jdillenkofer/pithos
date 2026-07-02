@@ -132,17 +132,57 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	if err != nil {
 		return nil, err
 	}
+	// Secondaries must not re-evaluate conditional-write preconditions (the
+	// primary already enforced them), but the tag set applies to every replica.
+	var secondaryOpts *storage.PutObjectOptions
+	if opts != nil && len(opts.Tags) > 0 {
+		secondaryOpts = &storage.PutObjectOptions{Tags: opts.Tags}
+	}
 	for _, secondaryStorage := range rs.secondaryStorages {
 		_, err = readSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, nil)
+		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, secondaryOpts)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return putObjectResult, nil
+}
+
+func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObjectTagging")
+	defer span.End()
+
+	err := rs.Next.PutObjectTagging(ctx, bucketName, key, tags)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.PutObjectTagging(ctx, bucketName, key, tags)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rs *replicationStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjectTagging")
+	defer span.End()
+
+	err := rs.Next.DeleteObjectTagging(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.DeleteObjectTagging(ctx, bucketName, key)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
@@ -222,17 +262,17 @@ func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName stor
 	return result, nil
 }
 
-func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateMultipartUpload")
 	defer span.End()
 
-	primaryResult, err := rs.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	primaryResult, err := rs.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 	if err != nil {
 		return nil, err
 	}
 	secondaryUploadIDs := make([]storage.UploadId, 0, len(rs.secondaryStorages))
 	for _, secondaryStorage := range rs.secondaryStorages {
-		secondaryResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+		secondaryResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 		if err != nil {
 			return nil, err
 		}

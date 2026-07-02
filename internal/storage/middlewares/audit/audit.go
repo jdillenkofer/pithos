@@ -375,10 +375,10 @@ func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName stora
 	return result, err
 }
 
-func (m *AuditLogMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (m *AuditLogMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	start := time.Now()
 	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, auditResource{bucket: bucketName.String(), key: key.String()}, nil, 0, 0)
-	res, err := m.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	res, err := m.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 	uid := ""
 	if res != nil {
 		uid = res.UploadId.String()

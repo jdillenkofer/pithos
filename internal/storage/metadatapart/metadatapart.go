@@ -321,6 +321,41 @@ func (mbs *metadataPartStorage) DeleteBucketCORSConfiguration(ctx context.Contex
 	})
 }
 
+func (mbs *metadataPartStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObjectTagging")
+	defer span.End()
+
+	var tags map[string]string
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		tags, err = mbs.metadataStore.GetObjectTagging(ctx, tx.SqlTx(), bucketName, key)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return tags, nil
+}
+
+func (mbs *metadataPartStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObjectTagging")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.PutObjectTagging(ctx, tx.SqlTx(), bucketName, key, tags)
+	})
+}
+
+func (mbs *metadataPartStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjectTagging")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.DeleteObjectTagging(ctx, tx.SqlTx(), bucketName, key)
+	})
+}
+
 func convertObject(mObject metadatastore.Object) storage.Object {
 	return storage.Object{
 		Key:               mObject.Key,
@@ -334,6 +369,7 @@ func convertObject(mObject metadatastore.Object) storage.Object {
 		ChecksumSHA256:    mObject.ChecksumSHA256,
 		ChecksumType:      mObject.ChecksumType,
 		Size:              mObject.Size,
+		Tags:              mObject.Tags,
 	}
 }
 
@@ -661,6 +697,9 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 				},
 			},
 		}
+		if opts != nil {
+			object.Tags = opts.Tags
+		}
 
 		metadataPutObjectOptions := &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar}
 		if opts != nil {
@@ -792,6 +831,14 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.ContentType = opts.ContentType
 		} else {
 			dstObject.ContentType = srcObject.ContentType
+		}
+
+		// Tags follow the tagging directive: REPLACE uses the supplied tag set,
+		// COPY (the default) carries over the source object's tags.
+		if opts != nil && opts.ReplaceTags {
+			dstObject.Tags = opts.Tags
+		} else {
+			dstObject.Tags = srcObject.Tags
 		}
 
 		// Remove the previous destination object's part content (if any) before
@@ -1058,15 +1105,20 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 	}
 }
 
-func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateMultipartUpload")
 	defer span.End()
+
+	var metadataOpts *metadatastore.CreateMultipartUploadOptions
+	if opts != nil {
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags}
+	}
 
 	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType)
+		result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType, metadataOpts)
 		if err != nil {
 			return err
 		}

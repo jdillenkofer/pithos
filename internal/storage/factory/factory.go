@@ -47,7 +47,12 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error during NewSqlMetadataStore: ", err))
 		os.Exit(1)

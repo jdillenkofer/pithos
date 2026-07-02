@@ -19,9 +19,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -46,13 +48,14 @@ type sqlMetadataStore struct {
 	bucketRepository bucket.Repository
 	objectRepository object.Repository
 	partRepository   part.Repository
+	tagRepository    tag.Repository
 	tracer           trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
 var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
-func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository) (metadatastore.MetadataStore, error) {
+func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository) (metadatastore.MetadataStore, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
 	if err != nil {
 		return nil, err
@@ -62,8 +65,44 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 		bucketRepository:   bucketRepository,
 		objectRepository:   objectRepository,
 		partRepository:     partRepository,
+		tagRepository:      tagRepository,
 		tracer:             otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
 	}, nil
+}
+
+// loadObjectTags loads the tag set for the given object id as a map. An object
+// with no tags yields an empty (non-nil) map.
+func (sms *sqlMetadataStore) loadObjectTags(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (map[string]string, error) {
+	tagEntities, err := sms.tagRepository.FindTagsByObjectIdOrderByKeyAsc(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+	tags := map[string]string{}
+	for _, tagEntity := range tagEntities {
+		tags[tagEntity.Key] = tagEntity.Value
+	}
+	return tags, nil
+}
+
+// replaceObjectTags removes any existing tags for the object id and inserts the
+// supplied tag set.
+func (sms *sqlMetadataStore) replaceObjectTags(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, tags map[string]string) error {
+	err := sms.tagRepository.DeleteTagsByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return err
+	}
+	for key, value := range tags {
+		tagEntity := tag.Entity{
+			ObjectId: objectId,
+			Key:      key,
+			Value:    value,
+		}
+		err = sms.tagRepository.SaveTag(ctx, tx, &tagEntity)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (sms *sqlMetadataStore) GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
@@ -318,6 +357,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 	commonPrefixes := []string{}
 	objects := []metadatastore.Object{}
+	listedObjectIds := []ulid.ULID{}
 	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
 	if err != nil {
 		return nil, err
@@ -367,8 +407,31 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					Size:              objectEntity.Size,
 					Parts:             parts,
 				})
+				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
 			}
 		}
+	}
+
+	// Load the tag sets of the whole page in one query, so per-object consumers
+	// (e.g. tag-based list filtering in the authorizer) don't need a storage
+	// lookup per key. Every listed object gets a non-nil map.
+	tagEntities, err := sms.tagRepository.FindTagsByObjectIdsOrderByObjectIdAndKeyAsc(ctx, tx, listedObjectIds)
+	if err != nil {
+		return nil, err
+	}
+	tagsByObjectId := map[ulid.ULID]map[string]string{}
+	for _, tagEntity := range tagEntities {
+		if tagsByObjectId[tagEntity.ObjectId] == nil {
+			tagsByObjectId[tagEntity.ObjectId] = map[string]string{}
+		}
+		tagsByObjectId[tagEntity.ObjectId][tagEntity.Key] = tagEntity.Value
+	}
+	for i, objectId := range listedObjectIds {
+		tags := tagsByObjectId[objectId]
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		objects[i].Tags = tags
 	}
 
 	listBucketResult := metadatastore.ListBucketResult{
@@ -430,6 +493,11 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		}
 	}, partEntities)
 
+	tags, err := sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	return &metadatastore.Object{
 		Key:               key,
 		ContentType:       objectEntity.ContentType,
@@ -443,6 +511,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumType:      objectEntity.ChecksumType,
 		Size:              objectEntity.Size,
 		Parts:             parts,
+		Tags:              tags,
 	}, nil
 }
 
@@ -543,6 +612,12 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 			return err
 		}
 		sequenceNumber += 1
+	}
+
+	// PutObject replaces the object entirely, so its tag set is replaced with the
+	// tags supplied on the new object (empty when none were provided).
+	if err := sms.replaceObjectTags(ctx, tx, *objectId, obj.Tags); err != nil {
+		return err
 	}
 
 	return nil
@@ -698,6 +773,11 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return err
 			}
 
+			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *lockedObjectEntity.Id)
+			if err != nil {
+				return err
+			}
+
 			deleted, err := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
 			if err != nil {
 				return err
@@ -707,6 +787,11 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		} else {
 			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return err
+			}
+
+			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
 			if err != nil {
 				return err
 			}
@@ -721,7 +806,86 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (map[string]string, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	return sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+}
+
+func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, tags map[string]string) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil {
+		return metadatastore.ErrNoSuchKey
+	}
+
+	if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, tags); err != nil {
+		return err
+	}
+
+	// Bump the object's updated_at / optimistic lock version so the tag change
+	// is reflected in the object metadata and concurrent writers are detected.
+	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil {
+		return metadatastore.ErrNoSuchKey
+	}
+
+	if err := sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id); err != nil {
+		return err
+	}
+
+	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+}
+
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
 
@@ -750,6 +914,14 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
 		return nil, err
+	}
+
+	// Persist any tags supplied via x-amz-tagging on the pending object. They are
+	// carried over when the upload is completed (the object row is reused).
+	if opts != nil && len(opts.Tags) > 0 {
+		if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, opts.Tags); err != nil {
+			return nil, err
+		}
 	}
 
 	return &metadatastore.InitiateMultipartUploadResult{
@@ -902,6 +1074,11 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, err
 		}
 
+		err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
 		deletedParts = sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
 			return metadatastore.Part{
 				Id:                partEntity.PartId,
@@ -988,6 +1165,11 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	}
 
 	err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,8 @@ type Object struct {
 	ChecksumSHA256    *string
 	ChecksumType      *string
 	Size              int64
+	// Tags holds the object's tag set as key/value pairs.
+	Tags map[string]string
 }
 
 // ByteRange represents a byte range for GetObject operations.
@@ -64,6 +66,17 @@ type PutObjectResult struct {
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
 	IfMatchETag     *string
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It
+	// replaces any previous tags on overwrite. Nil/empty means no tags.
+	Tags map[string]string
+}
+
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -151,6 +164,12 @@ type CopyObjectOptions struct {
 	Range *ByteRange
 	// CopySourceConditions holds preconditions evaluated against the source object.
 	CopySourceConditions CopySourceConditions
+	// ReplaceTags corresponds to x-amz-tagging-directive: REPLACE. When true, the
+	// destination object's tags are set from Tags instead of being copied from the
+	// source object.
+	ReplaceTags bool
+	// Tags is the destination tag set used when ReplaceTags is true.
+	Tags map[string]string
 }
 
 type CopyObjectResult struct {
@@ -357,6 +376,19 @@ type BucketCORSManager interface {
 	DeleteBucketCORSConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
+// TaggingManager manages object tagging operations.
+type TaggingManager interface {
+	// GetObjectTagging returns the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	// PutObjectTagging replaces the entire tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	// DeleteObjectTagging removes the entire tag set of the object at key.
+	// Returns ErrNoSuchKey if the object does not exist.
+	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) error
+}
+
 // ObjectManager manages object operations
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
@@ -382,7 +414,7 @@ type ObjectManager interface {
 
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
-	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
 	// UploadPartCopy uploads a part of a multipart upload by copying data (optionally
 	// a byte range) from an existing source object, server-side. opts may be nil.
@@ -401,6 +433,7 @@ type Storage interface {
 	BucketCORSManager
 	ObjectManager
 	MultipartUploadManager
+	TaggingManager
 }
 
 type TransactionalStorage interface {
@@ -501,7 +534,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -526,7 +559,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil, nil)
 		if err != nil {
 			return err
 		}

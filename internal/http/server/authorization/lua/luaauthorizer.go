@@ -384,7 +384,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 		}
 		return true, nil
 	}
-	authorizer.pushRequest(L, request)
+	authorizer.pushRequest(ctx, L, request)
 	argCount := 1 + len(args)
 	for _, arg := range args {
 		pushGoType(L, arg)
@@ -403,15 +403,15 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 func isReadOnly(operation string) bool {
 	var isReadOnly bool
 	switch operation {
-	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketCORS:
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketCORS, authorization.OperationGetObjectTagging:
 		isReadOnly = true
-	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationPutObject, authorization.OperationCopyObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketCORS, authorization.OperationDeleteBucketCORS:
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationPutObject, authorization.OperationCopyObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketCORS, authorization.OperationDeleteBucketCORS, authorization.OperationPutObjectTagging, authorization.OperationDeleteObjectTagging:
 		isReadOnly = false
 	}
 	return isReadOnly
 }
 
-func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorization.Request) {
+func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, request *authorization.Request) {
 	clientIP, scheme := authorizer.resolveClientIPAndScheme(request.HttpRequest)
 	request.HttpRequest.ClientIP = clientIP
 	request.HttpRequest.Scheme = scheme
@@ -744,4 +744,125 @@ func (authorizer *LuaAuthorizer) pushRequest(L *lua.State, request *authorizatio
 		return 1
 	})
 	L.SetField(-2, "keyHasSuffix")
+
+	// makeLazyTagLoader returns a memoized loader over a tag resolver so multiple
+	// tag predicates in one policy evaluation cause at most one storage lookup.
+	// A nil resolver yields an empty tag set; a resolver error is surfaced to the
+	// caller, which raises a Lua error so the whole authorization fails closed.
+	makeLazyTagLoader := func(resolve func(ctx context.Context) (map[string]string, error)) func() (map[string]string, error) {
+		var cached map[string]string
+		loaded := false
+		return func() (map[string]string, error) {
+			if loaded {
+				return cached, nil
+			}
+			if resolve == nil {
+				cached = map[string]string{}
+				loaded = true
+				return cached, nil
+			}
+			tags, err := resolve(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if tags == nil {
+				tags = map[string]string{}
+			}
+			cached = tags
+			loaded = true
+			return cached, nil
+		}
+	}
+
+	// registerTagPredicates installs a family of tag predicates on the request
+	// table: <tagsName>() returns the whole tag set as a table, <tagName>(key)
+	// returns a single value or nil, <equalsName>(key, value) and <hasName>(key)
+	// are boolean checks. A loader error raises a Lua error (fail closed).
+	registerTagPredicates := func(tagsName, tagName, equalsName, hasName string, load func() (map[string]string, error)) {
+		loadOrError := func(L *lua.State) (map[string]string, bool) {
+			tags, err := load()
+			if err != nil {
+				lua.Errorf(L, "failed to resolve %s: %v", tagsName, err)
+				return nil, false
+			}
+			return tags, true
+		}
+		L.PushGoFunction(func(L *lua.State) int {
+			tags, ok := loadOrError(L)
+			if !ok {
+				return 0
+			}
+			L.NewTable()
+			for k, v := range tags {
+				L.PushString(v)
+				L.SetField(-2, k)
+			}
+			return 1
+		})
+		L.SetField(-2, tagsName)
+		L.PushGoFunction(func(L *lua.State) int {
+			key, ok := L.ToString(2)
+			if !ok {
+				L.PushNil()
+				return 1
+			}
+			tags, okLoad := loadOrError(L)
+			if !okLoad {
+				return 0
+			}
+			if value, exists := tags[key]; exists {
+				L.PushString(value)
+			} else {
+				L.PushNil()
+			}
+			return 1
+		})
+		L.SetField(-2, tagName)
+		L.PushGoFunction(func(L *lua.State) int {
+			key, ok := L.ToString(2)
+			expectedValue, ok2 := L.ToString(3)
+			if !ok || !ok2 {
+				L.PushBoolean(false)
+				return 1
+			}
+			tags, okLoad := loadOrError(L)
+			if !okLoad {
+				return 0
+			}
+			value, exists := tags[key]
+			L.PushBoolean(exists && value == expectedValue)
+			return 1
+		})
+		L.SetField(-2, equalsName)
+		L.PushGoFunction(func(L *lua.State) int {
+			key, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
+			}
+			tags, okLoad := loadOrError(L)
+			if !okLoad {
+				return 0
+			}
+			_, exists := tags[key]
+			L.PushBoolean(exists)
+			return 1
+		})
+		L.SetField(-2, hasName)
+	}
+
+	// Existing object tags (s3:ExistingObjectTag) — the tags currently stored on
+	// the request's target object, resolved lazily.
+	registerTagPredicates("objectTags", "objectTag", "objectTagEquals", "hasObjectTag",
+		makeLazyTagLoader(request.ResolveExistingObjectTags))
+	// Existing tags on the copy source object (CopyObject/UploadPartCopy) — AWS
+	// evaluates s3:ExistingObjectTag against the source for the copy's read side.
+	registerTagPredicates("sourceObjectTags", "sourceObjectTag", "sourceObjectTagEquals", "hasSourceObjectTag",
+		makeLazyTagLoader(request.ResolveExistingSourceObjectTags))
+	// Request tags (s3:RequestObjectTag) — the tags supplied in the request
+	// itself; already in memory, no resolver needed.
+	registerTagPredicates("requestTags", "requestTag", "requestTagEquals", "hasRequestTag",
+		func() (map[string]string, error) {
+			return request.RequestObjectTags, nil
+		})
 }

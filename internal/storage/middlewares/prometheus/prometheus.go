@@ -406,11 +406,11 @@ func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucke
 	return result, err
 }
 
-func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	var result *storage.InitiateMultipartUploadResult
 	err := psm.run(ctx, "PrometheusStorageMiddleware.CreateMultipartUpload", "CreateMultipartUpload", func(ctx context.Context) error {
 		var err error
-		result, err = psm.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+		result, err = psm.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 		return err
 	})
 	return result, err

@@ -31,6 +31,10 @@ type Object struct {
 	ChecksumType      *string
 	Size              int64
 	Parts             []Part
+	// Tags holds the object's tag set as key/value pairs. It is populated by
+	// HeadObject and ListObjects and applied (replacing any existing tags) by
+	// PutObject.
+	Tags map[string]string
 }
 
 type ListBucketResult struct {
@@ -218,6 +222,14 @@ type PutObjectOptions struct {
 	IfMatchETag     *string
 }
 
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
+}
+
 // AppendObjectOptions holds options for an AppendObject operation.
 type AppendObjectOptions struct {
 	// WriteOffset, when non-nil, specifies the expected current size of the
@@ -301,10 +313,19 @@ type ObjectStore interface {
 	// size, ErrInvalidWriteOffset is returned.
 	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
+	// GetObjectTagging returns the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	// PutObjectTagging replaces the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	// DeleteObjectTagging removes the entire tag set of the object at key.
+	// Returns ErrNoSuchKey if the object does not exist.
+	DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
 }
 
 type MultipartStore interface {
-	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
@@ -436,7 +457,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	var initiateMultipartUploadResult *InitiateMultipartUploadResult
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
 		var err error
-		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil, nil)
 		return err
 	})
 	if err != nil {
@@ -475,7 +496,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
 		var err error
-		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil, nil)
 		return err
 	})
 	if err != nil {

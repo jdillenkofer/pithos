@@ -55,7 +55,12 @@ func TestSqlMetadataStore(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	sqlMetadataStore, err := New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	sqlMetadataStore, err := New(db, bucketRepository, objectRepository, partRepository, tagRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)

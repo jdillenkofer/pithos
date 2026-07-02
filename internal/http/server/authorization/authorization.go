@@ -47,6 +47,9 @@ const (
 	OperationGetBucketWebsite        = "GetBucketWebsite"
 	OperationPutBucketWebsite        = "PutBucketWebsite"
 	OperationDeleteBucketWebsite     = "DeleteBucketWebsite"
+	OperationGetObjectTagging        = "GetObjectTagging"
+	OperationPutObjectTagging        = "PutObjectTagging"
+	OperationDeleteObjectTagging     = "DeleteObjectTagging"
 )
 
 type Request struct {
@@ -60,6 +63,22 @@ type Request struct {
 	SourceBucket *string
 	SourceKey    *string
 	HttpRequest  HTTPRequest
+	// ResolveExistingObjectTags lazily returns the tags currently stored on the
+	// object this request targets (the s3:ExistingObjectTag condition). It is nil
+	// when the request has no single target object (e.g. ListBuckets). The server
+	// implements it over the storage layer; the authorizer must only invoke it
+	// when a policy actually reads object tags. A returned error must fail closed.
+	ResolveExistingObjectTags func(ctx context.Context) (map[string]string, error)
+	// ResolveExistingSourceObjectTags is the counterpart of
+	// ResolveExistingObjectTags for the copy source (SourceBucket/SourceKey) of a
+	// CopyObject or UploadPartCopy request; AWS evaluates s3:ExistingObjectTag
+	// against the source object for the copy's read side. Nil when the request
+	// has no copy source.
+	ResolveExistingSourceObjectTags func(ctx context.Context) (map[string]string, error)
+	// RequestObjectTags holds the tags supplied in the request itself (the
+	// s3:RequestObjectTag condition) via the x-amz-tagging header or the
+	// PutObjectTagging body. Nil when the request carries no tags.
+	RequestObjectTags map[string]string
 }
 
 type RequestAuthorizer interface {
