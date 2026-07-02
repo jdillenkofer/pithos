@@ -594,10 +594,10 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	defer span.End()
 
 	// Options that an outbox entry cannot represent must bypass the outbox:
-	// conditional-write preconditions have to be evaluated now, and tag sets are
-	// not persisted with the entry (replay would drop them). Drain the outbox
-	// and write through to the inner storage instead.
-	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0) {
+	// conditional-write preconditions have to be evaluated now, and tag sets and
+	// object metadata are not persisted with the entry (replay would drop them).
+	// Drain the outbox and write through to the inner storage instead.
+	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0 || opts.Metadata != nil) {
 		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 		if err != nil {
 			return nil, err

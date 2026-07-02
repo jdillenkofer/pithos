@@ -3201,6 +3201,203 @@ func TestObjectTagging(t *testing.T) {
 	})
 }
 
+func TestObjectMetadata(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		expires := time.Date(2026, time.October, 21, 7, 28, 0, 0, time.UTC)
+		putObjectWithMetadata := func(s3Client *s3.Client) {
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:                  bucketName,
+				Key:                     key,
+				Body:                    bytes.NewReader(body),
+				ContentType:             aws.String("text/plain"),
+				CacheControl:            aws.String("max-age=3600"),
+				ContentDisposition:      aws.String(`attachment; filename="hello.txt"`),
+				ContentEncoding:         aws.String("identity"),
+				ContentLanguage:         aws.String("en-US"),
+				Expires:                 aws.Time(expires),
+				WebsiteRedirectLocation: aws.String("/redirected.html"),
+				Metadata:                map[string]string{"Purpose": "testing", "owner": "storage-team"},
+			})
+			assert.Nil(t, err)
+		}
+
+		assertMetadata := func(t *testing.T, cacheControl, contentDisposition, contentEncoding, contentLanguage, expiresString, websiteRedirectLocation *string, userMetadata map[string]string) {
+			assert.NotNil(t, cacheControl)
+			assert.Equal(t, "max-age=3600", *cacheControl)
+			assert.NotNil(t, contentDisposition)
+			assert.Equal(t, `attachment; filename="hello.txt"`, *contentDisposition)
+			assert.NotNil(t, contentEncoding)
+			assert.Equal(t, "identity", *contentEncoding)
+			assert.NotNil(t, contentLanguage)
+			assert.Equal(t, "en-US", *contentLanguage)
+			assert.NotNil(t, expiresString)
+			parsedExpires, err := http.ParseTime(*expiresString)
+			assert.Nil(t, err)
+			assert.True(t, expires.Equal(parsedExpires))
+			assert.NotNil(t, websiteRedirectLocation)
+			assert.Equal(t, "/redirected.html", *websiteRedirectLocation)
+			// S3 stores user metadata keys lowercase.
+			assert.Equal(t, map[string]string{"purpose": "testing", "owner": "storage-team"}, userMetadata)
+		}
+
+		t.Run("it should persist and return metadata on HeadObject"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			putObjectWithMetadata(s3Client)
+
+			headResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			assertMetadata(t, headResult.CacheControl, headResult.ContentDisposition, headResult.ContentEncoding, headResult.ContentLanguage, headResult.ExpiresString, headResult.WebsiteRedirectLocation, headResult.Metadata)
+		})
+
+		t.Run("it should return metadata on GetObject"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			putObjectWithMetadata(s3Client)
+
+			getResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			io.ReadAll(getResult.Body)
+			getResult.Body.Close()
+			assertMetadata(t, getResult.CacheControl, getResult.ContentDisposition, getResult.ContentEncoding, getResult.ContentLanguage, getResult.ExpiresString, getResult.WebsiteRedirectLocation, getResult.Metadata)
+		})
+
+		t.Run("it should replace metadata when the object is overwritten"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			putObjectWithMetadata(s3Client)
+
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			headResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			assert.Nil(t, headResult.CacheControl)
+			assert.Nil(t, headResult.ContentDisposition)
+			assert.Nil(t, headResult.ContentEncoding)
+			assert.Nil(t, headResult.ContentLanguage)
+			assert.Nil(t, headResult.ExpiresString)
+			assert.Nil(t, headResult.WebsiteRedirectLocation)
+			assert.Len(t, headResult.Metadata, 0)
+		})
+
+		t.Run("it should preserve metadata across multipart uploads"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket:                  bucketName,
+				Key:                     key,
+				CacheControl:            aws.String("max-age=3600"),
+				ContentDisposition:      aws.String(`attachment; filename="hello.txt"`),
+				ContentEncoding:         aws.String("identity"),
+				ContentLanguage:         aws.String("en-US"),
+				Expires:                 aws.Time(expires),
+				WebsiteRedirectLocation: aws.String("/redirected.html"),
+				Metadata:                map[string]string{"purpose": "testing", "owner": "storage-team"},
+			})
+			assert.Nil(t, err)
+
+			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Key:        key,
+				UploadId:   createResult.UploadId,
+				PartNumber: aws.Int32(1),
+				Body:       bytes.NewReader(body),
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: createResult.UploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: []types.CompletedPart{{ETag: uploadPartResult.ETag, PartNumber: aws.Int32(1)}},
+				},
+			})
+			assert.Nil(t, err)
+
+			headResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key})
+			assert.Nil(t, err)
+			assertMetadata(t, headResult.CacheControl, headResult.ContentDisposition, headResult.ContentEncoding, headResult.ContentLanguage, headResult.ExpiresString, headResult.WebsiteRedirectLocation, headResult.Metadata)
+		})
+
+		t.Run("it should copy metadata by default on CopyObject except the website redirect location"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			putObjectWithMetadata(s3Client)
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.Nil(t, err)
+
+			headResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			assert.NotNil(t, headResult.CacheControl)
+			assert.Equal(t, "max-age=3600", *headResult.CacheControl)
+			assert.Equal(t, map[string]string{"purpose": "testing", "owner": "storage-team"}, headResult.Metadata)
+			// S3 never carries x-amz-website-redirect-location over to the copy.
+			assert.Nil(t, headResult.WebsiteRedirectLocation)
+		})
+
+		t.Run("it should replace metadata when metadata directive is REPLACE on CopyObject"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			putObjectWithMetadata(s3Client)
+
+			_, err := s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:            bucketName,
+				Key:               key2,
+				CopySource:        aws.String(*bucketName + "/" + *key),
+				MetadataDirective: types.MetadataDirectiveReplace,
+				CacheControl:      aws.String("no-store"),
+				Metadata:          map[string]string{"replaced": "yes"},
+			})
+			assert.Nil(t, err)
+
+			headResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{Bucket: bucketName, Key: key2})
+			assert.Nil(t, err)
+			assert.NotNil(t, headResult.CacheControl)
+			assert.Equal(t, "no-store", *headResult.CacheControl)
+			assert.Nil(t, headResult.ContentDisposition)
+			assert.Equal(t, map[string]string{"replaced": "yes"}, headResult.Metadata)
+		})
+
+		t.Run("it should reject user metadata over the 2 KB limit"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:   bucketName,
+				Key:      key,
+				Body:     bytes.NewReader(body),
+				Metadata: map[string]string{"big": strings.Repeat("v", storage.MaxUserMetadataSize)},
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			assert.True(t, errors.As(err, &apiErr))
+			assert.Equal(t, "MetadataTooLarge", apiErr.ErrorCode())
+		})
+	})
+}
+
 func TestTagBasedAuthorization(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

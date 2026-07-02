@@ -405,6 +405,7 @@ func convertObject(mObject metadatastore.Object) storage.Object {
 		ChecksumType:      mObject.ChecksumType,
 		Size:              mObject.Size,
 		Tags:              mObject.Tags,
+		Metadata:          mObject.Metadata,
 	}
 }
 
@@ -734,6 +735,9 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		}
 		if opts != nil {
 			object.Tags = opts.Tags
+			if opts.Metadata != nil {
+				object.Metadata = *opts.Metadata
+			}
 		}
 
 		metadataPutObjectOptions := &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar}
@@ -861,11 +865,21 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Parts = newParts
 		}
 
-		// Content type follows the metadata directive.
+		// Content type and metadata follow the metadata directive.
 		if opts != nil && opts.ReplaceMetadata {
 			dstObject.ContentType = opts.ContentType
+			if opts.Metadata != nil {
+				dstObject.Metadata = *opts.Metadata
+			}
 		} else {
 			dstObject.ContentType = srcObject.ContentType
+			dstObject.Metadata = srcObject.Metadata
+			// S3 never carries x-amz-website-redirect-location over from the
+			// source; it applies only when supplied on the copy request itself.
+			dstObject.Metadata.WebsiteRedirectLocation = nil
+			if opts != nil && opts.Metadata != nil {
+				dstObject.Metadata.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
+			}
 		}
 
 		// Tags follow the tagging directive: REPLACE uses the supplied tag set,
@@ -1146,7 +1160,7 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
-		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags}
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags, Metadata: opts.Metadata}
 	}
 
 	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)

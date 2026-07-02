@@ -220,6 +220,17 @@ const taggingCountHeader = "x-amz-tagging-count"
 const taggingDirectiveCopy = "COPY"
 const taggingDirectiveReplace = "REPLACE"
 
+const cacheControlHeader = "Cache-Control"
+const contentDispositionHeader = "Content-Disposition"
+const contentEncodingHeader = "Content-Encoding"
+const contentLanguageHeader = "Content-Language"
+const expiresHeader = "Expires"
+const websiteRedirectLocationHeader = "x-amz-website-redirect-location"
+
+// userMetadataHeaderPrefix is the prefix of user-defined object metadata
+// headers. Keys are stored lowercase without the prefix and returned with it.
+const userMetadataHeaderPrefix = "x-amz-meta-"
+
 const applicationXmlContentType = "application/xml"
 
 const storageClassStandard = "STANDARD"
@@ -568,6 +579,72 @@ func setTagCountHeaderFromObject(headers http.Header, object *storage.Object) {
 	}
 }
 
+// parseObjectMetadataHeaders extracts the user-controllable object metadata
+// from the request headers: the user-modifiable system headers plus the
+// x-amz-meta-* pairs. Per S3, user metadata keys are lowercased and repeated
+// headers of the same name are combined into a comma-delimited list; the total
+// user metadata size is limited to 2 KB (ErrMetadataTooLarge). Returns nil when
+// the request carries no metadata.
+func parseObjectMetadataHeaders(headers http.Header) (*storage.ObjectMetadata, error) {
+	metadata := storage.ObjectMetadata{
+		CacheControl:            getHeaderAsPtr(headers, cacheControlHeader),
+		ContentDisposition:      getHeaderAsPtr(headers, contentDispositionHeader),
+		ContentEncoding:         getHeaderAsPtr(headers, contentEncodingHeader),
+		ContentLanguage:         getHeaderAsPtr(headers, contentLanguageHeader),
+		Expires:                 getHeaderAsPtr(headers, expiresHeader),
+		WebsiteRedirectLocation: getHeaderAsPtr(headers, websiteRedirectLocationHeader),
+	}
+	userMetadata := map[string]string{}
+	for name, values := range headers {
+		lowerName := strings.ToLower(name)
+		key := strings.TrimPrefix(lowerName, userMetadataHeaderPrefix)
+		if key == lowerName || key == "" {
+			continue
+		}
+		userMetadata[key] = strings.Join(values, ",")
+	}
+	if err := storage.ValidateUserMetadata(userMetadata); err != nil {
+		return nil, err
+	}
+	if len(userMetadata) > 0 {
+		metadata.UserMetadata = userMetadata
+	}
+	if metadata.CacheControl == nil && metadata.ContentDisposition == nil &&
+		metadata.ContentEncoding == nil && metadata.ContentLanguage == nil &&
+		metadata.Expires == nil && metadata.WebsiteRedirectLocation == nil &&
+		metadata.UserMetadata == nil {
+		return nil, nil
+	}
+	return &metadata, nil
+}
+
+// setMetadataHeadersFromObject sets the user-controllable system metadata
+// headers and the x-amz-meta-* headers stored on the object.
+func setMetadataHeadersFromObject(headers http.Header, object *storage.Object) {
+	metadata := object.Metadata
+	if metadata.CacheControl != nil {
+		headers.Set(cacheControlHeader, *metadata.CacheControl)
+	}
+	if metadata.ContentDisposition != nil {
+		headers.Set(contentDispositionHeader, *metadata.ContentDisposition)
+	}
+	if metadata.ContentEncoding != nil {
+		headers.Set(contentEncodingHeader, *metadata.ContentEncoding)
+	}
+	if metadata.ContentLanguage != nil {
+		headers.Set(contentLanguageHeader, *metadata.ContentLanguage)
+	}
+	if metadata.Expires != nil {
+		headers.Set(expiresHeader, *metadata.Expires)
+	}
+	if metadata.WebsiteRedirectLocation != nil {
+		headers.Set(websiteRedirectLocationHeader, *metadata.WebsiteRedirectLocation)
+	}
+	for key, value := range metadata.UserMetadata {
+		headers.Set(userMetadataHeaderPrefix+key, value)
+	}
+}
+
 func setChecksumType(headers http.Header, checksumType string) {
 	headers.Set(checksumTypeHeader, checksumType)
 }
@@ -679,6 +756,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrTooManyParts:
 		statusCode = 400
 	case storage.ErrInvalidTag:
+		statusCode = 400
+	case storage.ErrMetadataTooLarge:
 		statusCode = 400
 	case storage.ErrInvalidWriteOffset:
 		statusCode = 400
@@ -1614,6 +1693,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	setETagHeaderFromObject(responseHeaders, object)
 	setChecksumHeadersFromObject(responseHeaders, object)
 	setTagCountHeaderFromObject(responseHeaders, object)
+	setMetadataHeadersFromObject(responseHeaders, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -1963,6 +2043,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	})()
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
 	setTagCountHeaderFromObject(responseHeaders, object)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()
@@ -2062,6 +2143,18 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 			return
 		}
 		createOpts = &storage.CreateMultipartUploadOptions{Tags: tags}
+	}
+
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if metadata != nil {
+		if createOpts == nil {
+			createOpts = &storage.CreateMultipartUploadOptions{}
+		}
+		createOpts.Metadata = metadata
 	}
 
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
@@ -2345,6 +2438,18 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		putObjectOptions.Tags = tags
 	}
 
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if metadata != nil {
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.Metadata = metadata
+	}
+
 	shouldReturn = validateMaxEntitySize(r, w)
 	if shouldReturn {
 		return
@@ -2625,12 +2730,19 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
 	opts := &storage.CopyObjectOptions{
 		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
 		Range:                copyRange,
 		CopySourceConditions: parseCopySourceConditions(r),
 		ReplaceTags:          taggingDirective == taggingDirectiveReplace,
 		Tags:                 replaceTags,
+		Metadata:             metadata,
 	}
 	if opts.ReplaceMetadata {
 		opts.ContentType = getHeaderAsPtr(r.Header, contentTypeHeader)
@@ -3847,6 +3959,14 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Objects with x-amz-website-redirect-location are served as a 301 redirect
+	// on the website endpoint, matching S3 static website hosting.
+	if object.Metadata.WebsiteRedirectLocation != nil {
+		w.Header().Set(locationHeader, *object.Metadata.WebsiteRedirectLocation)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+
 	contentType := "application/octet-stream"
 	if object.ContentType != nil {
 		contentType = *object.ContentType
@@ -3854,6 +3974,7 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, contentType)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
 	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
@@ -3894,12 +4015,21 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Objects with x-amz-website-redirect-location are served as a 301 redirect
+	// on the website endpoint, matching S3 static website hosting.
+	if object.Metadata.WebsiteRedirectLocation != nil {
+		w.Header().Set(locationHeader, *object.Metadata.WebsiteRedirectLocation)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+
 	responseHeaders := w.Header()
 	contentType := "application/octet-stream"
 	if object.ContentType != nil {
 		contentType = *object.ContentType
 	}
 	responseHeaders.Set(contentTypeHeader, contentType)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -176,8 +177,13 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return nil, err
 	}
+	var userMetadata map[string]string
+	if len(headObjectResult.Metadata) > 0 {
+		userMetadata = headObjectResult.Metadata
+	}
 	return &storage.Object{
 		Key:               key,
+		ContentType:       headObjectResult.ContentType,
 		LastModified:      *headObjectResult.LastModified,
 		ETag:              *headObjectResult.ETag,
 		ChecksumCRC32:     headObjectResult.ChecksumCRC32,
@@ -187,6 +193,15 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 		ChecksumSHA256:    headObjectResult.ChecksumSHA256,
 		ChecksumType:      (*string)(&headObjectResult.ChecksumType),
 		Size:              *headObjectResult.ContentLength,
+		Metadata: storage.ObjectMetadata{
+			CacheControl:            headObjectResult.CacheControl,
+			ContentDisposition:      headObjectResult.ContentDisposition,
+			ContentEncoding:         headObjectResult.ContentEncoding,
+			ContentLanguage:         headObjectResult.ContentLanguage,
+			Expires:                 headObjectResult.ExpiresString,
+			WebsiteRedirectLocation: headObjectResult.WebsiteRedirectLocation,
+			UserMetadata:            userMetadata,
+		},
 	}, nil
 }
 
@@ -242,11 +257,24 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	return object, readers, nil
 }
 
+// parseExpires parses the stored raw Expires header value into a time.Time for
+// the AWS SDK, which only accepts a parsed timestamp on requests. Unparseable
+// values are dropped.
+func parseExpires(expires *string) *time.Time {
+	if expires == nil {
+		return nil
+	}
+	if t, err := http.ParseTime(*expires); err == nil {
+		return &t
+	}
+	return nil
+}
+
 func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutObject")
 	defer span.End()
 
-	putObjectResult, err := rs.s3Client.PutObject(ctx, &s3.PutObjectInput{
+	input := &s3.PutObjectInput{
 		Bucket:      aws.String(bucketName.String()),
 		Key:         aws.String(key.String()),
 		ContentType: contentType,
@@ -264,7 +292,17 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 			return nil
 		}(),
 		// @TODO: Use checksumInput
-	})
+	}
+	if opts != nil && opts.Metadata != nil {
+		input.CacheControl = opts.Metadata.CacheControl
+		input.ContentDisposition = opts.Metadata.ContentDisposition
+		input.ContentEncoding = opts.Metadata.ContentEncoding
+		input.ContentLanguage = opts.Metadata.ContentLanguage
+		input.Expires = parseExpires(opts.Metadata.Expires)
+		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
+		input.Metadata = opts.Metadata.UserMetadata
+	}
+	putObjectResult, err := rs.s3Client.PutObject(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return nil, storage.ErrNoSuchBucket
@@ -348,6 +386,20 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 		if opts.ReplaceMetadata {
 			input.MetadataDirective = types.MetadataDirectiveReplace
 			input.ContentType = opts.ContentType
+			if opts.Metadata != nil {
+				input.CacheControl = opts.Metadata.CacheControl
+				input.ContentDisposition = opts.Metadata.ContentDisposition
+				input.ContentEncoding = opts.Metadata.ContentEncoding
+				input.ContentLanguage = opts.Metadata.ContentLanguage
+				input.Expires = parseExpires(opts.Metadata.Expires)
+				input.Metadata = opts.Metadata.UserMetadata
+			}
+		}
+		// The website redirect location is never copied from the source; it
+		// applies whenever it is supplied on the copy request, regardless of the
+		// metadata directive.
+		if opts.Metadata != nil {
+			input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		}
 		input.CopySourceIfMatch = opts.CopySourceConditions.IfMatch
 		input.CopySourceIfNoneMatch = opts.CopySourceConditions.IfNoneMatch
@@ -467,13 +519,23 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		}
 		tagging = aws.String(values.Encode())
 	}
-	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+	input := &s3.CreateMultipartUploadInput{
 		Bucket:       aws.String(bucketName.String()),
 		Key:          aws.String(key.String()),
 		ContentType:  contentType,
 		ChecksumType: checksumTypeStr,
 		Tagging:      tagging,
-	})
+	}
+	if opts != nil && opts.Metadata != nil {
+		input.CacheControl = opts.Metadata.CacheControl
+		input.ContentDisposition = opts.Metadata.ContentDisposition
+		input.ContentEncoding = opts.Metadata.ContentEncoding
+		input.ContentLanguage = opts.Metadata.ContentLanguage
+		input.Expires = parseExpires(opts.Metadata.Expires)
+		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
+		input.Metadata = opts.Metadata.UserMetadata
+	}
+	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return nil, storage.ErrNoSuchBucket

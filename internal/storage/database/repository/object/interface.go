@@ -25,23 +25,29 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id                    *ulid.ULID
-	BucketName            storage.BucketName
-	Key                   storage.ObjectKey
-	ContentType           *string
-	ETag                  string
-	ChecksumCRC32         *string
-	ChecksumCRC32C        *string
-	ChecksumCRC64NVME     *string
-	ChecksumSHA1          *string
-	ChecksumSHA256        *string
-	ChecksumType          *string
-	Size                  int64
-	UploadStatus          string
-	UploadId              *storage.UploadId
-	OptimisticLockVersion int64
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	Id                      *ulid.ULID
+	BucketName              storage.BucketName
+	Key                     storage.ObjectKey
+	ContentType             *string
+	CacheControl            *string
+	ContentDisposition      *string
+	ContentEncoding         *string
+	ContentLanguage         *string
+	Expires                 *string
+	WebsiteRedirectLocation *string
+	ETag                    string
+	ChecksumCRC32           *string
+	ChecksumCRC32C          *string
+	ChecksumCRC64NVME       *string
+	ChecksumSHA1            *string
+	ChecksumSHA256          *string
+	ChecksumType            *string
+	Size                    int64
+	UploadStatus            string
+	UploadId                *storage.UploadId
+	OptimisticLockVersion   int64
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 const (

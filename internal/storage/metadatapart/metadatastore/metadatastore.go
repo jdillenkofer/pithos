@@ -18,6 +18,23 @@ type Bucket struct {
 	CreationDate time.Time
 }
 
+// ObjectMetadata holds the user-controllable object metadata: the
+// user-modifiable system metadata headers and the user-defined x-amz-meta-*
+// key/value pairs. Content-Type is tracked separately on Object.
+type ObjectMetadata struct {
+	CacheControl       *string
+	ContentDisposition *string
+	ContentEncoding    *string
+	ContentLanguage    *string
+	// Expires is stored as the raw header value (an HTTP date) and returned
+	// verbatim, matching S3 behaviour.
+	Expires                 *string
+	WebsiteRedirectLocation *string
+	// UserMetadata holds the x-amz-meta-* pairs; keys are stored lowercase
+	// without the "x-amz-meta-" prefix.
+	UserMetadata map[string]string
+}
+
 type Object struct {
 	Key               ObjectKey
 	ContentType       *string // only set in HeadObject and PutObject
@@ -35,6 +52,9 @@ type Object struct {
 	// HeadObject and ListObjects and applied (replacing any existing tags) by
 	// PutObject.
 	Tags map[string]string
+	// Metadata holds the user-controllable object metadata. It is populated by
+	// HeadObject and applied (replacing any existing metadata) by PutObject.
+	Metadata ObjectMetadata
 }
 
 type ListBucketResult struct {
@@ -229,6 +249,10 @@ type CreateMultipartUploadOptions struct {
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It is applied to the object when the upload completes.
+	// Nil means no metadata.
+	Metadata *ObjectMetadata
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
