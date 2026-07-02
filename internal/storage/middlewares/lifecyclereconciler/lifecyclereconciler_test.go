@@ -1,0 +1,306 @@
+package lifecyclereconciler
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
+)
+
+// fakeStorage is an in-memory backend recording the deletions and aborts the
+// reconciler performs. The mutex makes it safe to inspect the state while the
+// background reconcile task is running.
+type fakeStorage struct {
+	delegator.DelegatingStorage
+	mu              sync.Mutex
+	buckets         []storage.Bucket
+	lifecycleConfig map[string]*storage.BucketLifecycleConfiguration
+	objects         map[string][]storage.Object
+	uploads         map[string][]storage.Upload
+	deletedKeys     []string
+	abortedUploads  []string
+}
+
+func newFakeStorage() *fakeStorage {
+	return &fakeStorage{
+		DelegatingStorage: delegator.Wrap(nil),
+		lifecycleConfig:   map[string]*storage.BucketLifecycleConfiguration{},
+		objects:           map[string][]storage.Object{},
+		uploads:           map[string][]storage.Upload{},
+	}
+}
+
+func (f *fakeStorage) Start(_ context.Context) error { return nil }
+
+func (f *fakeStorage) Stop(_ context.Context) error { return nil }
+
+func (f *fakeStorage) ListBuckets(_ context.Context) ([]storage.Bucket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.buckets, nil
+}
+
+func (f *fakeStorage) GetBucketLifecycleConfiguration(_ context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	config, ok := f.lifecycleConfig[bucketName.String()]
+	if !ok {
+		return nil, storage.ErrNoSuchLifecycleConfiguration
+	}
+	return config, nil
+}
+
+func (f *fakeStorage) ListObjects(_ context.Context, bucketName storage.BucketName, _ storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &storage.ListBucketResult{Objects: f.objects[bucketName.String()]}, nil
+}
+
+func (f *fakeStorage) GetObjectTagging(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, object := range f.objects[bucketName.String()] {
+		if object.Key.Equals(key) {
+			return object.Tags, nil
+		}
+	}
+	return nil, storage.ErrNoSuchKey
+}
+
+func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, _ *storage.DeleteObjectOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deletedKeys = append(f.deletedKeys, key.String())
+	objects := f.objects[bucketName.String()]
+	remaining := make([]storage.Object, 0, len(objects))
+	for _, object := range objects {
+		if !object.Key.Equals(key) {
+			remaining = append(remaining, object)
+		}
+	}
+	f.objects[bucketName.String()] = remaining
+	return nil
+}
+
+func (f *fakeStorage) ListMultipartUploads(_ context.Context, bucketName storage.BucketName, _ storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return &storage.ListMultipartUploadsResult{Uploads: f.uploads[bucketName.String()]}, nil
+}
+
+func (f *fakeStorage) AbortMultipartUpload(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, uploadId storage.UploadId) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abortedUploads = append(f.abortedUploads, uploadId.String())
+	return nil
+}
+
+func (f *fakeStorage) objectCount(bucket string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.objects[bucket])
+}
+
+func (f *fakeStorage) addBucket(name string) storage.BucketName {
+	bucketName := storage.MustNewBucketName(name)
+	f.buckets = append(f.buckets, storage.Bucket{Name: bucketName, CreationDate: time.Now()})
+	return bucketName
+}
+
+func (f *fakeStorage) addObject(bucket string, key string, size int64, lastModified time.Time, tags map[string]string) {
+	f.objects[bucket] = append(f.objects[bucket], storage.Object{
+		Key:          storage.MustNewObjectKey(key),
+		LastModified: lastModified,
+		ETag:         "etag-" + key,
+		Size:         size,
+		Tags:         tags,
+	})
+}
+
+func reconcile(f *fakeStorage, now time.Time) {
+	mw := NewStorageMiddleware(f, WithNow(func() time.Time { return now })).(*lifecycleReconcilerStorageMiddleware)
+	mw.ReconcileOnce(context.Background(), nil)
+}
+
+func enabledExpirationRule(prefix string, days int32) storage.LifecycleRule {
+	return storage.LifecycleRule{
+		Status:     storage.LifecycleRuleStatusEnabled,
+		Filter:     &storage.LifecycleFilter{Prefix: ptrutils.ToPtr(prefix)},
+		Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(days)},
+	}
+}
+
+func TestReconcileExpiresDueObjectsMatchingPrefix(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -10)
+	f.addObject(bucket.String(), "logs/old.log", 10, old, nil)
+	f.addObject(bucket.String(), "logs/new.log", 10, now.Add(-time.Hour), nil)
+	f.addObject(bucket.String(), "data/old.bin", 10, old, nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledExpirationRule("logs/", 3)},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/old.log"}, f.deletedKeys)
+}
+
+func TestReconcileSkipsDisabledRules(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "logs/old.log", 10, now.AddDate(0, 0, -10), nil)
+	rule := enabledExpirationRule("logs/", 3)
+	rule.Status = storage.LifecycleRuleStatusDisabled
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{rule},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedKeys)
+}
+
+func TestReconcileHonorsDaysRoundingToNextMidnight(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	created := time.Date(2026, 6, 28, 10, 30, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "logs/a.log", 10, created, nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledExpirationRule("logs/", 3)},
+	}
+
+	// Due at 2026-07-02T00:00Z; one second earlier nothing may be deleted.
+	reconcile(f, time.Date(2026, 7, 1, 23, 59, 59, 0, time.UTC))
+	assert.Empty(t, f.deletedKeys)
+
+	reconcile(f, time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC))
+	assert.Equal(t, []string{"logs/a.log"}, f.deletedKeys)
+}
+
+func TestReconcileExpiresObjectsByDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "a", 10, now.Add(-time.Minute), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{},
+			Expiration: &storage.LifecycleExpiration{
+				Date: ptrutils.ToPtr(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"a"}, f.deletedKeys)
+}
+
+func TestReconcileRespectsSizeAndTagFilters(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -10)
+	f.addObject(bucket.String(), "big-dev", 500, old, map[string]string{"env": "dev"})
+	f.addObject(bucket.String(), "big-prod", 500, old, map[string]string{"env": "prod"})
+	f.addObject(bucket.String(), "small-dev", 5, old, map[string]string{"env": "dev"})
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{And: &storage.LifecycleFilterAnd{
+				Tags:                  []storage.LifecycleTag{{Key: "env", Value: "dev"}},
+				ObjectSizeGreaterThan: ptrutils.ToPtr(int64(100)),
+			}},
+			Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(3))},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"big-dev"}, f.deletedKeys)
+}
+
+func TestReconcileAbortsStaleMultipartUploads(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	staleUploadId := storage.MustNewUploadId("019817f2-0000-7000-8000-000000000001")
+	freshUploadId := storage.MustNewUploadId("019817f2-0000-7000-8000-000000000002")
+	otherPrefixUploadId := storage.MustNewUploadId("019817f2-0000-7000-8000-000000000003")
+	f.uploads[bucket.String()] = []storage.Upload{
+		{Key: storage.MustNewObjectKey("uploads/stale"), UploadId: staleUploadId, Initiated: now.AddDate(0, 0, -10)},
+		{Key: storage.MustNewObjectKey("uploads/fresh"), UploadId: freshUploadId, Initiated: now.Add(-time.Hour)},
+		{Key: storage.MustNewObjectKey("other/stale"), UploadId: otherPrefixUploadId, Initiated: now.AddDate(0, 0, -10)},
+	}
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status:                         storage.LifecycleRuleStatusEnabled,
+			Filter:                         &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("uploads/")},
+			AbortIncompleteMultipartUpload: &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: ptrutils.ToPtr(int32(7))},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{staleUploadId.String()}, f.abortedUploads)
+	assert.Empty(t, f.deletedKeys)
+}
+
+func TestReconcileIgnoresBucketsWithoutLifecycleConfiguration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	f.addObject(bucket.String(), "a", 10, time.Now().AddDate(0, 0, -100), nil)
+
+	reconcile(f, time.Now())
+
+	assert.Empty(t, f.deletedKeys)
+}
+
+func TestStartAndStopRunTheBackgroundTask(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Now().UTC()
+	f.addObject(bucket.String(), "logs/old.log", 10, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledExpirationRule("logs/", 3)},
+	}
+
+	mw := NewStorageMiddleware(f, WithReconcileInterval(time.Hour))
+	require.NoError(t, mw.Start(context.Background()))
+	defer func() {
+		require.NoError(t, mw.Stop(context.Background()))
+	}()
+
+	// The initial sweep runs asynchronously right after Start.
+	require.Eventually(t, func() bool {
+		return f.objectCount(bucket.String()) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+}

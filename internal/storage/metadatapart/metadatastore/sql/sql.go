@@ -323,6 +323,71 @@ func (sms *sqlMetadataStore) DeleteBucketCORSConfiguration(ctx context.Context, 
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
+func (sms *sqlMetadataStore) GetBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketLifecycleConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+	if bucketEntity.LifecycleConfigurationJSON == nil {
+		return nil, metadatastore.ErrNoSuchLifecycleConfiguration
+	}
+
+	var config metadatastore.BucketLifecycleConfiguration
+	err = json.Unmarshal([]byte(*bucketEntity.LifecycleConfigurationJSON), &config)
+	if err != nil {
+		return nil, err
+	}
+	if config.Rules == nil {
+		config.Rules = []metadatastore.LifecycleRule{}
+	}
+	return &config, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketLifecycleConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	jsonString := string(jsonConfig)
+	bucketEntity.LifecycleConfigurationJSON = &jsonString
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.LifecycleConfigurationJSON = nil
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
 func determineCommonPrefix(prefix, key, delimiter string) *string {
 	prefixSegments := strings.Split(prefix, delimiter)
 	keySegments := strings.Split(key, delimiter)

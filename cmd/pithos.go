@@ -27,6 +27,7 @@ import (
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
@@ -154,6 +155,10 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath(), prometheus.DefaultRegisterer)
 
 	dbs := dbContainer.Dbs()
+
+	// Enforce bucket lifecycle configurations (object expiration and aborting
+	// stale multipart uploads) in the background while the server runs.
+	store = lifecyclereconciler.NewStorageMiddleware(store)
 
 	err = store.Start(ctx)
 	if err != nil {

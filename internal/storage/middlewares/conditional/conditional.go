@@ -455,3 +455,27 @@ func (csm *conditionalStorageMiddleware) DeleteBucketCORSConfiguration(ctx conte
 	storage := csm.lookupStorage(bucketName)
 	return storage.DeleteBucketCORSConfiguration(ctx, bucketName)
 }
+
+func (csm *conditionalStorageMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketLifecycleConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+}

@@ -40,6 +40,9 @@ const (
 	OpGetBucketWebsite        Operation = "GetBucketWebsite"
 	OpPutBucketWebsite        Operation = "PutBucketWebsite"
 	OpDeleteBucketWebsite     Operation = "DeleteBucketWebsite"
+	OpGetBucketLifecycle      Operation = "GetBucketLifecycle"
+	OpPutBucketLifecycle      Operation = "PutBucketLifecycle"
+	OpDeleteBucketLifecycle   Operation = "DeleteBucketLifecycle"
 )
 
 type Phase string

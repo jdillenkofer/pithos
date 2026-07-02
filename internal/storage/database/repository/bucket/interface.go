@@ -23,6 +23,7 @@ type Entity struct {
 	WebsiteIndexDocumentSuffix *string
 	WebsiteErrorDocumentKey    *string
 	CORSConfigurationJSON      *string
+	LifecycleConfigurationJSON *string
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }

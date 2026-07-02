@@ -81,6 +81,18 @@ func (d *DelegatingStorage) DeleteBucketCORSConfiguration(ctx context.Context, b
 	return d.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
 }
 
+func (d *DelegatingStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	return d.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
+}
+
+func (d *DelegatingStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	return d.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+}
+
+func (d *DelegatingStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return d.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+}
+
 func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
 	return d.Next.GetObjectTagging(ctx, bucketName, key)
 }

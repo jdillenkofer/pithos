@@ -310,6 +310,28 @@ func (psm *prometheusStorageMiddleware) DeleteBucketCORSConfiguration(ctx contex
 	})
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	var result *storage.BucketLifecycleConfiguration
+	err := psm.run(ctx, "PrometheusStorageMiddleware.GetBucketLifecycleConfiguration", "GetBucketLifecycle", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.PutBucketLifecycleConfiguration", "PutBucketLifecycle", func(ctx context.Context) error {
+		return psm.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (psm *prometheusStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteBucketLifecycleConfiguration", "DeleteBucketLifecycle", func(ctx context.Context) error {
+		return psm.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+	})
+}
+
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	var result *storage.ListBucketResult
 	err := psm.run(ctx, "PrometheusStorageMiddleware.ListObjects", "ListObjects", func(ctx context.Context) error {

@@ -124,7 +124,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 
 ### Available Operations
 
-`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketCORS`, `PutBucketCORS`, `DeleteBucketCORS`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`
+`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketCORS`, `PutBucketCORS`, `DeleteBucketCORS`, `GetBucketLifecycle`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`, `GetObjectTagging`, `PutObjectTagging`, `DeleteObjectTagging`
 
 Server-side copies (`CopyObject` and `UploadPartCopy`, requested via the `x-amz-copy-source` header) are authorized as a single `CopyObject` / `UploadPartCopy` operation. For these operations the request carries both the destination (`request.bucket` / `request.key`) and the copy source (`request.sourceBucket` / `request.sourceKey`), so a policy can reason about both ends in one check.
 

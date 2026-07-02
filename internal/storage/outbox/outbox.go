@@ -881,6 +881,42 @@ func (os *outboxStorage) DeleteBucketCORSConfiguration(ctx context.Context, buck
 	return os.innerStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
 }
 
+func (os *outboxStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetBucketLifecycleConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+}
+
+func (os *outboxStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+}
+
 func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObjectTagging")
 	defer span.End()

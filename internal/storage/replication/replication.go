@@ -465,3 +465,44 @@ func (rs *replicationStorage) DeleteBucketCORSConfiguration(ctx context.Context,
 	}
 	return nil
 }
+
+func (rs *replicationStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	return rs.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	err := rs.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rs *replicationStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	err := rs.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		err = secondaryStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

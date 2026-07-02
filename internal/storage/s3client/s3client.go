@@ -854,6 +854,176 @@ func (rs *s3ClientStorage) DeleteBucketCORSConfiguration(ctx context.Context, bu
 	return nil
 }
 
+func convertLifecycleTagFromSdk(tag *types.Tag) *storage.LifecycleTag {
+	if tag == nil {
+		return nil
+	}
+	return &storage.LifecycleTag{
+		Key:   aws.ToString(tag.Key),
+		Value: aws.ToString(tag.Value),
+	}
+}
+
+func convertLifecycleTagToSdk(tag *storage.LifecycleTag) *types.Tag {
+	if tag == nil {
+		return nil
+	}
+	return &types.Tag{
+		Key:   aws.String(tag.Key),
+		Value: aws.String(tag.Value),
+	}
+}
+
+func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule {
+	converted := storage.LifecycleRule{
+		ID:     rule.ID,
+		Status: string(rule.Status),
+		Prefix: rule.Prefix,
+	}
+	if rule.Filter != nil {
+		filter := &storage.LifecycleFilter{
+			Prefix:                rule.Filter.Prefix,
+			Tag:                   convertLifecycleTagFromSdk(rule.Filter.Tag),
+			ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+			ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+		}
+		if rule.Filter.And != nil {
+			and := &storage.LifecycleFilterAnd{
+				Prefix:                rule.Filter.And.Prefix,
+				ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+			}
+			for _, tag := range rule.Filter.And.Tags {
+				and.Tags = append(and.Tags, *convertLifecycleTagFromSdk(&tag))
+			}
+			filter.And = and
+		}
+		converted.Filter = filter
+	}
+	if rule.Expiration != nil {
+		converted.Expiration = &storage.LifecycleExpiration{
+			Days:                      rule.Expiration.Days,
+			Date:                      rule.Expiration.Date,
+			ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+		}
+	}
+	if rule.AbortIncompleteMultipartUpload != nil {
+		converted.AbortIncompleteMultipartUpload = &storage.LifecycleAbortIncompleteMultipartUpload{
+			DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+		}
+	}
+	return converted
+}
+
+func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
+	converted := types.LifecycleRule{
+		ID:     rule.ID,
+		Status: types.ExpirationStatus(rule.Status),
+		Prefix: rule.Prefix,
+	}
+	if rule.Filter != nil {
+		filter := &types.LifecycleRuleFilter{
+			Prefix:                rule.Filter.Prefix,
+			Tag:                   convertLifecycleTagToSdk(rule.Filter.Tag),
+			ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+			ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+		}
+		if rule.Filter.And != nil {
+			and := &types.LifecycleRuleAndOperator{
+				Prefix:                rule.Filter.And.Prefix,
+				ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+			}
+			for _, tag := range rule.Filter.And.Tags {
+				and.Tags = append(and.Tags, *convertLifecycleTagToSdk(&tag))
+			}
+			filter.And = and
+		}
+		converted.Filter = filter
+	}
+	if rule.Expiration != nil {
+		converted.Expiration = &types.LifecycleExpiration{
+			Days:                      rule.Expiration.Days,
+			Date:                      rule.Expiration.Date,
+			ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+		}
+	}
+	if rule.AbortIncompleteMultipartUpload != nil {
+		converted.AbortIncompleteMultipartUpload = &types.AbortIncompleteMultipartUpload{
+			DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+		}
+	}
+	return converted
+}
+
+func (rs *s3ClientStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchLifecycleConfiguration" {
+		return nil, storage.ErrNoSuchLifecycleConfiguration
+	}
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rules := make([]storage.LifecycleRule, 0, len(result.Rules))
+	for _, rule := range result.Rules {
+		rules = append(rules, convertLifecycleRuleFromSdk(rule))
+	}
+
+	return &storage.BucketLifecycleConfiguration{Rules: rules}, nil
+}
+
+func (rs *s3ClientStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	rules := make([]types.LifecycleRule, 0, len(config.Rules))
+	for _, rule := range config.Rules {
+		rules = append(rules, convertLifecycleRuleToSdk(rule))
+	}
+
+	_, err := rs.s3Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucketName.String()),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: rules,
+		},
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	_, err := rs.s3Client.DeleteBucketLifecycle(ctx, &s3.DeleteBucketLifecycleInput{
+		Bucket: aws.String(bucketName.String()),
+	})
+	var ae smithy.APIError
+	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchBucket" {
+		return storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (rs *s3ClientStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObjectTagging")
 	defer span.End()

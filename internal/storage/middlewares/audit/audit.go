@@ -300,6 +300,28 @@ func (m *AuditLogMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, 
 	})
 }
 
+func (m *AuditLogMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	var result *storage.BucketLifecycleConfiguration
+	err := m.run(ctx, auditlog.OpGetBucketLifecycle, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (m *AuditLogMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	return m.run(ctx, auditlog.OpPutBucketLifecycle, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (m *AuditLogMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return m.run(ctx, auditlog.OpDeleteBucketLifecycle, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+	})
+}
+
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	var result *storage.ListBucketResult
 	err := m.run(ctx, auditlog.OpListObjects, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
