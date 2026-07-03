@@ -1,4 +1,4 @@
-FROM golang:1.26.1-alpine3.22 AS app-builder
+FROM golang:1.26.4-alpine3.22@sha256:727cfc3c40be55cd1bc9a4a059406b28a059857e3be752aa9d09531e12c20c56 AS app-builder
 
 ARG SKIP_TESTS=false
 
@@ -17,8 +17,9 @@ RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
 # Create non-root user (UID 10001)
 RUN adduser -D -u 10001 appuser
 
-# Create a temporary directory with correct permissions
+# Create runtime directories with correct permissions
 RUN mkdir -m 1777 /tmp-dir
+RUN mkdir -p /data && chown 10001:10001 /data
 
 RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
 
@@ -34,6 +35,7 @@ COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
 COPY --from=app-builder /etc/passwd /etc/passwd
 COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=app-builder --chown=10001:10001 /tmp-dir /tmp
+COPY --from=app-builder --chown=10001:10001 /data /data
 
 EXPOSE 9000
 
@@ -41,4 +43,3 @@ EXPOSE 9000
 USER 10001
 
 ENTRYPOINT ["/usr/local/bin/pithos", "serve"]
-

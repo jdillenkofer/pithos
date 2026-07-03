@@ -1,8 +1,8 @@
 package sql
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
 	"io"
 
 	"go.opentelemetry.io/otel"
@@ -39,38 +39,32 @@ func New(db database.Database, partContentRepository partContent.Repository) (pa
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
 
 	// Delete existing content first to avoid stale chunks if overwriting
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx, partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
 	if err != nil {
 		return err
 	}
 
-	buffer := make([]byte, chunkSize)
 	chunkIndex := 0
 	for {
-		n, err := io.ReadFull(reader, buffer)
-		if n > 0 {
-			// Create a copy of the read bytes to store
-			content := make([]byte, n)
-			copy(content, buffer[:n])
-
+		content, err := ioutils.ReadChunk(reader, chunkSize)
+		if len(content) > 0 {
 			partContentEntity := partContent.Entity{
 				Id:         ptrutils.ToPtr(partId),
 				ChunkIndex: chunkIndex,
 				Content:    content,
 			}
-			err = bs.partContentRepository.SavePartContent(ctx, tx, &partContentEntity)
-			if err != nil {
-				return err
+			if saveErr := bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), &partContentEntity); saveErr != nil {
+				return saveErr
 			}
 			chunkIndex++
 		}
 		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			if err == io.EOF {
 				break
 			}
 			return err
@@ -80,37 +74,92 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstor
 	return nil
 }
 
-func (bs *sqlPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (bs *sqlPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPart")
 	defer span.End()
 
-	chunks, err := bs.partContentRepository.FindPartContentChunksById(ctx, tx, partId)
+	// Fetch the first chunk eagerly to preserve ErrPartNotFound semantics; the
+	// remaining chunks are loaded lazily so we never hold more than one chunk in
+	// memory at a time.
+	firstChunk, err := bs.partContentRepository.FindPartContentChunkByIndex(ctx, tx.SqlTx(), partId, 0)
 	if err != nil {
 		return nil, err
 	}
-	if len(chunks) == 0 {
+	if firstChunk == nil {
 		return nil, partstore.ErrPartNotFound
 	}
 
-	readers := make([]io.Reader, len(chunks))
-	for i, chunk := range chunks {
-		readers[i] = ioutils.NewByteReadSeekCloser(chunk.Content)
-	}
-
-	return io.NopCloser(io.MultiReader(readers...)), nil
+	return &lazyChunkReadCloser{
+		ctx:       ctx,
+		tx:        tx,
+		repo:      bs.partContentRepository,
+		partId:    partId,
+		nextChunk: 1,
+		current:   bytes.NewReader(firstChunk.Content),
+	}, nil
 }
 
-func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+// lazyChunkReadCloser streams a part's chunks one at a time, querying the next
+// chunk from the repository only once the current one is exhausted. This keeps
+// the read path's memory proportional to a single chunk rather than the whole
+// part. It relies on the read transaction outliving the reader (GetObject binds
+// the tx lifetime to its returned readers).
+type lazyChunkReadCloser struct {
+	ctx       context.Context
+	tx        database.Tx
+	repo      partContent.Repository
+	partId    partstore.PartId
+	nextChunk int
+	current   *bytes.Reader
+	done      bool
+}
+
+func (l *lazyChunkReadCloser) Read(p []byte) (int, error) {
+	for {
+		if l.current != nil {
+			n, err := l.current.Read(p)
+			if err == io.EOF {
+				l.current = nil
+				if n > 0 {
+					return n, nil
+				}
+				continue
+			}
+			return n, err
+		}
+		if l.done {
+			return 0, io.EOF
+		}
+		chunk, err := l.repo.FindPartContentChunkByIndex(l.ctx, l.tx.SqlTx(), l.partId, l.nextChunk)
+		if err != nil {
+			return 0, err
+		}
+		if chunk == nil {
+			l.done = true
+			return 0, io.EOF
+		}
+		l.nextChunk++
+		l.current = bytes.NewReader(chunk.Content)
+	}
+}
+
+func (l *lazyChunkReadCloser) Close() error {
+	l.done = true
+	l.current = nil
+	return nil
+}
+
+func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPartIds")
 	defer span.End()
 
-	return bs.partContentRepository.FindPartContentIds(ctx, tx)
+	return bs.partContentRepository.FindPartContentIds(ctx, tx.SqlTx())
 }
 
-func (bs *sqlPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (bs *sqlPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.DeletePart")
 	defer span.End()
 
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx, partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
 	return err
 }

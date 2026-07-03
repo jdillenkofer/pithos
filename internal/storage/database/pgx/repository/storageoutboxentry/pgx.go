@@ -14,26 +14,30 @@ type pgxRepository struct {
 }
 
 const (
-	countStorageOutboxEntriesStmt                    = "SELECT COUNT(*) FROM storage_outbox_entries"
-	findFirstStorageOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
-	findFirstStorageOutboxEntryStmt                  = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryStmt                   = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at FROM storage_outbox_entries ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketStmt         = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketStmt          = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at FROM storage_outbox_entries WHERE bucket = $1 ORDER BY id DESC LIMIT 1"
-	findStorageOutboxEntryChunksByIdStmt             = "SELECT outbox_entry_id, chunk_index, content FROM storage_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
-	insertStorageOutboxEntryStmt                     = "INSERT INTO storage_outbox_entries (id, operation, bucket, key, version_id, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
-	updateStorageOutboxEntryByIdStmt                 = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, version_id = $4, content_type = $5, updated_at = $6 WHERE id = $7"
-	upsertStorageOutboxContentChunkStmt              = "INSERT INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
-	deleteStorageOutboxEntryByIdStmt                 = "DELETE FROM storage_outbox_entries WHERE id = $1"
+	countStorageOutboxEntriesStmt                                 = "SELECT COUNT(*) FROM storage_outbox_entries WHERE outbox_id = $1"
+	findFirstStorageOutboxEntryStmt                               = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryStmt                                = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketStmt                      = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketStmt                       = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
+	findStorageOutboxEntryChunksByIdStmt                          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, version_id, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, version_id = $4, content_type = $5, updated_at = $6 WHERE id = $7 AND outbox_id = $8"
+	upsertStorageOutboxContentChunkStmt                           = "INSERT INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
+	claimStorageOutboxEntryStmt                                   = "UPDATE storage_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
+	deleteStorageOutboxEntryByClaimOwnerStmt                      = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
+	releaseStorageOutboxEntryClaimStmt                            = "UPDATE storage_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
+	extendStorageOutboxEntryClaimStmt                             = "UPDATE storage_outbox_entries SET claim_until = $1, version = version + 1, updated_at = $2 WHERE id = $3 AND outbox_id = $4 AND claim_owner = $5"
 )
 
 func NewRepository() (storageoutboxentry.Repository, error) {
 	return &pgxRepository{}, nil
 }
 
-func (sor *pgxRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+func (sor *pgxRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, countStorageOutboxEntriesStmt).Scan(&count)
+	err := tx.QueryRowContext(ctx, countStorageOutboxEntriesStmt, outboxId).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -49,7 +53,10 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	var contentType *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &versionID, &contentType, &createdAt, &updatedAt)
+	var claimOwner *string
+	var claimUntil *time.Time
+	var version int64
+	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &versionID, &contentType, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -66,11 +73,14 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 		ContentType: contentType,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+		ClaimOwner:  claimOwner,
+		ClaimUntil:  claimUntil,
+		Version:     version,
 	}, nil
 }
 
-func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt)
+func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryStmt, outboxId)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -78,8 +88,8 @@ func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *s
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *pgxRepository) FindFirstStorageOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryWithForUpdateLockStmt)
+func (sor *pgxRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt, outboxId)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -87,8 +97,8 @@ func (sor *pgxRepository) FindFirstStorageOutboxEntryWithForUpdateLock(ctx conte
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *pgxRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sql.Tx) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryStmt)
+func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -96,8 +106,8 @@ func (sor *pgxRepository) FindLastStorageOutboxEntry(ctx context.Context, tx *sq
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketStmt, bucketName.String())
+func (sor *pgxRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -105,8 +115,8 @@ func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucket(ctx context.Conte
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *pgxRepository) FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketStmt, bucketName.String())
+func (sor *pgxRepository) FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, outboxId, bucketName.String(), key)
 	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -114,8 +124,17 @@ func (sor *pgxRepository) FindLastStorageOutboxEntryForBucket(ctx context.Contex
 	return storageOutboxEntryEntity, nil
 }
 
-func (sor *pgxRepository) FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*storageoutboxentry.ContentChunk, error) {
-	rows, err := tx.QueryContext(ctx, findStorageOutboxEntryChunksByIdStmt, id.String())
+func (sor *pgxRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt, outboxId, bucketName.String(), key)
+	storageOutboxEntryEntity, err := convertRowToStorageOutboxEntryEntity(row)
+	if err != nil {
+		return nil, err
+	}
+	return storageOutboxEntryEntity, nil
+}
+
+func (sor *pgxRepository) FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*storageoutboxentry.ContentChunk, error) {
+	rows, err := tx.QueryContext(ctx, findStorageOutboxEntryChunksByIdStmt, id.String(), outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +158,18 @@ func (sor *pgxRepository) FindStorageOutboxEntryChunksById(ctx context.Context, 
 	return chunks, nil
 }
 
-func (sor *pgxRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, storageOutboxEntry *storageoutboxentry.Entity) error {
+func (sor *pgxRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, storageOutboxEntry *storageoutboxentry.Entity) error {
 	if storageOutboxEntry.Id == nil {
 		id := ulid.Make()
 		storageOutboxEntry.Id = &id
 		storageOutboxEntry.CreatedAt = time.Now().UTC()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), outboxId, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	storageOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String(), outboxId)
 	return err
 }
 
@@ -159,7 +178,52 @@ func (sor *pgxRepository) SaveStorageOutboxContentChunk(ctx context.Context, tx 
 	return err
 }
 
-func (sor *pgxRepository) DeleteStorageOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByIdStmt, id.String())
-	return err
+func (sor *pgxRepository) ClaimFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*storageoutboxentry.Entity, bool, error) {
+	entry, err := sor.FindFirstStorageOutboxEntry(ctx, tx, outboxId)
+	if err != nil || entry == nil {
+		return entry, false, err
+	}
+	result, err := tx.ExecContext(ctx, claimStorageOutboxEntryStmt, owner, claimUntil, now, entry.Id.String(), outboxId, entry.Version, now)
+	if err != nil {
+		return nil, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	if affected != 1 {
+		return nil, false, nil
+	}
+	entry.ClaimOwner = &owner
+	entry.ClaimUntil = &claimUntil
+	entry.Version += 1
+	entry.UpdatedAt = now
+	return entry, true, nil
+}
+
+func (sor *pgxRepository) DeleteStorageOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error) {
+	result, err := tx.ExecContext(ctx, deleteStorageOutboxEntryByClaimOwnerStmt, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (sor *pgxRepository) ReleaseStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, releaseStorageOutboxEntryClaimStmt, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (sor *pgxRepository) ExtendStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time, claimUntil time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, extendStorageOutboxEntryClaimStmt, claimUntil, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }

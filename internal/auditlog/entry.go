@@ -23,18 +23,26 @@ const (
 	OpHeadObject              Operation = "HeadObject"
 	OpGetObject               Operation = "GetObject"
 	OpPutObject               Operation = "PutObject"
+	OpCopyObject              Operation = "CopyObject"
 	OpAppendObject            Operation = "AppendObject"
 	OpDeleteObject            Operation = "DeleteObject"
 	OpDeleteObjects           Operation = "DeleteObjects"
 	OpCreateMultipartUpload   Operation = "CreateMultipartUpload"
 	OpUploadPart              Operation = "UploadPart"
+	OpUploadPartCopy          Operation = "UploadPartCopy"
 	OpCompleteMultipartUpload Operation = "CompleteMultipartUpload"
 	OpAbortMultipartUpload    Operation = "AbortMultipartUpload"
 	OpListMultipartUploads    Operation = "ListMultipartUploads"
 	OpListParts               Operation = "ListParts"
+	OpGetBucketCORS           Operation = "GetBucketCORS"
+	OpPutBucketCORS           Operation = "PutBucketCORS"
+	OpDeleteBucketCORS        Operation = "DeleteBucketCORS"
 	OpGetBucketWebsite        Operation = "GetBucketWebsite"
 	OpPutBucketWebsite        Operation = "PutBucketWebsite"
 	OpDeleteBucketWebsite     Operation = "DeleteBucketWebsite"
+	OpGetBucketLifecycle      Operation = "GetBucketLifecycle"
+	OpPutBucketLifecycle      Operation = "PutBucketLifecycle"
+	OpDeleteBucketLifecycle   Operation = "DeleteBucketLifecycle"
 )
 
 type Phase string
@@ -44,7 +52,10 @@ const (
 	PhaseComplete Phase = "COMPLETE"
 )
 
-const CurrentVersion uint16 = 2
+// CurrentVersion is the audit log entry format version.
+//   - v2 added actor/request/outcome detail fields.
+//   - v3 added ResourceDetails.SourceBucket/SourceKey for server-side copy operations.
+const CurrentVersion uint16 = 3
 
 type EntryType string
 
@@ -80,6 +91,10 @@ type ResourceDetails struct {
 	Key        string
 	UploadID   string
 	PartNumber int32
+	// SourceBucket and SourceKey identify the copy source for server-side copy
+	// operations (CopyObject, UploadPartCopy). Empty for all other operations.
+	SourceBucket string
+	SourceKey    string
 }
 
 type ActorDetails struct {

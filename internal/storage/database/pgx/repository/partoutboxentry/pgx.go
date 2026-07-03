@@ -14,25 +14,28 @@ type pgxRepository struct {
 }
 
 const (
-	countPartOutboxEntriesStmt                    = "SELECT COUNT(*) FROM part_outbox_entries"
-	findLastPartOutboxEntryByPartIdStmt           = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries WHERE part_id = $1 ORDER BY id DESC LIMIT 1"
-	findLastPartOutboxEntryGroupedByPartIdStmt    = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY part_id, id DESC"
-	findFirstPartOutboxEntryStmt                  = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1"
-	findFirstPartOutboxEntryWithForUpdateLockStmt = "SELECT id, operation, part_id, created_at, updated_at FROM part_outbox_entries ORDER BY id ASC LIMIT 1 FOR UPDATE"
-	findPartOutboxEntryChunksByIdStmt             = "SELECT outbox_entry_id, chunk_index, content FROM part_outbox_contents WHERE outbox_entry_id = $1 ORDER BY chunk_index ASC"
-	insertPartOutboxEntryStmt                     = "INSERT INTO part_outbox_entries (id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
-	updatePartOutboxEntryByIdStmt                 = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4"
-	upsertPartOutboxContentChunkStmt              = "INSERT INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
-	deletePartOutboxEntryByIdStmt                 = "DELETE FROM part_outbox_entries WHERE id = $1"
+	countPartOutboxEntriesStmt                 = "SELECT COUNT(*) FROM part_outbox_entries WHERE outbox_id = $1"
+	findLastPartOutboxEntryByPartIdStmt        = "SELECT id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 AND part_id = $2 ORDER BY id DESC LIMIT 1"
+	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT DISTINCT ON (part_id) id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY part_id, id DESC"
+	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findPartOutboxEntryChunksByIdStmt          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
+	findPartOutboxEntryChunkByIndexStmt        = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 AND c.chunk_index = $3"
+	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
+	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
+	upsertPartOutboxContentChunkStmt           = "INSERT INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
+	claimPartOutboxEntryStmt                   = "UPDATE part_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
+	deletePartOutboxEntryByClaimOwnerStmt      = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
+	releasePartOutboxEntryClaimStmt            = "UPDATE part_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
+	extendPartOutboxEntryClaimStmt             = "UPDATE part_outbox_entries SET claim_until = $1, version = version + 1, updated_at = $2 WHERE id = $3 AND outbox_id = $4 AND claim_owner = $5"
 )
 
 func NewRepository() (partoutboxentry.Repository, error) {
 	return &pgxRepository{}, nil
 }
 
-func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx) (int, error) {
+func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt).Scan(&count)
+	err := tx.QueryRowContext(ctx, countPartOutboxEntriesStmt, outboxId).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -45,7 +48,10 @@ func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry
 	var partIdStr string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := partOutboxRow.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt)
+	var claimOwner *string
+	var claimUntil *time.Time
+	var version int64
+	err := partOutboxRow.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -55,11 +61,14 @@ func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry
 	ulidId := ulid.MustParse(id)
 	partId := partstore.MustNewPartIdFromString(partIdStr)
 	return &partoutboxentry.Entity{
-		Id:        &ulidId,
-		Operation: operation,
-		PartId:    *partId,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		Id:         &ulidId,
+		Operation:  operation,
+		PartId:     *partId,
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
+		ClaimOwner: claimOwner,
+		ClaimUntil: claimUntil,
+		Version:    version,
 	}, nil
 }
 
@@ -69,28 +78,34 @@ func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxen
 	var partIdStr string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := partOutboxRows.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt)
+	var claimOwner *string
+	var claimUntil *time.Time
+	var version int64
+	err := partOutboxRows.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
 	partId := partstore.MustNewPartIdFromString(partIdStr)
 	return &partoutboxentry.Entity{
-		Id:        &ulidId,
-		Operation: operation,
-		PartId:    *partId,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
+		Id:         &ulidId,
+		Operation:  operation,
+		PartId:     *partId,
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
+		ClaimOwner: claimOwner,
+		ClaimUntil: claimUntil,
+		Version:    version,
 	}, nil
 }
 
-func (bor *pgxRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, partId.String())
+func (bor *pgxRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastPartOutboxEntryByPartIdStmt, outboxId, partId.String())
 	return convertRowToPartOutboxEntryEntity(row)
 }
 
-func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx) ([]partoutboxentry.Entity, error) {
-	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt)
+func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]partoutboxentry.Entity, error) {
+	partOutboxEntryRows, err := tx.QueryContext(ctx, findLastPartOutboxEntryGroupedByPartIdStmt, outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +121,8 @@ func (bor *pgxRepository) FindLastPartOutboxEntryGroupedByPartId(ctx context.Con
 	return partOutboxEntryEntities, nil
 }
 
-func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt)
+func (bor *pgxRepository) findFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId)
 	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
 	if err != nil {
 		return nil, err
@@ -115,17 +130,8 @@ func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.
 	return partOutboxEntryEntity, nil
 }
 
-func (bor *pgxRepository) FindFirstPartOutboxEntryWithForUpdateLock(ctx context.Context, tx *sql.Tx) (*partoutboxentry.Entity, error) {
-	row := tx.QueryRowContext(ctx, findFirstPartOutboxEntryWithForUpdateLockStmt)
-	partOutboxEntryEntity, err := convertRowToPartOutboxEntryEntity(row)
-	if err != nil {
-		return nil, err
-	}
-	return partOutboxEntryEntity, nil
-}
-
-func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
-	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String())
+func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*partoutboxentry.ContentChunk, error) {
+	rows, err := tx.QueryContext(ctx, findPartOutboxEntryChunksByIdStmt, id.String(), outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -149,18 +155,37 @@ func (bor *pgxRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx 
 	return chunks, nil
 }
 
-func (bor *pgxRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, partOutboxEntry *partoutboxentry.Entity) error {
+func (bor *pgxRepository) FindPartOutboxEntryChunkByIndex(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, chunkIndex int) (*partoutboxentry.ContentChunk, error) {
+	row := tx.QueryRowContext(ctx, findPartOutboxEntryChunkByIndexStmt, id.String(), outboxId, chunkIndex)
+	var entryIdStr string
+	var idx int
+	var content []byte
+	err := row.Scan(&entryIdStr, &idx, &content)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &partoutboxentry.ContentChunk{
+		OutboxEntryId: ulid.MustParse(entryIdStr),
+		ChunkIndex:    idx,
+		Content:       content,
+	}, nil
+}
+
+func (bor *pgxRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *partoutboxentry.Entity) error {
 	if partOutboxEntry.Id == nil {
 		id := ulid.Make()
 		partOutboxEntry.Id = &id
 		partOutboxEntry.CreatedAt = time.Now().UTC()
 		partOutboxEntry.UpdatedAt = partOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertPartOutboxEntryStmt, partOutboxEntry.Id.String(), outboxId, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.CreatedAt, partOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	partOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String())
+	_, err := tx.ExecContext(ctx, updatePartOutboxEntryByIdStmt, partOutboxEntry.Operation, partOutboxEntry.PartId.String(), partOutboxEntry.UpdatedAt, partOutboxEntry.Id.String(), outboxId)
 	return err
 }
 
@@ -169,7 +194,52 @@ func (bor *pgxRepository) SavePartOutboxContentChunk(ctx context.Context, tx *sq
 	return err
 }
 
-func (bor *pgxRepository) DeletePartOutboxEntryById(ctx context.Context, tx *sql.Tx, id ulid.ULID) error {
-	_, err := tx.ExecContext(ctx, deletePartOutboxEntryByIdStmt, id.String())
-	return err
+func (bor *pgxRepository) ClaimFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*partoutboxentry.Entity, bool, error) {
+	entry, err := bor.findFirstPartOutboxEntry(ctx, tx, outboxId)
+	if err != nil || entry == nil {
+		return entry, false, err
+	}
+	result, err := tx.ExecContext(ctx, claimPartOutboxEntryStmt, owner, claimUntil, now, entry.Id.String(), outboxId, entry.Version, now)
+	if err != nil {
+		return nil, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, false, err
+	}
+	if affected != 1 {
+		return nil, false, nil
+	}
+	entry.ClaimOwner = &owner
+	entry.ClaimUntil = &claimUntil
+	entry.Version += 1
+	entry.UpdatedAt = now
+	return entry, true, nil
+}
+
+func (bor *pgxRepository) DeletePartOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error) {
+	result, err := tx.ExecContext(ctx, deletePartOutboxEntryByClaimOwnerStmt, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (bor *pgxRepository) ReleasePartOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, releasePartOutboxEntryClaimStmt, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (bor *pgxRepository) ExtendPartOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time, claimUntil time.Time) (bool, error) {
+	result, err := tx.ExecContext(ctx, extendPartOutboxEntryClaimStmt, claimUntil, now, id.String(), outboxId, owner)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }

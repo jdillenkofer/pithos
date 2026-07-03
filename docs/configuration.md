@@ -78,8 +78,10 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 |-------|------|-------------|
 | `request.operation` | `string` | The S3 operation being performed (e.g. `"GetObject"`, `"PutObject"`) |
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
-| `request.bucket` | `string\|nil` | The bucket name, or `nil` for bucket-list operations |
-| `request.key` | `string\|nil` | The object key, or `nil` for bucket-level operations |
+| `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
+| `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
+| `request.sourceBucket` | `string\|nil` | The copy source bucket for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
+| `request.sourceKey` | `string\|nil` | The copy source key for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
 | `request.httpRequest.method` | `string` | The incoming HTTP method (for example, `"GET"`, `"PUT"`) |
 | `request.httpRequest.path` | `string` | The incoming HTTP path (without query string) |
 | `request.httpRequest.query` | `string` | The raw query string without the leading `?` |
@@ -122,7 +124,9 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 
 ### Available Operations
 
-`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`
+`ListBuckets`, `HeadBucket`, `CreateBucket`, `DeleteBucket`, `ListObjects`, `HeadObject`, `GetObject`, `PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `ListMultipartUploads`, `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `GetBucketCORS`, `PutBucketCORS`, `DeleteBucketCORS`, `GetBucketLifecycle`, `PutBucketLifecycle`, `DeleteBucketLifecycle`, `GetBucketWebsite`, `PutBucketWebsite`, `DeleteBucketWebsite`, `GetObjectTagging`, `PutObjectTagging`, `DeleteObjectTagging`
+
+Server-side copies (`CopyObject` and `UploadPartCopy`, requested via the `x-amz-copy-source` header) are authorized as a single `CopyObject` / `UploadPartCopy` operation. For these operations the request carries both the destination (`request.bucket` / `request.key`) and the copy source (`request.sourceBucket` / `request.sourceKey`), so a policy can reason about both ends in one check.
 
 ### Optional List Filtering Hooks
 

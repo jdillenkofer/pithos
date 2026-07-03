@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -24,6 +26,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEvaluateCopySourceConditionsMatchesS3IfMatchAndUnmodifiedSincePrecedence(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	etag := "\"etag\""
+	lastModified := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	object := &metadatastore.Object{
+		ETag:         etag,
+		LastModified: lastModified,
+	}
+	beforeLastModified := lastModified.Add(-time.Hour)
+	afterLastModified := lastModified.Add(time.Hour)
+
+	err := evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfMatch:           ptrutils.ToPtr(etag),
+		IfUnmodifiedSince: &beforeLastModified,
+	}, object)
+	require.NoError(t, err)
+
+	err = evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfMatch:           ptrutils.ToPtr("\"different\""),
+		IfUnmodifiedSince: &afterLastModified,
+	}, object)
+	require.ErrorIs(t, err, storage.ErrPreconditionFailed)
+
+	err = evaluateCopySourceConditions(storage.CopySourceConditions{
+		IfUnmodifiedSince: &beforeLastModified,
+	}, object)
+	require.ErrorIs(t, err, storage.ErrPreconditionFailed)
+}
 
 func TestMetadataPartStorageWithSql(t *testing.T) {
 	testutils.SkipIfIntegration(t)
@@ -77,7 +109,17 @@ func TestMetadataPartStorageWithSql(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create UserMetadataRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
@@ -140,7 +182,17 @@ func TestMetadataPartStorageWithFilesystem(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create UserMetadataRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create SqlMetadataStore: %s", err))
 		os.Exit(1)
@@ -177,7 +229,11 @@ func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	require.NoError(t, err)
 	partRepository, err := repositoryFactory.NewPartRepository(db)
 	require.NoError(t, err)
-	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	require.NoError(t, err)
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	require.NoError(t, err)
+	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 	require.NoError(t, err)
 	st, err := NewStorage(db, metaStore, partStore)
 	require.NoError(t, err)
@@ -777,21 +833,146 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 	objectChecksums, err := checksumutils.CalculateMultipartChecksums(partChecksumsList, checksumutils.ChecksumTypeFullObject)
 	require.NoError(t, err)
 
-	tx, err := st.db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	for _, p := range parts {
-		require.NoError(t, st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)))
-	}
-	err = st.metadataStore.PutObject(ctx, tx, bucket, &metadatastore.Object{
-		Key:   key,
-		ETag:  *objectChecksums.ETag,
-		Size:  int64(maxParts) * int64(len(partData)),
-		Parts: parts,
-	}, nil)
-	require.NoError(t, tx.Commit())
+	err = database.WithTx(ctx, st.db, nil, func(ctx context.Context, tx database.Tx) error {
+		for _, p := range parts {
+			if err := st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)); err != nil {
+				return err
+			}
+		}
+		return st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+			Key:   key,
+			ETag:  *objectChecksums.ETag,
+			Size:  int64(maxParts) * int64(len(partData)),
+			Parts: parts,
+		}, nil)
+	})
 	require.NoError(t, err)
 
 	// The next append must fail with ErrTooManyParts.
 	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("x")), nil, nil)
 	assert.ErrorIs(t, err, storage.ErrTooManyParts)
+}
+
+func TestGetObject_RangeRegression_StartInsideLaterPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-0000-")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-1111-")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("part-2222")), nil, nil)
+	require.NoError(t, err)
+
+	start := int64(12) // inside second part
+	end := int64(26)   // inside third part
+	_, readers, err := st.GetObject(ctx, bucket, key, []storage.ByteRange{{Start: &start, End: &end}}, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	defer readers[0].Close()
+
+	content, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	assert.Equal(t, "rt-1111-part-2", string(content))
+}
+
+func TestGetObject_RangeHandlingAcrossPartBoundaries(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("!!!")), nil, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		byteRange storage.ByteRange
+		expected  string
+	}{
+		{
+			name:      "entire second part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(5)), End: ptrutils.ToPtr(int64(11))},
+			expected:  " world",
+		},
+		{
+			name:      "straddles second and third part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(8)), End: ptrutils.ToPtr(int64(13))},
+			expected:  "rld!!",
+		},
+		{
+			name:      "open-ended from middle of second part",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(7)), End: nil},
+			expected:  "orld!!!",
+		},
+		{
+			name:      "exact part boundary",
+			byteRange: storage.ByteRange{Start: ptrutils.ToPtr(int64(11)), End: ptrutils.ToPtr(int64(14))},
+			expected:  "!!!",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, readers, err := st.GetObject(ctx, bucket, key, []storage.ByteRange{tc.byteRange}, nil)
+			require.NoError(t, err)
+			require.Len(t, readers, 1)
+			defer readers[0].Close()
+
+			content, err := io.ReadAll(readers[0])
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, string(content))
+		})
+	}
+}
+
+func TestGetObject_MultipleRangesStartingAfterEarlierParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("aaa")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("bbb")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("ccc")), nil, nil)
+	require.NoError(t, err)
+
+	ranges := []storage.ByteRange{
+		{Start: ptrutils.ToPtr(int64(4)), End: ptrutils.ToPtr(int64(6))},
+		{Start: ptrutils.ToPtr(int64(7)), End: ptrutils.ToPtr(int64(9))},
+	}
+
+	_, readers, err := st.GetObject(ctx, bucket, key, ranges, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	defer readers[0].Close()
+	defer readers[1].Close()
+
+	first, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	second, err := io.ReadAll(readers[1])
+	require.NoError(t, err)
+
+	assert.Equal(t, "bb", string(first))
+	assert.Equal(t, "cc", string(second))
 }

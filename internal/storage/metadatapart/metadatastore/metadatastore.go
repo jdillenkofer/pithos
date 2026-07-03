@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
@@ -29,6 +31,23 @@ type BucketVersioningConfiguration struct {
 	Status *BucketVersioningStatus
 }
 
+// ObjectMetadata holds the user-controllable object metadata: the
+// user-modifiable system metadata headers and the user-defined x-amz-meta-*
+// key/value pairs. Content-Type is tracked separately on Object.
+type ObjectMetadata struct {
+	CacheControl       *string
+	ContentDisposition *string
+	ContentEncoding    *string
+	ContentLanguage    *string
+	// Expires is stored as the raw header value (an HTTP date) and returned
+	// verbatim, matching S3 behaviour.
+	Expires                 *string
+	WebsiteRedirectLocation *string
+	// UserMetadata holds the x-amz-meta-* pairs; keys are stored lowercase
+	// without the "x-amz-meta-" prefix.
+	UserMetadata map[string]string
+}
+
 type Object struct {
 	Key               ObjectKey
 	ContentType       *string // only set in HeadObject and PutObject
@@ -44,6 +63,13 @@ type Object struct {
 	ChecksumType      *string
 	Size              int64
 	Parts             []Part
+	// Tags holds the object's tag set as key/value pairs. It is populated by
+	// HeadObject and ListObjects and applied (replacing any existing tags) by
+	// PutObject.
+	Tags map[string]string
+	// Metadata holds the user-controllable object metadata. It is populated by
+	// HeadObject and applied (replacing any existing metadata) by PutObject.
+	Metadata ObjectMetadata
 }
 
 type ListBucketResult struct {
@@ -192,6 +218,8 @@ var ErrEntityTooLarge error = errors.New("EntityTooLarge")
 var ErrPreconditionFailed error = errors.New("PreconditionFailed")
 var ErrNotModified error = errors.New("NotModified")
 var ErrNoSuchWebsiteConfiguration error = errors.New("NoSuchWebsiteConfiguration")
+var ErrNoSuchCORSConfiguration error = errors.New("NoSuchCORSConfiguration")
+var ErrNoSuchLifecycleConfiguration error = errors.New("NoSuchLifecycleConfiguration")
 var ErrTooManyParts error = errors.New("TooManyParts")
 var ErrInvalidWriteOffset error = errors.New("InvalidWriteOffset")
 
@@ -229,6 +257,18 @@ const ETagWildcard = "*"
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
 	IfMatchETag     *string
+}
+
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It is applied to the object when the upload completes.
+	// Nil means no metadata.
+	Metadata *ObjectMetadata
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -312,10 +352,103 @@ type WebsiteConfiguration struct {
 	ErrorDocumentKey    *string
 }
 
+type CORSRule struct {
+	ID             *string
+	AllowedOrigins []string
+	AllowedMethods []string
+	AllowedHeaders []string
+	ExposeHeaders  []string
+	MaxAgeSeconds  *int
+}
+
+type BucketCORSConfiguration struct {
+	Rules []CORSRule
+}
+
+// LifecycleRuleStatus values as defined by the S3 API.
+const (
+	LifecycleRuleStatusEnabled  = "Enabled"
+	LifecycleRuleStatusDisabled = "Disabled"
+)
+
+// LifecycleTag is a single tag predicate of a lifecycle rule filter.
+type LifecycleTag struct {
+	Key   string
+	Value string
+}
+
+// LifecycleFilterAnd combines multiple lifecycle filter predicates; an object
+// must satisfy all of them for the rule to apply.
+type LifecycleFilterAnd struct {
+	Prefix                *string
+	Tags                  []LifecycleTag
+	ObjectSizeGreaterThan *int64
+	ObjectSizeLessThan    *int64
+}
+
+// LifecycleFilter selects the objects a lifecycle rule applies to. At most one
+// of the fields may be set; combinations must be expressed via And. An empty
+// filter applies the rule to all objects in the bucket.
+type LifecycleFilter struct {
+	Prefix                *string
+	Tag                   *LifecycleTag
+	ObjectSizeGreaterThan *int64
+	ObjectSizeLessThan    *int64
+	And                   *LifecycleFilterAnd
+}
+
+// LifecycleExpiration describes when objects expire. Exactly one of Days, Date
+// or ExpiredObjectDeleteMarker is set.
+type LifecycleExpiration struct {
+	// Days is the number of days after object creation when the object expires.
+	// Following S3 semantics, the effective expiry is rounded to the next
+	// midnight UTC after creation + Days.
+	Days *int32
+	// Date is the absolute expiry time; it must be midnight UTC.
+	Date *time.Time
+	// ExpiredObjectDeleteMarker only has an effect on versioned buckets and is
+	// accepted for compatibility; without versioning it is a no-op.
+	ExpiredObjectDeleteMarker *bool
+}
+
+// LifecycleAbortIncompleteMultipartUpload aborts multipart uploads that were
+// initiated more than DaysAfterInitiation days ago and never completed.
+type LifecycleAbortIncompleteMultipartUpload struct {
+	DaysAfterInitiation *int32
+}
+
+// LifecycleRule is a single rule of a bucket lifecycle configuration.
+type LifecycleRule struct {
+	ID     *string
+	Status string
+	// Prefix is the legacy top-level rule prefix (pre-Filter API). New
+	// configurations use Filter instead; exactly one of the two is set.
+	Prefix                         *string
+	Filter                         *LifecycleFilter
+	Expiration                     *LifecycleExpiration
+	AbortIncompleteMultipartUpload *LifecycleAbortIncompleteMultipartUpload
+}
+
+type BucketLifecycleConfiguration struct {
+	Rules []LifecycleRule
+}
+
 type BucketWebsiteStore interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *WebsiteConfiguration) error
 	DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
+type BucketCORSStore interface {
+	GetBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketCORSConfiguration, error)
+	PutBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketCORSConfiguration) error
+	DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+}
+
+type BucketLifecycleStore interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketLifecycleConfiguration, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketLifecycleConfiguration) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 }
 
 type ObjectStore interface {
@@ -331,10 +464,19 @@ type ObjectStore interface {
 	// size, ErrInvalidWriteOffset is returned.
 	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
+	// GetObjectTagging returns the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	// PutObjectTagging replaces the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	// DeleteObjectTagging removes the entire tag set of the object at key.
+	// Returns ErrNoSuchKey if the object does not exist.
+	DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
 }
 
 type MultipartStore interface {
-	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
@@ -347,8 +489,16 @@ type MetadataStore interface {
 	MaintenanceStore
 	BucketStore
 	BucketWebsiteStore
+	BucketCORSStore
+	BucketLifecycleStore
 	ObjectStore
 	MultipartStore
+}
+
+func runTesterTx(ctx context.Context, db database.Database, opts *sql.TxOptions, fn func(tx *sql.Tx) error) error {
+	return database.WithTx(ctx, db, opts, func(ctx context.Context, tx database.Tx) error {
+		return fn(tx.SqlTx())
+	})
 }
 
 func Tester(metadataStore MetadataStore, db database.Database) error {
@@ -362,42 +512,36 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	bucketName := MustNewBucketName("bucket")
 	key := MustNewObjectKey("test")
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		return metadataStore.CreateBucket(ctx, tx, bucketName)
+	})
 	if err != nil {
 		return err
 	}
-	err = metadataStore.CreateBucket(ctx, tx, bucketName)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	var bucket *Bucket
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var err error
+		bucket, err = metadataStore.HeadBucket(ctx, tx, bucketName)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	bucket, err := metadataStore.HeadBucket(ctx, tx, bucketName)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
 	if !bucketName.Equals(bucket.Name) {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	var buckets []Bucket
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var err error
+		buckets, err = metadataStore.ListBuckets(ctx, tx)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	buckets, err := metadataStore.ListBuckets(ctx, tx)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
 	if len(buckets) != 1 {
 		return errors.New("expected 1 bucket got " + strconv.Itoa(len(buckets)))
@@ -407,51 +551,45 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return errors.New("invalid bucketName")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		return metadataStore.PutObject(ctx, tx, bucketName, &Object{
+			Key:          key,
+			LastModified: time.Now(),
+			ETag:         "",
+			Size:         0,
+			Parts:        []Part{},
+		}, nil)
+	})
 	if err != nil {
 		return err
 	}
-	err = metadataStore.PutObject(ctx, tx, bucketName, &Object{
-		Key:          key,
-		LastModified: time.Now(),
-		ETag:         "",
-		Size:         0,
-		Parts:        []Part{},
-	}, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	var object *Object
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var err error
+		object, err = metadataStore.HeadObject(ctx, tx, bucketName, key)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	object, err := metadataStore.HeadObject(ctx, tx, bucketName, key)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
 	if len(object.Parts) != 0 {
 		return errors.New("invalid part length")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
+	var listBucketResult *ListBucketResult
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var err error
+		listBucketResult, err = metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
+			MaxKeys:       1000,
+			SkipPartFetch: true,
+		})
 		return err
-	}
-	listBucketResult, err := metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
-		MaxKeys:       1000,
-		SkipPartFetch: true,
 	})
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	tx.Commit()
 
 	if len(listBucketResult.Objects) != 1 {
 		return errors.New("invalid objects length")
@@ -461,133 +599,182 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return errors.New("invalid object key")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		_, err := metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	var initiateMultipartUploadResult *InitiateMultipartUploadResult
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		var err error
+		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil, nil)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
 	partId, err := partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
-		Id:   *partId,
-		Size: 0,
-		ETag: "",
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		return metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+			Id:   *partId,
+			Size: 0,
+			ETag: "",
+		})
 	})
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		_, err := metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil, nil)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.CompleteMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, nil, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		_, err := metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		var err error
+		initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil, nil)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	initiateMultipartUploadResult, err = metadataStore.CreateMultipartUpload(ctx, tx, bucketName, key, nil, nil)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
-	}
 	partId, err = partstore.NewRandomPartId()
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	err = metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
-		Id:   *partId,
-		Size: 0,
-		ETag: "",
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		return metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+			Id:   *partId,
+			Size: 0,
+			ETag: "",
+		})
 	})
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		_, err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	_, err = metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return err
+	// Multiple pending uploads can share the same key, so the
+	// (keyMarker, uploadIdMarker) cursor must resume mid-key and return the
+	// remaining uploads of the marker key before moving to greater keys.
+	uploadKeys := []ObjectKey{
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-a"),
+		MustNewObjectKey("upload-b"),
+		MustNewObjectKey("upload-c"),
 	}
-	err = metadataStore.DeleteBucket(ctx, tx, bucketName)
-	if err != nil {
-		tx.Rollback()
-		return err
+	expectedUploads := []Upload{}
+	for _, uploadKey := range uploadKeys {
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+			initiateResult, err := metadataStore.CreateMultipartUpload(ctx, tx, bucketName, uploadKey, nil, nil, nil)
+			if err != nil {
+				return err
+			}
+			expectedUploads = append(expectedUploads, Upload{Key: uploadKey, UploadId: initiateResult.UploadId})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 	}
-	tx.Commit()
+	slices.SortFunc(expectedUploads, func(a, b Upload) int {
+		if c := strings.Compare(a.Key.String(), b.Key.String()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.UploadId.String(), b.UploadId.String())
+	})
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	collectedUploads := []Upload{}
+	keyMarker := ""
+	uploadIdMarker := ""
+	for page := 0; ; page++ {
+		if page > len(expectedUploads) {
+			return errors.New("multipart upload pagination did not terminate")
+		}
+		var listMultipartUploadsResult *ListMultipartUploadsResult
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+			var err error
+			listMultipartUploadsResult, err = metadataStore.ListMultipartUploads(ctx, tx, bucketName, ListMultipartUploadsOptions{
+				KeyMarker:      &keyMarker,
+				UploadIdMarker: &uploadIdMarker,
+				MaxUploads:     2,
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if len(listMultipartUploadsResult.Uploads) > 2 {
+			return errors.New("expected at most 2 uploads per page got " + strconv.Itoa(len(listMultipartUploadsResult.Uploads)))
+		}
+		collectedUploads = append(collectedUploads, listMultipartUploadsResult.Uploads...)
+		if !listMultipartUploadsResult.IsTruncated {
+			break
+		}
+		keyMarker = listMultipartUploadsResult.NextKeyMarker
+		uploadIdMarker = listMultipartUploadsResult.NextUploadIdMarker
+	}
+	if len(collectedUploads) != len(expectedUploads) {
+		return errors.New("expected " + strconv.Itoa(len(expectedUploads)) + " paginated uploads got " + strconv.Itoa(len(collectedUploads)))
+	}
+	for idx, expectedUpload := range expectedUploads {
+		if !expectedUpload.Key.Equals(collectedUploads[idx].Key) || !expectedUpload.UploadId.Equals(collectedUploads[idx].UploadId) {
+			return errors.New("unexpected upload at index " + strconv.Itoa(idx))
+		}
+	}
+
+	for _, upload := range expectedUploads {
+		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+			_, err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, upload.Key, upload.UploadId)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
+		return metadataStore.DeleteBucket(ctx, tx, bucketName)
+	})
 	if err != nil {
 		return err
 	}
-	buckets, err = metadataStore.ListBuckets(ctx, tx)
+
+	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		var err error
+		buckets, err = metadataStore.ListBuckets(ctx, tx)
+		return err
+	})
 	if err != nil {
-		tx.Rollback()
 		return err
 	}
-	tx.Commit()
 
 	if len(buckets) != 0 {
 		return errors.New("expected 0 bucket got " + strconv.Itoa(len(buckets)))

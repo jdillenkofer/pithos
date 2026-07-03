@@ -143,87 +143,87 @@ func (v *Validator) validateObject(ctx context.Context, db database.Database, pa
 		Success:    true,
 	}
 
-	// Get object ID (we need to query the DB to get the ULID for the object)
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		// Get object ID (we need to query the DB to get the ULID for the object)
+		objEntity, err := objectRepo.FindObjectByBucketNameAndKey(ctx, tx.SqlTx(), bucketName, object.Key)
+		if err != nil {
+			result.Success = false
+			result.ErrorType = fmt.Sprintf("Object not found in DB: %v", err)
+			return nil
+		}
+
+		// Get parts
+		parts, err := partRepo.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx.SqlTx(), *objEntity.Id)
+		if err != nil {
+			result.Success = false
+			result.ErrorType = fmt.Sprintf("Failed to get parts: %v", err)
+			return nil
+		}
+
+		// Validate each part
+		var partChecksums []storage.ChecksumValues
+
+		for _, part := range parts {
+			// Read part content
+			reader, err := partStore.GetPart(ctx, tx, part.PartId)
+			if err != nil {
+				result.Success = false
+				result.ErrorType = "Part retrieval failed"
+				result.PartFailures = append(result.PartFailures, PartFailure{
+					PartID:         part.PartId.String(),
+					SequenceNumber: part.SequenceNumber,
+					Error:          fmt.Sprintf("GetPart failed: %v", err),
+				})
+				continue
+			}
+
+			// Calculate checksums
+			_, calculated, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
+				_, err := io.Copy(io.Discard, r)
+				return err
+			})
+			reader.Close()
+
+			if err != nil {
+				result.Success = false
+				result.PartFailures = append(result.PartFailures, PartFailure{
+					PartID:         part.PartId.String(),
+					SequenceNumber: part.SequenceNumber,
+					Error:          fmt.Sprintf("Checksum calculation failed: %v", err),
+				})
+				continue
+			}
+
+			partChecksums = append(partChecksums, *calculated)
+
+			// Verify part checksums
+			if err := verifyPartChecksums(part, *calculated); err != nil {
+				result.Success = false
+				result.PartFailures = append(result.PartFailures, PartFailure{
+					PartID:         part.PartId.String(),
+					SequenceNumber: part.SequenceNumber,
+					Error:          err.Error(),
+				})
+			}
+		}
+
+		if !result.Success {
+			result.ErrorType = "Part validation failed"
+			return nil
+		}
+
+		// Validate object checksums (derived from parts)
+		if err := verifyObjectChecksums(object, parts, partChecksums); err != nil {
+			result.Success = false
+			result.ErrorType = "Object checksum mismatch"
+			result.ObjectFailures = append(result.ObjectFailures, err.Error())
+		}
+		return nil
+	})
 	if err != nil {
 		result.Success = false
 		result.ErrorType = fmt.Sprintf("DB Error: %v", err)
 		return result
-	}
-	defer tx.Rollback()
-
-	objEntity, err := objectRepo.FindObjectByBucketNameAndKey(ctx, tx, bucketName, object.Key)
-	if err != nil {
-		result.Success = false
-		result.ErrorType = fmt.Sprintf("Object not found in DB: %v", err)
-		return result
-	}
-
-	// Get parts
-	parts, err := partRepo.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objEntity.Id)
-	if err != nil {
-		result.Success = false
-		result.ErrorType = fmt.Sprintf("Failed to get parts: %v", err)
-		return result
-	}
-
-	// Validate each part
-	var partChecksums []storage.ChecksumValues
-
-	for _, part := range parts {
-		// Read part content
-		reader, err := partStore.GetPart(ctx, tx, part.PartId)
-		if err != nil {
-			result.Success = false
-			result.ErrorType = "Part retrieval failed"
-			result.PartFailures = append(result.PartFailures, PartFailure{
-				PartID:         part.PartId.String(),
-				SequenceNumber: part.SequenceNumber,
-				Error:          fmt.Sprintf("GetPart failed: %v", err),
-			})
-			continue
-		}
-
-		// Calculate checksums
-		_, calculated, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
-			_, err := io.Copy(io.Discard, r)
-			return err
-		})
-		reader.Close()
-
-		if err != nil {
-			result.Success = false
-			result.PartFailures = append(result.PartFailures, PartFailure{
-				PartID:         part.PartId.String(),
-				SequenceNumber: part.SequenceNumber,
-				Error:          fmt.Sprintf("Checksum calculation failed: %v", err),
-			})
-			continue
-		}
-
-		partChecksums = append(partChecksums, *calculated)
-
-		// Verify part checksums
-		if err := verifyPartChecksums(part, *calculated); err != nil {
-			result.Success = false
-			result.PartFailures = append(result.PartFailures, PartFailure{
-				PartID:         part.PartId.String(),
-				SequenceNumber: part.SequenceNumber,
-				Error:          err.Error(),
-			})
-		}
-	}
-
-	if !result.Success {
-		result.ErrorType = "Part validation failed"
-		return result
-	}
-
-	// Validate object checksums (derived from parts)
-	if err := verifyObjectChecksums(object, parts, partChecksums); err != nil {
-		result.Success = false
-		result.ErrorType = "Object checksum mismatch"
-		result.ObjectFailures = append(result.ObjectFailures, err.Error())
 	}
 
 	return result

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	storage "github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/corscache"
 )
 
 type Server struct {
@@ -41,23 +43,36 @@ type Server struct {
 func SetupServer(credentials []settings.Credentials, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
-		storage:           storage,
-		tracer:            otel.Tracer("internal/http/server"),
+		// CORS configuration is resolved on every Origin-bearing request, so wrap
+		// the storage in a cache that serves those reads without re-hitting the
+		// backend (and without flooding audit/metrics). Writes flow through the
+		// same wrapper, so it invalidates itself.
+		storage: corscache.NewStorageMiddleware(storage),
+		tracer:  otel.Tracer("internal/http/server"),
 	}
 	apiMux := http.NewServeMux()
-	// @TODO(auth): list requests authorization does not filter out buckets and objects the user is not allowed to access
 	apiMux.HandleFunc("GET /", server.listBucketsHandler)
 	apiMux.HandleFunc("HEAD /{bucket}", server.headBucketHandler)
-	apiMux.HandleFunc("GET /{bucket}", server.listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler)
-	apiMux.HandleFunc("PUT /{bucket}", server.createBucketOrPutBucketWebsiteHandler)
-	apiMux.HandleFunc("DELETE /{bucket}", server.deleteBucketOrDeleteBucketWebsiteHandler)
+	apiMux.HandleFunc("GET /{bucket}", server.routeBucketGetHandler)
+	apiMux.HandleFunc("PUT /{bucket}", server.routeBucketPutHandler)
+	apiMux.HandleFunc("DELETE /{bucket}", server.routeBucketDeleteHandler)
+	apiMux.HandleFunc("OPTIONS /{bucket}", server.optionsBucketHandler)
 	apiMux.HandleFunc("POST /{bucket}", server.postBucketHandler)
 	apiMux.HandleFunc("HEAD /{bucket}/{key...}", server.headObjectHandler)
 	apiMux.HandleFunc("GET /{bucket}/{key...}", server.getObjectOrListPartsHandler)
 	apiMux.HandleFunc("POST /{bucket}/{key...}", server.createMultipartUploadOrCompleteMultipartUploadHandler)
 	apiMux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
+	apiMux.HandleFunc("OPTIONS /{bucket}/{key...}", server.optionsObjectHandler)
 	var apiHandler http.Handler = apiMux
+	// CORS must be wrapped *inside* the virtual-host addressing middleware so the
+	// resolver sees the rewritten path (with the bucket prefix) for virtual-hosted
+	// requests. This also places CORS inside SigV4 auth: anonymous preflights pass
+	// through and reach this handler, but a credentialed request that fails auth
+	// gets a 401 without Access-Control-* headers (an opaque CORS error in the
+	// browser). Acceptable, since cross-origin requests are no-credentials by
+	// default and the preflight already gates access.
+	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
 	apiHandler = httpmiddleware.MakeVirtualHostBucketAddressingMiddleware(apiEndpoint, apiHandler)
 
 	websiteMux := http.NewServeMux()
@@ -156,10 +171,13 @@ const maxPartsQuery = "max-parts"
 const listTypeQuery = "list-type"
 const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
+const corsQuery = "cors"
+const lifecycleQuery = "lifecycle"
 const appendQuery = "append"
 const versioningQuery = "versioning"
 const versionsQuery = "versions"
 const versionIDQuery = "versionId"
+const taggingQuery = "tagging"
 
 const acceptRangesHeader = "Accept-Ranges"
 const expectHeader = "Expect"
@@ -183,6 +201,41 @@ const checksumSHA256Header = "x-amz-checksum-sha256"
 const writeOffsetBytesHeader = "x-amz-write-offset-bytes"
 const versionIDHeader = "x-amz-version-id"
 const deleteMarkerHeader = "x-amz-delete-marker"
+
+const copySourceHeader = "x-amz-copy-source"
+const copySourceRangeHeader = "x-amz-copy-source-range"
+const metadataDirectiveHeader = "x-amz-metadata-directive"
+const copySourceIfMatchHeader = "x-amz-copy-source-if-match"
+const copySourceIfNoneMatchHeader = "x-amz-copy-source-if-none-match"
+const copySourceIfModifiedSinceHeader = "x-amz-copy-source-if-modified-since"
+const copySourceIfUnmodifiedSinceHeader = "x-amz-copy-source-if-unmodified-since"
+
+const metadataDirectiveCopy = "COPY"
+const metadataDirectiveReplace = "REPLACE"
+
+const taggingHeader = "x-amz-tagging"
+const taggingDirectiveHeader = "x-amz-tagging-directive"
+
+// taggingCountHeader is the GetObject/HeadObject response header carrying the
+// object's tag count. The S3 REST API user-guide page lists this as
+// "x-amz-tag-count", but that is a documentation error: the canonical AWS API
+// model (and therefore every AWS SDK and the real service) uses
+// "x-amz-tagging-count".
+const taggingCountHeader = "x-amz-tagging-count"
+
+const taggingDirectiveCopy = "COPY"
+const taggingDirectiveReplace = "REPLACE"
+
+const cacheControlHeader = "Cache-Control"
+const contentDispositionHeader = "Content-Disposition"
+const contentEncodingHeader = "Content-Encoding"
+const contentLanguageHeader = "Content-Language"
+const expiresHeader = "Expires"
+const websiteRedirectLocationHeader = "x-amz-website-redirect-location"
+
+// userMetadataHeaderPrefix is the prefix of user-defined object metadata
+// headers. Keys are stored lowercase without the prefix and returned with it.
+const userMetadataHeaderPrefix = "x-amz-meta-"
 
 const applicationXmlContentType = "application/xml"
 
@@ -409,6 +462,87 @@ type ListObjectVersionsResult struct {
 	CommonPrefixes      []*CommonPrefixResult       `xml:"CommonPrefixes"`
 }
 
+type CORSConfigurationRule struct {
+	ID             *string  `xml:"ID,omitempty"`
+	AllowedOrigins []string `xml:"AllowedOrigin"`
+	AllowedMethods []string `xml:"AllowedMethod"`
+	AllowedHeaders []string `xml:"AllowedHeader,omitempty"`
+	ExposeHeaders  []string `xml:"ExposeHeader,omitempty"`
+	MaxAgeSeconds  *int     `xml:"MaxAgeSeconds,omitempty"`
+}
+
+type CORSConfiguration struct {
+	XMLName xml.Name                `xml:"CORSConfiguration"`
+	Xmlns   string                  `xml:"xmlns,attr,omitempty"`
+	Rules   []CORSConfigurationRule `xml:"CORSRule"`
+}
+
+type LifecycleConfigurationTag struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
+}
+
+type LifecycleConfigurationAndOperator struct {
+	Prefix                *string                     `xml:"Prefix"`
+	Tags                  []LifecycleConfigurationTag `xml:"Tag"`
+	ObjectSizeGreaterThan *int64                      `xml:"ObjectSizeGreaterThan"`
+	ObjectSizeLessThan    *int64                      `xml:"ObjectSizeLessThan"`
+}
+
+type LifecycleConfigurationFilter struct {
+	Prefix                *string                            `xml:"Prefix"`
+	Tag                   *LifecycleConfigurationTag         `xml:"Tag"`
+	ObjectSizeGreaterThan *int64                             `xml:"ObjectSizeGreaterThan"`
+	ObjectSizeLessThan    *int64                             `xml:"ObjectSizeLessThan"`
+	And                   *LifecycleConfigurationAndOperator `xml:"And"`
+}
+
+type LifecycleConfigurationExpiration struct {
+	// Date is kept as a string so that the ISO 8601 variants S3 accepts can be
+	// parsed explicitly (see parseLifecycleDate).
+	Days                      *int32  `xml:"Days"`
+	Date                      *string `xml:"Date"`
+	ExpiredObjectDeleteMarker *bool   `xml:"ExpiredObjectDeleteMarker"`
+}
+
+type LifecycleConfigurationAbortIncompleteMultipartUpload struct {
+	DaysAfterInitiation *int32 `xml:"DaysAfterInitiation"`
+}
+
+// lifecycleUnsupportedElement captures the presence of lifecycle rule elements
+// pithos does not support (transitions and versioning-dependent actions) so
+// the PUT handler can reject them explicitly instead of silently dropping them.
+type lifecycleUnsupportedElement struct{}
+
+type LifecycleConfigurationRule struct {
+	ID                             *string                                               `xml:"ID"`
+	Status                         string                                                `xml:"Status"`
+	Prefix                         *string                                               `xml:"Prefix"`
+	Filter                         *LifecycleConfigurationFilter                         `xml:"Filter"`
+	Expiration                     *LifecycleConfigurationExpiration                     `xml:"Expiration"`
+	AbortIncompleteMultipartUpload *LifecycleConfigurationAbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload"`
+	Transitions                    []lifecycleUnsupportedElement                         `xml:"Transition"`
+	NoncurrentVersionTransitions   []lifecycleUnsupportedElement                         `xml:"NoncurrentVersionTransition"`
+	NoncurrentVersionExpiration    *lifecycleUnsupportedElement                          `xml:"NoncurrentVersionExpiration"`
+}
+
+type LifecycleConfiguration struct {
+	XMLName xml.Name                     `xml:"LifecycleConfiguration"`
+	Xmlns   string                       `xml:"xmlns,attr,omitempty"`
+	Rules   []LifecycleConfigurationRule `xml:"Rule"`
+}
+
+type Tag struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
+}
+
+type Tagging struct {
+	XMLName xml.Name `xml:"Tagging"`
+	Xmlns   string   `xml:"xmlns,attr,omitempty"`
+	TagSet  []Tag    `xml:"TagSet>Tag"`
+}
+
 type DeleteObjectEntry struct {
 	Key       string  `xml:"Key"`
 	VersionId *string `xml:"VersionId"`
@@ -441,6 +575,18 @@ type DeleteObjectsResult struct {
 	Errors  []*DeleteErrorEntry `xml:"Error"`
 }
 
+type CopyObjectResult struct {
+	XMLName      xml.Name `xml:"CopyObjectResult"`
+	ETag         string   `xml:"ETag"`
+	LastModified string   `xml:"LastModified"`
+}
+
+type CopyPartResult struct {
+	XMLName      xml.Name `xml:"CopyPartResult"`
+	ETag         string   `xml:"ETag"`
+	LastModified string   `xml:"LastModified"`
+}
+
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
 
 type ErrorResponse struct {
@@ -471,6 +617,81 @@ func getHeaderAsPtr(headers http.Header, name string) *string {
 
 func setETagHeaderFromObject(headers http.Header, object *storage.Object) {
 	headers.Set(etagHeader, object.ETag)
+}
+
+// setTagCountHeaderFromObject sets the x-amz-tag-count header to the number of
+// tags on the object. Per S3, the header is only present when the object has at
+// least one tag.
+func setTagCountHeaderFromObject(headers http.Header, object *storage.Object) {
+	if len(object.Tags) > 0 {
+		headers.Set(taggingCountHeader, strconv.Itoa(len(object.Tags)))
+	}
+}
+
+// parseObjectMetadataHeaders extracts the user-controllable object metadata
+// from the request headers: the user-modifiable system headers plus the
+// x-amz-meta-* pairs. Per S3, user metadata keys are lowercased and repeated
+// headers of the same name are combined into a comma-delimited list; the total
+// user metadata size is limited to 2 KB (ErrMetadataTooLarge). Returns nil when
+// the request carries no metadata.
+func parseObjectMetadataHeaders(headers http.Header) (*storage.ObjectMetadata, error) {
+	metadata := storage.ObjectMetadata{
+		CacheControl:            getHeaderAsPtr(headers, cacheControlHeader),
+		ContentDisposition:      getHeaderAsPtr(headers, contentDispositionHeader),
+		ContentEncoding:         getHeaderAsPtr(headers, contentEncodingHeader),
+		ContentLanguage:         getHeaderAsPtr(headers, contentLanguageHeader),
+		Expires:                 getHeaderAsPtr(headers, expiresHeader),
+		WebsiteRedirectLocation: getHeaderAsPtr(headers, websiteRedirectLocationHeader),
+	}
+	userMetadata := map[string]string{}
+	for name, values := range headers {
+		lowerName := strings.ToLower(name)
+		key := strings.TrimPrefix(lowerName, userMetadataHeaderPrefix)
+		if key == lowerName || key == "" {
+			continue
+		}
+		userMetadata[key] = strings.Join(values, ",")
+	}
+	if err := storage.ValidateUserMetadata(userMetadata); err != nil {
+		return nil, err
+	}
+	if len(userMetadata) > 0 {
+		metadata.UserMetadata = userMetadata
+	}
+	if metadata.CacheControl == nil && metadata.ContentDisposition == nil &&
+		metadata.ContentEncoding == nil && metadata.ContentLanguage == nil &&
+		metadata.Expires == nil && metadata.WebsiteRedirectLocation == nil &&
+		metadata.UserMetadata == nil {
+		return nil, nil
+	}
+	return &metadata, nil
+}
+
+// setMetadataHeadersFromObject sets the user-controllable system metadata
+// headers and the x-amz-meta-* headers stored on the object.
+func setMetadataHeadersFromObject(headers http.Header, object *storage.Object) {
+	metadata := object.Metadata
+	if metadata.CacheControl != nil {
+		headers.Set(cacheControlHeader, *metadata.CacheControl)
+	}
+	if metadata.ContentDisposition != nil {
+		headers.Set(contentDispositionHeader, *metadata.ContentDisposition)
+	}
+	if metadata.ContentEncoding != nil {
+		headers.Set(contentEncodingHeader, *metadata.ContentEncoding)
+	}
+	if metadata.ContentLanguage != nil {
+		headers.Set(contentLanguageHeader, *metadata.ContentLanguage)
+	}
+	if metadata.Expires != nil {
+		headers.Set(expiresHeader, *metadata.Expires)
+	}
+	if metadata.WebsiteRedirectLocation != nil {
+		headers.Set(websiteRedirectLocationHeader, *metadata.WebsiteRedirectLocation)
+	}
+	for key, value := range metadata.UserMetadata {
+		headers.Set(userMetadataHeaderPrefix+key, value)
+	}
 }
 
 func setChecksumType(headers http.Header, checksumType string) {
@@ -583,12 +804,20 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 413
 	case storage.ErrTooManyParts:
 		statusCode = 400
+	case storage.ErrInvalidTag:
+		statusCode = 400
+	case storage.ErrMetadataTooLarge:
+		statusCode = 400
 	case storage.ErrInvalidWriteOffset:
 		statusCode = 400
 	case storage.ErrPreconditionFailed:
 		statusCode = 412
 	case storage.ErrNotModified:
 		statusCode = 304
+	case storage.ErrNotImplemented:
+		statusCode = http.StatusNotImplemented
+		errResponse.Code = "NotImplemented"
+		errResponse.Message = "NotImplemented"
 	default:
 		slog.ErrorContext(r.Context(), fmt.Sprintf("Unhandled internal error: %v", err))
 		statusCode = 500
@@ -604,8 +833,93 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	w.Write(xmlErrorResponse)
 }
 
+func writeNoSuchCORSConfiguration(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:      "NoSuchCORSConfiguration",
+		Message:   "The CORS configuration does not exist",
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(404)
+	w.Write(xmlErrorResponse)
+}
+
+func writeInvalidRequest(w http.ResponseWriter, r *http.Request, message string) {
+	errResponse := ErrorResponse{
+		Code:      "InvalidRequest",
+		Message:   message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusBadRequest)
+	w.Write(xmlErrorResponse)
+}
+
 func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket *string, key *string, w http.ResponseWriter, r *http.Request) bool {
+	return s.authorizeRequestWithRequestTags(ctx, operation, bucket, key, nil, w, r)
+}
+
+// authorizeRequestWithRequestTags is like authorizeRequest but overrides the
+// request's tag set (s3:RequestObjectTag) with tags that are not derivable from
+// the request headers — e.g. the tags carried in the PutObjectTagging XML body.
+// A nil requestTags keeps the header-derived tags from makeAuthorizationRequest.
+func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation string, bucket *string, key *string, requestTags map[string]string, w http.ResponseWriter, r *http.Request) bool {
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, bucket, key, r)
+	if requestTags != nil {
+		request.RequestObjectTags = requestTags
+	}
+	s.bindExistingObjectTagsResolver(request, bucket, key)
+	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// makeExistingObjectTagsResolver builds a lazy resolver that fetches the given
+// object's currently stored tags, so Lua policies can gate on
+// s3:ExistingObjectTag. A missing object resolves to an empty tag set; other
+// lookup errors fail closed. Returns nil when bucket/key are absent or invalid.
+func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string) func(ctx context.Context) (map[string]string, error) {
+	if bucket == nil || key == nil {
+		return nil
+	}
+	bucketName, errB := storage.NewBucketName(*bucket)
+	objectKey, errK := storage.NewObjectKey(*key)
+	if errB != nil || errK != nil {
+		return nil
+	}
+	return func(ctx context.Context) (map[string]string, error) {
+		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey)
+		if err == storage.ErrNoSuchKey {
+			return map[string]string{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return tags, nil
+	}
+}
+
+// bindExistingObjectTagsResolver attaches the lazy tag resolver for the
+// request's target object.
+func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, bucket *string, key *string) {
+	if resolver := s.makeExistingObjectTagsResolver(bucket, key); resolver != nil {
+		request.ResolveExistingObjectTags = resolver
+	}
+}
+
+// runAuthorization invokes the configured authorizer and writes the appropriate
+// error/deny response. It returns true when the caller should stop handling the
+// request (error or denied).
+func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
@@ -624,6 +938,36 @@ func (s *Server) authorizeRequest(ctx context.Context, operation string, bucket 
 	return false
 }
 
+// authorizeCopyRequest authorizes a server-side copy operation (CopyObject or
+// UploadPartCopy). Bucket/Key identify the destination; SourceBucket/SourceKey
+// identify the copy source, so a policy can reason about both ends in a single
+// check.
+func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, srcBucket, srcKey, dstBucket, dstKey string, w http.ResponseWriter, r *http.Request) bool {
+	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
+	request.SourceBucket = ptrutils.ToPtr(srcBucket)
+	request.SourceKey = ptrutils.ToPtr(srcKey)
+	// objectTag* predicates refer to the destination object being
+	// created/overwritten; sourceObjectTag* predicates refer to the copy source
+	// (matching AWS, which evaluates s3:ExistingObjectTag against the source for
+	// the copy's read side).
+	s.bindExistingObjectTagsResolver(request, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey))
+	request.ResolveExistingSourceObjectTags = s.makeExistingObjectTagsResolver(ptrutils.ToPtr(srcBucket), ptrutils.ToPtr(srcKey))
+	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// taggingHeaderApplies reports whether the x-amz-tagging header has any effect
+// for the given operation, i.e. whether the operation persists the header's
+// tags on the target object.
+func taggingHeaderApplies(operation string, r *http.Request) bool {
+	switch operation {
+	case authorization.OperationPutObject, authorization.OperationCreateMultipartUpload:
+		return true
+	case authorization.OperationCopyObject:
+		return strings.ToUpper(r.Header.Get(taggingDirectiveHeader)) == taggingDirectiveReplace
+	}
+	return false
+}
+
 func makeAuthorizationRequest(ctx context.Context, operation string, bucket *string, key *string, r *http.Request) (*authorization.Request, bool) {
 	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
 
@@ -633,14 +977,30 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		accessKeyId = &keyStr
 	}
 
+	// Expose tags supplied via the x-amz-tagging header as request tags
+	// (s3:RequestObjectTag), but only for operations that actually store the
+	// header's tags — otherwise a policy could be satisfied by tags the
+	// operation ignores (e.g. CopyObject with the default COPY directive).
+	// Malformed values are left unset here; the operation itself rejects them
+	// later.
+	var requestTags map[string]string
+	if taggingHeaderApplies(operation, r) {
+		if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+			if parsed, err := storage.ParseTaggingHeader(taggingValue); err == nil {
+				requestTags = parsed
+			}
+		}
+	}
+
 	request := &authorization.Request{
 		Operation: operation,
 		Authorization: authorization.Authorization{
 			AccessKeyId: accessKeyId,
 		},
-		Bucket:      bucket,
-		Key:         key,
-		HttpRequest: makeAuthorizationHTTPRequest(r),
+		Bucket:            bucket,
+		Key:               key,
+		HttpRequest:       makeAuthorizationHTTPRequest(r),
+		RequestObjectTags: requestTags,
 	}
 	return request, isAuthenticated
 }
@@ -653,10 +1013,24 @@ func (s *Server) authorizeListBucket(ctx context.Context, request *authorization
 	return requestResourceAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
 }
 
-func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
+// authorizeListObject filters a single listed key. existingTags, when non-nil,
+// is the object's tag set already loaded by the list query; it is served to
+// tag predicates directly so filtering a page does not cost one storage lookup
+// per key. A nil existingTags (e.g. common prefixes, or backends whose list
+// results carry no tags) falls back to a lazy per-key lookup.
+func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string, existingTags map[string]string) (bool, error) {
 	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
 	if !ok {
 		return true, nil
+	}
+	// Re-bind the existing-tags resolver to the object currently being filtered so
+	// authorizeListObject policies can gate each listed object on its own tags.
+	if existingTags != nil {
+		request.ResolveExistingObjectTags = func(context.Context) (map[string]string, error) {
+			return existingTags, nil
+		}
+	} else {
+		s.bindExistingObjectTagsResolver(request, request.Bucket, &key)
 	}
 	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
 }
@@ -820,7 +1194,7 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(versioningQuery) {
 		s.getBucketVersioningHandler(w, r)
@@ -828,6 +1202,14 @@ func (s *Server) listObjectsOrListMultipartUploadsOrGetBucketWebsiteHandler(w ht
 	}
 	if query.Has(versionsQuery) {
 		s.listObjectVersionsHandler(w, r)
+		return
+	}
+	if query.Has(corsQuery) {
+		s.getBucketCORSHandler(w, r)
+		return
+	}
+	if query.Has(lifecycleQuery) {
+		s.getBucketLifecycleHandler(w, r)
 		return
 	}
 	if query.Has(websiteQuery) {
@@ -1102,7 +1484,7 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		for objectIndex, object := range result.Objects {
 			key := object.Key.String()
 			lastScanned = &key
-			allowed, err := s.authorizeListObject(ctx, baseRequest, key)
+			allowed, err := s.authorizeListObject(ctx, baseRequest, key, object.Tags)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1121,7 +1503,7 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		}
 		for _, commonPrefix := range result.CommonPrefixes {
 			lastScanned = &commonPrefix
-			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix)
+			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix, nil)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1232,10 +1614,18 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	w.Write(out)
 }
 
-func (s *Server) createBucketOrPutBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	if query.Has(versioningQuery) {
 		s.putBucketVersioningHandler(w, r)
+		return
+	}
+	if query.Has(corsQuery) {
+		s.putBucketCORSHandler(w, r)
+		return
+	}
+	if query.Has(lifecycleQuery) {
+		s.putBucketLifecycleHandler(w, r)
 		return
 	}
 	if query.Has(websiteQuery) {
@@ -1271,8 +1661,16 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
-func (s *Server) deleteBucketOrDeleteBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has(corsQuery) {
+		s.deleteBucketCORSHandler(w, r)
+		return
+	}
+	if query.Has(lifecycleQuery) {
+		s.deleteBucketLifecycleHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.deleteBucketWebsiteHandler(w, r)
 		return
@@ -1385,6 +1783,8 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if object.VersionID != nil {
 		responseHeaders.Set(versionIDHeader, *object.VersionID)
 	}
+	setTagCountHeaderFromObject(responseHeaders, object)
+	setMetadataHeadersFromObject(responseHeaders, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -1442,7 +1842,7 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 		rangeVal = strings.TrimSpace(rangeVal)
 		byteSplit := strings.SplitN(rangeVal, "-", 2)
 		if len(byteSplit) != 2 {
-			continue
+			return nil, errInvalidByteRange
 		}
 
 		var start *int64
@@ -1450,15 +1850,20 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 
 		if byteSplit[0] != "" {
 			startByte, err := strconv.ParseInt(byteSplit[0], 10, 64)
-			if err == nil {
-				start = &startByte
+			if err != nil {
+				return nil, errInvalidByteRange
 			}
+			start = &startByte
 		}
 		if byteSplit[1] != "" {
 			endByte, err := strconv.ParseInt(byteSplit[1], 10, 64)
-			if err == nil {
-				end = &endByte
+			if err != nil {
+				return nil, errInvalidByteRange
 			}
+			end = &endByte
+		}
+		if start == nil && end == nil {
+			return nil, errInvalidByteRange
 		}
 
 		if start == nil && end != nil {
@@ -1482,6 +1887,10 @@ func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Requ
 	query := r.URL.Query()
 	if query.Has(uploadIdQuery) {
 		s.listPartsHandler(w, r)
+		return
+	}
+	if query.Has(taggingQuery) {
+		s.getObjectTaggingHandler(w, r)
 		return
 	}
 	s.getObjectHandler(w, r)
@@ -1754,6 +2163,8 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	})()
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
+	setTagCountHeaderFromObject(responseHeaders, object)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()
@@ -1777,27 +2188,48 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
 		for idx := range readers {
 			if idx > 0 {
-				io.WriteString(writer, "\r\n")
+				if _, err := io.WriteString(writer, "\r\n"); err != nil {
+					slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+					return
+				}
 			}
-			io.WriteString(writer, fmt.Sprintf("--%s\r\n", separator))
+			if _, err := io.WriteString(writer, fmt.Sprintf("--%s\r\n", separator)); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+				return
+			}
 
-			io.WriteString(writer, rangeHeaders[idx])
+			if _, err := io.WriteString(writer, rangeHeaders[idx]); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response write", "error", err)
+				return
+			}
 
-			ioutils.CopyN(writer, readers[idx], sizes[idx])
+			if _, err := ioutils.CopyN(writer, readers[idx], sizes[idx]); err != nil {
+				slog.DebugContext(ctx, "Stopped multipart response copy", "error", err)
+				return
+			}
 		}
-		io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator))
+		if _, err := io.WriteString(writer, fmt.Sprintf("\r\n--%s--\r\n", separator)); err != nil {
+			slog.DebugContext(ctx, "Stopped multipart response final write", "error", err)
+			return
+		}
 	} else if len(storageRanges) == 1 {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		contentRangeValue := generateContentRangeValue(storageRanges[0], object.Size)
 		responseHeaders.Set(contentRangeHeader, contentRangeValue)
 		w.WriteHeader(206)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		ioutils.CopyN(writer, readers[0], totalSize)
+		if _, err := ioutils.CopyN(writer, readers[0], totalSize); err != nil {
+			slog.DebugContext(ctx, "Stopped single range response copy", "error", err)
+			return
+		}
 	} else {
 		responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", totalSize))
 		w.WriteHeader(200)
 		writer := ioutils.NewTracingWriter(ctx, s.tracer, "ResponseWriter", w)
-		ioutils.CopyN(writer, readers[0], totalSize)
+		if _, err := ioutils.CopyN(writer, readers[0], totalSize); err != nil {
+			slog.DebugContext(ctx, "Stopped full response copy", "error", err)
+			return
+		}
 	}
 }
 
@@ -1823,8 +2255,31 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 
 	contentType := getHeaderAsPtr(r.Header, contentTypeHeader)
 	checksumType := getHeaderAsPtr(r.Header, checksumTypeHeader)
+
+	var createOpts *storage.CreateMultipartUploadOptions
+	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+		tags, err := storage.ParseTaggingHeader(taggingValue)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		createOpts = &storage.CreateMultipartUploadOptions{Tags: tags}
+	}
+
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if metadata != nil {
+		if createOpts == nil {
+			createOpts = &storage.CreateMultipartUploadOptions{}
+		}
+		createOpts.Metadata = metadata
+	}
+
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
-	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, createOpts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2095,6 +2550,30 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if taggingValue := r.Header.Get(taggingHeader); taggingValue != "" {
+		tags, err := storage.ParseTaggingHeader(taggingValue)
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.Tags = tags
+	}
+
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if metadata != nil {
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.Metadata = metadata
+	}
+
 	shouldReturn = validateMaxEntitySize(r, w)
 	if shouldReturn {
 		return
@@ -2197,9 +2676,19 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
-	// UploadPart
+	// UploadPart / UploadPartCopy
 	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
+		if r.Header.Get(copySourceHeader) != "" {
+			s.uploadPartCopyHandler(w, r)
+			return
+		}
 		s.uploadPartHandler(w, r)
+		return
+	}
+
+	// CopyObject (server-side copy).
+	if r.Header.Get(copySourceHeader) != "" {
+		s.copyObjectHandler(w, r)
 		return
 	}
 
@@ -2209,8 +2698,285 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// PutObjectTagging
+	if query.Has(taggingQuery) {
+		s.putObjectTaggingHandler(w, r)
+		return
+	}
+
 	// PutObject
 	s.putObjectHandler(w, r)
+}
+
+// parseCopySource parses the x-amz-copy-source header value into its source
+// bucket and object key. The expected form is "/sourceBucket/sourceKey" or
+// "sourceBucket/sourceKey"; the key portion is URL-encoded by S3 clients and is
+// decoded here. Any "?versionId=..." suffix is ignored as versioning is not
+// supported.
+func parseCopySource(value string) (bucket string, key string, err error) {
+	if value == "" {
+		return "", "", ErrInvalidRequest
+	}
+	if qIdx := strings.IndexByte(value, '?'); qIdx != -1 {
+		query, parseErr := url.ParseQuery(value[qIdx+1:])
+		if parseErr != nil {
+			return "", "", ErrInvalidRequest
+		}
+		if query.Has(versionIDQuery) {
+			// Copying a specific source version is not supported yet; reject
+			// instead of silently copying the latest version.
+			return "", "", storage.ErrNotImplemented
+		}
+		value = value[:qIdx]
+	}
+	value = strings.TrimPrefix(value, "/")
+	slashIdx := strings.IndexByte(value, '/')
+	if slashIdx <= 0 || slashIdx == len(value)-1 {
+		return "", "", ErrInvalidRequest
+	}
+	bucket = value[:slashIdx]
+	decodedKey, err := url.PathUnescape(value[slashIdx+1:])
+	if err != nil {
+		return "", "", ErrInvalidRequest
+	}
+	return bucket, decodedKey, nil
+}
+
+// parseCopySourceConditions extracts the x-amz-copy-source-if-* preconditions
+// from the request headers. Invalid HTTP dates are ignored (treated as absent),
+// matching lenient S3 behaviour.
+func parseCopySourceConditions(r *http.Request) storage.CopySourceConditions {
+	conditions := storage.CopySourceConditions{
+		IfMatch:     getHeaderAsPtr(r.Header, copySourceIfMatchHeader),
+		IfNoneMatch: getHeaderAsPtr(r.Header, copySourceIfNoneMatchHeader),
+	}
+	if ims := r.Header.Get(copySourceIfModifiedSinceHeader); ims != "" {
+		if t, err := http.ParseTime(ims); err == nil {
+			conditions.IfModifiedSince = &t
+		}
+	}
+	if ius := r.Header.Get(copySourceIfUnmodifiedSinceHeader); ius != "" {
+		if t, err := http.ParseTime(ius); err == nil {
+			conditions.IfUnmodifiedSince = &t
+		}
+	}
+	return conditions
+}
+
+// parseCopySourceRange parses the optional x-amz-copy-source-range header. It
+// returns (nil, nil) when the header is absent and an error for a malformed
+// value or anything other than a single byte range.
+func parseCopySourceRange(r *http.Request) (*storage.ByteRange, error) {
+	rangeValue := r.Header.Get(copySourceRangeHeader)
+	if rangeValue == "" {
+		return nil, nil
+	}
+	parsedRanges, err := parseRangeHeader(rangeValue)
+	if err != nil || len(parsedRanges) != 1 {
+		return nil, ErrInvalidRequest
+	}
+	return &parsedRanges[0], nil
+}
+
+// parseCopyHandlerSource parses and validates the destination path values and
+// the x-amz-copy-source header, writing the appropriate error response and
+// returning ok=false on failure.
+func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, ok bool) {
+	dstBucket, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	dstKey, err = storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcBucketStr, srcKeyStr, err := parseCopySource(r.Header.Get(copySourceHeader))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcBucket, err = storage.NewBucketName(srcBucketStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	srcKey, err = storage.NewObjectKey(srcKeyStr)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	return srcBucket, srcKey, dstBucket, dstKey, true
+}
+
+func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.copyObjectHandler")
+	defer span.End()
+
+	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	if !ok {
+		return
+	}
+
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationCopyObject, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	if shouldReturn {
+		return
+	}
+
+	metadataDirective := strings.ToUpper(r.Header.Get(metadataDirectiveHeader))
+	if metadataDirective == "" {
+		metadataDirective = metadataDirectiveCopy
+	}
+	if metadataDirective != metadataDirectiveCopy && metadataDirective != metadataDirectiveReplace {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	taggingDirective := strings.ToUpper(r.Header.Get(taggingDirectiveHeader))
+	if taggingDirective == "" {
+		taggingDirective = taggingDirectiveCopy
+	}
+	if taggingDirective != taggingDirectiveCopy && taggingDirective != taggingDirectiveReplace {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	var replaceTags map[string]string
+	if taggingDirective == taggingDirectiveReplace {
+		tags, err := storage.ParseTaggingHeader(r.Header.Get(taggingHeader))
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
+		replaceTags = tags
+	}
+
+	copyRange, err := parseCopySourceRange(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// Disallow a no-op self copy (same bucket+key, COPY directive, no range),
+	// matching S3 which rejects it as an illegal request.
+	if metadataDirective == metadataDirectiveCopy && copyRange == nil &&
+		srcBucketName.Equals(dstBucketName) && srcKey.Equals(dstKey) {
+		handleError(ErrInvalidRequest, w, r)
+		return
+	}
+
+	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	opts := &storage.CopyObjectOptions{
+		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
+		Range:                copyRange,
+		CopySourceConditions: parseCopySourceConditions(r),
+		ReplaceTags:          taggingDirective == taggingDirectiveReplace,
+		Tags:                 replaceTags,
+		Metadata:             metadata,
+	}
+	if opts.ReplaceMetadata {
+		opts.ContentType = getHeaderAsPtr(r.Header, contentTypeHeader)
+	}
+
+	slog.InfoContext(r.Context(), "Copying object",
+		"srcBucket", srcBucketName.String(), "srcKey", srcKey.String(),
+		"dstBucket", dstBucketName.String(), "dstKey", dstKey.String(),
+		"metadataDirective", metadataDirective)
+
+	result, err := s.storage.CopyObject(ctx, srcBucketName, srcKey, dstBucketName, dstKey, opts)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	copyObjectResult := CopyObjectResult{
+		ETag:         result.ETag,
+		LastModified: result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	if result.VersionID != nil {
+		responseHeaders.Set(versionIDHeader, *result.VersionID)
+	}
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(copyObjectResult)
+	w.Write(out)
+}
+
+func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.uploadPartCopyHandler")
+	defer span.End()
+
+	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	if !ok {
+		return
+	}
+
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationUploadPartCopy, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	if shouldReturn {
+		return
+	}
+
+	query := r.URL.Query()
+	if !query.Has(uploadIdQuery) || !query.Has(partNumberQuery) {
+		w.WriteHeader(400)
+		return
+	}
+	uploadId, err := storage.NewUploadId(query.Get(uploadIdQuery))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	partNumberI64, err := strconv.ParseInt(query.Get(partNumberQuery), 10, 16)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	partNumberI32 := int32(partNumberI64)
+	if partNumberI32 < 1 || partNumberI32 > 10000 {
+		w.WriteHeader(400)
+		return
+	}
+
+	copyRange, err := parseCopySourceRange(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	opts := &storage.UploadPartCopyOptions{
+		Range:                copyRange,
+		CopySourceConditions: parseCopySourceConditions(r),
+	}
+
+	slog.InfoContext(r.Context(), "UploadPartCopy",
+		"srcBucket", srcBucketName.String(), "srcKey", srcKey.String(),
+		"dstBucket", dstBucketName.String(), "dstKey", dstKey.String(),
+		"uploadId", uploadId.String(), "partNumber", partNumberI32)
+
+	result, err := s.storage.UploadPartCopy(ctx, srcBucketName, srcKey, dstBucketName, dstKey, uploadId, partNumberI32, opts)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	copyPartResult := CopyPartResult{
+		ETag:         result.ETag,
+		LastModified: result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(copyPartResult)
+	w.Write(out)
 }
 
 func (s *Server) abortMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -2302,6 +3068,12 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 		return
 	}
 
+	// DeleteObjectTagging
+	if query.Has(taggingQuery) {
+		s.deleteObjectTaggingHandler(w, r)
+		return
+	}
+
 	// DeleteObject
 	s.deleteObjectHandler(w, r)
 }
@@ -2321,6 +3093,13 @@ const maxCompleteMultipartUploadBodySize int64 = 10 * 1024 * 1024
 const maxDeleteObjectsBodySize int64 = 5 * 1024 * 1024
 const maxPutBucketWebsiteBodySize int64 = 128 * 1024
 const maxPutBucketVersioningBodySize int64 = 16 * 1024
+const maxPutBucketCORSBodySize int64 = 128 * 1024
+const maxPutObjectTaggingBodySize int64 = 128 * 1024
+
+// maxPutBucketLifecycleBodySize bounds the ?lifecycle request body. A
+// configuration may hold up to 1000 rules, so the limit is more generous than
+// for the other bucket subresources.
+const maxPutBucketLifecycleBodySize int64 = 1024 * 1024
 
 func readLimitedBody(r *http.Request, w http.ResponseWriter, maxBodySize int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
@@ -2511,7 +3290,6 @@ func (s *Server) getBucketVersioningHandler(w http.ResponseWriter, r *http.Reque
 	out, _ := xmlMarshalWithDocType(response)
 	w.Write(out)
 }
-
 func (s *Server) putBucketVersioningHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketVersioningHandler")
 	defer span.End()
@@ -2562,7 +3340,6 @@ func (s *Server) putBucketVersioningHandler(w http.ResponseWriter, r *http.Reque
 
 	w.WriteHeader(http.StatusOK)
 }
-
 func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.listObjectVersionsHandler")
 	defer span.End()
@@ -2630,6 +3407,653 @@ func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusOK)
 	out, _ := xmlMarshalWithDocType(response)
 	w.Write(out)
+}
+
+func (s *Server) getBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	config, err := s.storage.GetBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchCORSConfiguration {
+			writeNoSuchCORSConfiguration(w, r)
+			return
+		}
+		handleError(err, w, r)
+		return
+	}
+
+	response := CORSConfiguration{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+		Rules: make([]CORSConfigurationRule, 0, len(config.Rules)),
+	}
+	for _, rule := range config.Rules {
+		response.Rules = append(response.Rules, CORSConfigurationRule{
+			ID:             rule.ID,
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  rule.MaxAgeSeconds,
+		})
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutBucketCORSBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request CORSConfiguration
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	rules := make([]storage.CORSRule, 0, len(request.Rules))
+	for _, rule := range request.Rules {
+		rules = append(rules, storage.CORSRule{
+			ID:             rule.ID,
+			AllowedOrigins: rule.AllowedOrigins,
+			AllowedMethods: rule.AllowedMethods,
+			AllowedHeaders: rule.AllowedHeaders,
+			ExposeHeaders:  rule.ExposeHeaders,
+			MaxAgeSeconds:  rule.MaxAgeSeconds,
+		})
+	}
+
+	normalizedRules, err := httpmiddleware.NormalizeAndValidateCORSRules(rules)
+	if err != nil {
+		writeInvalidRequest(w, r, err.Error())
+		return
+	}
+
+	err = s.storage.PutBucketCORSConfiguration(ctx, bucketName, &storage.BucketCORSConfiguration{Rules: normalizedRules})
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketCORSHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketCORSHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketCORS, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteBucketCORSConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func writeNoSuchLifecycleConfiguration(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:      "NoSuchLifecycleConfiguration",
+		Message:   "The lifecycle configuration does not exist",
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+	w.WriteHeader(404)
+	w.Write(xmlErrorResponse)
+}
+
+func writeLifecycleValidationError(w http.ResponseWriter, r *http.Request, validationErr *storage.LifecycleValidationError) {
+	errResponse := ErrorResponse{
+		Code:      validationErr.Code,
+		Message:   validationErr.Message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusBadRequest)
+	w.Write(xmlErrorResponse)
+}
+
+func writeNotImplemented(w http.ResponseWriter, r *http.Request, message string) {
+	errResponse := ErrorResponse{
+		Code:      "NotImplemented",
+		Message:   message,
+		Resource:  html.EscapeString(r.RequestURI),
+		RequestId: ulid.Make().String(),
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(http.StatusNotImplemented)
+	w.Write(xmlErrorResponse)
+}
+
+// lifecycleDateFormats are the ISO 8601 variants accepted for the Expiration
+// Date element. S3 always reports dates at midnight UTC.
+var lifecycleDateFormats = []string{
+	time.RFC3339,
+	"2006-01-02T15:04:05.000Z07:00",
+	"2006-01-02",
+}
+
+func parseLifecycleDate(value string) (*time.Time, error) {
+	for _, format := range lifecycleDateFormats {
+		parsed, err := time.Parse(format, value)
+		if err == nil {
+			parsed = parsed.UTC()
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("invalid lifecycle date %q", value)
+}
+
+func convertLifecycleTagFromXML(tag *LifecycleConfigurationTag) *storage.LifecycleTag {
+	if tag == nil {
+		return nil
+	}
+	return &storage.LifecycleTag{Key: tag.Key, Value: tag.Value}
+}
+
+func convertLifecycleTagToXML(tag *storage.LifecycleTag) *LifecycleConfigurationTag {
+	if tag == nil {
+		return nil
+	}
+	return &LifecycleConfigurationTag{Key: tag.Key, Value: tag.Value}
+}
+
+// convertLifecycleConfigurationFromXML maps the parsed request body to the
+// storage model. It returns a *storage.LifecycleValidationError when a value
+// cannot be represented (e.g. a malformed Date).
+func convertLifecycleConfigurationFromXML(request *LifecycleConfiguration) (*storage.BucketLifecycleConfiguration, *storage.LifecycleValidationError) {
+	config := &storage.BucketLifecycleConfiguration{
+		Rules: make([]storage.LifecycleRule, 0, len(request.Rules)),
+	}
+	for _, rule := range request.Rules {
+		converted := storage.LifecycleRule{
+			ID:     rule.ID,
+			Status: rule.Status,
+			Prefix: rule.Prefix,
+		}
+		if rule.Filter != nil {
+			filter := &storage.LifecycleFilter{
+				Prefix:                rule.Filter.Prefix,
+				Tag:                   convertLifecycleTagFromXML(rule.Filter.Tag),
+				ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+			}
+			if rule.Filter.And != nil {
+				and := &storage.LifecycleFilterAnd{
+					Prefix:                rule.Filter.And.Prefix,
+					ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+					ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+				}
+				for _, tag := range rule.Filter.And.Tags {
+					and.Tags = append(and.Tags, storage.LifecycleTag{Key: tag.Key, Value: tag.Value})
+				}
+				filter.And = and
+			}
+			converted.Filter = filter
+		}
+		if rule.Expiration != nil {
+			expiration := &storage.LifecycleExpiration{
+				Days:                      rule.Expiration.Days,
+				ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+			}
+			if rule.Expiration.Date != nil {
+				date, err := parseLifecycleDate(*rule.Expiration.Date)
+				if err != nil {
+					return nil, &storage.LifecycleValidationError{
+						Code:    "InvalidArgument",
+						Message: "'Date' must be in ISO 8601 format",
+					}
+				}
+				expiration.Date = date
+			}
+			converted.Expiration = expiration
+		}
+		if rule.AbortIncompleteMultipartUpload != nil {
+			converted.AbortIncompleteMultipartUpload = &storage.LifecycleAbortIncompleteMultipartUpload{
+				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+			}
+		}
+		config.Rules = append(config.Rules, converted)
+	}
+	return config, nil
+}
+
+func convertLifecycleConfigurationToXML(config *storage.BucketLifecycleConfiguration) *LifecycleConfiguration {
+	response := &LifecycleConfiguration{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+		Rules: make([]LifecycleConfigurationRule, 0, len(config.Rules)),
+	}
+	for _, rule := range config.Rules {
+		converted := LifecycleConfigurationRule{
+			ID:     rule.ID,
+			Status: rule.Status,
+			Prefix: rule.Prefix,
+		}
+		if rule.Filter != nil {
+			filter := &LifecycleConfigurationFilter{
+				Prefix:                rule.Filter.Prefix,
+				Tag:                   convertLifecycleTagToXML(rule.Filter.Tag),
+				ObjectSizeGreaterThan: rule.Filter.ObjectSizeGreaterThan,
+				ObjectSizeLessThan:    rule.Filter.ObjectSizeLessThan,
+			}
+			if rule.Filter.And != nil {
+				and := &LifecycleConfigurationAndOperator{
+					Prefix:                rule.Filter.And.Prefix,
+					ObjectSizeGreaterThan: rule.Filter.And.ObjectSizeGreaterThan,
+					ObjectSizeLessThan:    rule.Filter.And.ObjectSizeLessThan,
+				}
+				for _, tag := range rule.Filter.And.Tags {
+					and.Tags = append(and.Tags, LifecycleConfigurationTag{Key: tag.Key, Value: tag.Value})
+				}
+				filter.And = and
+			}
+			converted.Filter = filter
+		}
+		if rule.Expiration != nil {
+			expiration := &LifecycleConfigurationExpiration{
+				Days:                      rule.Expiration.Days,
+				ExpiredObjectDeleteMarker: rule.Expiration.ExpiredObjectDeleteMarker,
+			}
+			if rule.Expiration.Date != nil {
+				expiration.Date = ptrutils.ToPtr(rule.Expiration.Date.UTC().Format(time.RFC3339))
+			}
+			converted.Expiration = expiration
+		}
+		if rule.AbortIncompleteMultipartUpload != nil {
+			converted.AbortIncompleteMultipartUpload = &LifecycleConfigurationAbortIncompleteMultipartUpload{
+				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+			}
+		}
+		response.Rules = append(response.Rules, converted)
+	}
+	return response
+}
+
+func (s *Server) getBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	config, err := s.storage.GetBucketLifecycleConfiguration(ctx, bucketName)
+	if err != nil {
+		if err == storage.ErrNoSuchLifecycleConfiguration {
+			writeNoSuchLifecycleConfiguration(w, r)
+			return
+		}
+		handleError(err, w, r)
+		return
+	}
+
+	response := convertLifecycleConfigurationToXML(config)
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationPutBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	data, err := readLimitedBody(r, w, maxPutBucketLifecycleBodySize)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	var request LifecycleConfiguration
+	err = xml.Unmarshal(data, &request)
+	if err != nil {
+		writeMalformedXML(w, r)
+		return
+	}
+
+	for _, rule := range request.Rules {
+		if len(rule.Transitions) > 0 || len(rule.NoncurrentVersionTransitions) > 0 {
+			writeNotImplemented(w, r, "Transition actions are not supported")
+			return
+		}
+		if rule.NoncurrentVersionExpiration != nil {
+			writeNotImplemented(w, r, "NoncurrentVersionExpiration requires bucket versioning, which is not supported")
+			return
+		}
+	}
+
+	config, validationErr := convertLifecycleConfigurationFromXML(&request)
+	if validationErr != nil {
+		writeLifecycleValidationError(w, r, validationErr)
+		return
+	}
+
+	if validationErr := storage.ValidateBucketLifecycleConfiguration(config); validationErr != nil {
+		writeLifecycleValidationError(w, r, validationErr)
+		return
+	}
+
+	err = s.storage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteBucketLifecycleHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketLifecycleHandler")
+	defer span.End()
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteBucketLifecycle, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func writeMalformedXML(w http.ResponseWriter, r *http.Request) {
+	errResponse := ErrorResponse{
+		Code:     "MalformedXML",
+		Message:  "The XML you provided was not well-formed or did not validate against our published schema",
+		Resource: r.URL.Path,
+	}
+	if requestID, ok := httpmiddleware.RequestIDFromContext(r.Context()); ok {
+		errResponse.RequestId = requestID
+	}
+	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+	w.WriteHeader(400)
+	w.Write(xmlErrorResponse)
+}
+
+// tagSetToMap converts a parsed Tagging XML body into a map, rejecting duplicate
+// keys with ErrInvalidTag.
+func tagSetToMap(tagging *Tagging) (map[string]string, error) {
+	tags := map[string]string{}
+	for _, t := range tagging.TagSet {
+		if _, exists := tags[t.Key]; exists {
+			return nil, storage.ErrInvalidTag
+		}
+		tags[t.Key] = t.Value
+	}
+	return tags, nil
+}
+
+func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getObjectTaggingHandler")
+	defer span.End()
+
+	if r.URL.Query().Has(versionIDQuery) {
+		// Version-specific tagging is not supported yet; reject instead of
+		// silently targeting the latest version.
+		handleError(storage.ErrNotImplemented, w, r)
+		return
+	}
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	tags, err := s.storage.GetObjectTagging(ctx, bucketName, key)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	response := Tagging{
+		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
+		TagSet: make([]Tag, 0, len(tags)),
+	}
+	for k, v := range tags {
+		response.TagSet = append(response.TagSet, Tag{Key: k, Value: v})
+	}
+
+	responseHeaders := w.Header()
+	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	w.WriteHeader(200)
+	out, _ := xmlMarshalWithDocType(response)
+	w.Write(out)
+}
+
+func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putObjectTaggingHandler")
+	defer span.End()
+
+	if r.URL.Query().Has(versionIDQuery) {
+		// Version-specific tagging is not supported yet; reject instead of
+		// silently targeting the latest version.
+		handleError(storage.ErrNotImplemented, w, r)
+		return
+	}
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// Parse and validate the tag set before authorizing so the tags being set are
+	// available to the authorizer as request tags (s3:RequestObjectTag), but hold
+	// any validation error back until after authorization: unauthorized callers
+	// must get 401/403 (as AWS does), not validation details.
+	var tags map[string]string
+	var malformedXML bool
+	data, validationErr := readLimitedBody(r, w, maxPutObjectTaggingBodySize)
+	if validationErr == nil {
+		var request Tagging
+		if err := xml.Unmarshal(data, &request); err != nil {
+			malformedXML = true
+		} else if tags, validationErr = tagSetToMap(&request); validationErr == nil {
+			validationErr = storage.ValidateTags(tags)
+		}
+	}
+	if malformedXML || validationErr != nil {
+		tags = nil
+	}
+
+	shouldReturn := s.authorizeRequestWithRequestTags(ctx, authorization.OperationPutObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), tags, w, r)
+	if shouldReturn {
+		return
+	}
+
+	if malformedXML {
+		writeMalformedXML(w, r)
+		return
+	}
+	if validationErr != nil {
+		handleError(validationErr, w, r)
+		return
+	}
+
+	err = s.storage.PutObjectTagging(ctx, bucketName, key, tags)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (s *Server) deleteObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectTaggingHandler")
+	defer span.End()
+
+	if r.URL.Query().Has(versionIDQuery) {
+		// Version-specific tagging is not supported yet; reject instead of
+		// silently targeting the latest version.
+		handleError(storage.ErrNotImplemented, w, r)
+		return
+	}
+
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	key, err := storage.NewObjectKey(r.PathValue(keyPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	if shouldReturn {
+		return
+	}
+
+	err = s.storage.DeleteObjectTagging(ctx, bucketName, key)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) optionsBucketHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func (s *Server) optionsObjectHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
+func (s *Server) resolveCORSRulesForRequest(r *http.Request) []httpmiddleware.CORSRule {
+	bucket, ok := bucketFromPath(r.URL.Path)
+	if !ok {
+		return nil
+	}
+	bucketName, err := storage.NewBucketName(bucket)
+	if err != nil {
+		return nil
+	}
+	config, err := s.storage.GetBucketCORSConfiguration(r.Context(), bucketName)
+	if err != nil {
+		return nil
+	}
+	return config.Rules
+}
+
+func bucketFromPath(requestPath string) (string, bool) {
+	trimmedPath := strings.TrimPrefix(requestPath, "/")
+	if trimmedPath == "" {
+		return "", false
+	}
+	pathSegments := strings.SplitN(trimmedPath, "/", 2)
+	bucket := strings.TrimSpace(pathSegments[0])
+	if bucket == "" {
+		return "", false
+	}
+	return bucket, true
 }
 
 func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
@@ -2868,6 +4292,14 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Objects with x-amz-website-redirect-location are served as a 301 redirect
+	// on the website endpoint, matching S3 static website hosting.
+	if object.Metadata.WebsiteRedirectLocation != nil {
+		w.Header().Set(locationHeader, *object.Metadata.WebsiteRedirectLocation)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+
 	contentType := "application/octet-stream"
 	if object.ContentType != nil {
 		contentType = *object.ContentType
@@ -2875,13 +4307,17 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, contentType)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
 	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
 	w.WriteHeader(http.StatusOK)
 
 	writer := ioutils.NewTracingWriter(ctx, s.tracer, "WebsiteGetObject", w)
-	ioutils.CopyN(writer, readers[0], object.Size)
+	if _, err := ioutils.CopyN(writer, readers[0], object.Size); err != nil {
+		slog.DebugContext(ctx, "Stopped website object response copy", "error", err)
+		return
+	}
 }
 
 func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) {
@@ -2912,12 +4348,21 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Objects with x-amz-website-redirect-location are served as a 301 redirect
+	// on the website endpoint, matching S3 static website hosting.
+	if object.Metadata.WebsiteRedirectLocation != nil {
+		w.Header().Set(locationHeader, *object.Metadata.WebsiteRedirectLocation)
+		w.WriteHeader(http.StatusMovedPermanently)
+		return
+	}
+
 	responseHeaders := w.Header()
 	contentType := "application/octet-stream"
 	if object.ContentType != nil {
 		contentType = *object.ContentType
 	}
 	responseHeaders.Set(contentTypeHeader, contentType)
+	setMetadataHeadersFromObject(responseHeaders, object)
 	responseHeaders.Set(etagHeader, fmt.Sprintf("\"%s\"", object.ETag))
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -2971,7 +4416,10 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	io.Copy(w, readers[0])
+	if _, err := io.Copy(w, readers[0]); err != nil {
+		slog.DebugContext(ctx, "Stopped website error document response copy", "error", err)
+		return
+	}
 }
 
 // writePlainError writes a plain-text error response for the website endpoint.

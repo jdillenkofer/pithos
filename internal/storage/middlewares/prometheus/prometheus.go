@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
@@ -19,6 +21,7 @@ import (
 
 type prometheusStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
+	delegator.DelegatingStorage
 	registerer                   prometheus.Registerer
 	failedApiOpsCounter          *prometheus.CounterVec
 	successfulApiOpsCounter      *prometheus.CounterVec
@@ -26,12 +29,29 @@ type prometheusStorageMiddleware struct {
 	totalBytesUploadedByBucket   *prometheus.CounterVec
 	totalBytesDownloadedByBucket *prometheus.CounterVec
 	metricsMeasuringTaskHandle   *task.TaskHandle
-	innerStorage                 storage.Storage
 	tracer                       trace.Tracer
+}
+
+func (psm *prometheusStorageMiddleware) run(ctx context.Context, spanName string, opType string, fn func(context.Context) error) error {
+	ctx, span := psm.tracer.Start(ctx, spanName)
+	defer span.End()
+
+	err := fn(ctx)
+	if err != nil {
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": opType}).Inc()
+		return err
+	}
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": opType}).Inc()
+	return nil
 }
 
 // Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*prometheusStorageMiddleware)(nil)
+var _ storage.TransactionalStorage = (*prometheusStorageMiddleware)(nil)
+
+func (psm *prometheusStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, psm.Next, psm, fn)
+}
 
 func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Registerer) (storage.Storage, error) {
 	failedApiOpsCounter := prometheus.NewCounterVec(
@@ -91,19 +111,19 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 
 	return &prometheusStorageMiddleware{
 		ValidatedLifecycle:           lifecycle,
+		DelegatingStorage:            delegator.Wrap(innerStorage),
 		registerer:                   registerer,
 		failedApiOpsCounter:          failedApiOpsCounter,
 		successfulApiOpsCounter:      successfulApiOpsCounter,
 		totalSizeByBucket:            totalSizeByBucket,
 		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
 		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
-		innerStorage:                 innerStorage,
 		tracer:                       otel.Tracer("internal/storage/middlewares/prometheus"),
 	}, nil
 }
 
 func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) {
-	buckets, err := psm.innerStorage.ListBuckets(ctx)
+	buckets, err := psm.Next.ListBuckets(ctx)
 	if err != nil {
 		return
 	}
@@ -122,7 +142,7 @@ func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 	truncated := true
 
 	for truncated {
-		listBucketResult, err := psm.innerStorage.ListObjects(ctx, bucket.Name, storage.ListObjectsOptions{
+		listBucketResult, err := psm.Next.ListObjects(ctx, bucket.Name, storage.ListObjectsOptions{
 			StartAfter: startAfter,
 			MaxKeys:    1000,
 		})
@@ -187,7 +207,7 @@ func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
 		psm.measureMetricsLoop(cancelTask)
 	})
 
-	return psm.innerStorage.Start(ctx)
+	return psm.Next.Start(ctx)
 }
 
 func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
@@ -211,189 +231,132 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 		}
 	}
 
-	return psm.innerStorage.Stop(ctx)
+	return psm.Next.Stop(ctx)
 }
 
 func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CreateBucket")
-	defer span.End()
-
-	err := psm.innerStorage.CreateBucket(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateBucket"}).Inc()
-
-		return err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CreateBucket"}).Inc()
-
-	return nil
+	return psm.run(ctx, "PrometheusStorageMiddleware.CreateBucket", "CreateBucket", func(ctx context.Context) error {
+		return psm.Next.CreateBucket(ctx, bucketName)
+	})
 }
 
 func (psm *prometheusStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucket")
-	defer span.End()
-
-	err := psm.innerStorage.DeleteBucket(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucket"}).Inc()
-		return err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucket"}).Inc()
-
-	return nil
+	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteBucket", "DeleteBucket", func(ctx context.Context) error {
+		return psm.Next.DeleteBucket(ctx, bucketName)
+	})
 }
 
 func (psm *prometheusStorageMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListBuckets")
-	defer span.End()
-
-	mBuckets, err := psm.innerStorage.ListBuckets(ctx)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListBuckets"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListBuckets"}).Inc()
-
-	return mBuckets, nil
+	var result []storage.Bucket
+	err := psm.run(ctx, "PrometheusStorageMiddleware.ListBuckets", "ListBuckets", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.ListBuckets(ctx)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) HeadBucket(ctx context.Context, bucketName storage.BucketName) (*storage.Bucket, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.HeadBucket")
-	defer span.End()
-
-	mBucket, err := psm.innerStorage.HeadBucket(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadBucket"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "HeadBucket"}).Inc()
-
-	return mBucket, err
-}
-
-func (psm *prometheusStorageMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketVersioningConfiguration")
-	defer span.End()
-
-	config, err := psm.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketVersioning"}).Inc()
-		return nil, err
-	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketVersioning"}).Inc()
-	return config, nil
-}
-
-func (psm *prometheusStorageMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketVersioningConfiguration")
-	defer span.End()
-
-	err := psm.innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketVersioning"}).Inc()
+	var result *storage.Bucket
+	err := psm.run(ctx, "PrometheusStorageMiddleware.HeadBucket", "HeadBucket", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.HeadBucket(ctx, bucketName)
 		return err
-	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketVersioning"}).Inc()
-	return nil
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) GetBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.WebsiteConfiguration, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetBucketWebsiteConfiguration")
-	defer span.End()
-
-	config, err := psm.innerStorage.GetBucketWebsiteConfiguration(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetBucketWebsite"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetBucketWebsite"}).Inc()
-
-	return config, nil
+	var result *storage.WebsiteConfiguration
+	err := psm.run(ctx, "PrometheusStorageMiddleware.GetBucketWebsiteConfiguration", "GetBucketWebsite", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.GetBucketWebsiteConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutBucketWebsiteConfiguration")
-	defer span.End()
-
-	err := psm.innerStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutBucketWebsite"}).Inc()
-		return err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutBucketWebsite"}).Inc()
-
-	return nil
+	return psm.run(ctx, "PrometheusStorageMiddleware.PutBucketWebsiteConfiguration", "PutBucketWebsite", func(ctx context.Context) error {
+		return psm.Next.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+	})
 }
 
 func (psm *prometheusStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteBucketWebsiteConfiguration")
-	defer span.End()
+	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteBucketWebsiteConfiguration", "DeleteBucketWebsite", func(ctx context.Context) error {
+		return psm.Next.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+	})
+}
 
-	err := psm.innerStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketWebsite"}).Inc()
+func (psm *prometheusStorageMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	var result *storage.BucketCORSConfiguration
+	err := psm.run(ctx, "PrometheusStorageMiddleware.GetBucketCORSConfiguration", "GetBucketCORS", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.GetBucketCORSConfiguration(ctx, bucketName)
 		return err
-	}
+	})
+	return result, err
+}
 
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteBucketWebsite"}).Inc()
+func (psm *prometheusStorageMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.PutBucketCORSConfiguration", "PutBucketCORS", func(ctx context.Context) error {
+		return psm.Next.PutBucketCORSConfiguration(ctx, bucketName, config)
+	})
+}
 
-	return nil
+func (psm *prometheusStorageMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteBucketCORSConfiguration", "DeleteBucketCORS", func(ctx context.Context) error {
+		return psm.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
+	})
+}
+
+func (psm *prometheusStorageMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	var result *storage.BucketLifecycleConfiguration
+	err := psm.run(ctx, "PrometheusStorageMiddleware.GetBucketLifecycleConfiguration", "GetBucketLifecycle", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.PutBucketLifecycleConfiguration", "PutBucketLifecycle", func(ctx context.Context) error {
+		return psm.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (psm *prometheusStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteBucketLifecycleConfiguration", "DeleteBucketLifecycle", func(ctx context.Context) error {
+		return psm.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+	})
 }
 
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjects")
-	defer span.End()
-
-	mListBucketResult, err := psm.innerStorage.ListObjects(ctx, bucketName, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListObjects"}).Inc()
-
-	return mListBucketResult, nil
-}
-
-func (psm *prometheusStorageMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListObjectVersions")
-	defer span.End()
-
-	res, err := psm.innerStorage.ListObjectVersions(ctx, bucketName, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListObjectVersions"}).Inc()
-		return nil, err
-	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListObjectVersions"}).Inc()
-	return res, nil
+	var result *storage.ListBucketResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.ListObjects", "ListObjects", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.ListObjects(ctx, bucketName, opts)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.HeadObject")
-	defer span.End()
-
-	mObject, err := psm.innerStorage.HeadObject(ctx, bucketName, key, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "HeadObject"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "HeadObject"}).Inc()
-
-	return mObject, nil
+	var result *storage.Object
+	err := psm.run(ctx, "PrometheusStorageMiddleware.HeadObject", "HeadObject", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.HeadObject(ctx, bucketName, key, opts)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetObject")
 	defer span.End()
 
-	object, readers, err := psm.innerStorage.GetObject(ctx, bucketName, key, ranges, opts)
+	object, readers, err := psm.Next.GetObject(ctx, bucketName, key, ranges, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 		return nil, nil, err
@@ -419,7 +382,7 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
-	putObjectResult, err := psm.innerStorage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
+	putObjectResult, err := psm.Next.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return nil, err
@@ -438,7 +401,7 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
-	appendObjectResult, err := psm.innerStorage.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+	appendObjectResult, err := psm.Next.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AppendObject"}).Inc()
 		return nil, err
@@ -450,48 +413,59 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 }
 
 func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObject")
-	defer span.End()
-
-	result, err := psm.innerStorage.DeleteObject(ctx, bucketName, key, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteObject"}).Inc()
-
-	return result, nil
+	var result *storage.DeleteObjectResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.DeleteObject", "DeleteObject", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.DeleteObject(ctx, bucketName, key, opts)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.DeleteObjects")
+	var result *storage.DeleteObjectsResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.DeleteObjects", "DeleteObjects", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.DeleteObjects(ctx, bucketName, entries)
+		return err
+	})
+	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	var result *storage.InitiateMultipartUploadResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.CreateMultipartUpload", "CreateMultipartUpload", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
+		return err
+	})
+	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CopyObject")
 	defer span.End()
 
-	result, err := psm.innerStorage.DeleteObjects(ctx, bucketName, entries)
+	result, err := psm.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "DeleteObjects"}).Inc()
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
 		return nil, err
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "DeleteObjects"}).Inc()
-
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
 	return result, nil
 }
 
-func (psm *prometheusStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CreateMultipartUpload")
+func (psm *prometheusStorageMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.UploadPartCopy")
 	defer span.End()
 
-	initiateMultipartUploadResult, err := psm.innerStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	result, err := psm.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CreateMultipartUpload"}).Inc()
+		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
 		return nil, err
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CreateMultipartUpload"}).Inc()
-
-	return initiateMultipartUploadResult, nil
+	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
+	return result, nil
 }
 
 func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, data io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
@@ -503,7 +477,7 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 		bytesUploaded += n
 	})
 
-	uploadPartResult, err := psm.innerStorage.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
+	uploadPartResult, err := psm.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
 	if err != nil {
 		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
 		return nil, err
@@ -516,59 +490,37 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 }
 
 func (psm *prometheusStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CompleteMultipartUpload")
-	defer span.End()
-
-	completeMultipartUploadResult, err := psm.innerStorage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CompleteMultipartUpload"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CompleteMultipartUpload"}).Inc()
-
-	return completeMultipartUploadResult, nil
+	var result *storage.CompleteMultipartUploadResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.CompleteMultipartUpload", "CompleteMultipartUpload", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.AbortMultipartUpload")
-	defer span.End()
-
-	err := psm.innerStorage.AbortMultipartUpload(ctx, bucketName, key, uploadId)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AbortMultipartUpload"}).Inc()
-		return err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "AbortMultipartUpload"}).Inc()
-
-	return nil
+	return psm.run(ctx, "PrometheusStorageMiddleware.AbortMultipartUpload", "AbortMultipartUpload", func(ctx context.Context) error {
+		return psm.Next.AbortMultipartUpload(ctx, bucketName, key, uploadId)
+	})
 }
 
 func (psm *prometheusStorageMiddleware) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListMultipartUploads")
-	defer span.End()
-
-	listMultipartUploadsResult, err := psm.innerStorage.ListMultipartUploads(ctx, bucketName, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListMultipartUploads"}).Inc()
-	return listMultipartUploadsResult, nil
+	var result *storage.ListMultipartUploadsResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.ListMultipartUploads", "ListMultipartUploads", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.ListMultipartUploads(ctx, bucketName, opts)
+		return err
+	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
-	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.ListParts")
-	defer span.End()
-
-	listPartsResult, err := psm.innerStorage.ListParts(ctx, bucketName, key, uploadId, opts)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "ListParts"}).Inc()
-		return nil, err
-	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "ListParts"}).Inc()
-	return listPartsResult, nil
+	var result *storage.ListPartsResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.ListParts", "ListParts", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.ListParts(ctx, bucketName, key, uploadId, opts)
+		return err
+	})
+	return result, err
 }

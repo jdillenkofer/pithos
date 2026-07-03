@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"time"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -50,8 +51,12 @@ func (s *SqliteDatabaseConfiguration) Instantiate(diProvider dependencyinjection
 }
 
 type PostgresDatabaseConfiguration struct {
-	dbInstance database.Database
-	DbUrl      internalConfig.StringProvider `json:"dbUrl"`
+	dbInstance         database.Database
+	DbUrl              internalConfig.StringProvider  `json:"dbUrl"`
+	MaxOpenConns       *internalConfig.Int64Provider  `json:"maxOpenConns,omitempty"`
+	MaxIdleConns       *internalConfig.Int64Provider  `json:"maxIdleConns,omitempty"`
+	ConnMaxLifetime    *internalConfig.StringProvider `json:"connMaxLifetime,omitempty"`
+	ConnMaxIdleTime    *internalConfig.StringProvider `json:"connMaxIdleTime,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -61,7 +66,11 @@ func (s *PostgresDatabaseConfiguration) RegisterReferences(diCollection dependen
 
 func (s *PostgresDatabaseConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (database.Database, error) {
 	if s.dbInstance == nil {
-		dbInstance, err := pgx.OpenDatabase(s.DbUrl.Value())
+		poolConfig, err := s.connectionPoolConfiguration()
+		if err != nil {
+			return nil, err
+		}
+		dbInstance, err := pgx.OpenDatabase(s.DbUrl.Value(), poolConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -75,6 +84,42 @@ func (s *PostgresDatabaseConfiguration) Instantiate(diProvider dependencyinjecti
 		dbContainer.AddDb(dbInstance)
 	}
 	return s.dbInstance, nil
+}
+
+func (s *PostgresDatabaseConfiguration) connectionPoolConfiguration() (*pgx.ConnectionPoolConfiguration, error) {
+	cfg := &pgx.ConnectionPoolConfiguration{}
+	hasValue := false
+
+	if s.MaxOpenConns != nil {
+		cfg.MaxOpenConns = int(s.MaxOpenConns.Value())
+		hasValue = true
+	}
+	if s.MaxIdleConns != nil {
+		cfg.MaxIdleConns = int(s.MaxIdleConns.Value())
+		hasValue = true
+	}
+	if s.ConnMaxLifetime != nil {
+		parsedVal, err := time.ParseDuration(s.ConnMaxLifetime.Value())
+		if err != nil {
+			return nil, err
+		}
+		cfg.ConnMaxLifetime = parsedVal
+		hasValue = true
+	}
+	if s.ConnMaxIdleTime != nil {
+		parsedVal, err := time.ParseDuration(s.ConnMaxIdleTime.Value())
+		if err != nil {
+			return nil, err
+		}
+		cfg.ConnMaxIdleTime = parsedVal
+		hasValue = true
+	}
+
+	if !hasValue {
+		return nil, nil
+	}
+
+	return cfg, nil
 }
 
 type DatabaseReferenceConfiguration struct {

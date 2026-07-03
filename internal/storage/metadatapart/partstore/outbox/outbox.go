@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -85,6 +86,9 @@ type outboxPartStore struct {
 	db                         database.Database
 	triggerChannel             chan struct{}
 	triggerChannelClosed       bool
+	outboxId                   string
+	claimOwner                 string
+	claimLeaseDuration         time.Duration
 	outboxProcessingTaskHandle *task.TaskHandle
 	innerPartStore             partstore.PartStore
 	partOutboxEntryRepository  partOutboxEntry.Repository
@@ -95,17 +99,126 @@ type outboxPartStore struct {
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*outboxPartStore)(nil)
 
-func New(db database.Database, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer) (partstore.PartStore, error) {
+const defaultClaimLeaseDuration = 30 * time.Second
+
+func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
+	leaseDuration := defaultClaimLeaseDuration
+	if claimLeaseDuration > 0 {
+		leaseDuration = claimLeaseDuration
+	}
 	obs := &outboxPartStore{
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
 		triggerChannelClosed:      false,
+		outboxId:                  outboxId,
+		claimOwner:                outboxId + ":" + ulid.Make().String(),
+		claimLeaseDuration:        leaseDuration,
 		innerPartStore:            innerPartStore,
 		partOutboxEntryRepository: partOutboxEntryRepository,
 		tracer:                    otel.Tracer("internal/storage/metadatapart/partstore/outbox"),
 		metrics:                   newPartOutboxMetrics(registerer),
 	}
 	return obs, nil
+}
+
+func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutboxEntry.Entity, bool, error) {
+	var entry *partOutboxEntry.Entity
+	var claimed bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		now := time.Now().UTC()
+		var err error
+		entry, claimed, err = obs.partOutboxEntryRepository.ClaimFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+		return err
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return entry, claimed, nil
+}
+
+func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *partOutboxEntry.Entity) (io.Reader, error) {
+	if entry.Operation != partOutboxEntry.PutPartOperation {
+		return nil, nil
+	}
+	var chunks []*partOutboxEntry.ContentChunk
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		chunks, err = obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	readers := make([]io.Reader, len(chunks))
+	for i, chunk := range chunks {
+		readers[i] = bytes.NewReader(chunk.Content)
+	}
+	return io.MultiReader(readers...), nil
+}
+
+func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
+	var deleted bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		deleted, err = obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
+	var released bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		released, err = obs.partOutboxEntryRepository.ReleasePartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, time.Now().UTC())
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return released, nil
+}
+
+func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry *partOutboxEntry.Entity) func() {
+	interval := obs.claimLeaseDuration / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now().UTC()
+				var extended bool
+				err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+					var err error
+					extended, err = obs.partOutboxEntryRepository.ExtendPartOutboxEntryClaim(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner, now, now.Add(obs.claimLeaseDuration))
+					return err
+				})
+				if err != nil {
+					slog.WarnContext(ctx, "Failed to commit part outbox heartbeat", "error", err)
+					continue
+				}
+				if !extended {
+					slog.WarnContext(ctx, "Part outbox heartbeat lost claim", "entryId", entry.Id.String())
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
 func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
@@ -121,84 +234,71 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 	}()
 
-	tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-	if err != nil {
-		return
-	}
-
-	pendingCount, err := obs.partOutboxEntryRepository.Count(ctx, tx)
-	if err != nil {
-		tx.Rollback()
+	var pendingCount int
+	if err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		pendingCount, err = obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
+		return err
+	}); err != nil {
 		return
 	}
 	obs.metrics.pendingEntries.Set(float64(pendingCount))
-	tx.Commit()
 
 	for {
-		tx, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
-		if err != nil {
-			obs.metrics.errorsCounter.Inc()
-			return
-		}
+		var entry *partOutboxEntry.Entity
+		var putPartReader io.Reader
 
-		entry, err := obs.partOutboxEntryRepository.FindFirstPartOutboxEntryWithForUpdateLock(ctx, tx)
+		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
-			tx.Rollback()
 			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
-		if entry == nil {
-			tx.Commit()
+		if entry == nil || !claimed {
 			break
 		}
 
-		switch entry.Operation {
-		case partOutboxEntry.PutPartOperation:
-			chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *entry.Id)
-			if err != nil {
-				tx.Rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
+		putPartReader, err = obs.readPartOutboxContent(ctx, entry)
+		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
+			time.Sleep(5 * time.Second)
+			return
+		}
+
+		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
+		err = database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			switch entry.Operation {
+			case partOutboxEntry.PutPartOperation:
+				return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
+			case partOutboxEntry.DeletePartOperation:
+				return obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
+			default:
+				slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
+				return fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
 			}
-			readers := make([]io.Reader, len(chunks))
-			for i, chunk := range chunks {
-				readers[i] = bytes.NewReader(chunk.Content)
-			}
-			err = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, io.MultiReader(readers...))
-			if err != nil {
-				tx.Rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		case partOutboxEntry.DeletePartOperation:
-			err = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
-			if err != nil {
-				tx.Rollback()
-				obs.metrics.errorsCounter.Inc()
-				time.Sleep(5 * time.Second)
-				return
-			}
-		default:
-			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-			tx.Rollback()
+		})
+		if err != nil {
+			stopHeartbeat()
+			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
 			time.Sleep(5 * time.Second)
 			return
 		}
-		err = obs.partOutboxEntryRepository.DeletePartOutboxEntryById(ctx, tx, *entry.Id)
+		stopHeartbeat()
+
+		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
 		if err != nil {
-			tx.Rollback()
+			obs.metrics.errorsCounter.Inc()
+			time.Sleep(5 * time.Second)
+			return
+		}
+		if !deleted {
+			obs.metrics.errorsCounter.Inc()
+			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}
 		processedOutboxEntryCount += 1
-
-		err = tx.Commit()
-		if err != nil {
-			return
-		}
 	}
 	if processedOutboxEntryCount > 0 {
 		slog.Info(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
@@ -246,26 +346,29 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx *sql.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
+func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx database.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
 	entry := partOutboxEntry.Entity{
 		Operation: operation,
 		PartId:    partId,
 	}
-	err := obs.partOutboxEntryRepository.SavePartOutboxEntry(ctx, tx, &entry)
+	err := obs.partOutboxEntryRepository.SavePartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId, &entry)
 	if err != nil {
 		return nil, err
 	}
 
-	// Put struct{} in the channel unless it is full
-	select {
-	case obs.triggerChannel <- struct{}{}:
-	default:
-	}
+	tx.OnAfterCommit(func(context.Context) error {
+		// Put struct{} in the channel unless it is full.
+		select {
+		case obs.triggerChannel <- struct{}{}:
+		default:
+		}
+		return nil
+	})
 
 	return entry.Id, nil
 }
 
-func (obs *outboxPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.PutPart")
 	defer span.End()
 
@@ -274,27 +377,22 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId part
 		return err
 	}
 
-	buffer := make([]byte, chunkSize)
 	chunkIndex := 0
 	for {
-		n, err := io.ReadFull(reader, buffer)
-		if n > 0 {
-			content := make([]byte, n)
-			copy(content, buffer[:n])
-
+		content, err := ioutils.ReadChunk(reader, chunkSize)
+		if len(content) > 0 {
 			chunk := partOutboxEntry.ContentChunk{
 				OutboxEntryId: *entryId,
 				ChunkIndex:    chunkIndex,
 				Content:       content,
 			}
-			err = obs.partOutboxEntryRepository.SavePartOutboxContentChunk(ctx, tx, &chunk)
-			if err != nil {
-				return err
+			if saveErr := obs.partOutboxEntryRepository.SavePartOutboxContentChunk(ctx, tx.SqlTx(), &chunk); saveErr != nil {
+				return saveErr
 			}
 			chunkIndex++
 		}
 		if err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			if err == io.EOF {
 				break
 			}
 			return err
@@ -304,11 +402,11 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx *sql.Tx, partId part
 	return nil
 }
 
-func (obs *outboxPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPart")
 	defer span.End()
 
-	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx, partId)
+	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx.SqlTx(), obs.outboxId, partId)
 	if err != nil {
 		return nil, err
 	}
@@ -317,27 +415,85 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx *sql.Tx, partId part
 			return nil, partstore.ErrPartNotFound
 		}
 
-		chunks, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx, *lastEntry.Id)
+		// Fetch the first chunk eagerly so we know whether the outbox entry holds
+		// any content; the remaining chunks are loaded lazily so we never hold
+		// more than one chunk in memory at a time.
+		firstChunk, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndex(ctx, tx.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
 		if err != nil {
 			return nil, err
 		}
-		if len(chunks) > 0 {
-			readers := make([]io.Reader, len(chunks))
-			for i, chunk := range chunks {
-				readers[i] = bytes.NewReader(chunk.Content)
-			}
-			return io.NopCloser(io.MultiReader(readers...)), nil
+		if firstChunk != nil {
+			return &lazyOutboxChunkReadCloser{
+				ctx:       ctx,
+				tx:        tx,
+				repo:      obs.partOutboxEntryRepository,
+				outboxId:  obs.outboxId,
+				entryId:   *lastEntry.Id,
+				nextChunk: 1,
+				current:   bytes.NewReader(firstChunk.Content),
+			}, nil
 		}
 	}
 	return obs.innerPartStore.GetPart(ctx, tx, partId)
 }
 
-func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+// lazyOutboxChunkReadCloser streams an outbox entry's chunks one at a time,
+// querying the next chunk from the repository only once the current one is
+// exhausted. This keeps the read path's memory proportional to a single chunk
+// rather than the whole part. It relies on the read transaction outliving the
+// reader (GetObject binds the tx lifetime to its returned readers).
+type lazyOutboxChunkReadCloser struct {
+	ctx       context.Context
+	tx        database.Tx
+	repo      partOutboxEntry.Repository
+	outboxId  string
+	entryId   ulid.ULID
+	nextChunk int
+	current   *bytes.Reader
+	done      bool
+}
+
+func (l *lazyOutboxChunkReadCloser) Read(p []byte) (int, error) {
+	for {
+		if l.current != nil {
+			n, err := l.current.Read(p)
+			if err == io.EOF {
+				l.current = nil
+				if n > 0 {
+					return n, nil
+				}
+				continue
+			}
+			return n, err
+		}
+		if l.done {
+			return 0, io.EOF
+		}
+		chunk, err := l.repo.FindPartOutboxEntryChunkByIndex(l.ctx, l.tx.SqlTx(), l.outboxId, l.entryId, l.nextChunk)
+		if err != nil {
+			return 0, err
+		}
+		if chunk == nil {
+			l.done = true
+			return 0, io.EOF
+		}
+		l.nextChunk++
+		l.current = bytes.NewReader(chunk.Content)
+	}
+}
+
+func (l *lazyOutboxChunkReadCloser) Close() error {
+	l.done = true
+	l.current = nil
+	return nil
+}
+
+func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPartIds")
 	defer span.End()
 
 	// We get the lastOutboxEntry for each partId
-	lastOutboxEntryGroupedByPartId, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryGroupedByPartId(ctx, tx)
+	lastOutboxEntryGroupedByPartId, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryGroupedByPartId(ctx, tx.SqlTx(), obs.outboxId)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +529,7 @@ func (obs *outboxPartStore) GetPartIds(ctx context.Context, tx *sql.Tx) ([]parts
 	return partIds, nil
 }
 
-func (obs *outboxPartStore) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (obs *outboxPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.DeletePart")
 	defer span.End()
 

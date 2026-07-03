@@ -37,6 +37,12 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if d.Resource.PartNumber != 0 {
 			base += fmt.Sprintf(" | Part: %d", d.Resource.PartNumber)
 		}
+		if d.Resource.SourceBucket != "" {
+			base += fmt.Sprintf(" | SourceBucket: %s", escape(d.Resource.SourceBucket))
+		}
+		if d.Resource.SourceKey != "" {
+			base += fmt.Sprintf(" | SourceKey: %s", escape(d.Resource.SourceKey))
+		}
 		if d.Actor.CredentialID != "" {
 			base += fmt.Sprintf(" | CredentialID: %s", escape(d.Actor.CredentialID))
 		}
@@ -155,6 +161,10 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 			case "Part":
 				p, _ := strconv.Atoi(val)
 				dls.Resource.PartNumber = int32(p)
+			case "SourceBucket":
+				dls.Resource.SourceBucket = unescape(val)
+			case "SourceKey":
+				dls.Resource.SourceKey = unescape(val)
 			case "Actor", "CredentialID":
 				dls.Actor.CredentialID = unescape(val)
 			case "AuthType":

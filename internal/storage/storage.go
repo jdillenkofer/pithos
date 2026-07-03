@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"strconv"
@@ -29,6 +30,11 @@ type BucketVersioningConfiguration struct {
 	Status *BucketVersioningStatus
 }
 
+// ObjectMetadata holds the user-controllable object metadata: the
+// user-modifiable system metadata headers and the user-defined x-amz-meta-*
+// key/value pairs. Content-Type is tracked separately.
+type ObjectMetadata = metadatastore.ObjectMetadata
+
 type Object struct {
 	Key               ObjectKey
 	ContentType       *string
@@ -43,6 +49,11 @@ type Object struct {
 	ChecksumSHA256    *string
 	ChecksumType      *string
 	Size              int64
+	// Tags holds the object's tag set as key/value pairs.
+	Tags map[string]string
+	// Metadata holds the user-controllable object metadata. Populated by
+	// HeadObject and GetObject.
+	Metadata ObjectMetadata
 }
 
 // ByteRange represents a byte range for GetObject operations.
@@ -77,6 +88,25 @@ type PutObjectResult struct {
 type PutObjectOptions struct {
 	IfNoneMatchStar bool
 	IfMatchETag     *string
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It
+	// replaces any previous tags on overwrite. Nil/empty means no tags.
+	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It replaces any previous metadata on overwrite. Nil
+	// means no metadata.
+	Metadata *ObjectMetadata
+}
+
+// CreateMultipartUploadOptions holds options for a CreateMultipartUpload
+// operation. A nil options pointer is valid and means all defaults.
+type CreateMultipartUploadOptions struct {
+	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
+	// applied to the object when the upload completes. Nil/empty means no tags.
+	Tags map[string]string
+	// Metadata is the object's user-controllable metadata, supplied via the
+	// request headers. It is applied to the object when the upload completes.
+	// Nil means no metadata.
+	Metadata *ObjectMetadata
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -140,6 +170,70 @@ type GetObjectOptions struct {
 	// otherwise ErrNotModified is returned.
 	// The special value "*" matches any existing object.
 	IfNoneMatchETag *string
+}
+
+// CopySourceConditions holds the x-amz-copy-source-if-* preconditions that are
+// evaluated against the source object of a server-side copy. A nil field means
+// the corresponding condition is absent. A failed precondition surfaces as
+// ErrPreconditionFailed.
+type CopySourceConditions struct {
+	// IfMatch requires the source ETag to equal this value (or "*" to match any
+	// existing object).
+	IfMatch *string
+	// IfNoneMatch requires the source ETag to differ from this value ("*" matches
+	// any existing object and therefore always fails).
+	IfNoneMatch *string
+	// IfModifiedSince requires the source to have been modified after this time.
+	IfModifiedSince *time.Time
+	// IfUnmodifiedSince requires the source to be unmodified since this time.
+	IfUnmodifiedSince *time.Time
+}
+
+// CopyObjectOptions holds options for a server-side CopyObject. A nil pointer is
+// equivalent to a plain COPY of the whole object with no preconditions.
+type CopyObjectOptions struct {
+	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
+	// ContentType and Metadata are used for the destination instead of the
+	// source's content type and metadata.
+	ReplaceMetadata bool
+	// ContentType is the destination content type used when ReplaceMetadata is true.
+	ContentType *string
+	// Metadata is the destination object metadata used when ReplaceMetadata is
+	// true. Its WebsiteRedirectLocation is applied even with the COPY directive,
+	// because S3 never carries the redirect location over from the source.
+	Metadata *ObjectMetadata
+	// Range, when non-nil, copies only the given byte range of the source into a
+	// single-part destination object.
+	Range *ByteRange
+	// CopySourceConditions holds preconditions evaluated against the source object.
+	CopySourceConditions CopySourceConditions
+	// ReplaceTags corresponds to x-amz-tagging-directive: REPLACE. When true, the
+	// destination object's tags are set from Tags instead of being copied from the
+	// source object.
+	ReplaceTags bool
+	// Tags is the destination tag set used when ReplaceTags is true.
+	Tags map[string]string
+}
+
+type CopyObjectResult struct {
+	ETag         string
+	LastModified time.Time
+	// VersionID is the version id of the newly created destination object when
+	// the destination bucket has versioning enabled.
+	VersionID *string
+}
+
+// UploadPartCopyOptions holds options for a server-side UploadPartCopy.
+type UploadPartCopyOptions struct {
+	// Range, when non-nil, copies only the given byte range of the source into the part.
+	Range *ByteRange
+	// CopySourceConditions holds preconditions evaluated against the source object.
+	CopySourceConditions CopySourceConditions
+}
+
+type UploadPartCopyResult struct {
+	ETag         string
+	LastModified time.Time
 }
 
 type InitiateMultipartUploadResult struct {
@@ -292,6 +386,8 @@ var ErrInvalidObjectKey error = metadatastore.ErrInvalidObjectKey
 var ErrInvalidUploadId error = metadatastore.ErrInvalidUploadId
 var ErrInvalidRange error = errors.New("InvalidRange")
 var ErrNoSuchWebsiteConfiguration error = metadatastore.ErrNoSuchWebsiteConfiguration
+var ErrNoSuchCORSConfiguration error = metadatastore.ErrNoSuchCORSConfiguration
+var ErrNoSuchLifecycleConfiguration error = metadatastore.ErrNoSuchLifecycleConfiguration
 var ErrTooManyParts error = metadatastore.ErrTooManyParts
 var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
 var ErrCASFailure error = metadatastore.ErrCASFailure
@@ -361,10 +457,50 @@ type BucketManager interface {
 
 type WebsiteConfiguration = metadatastore.WebsiteConfiguration
 
+type CORSRule = metadatastore.CORSRule
+
+type BucketCORSConfiguration = metadatastore.BucketCORSConfiguration
+
+const LifecycleRuleStatusEnabled = metadatastore.LifecycleRuleStatusEnabled
+const LifecycleRuleStatusDisabled = metadatastore.LifecycleRuleStatusDisabled
+
+type LifecycleTag = metadatastore.LifecycleTag
+type LifecycleFilterAnd = metadatastore.LifecycleFilterAnd
+type LifecycleFilter = metadatastore.LifecycleFilter
+type LifecycleExpiration = metadatastore.LifecycleExpiration
+type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
+type LifecycleRule = metadatastore.LifecycleRule
+type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
+
 type BucketWebsiteManager interface {
 	GetBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) (*WebsiteConfiguration, error)
 	PutBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName, config *WebsiteConfiguration) error
 	DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName BucketName) error
+}
+
+type BucketCORSManager interface {
+	GetBucketCORSConfiguration(ctx context.Context, bucketName BucketName) (*BucketCORSConfiguration, error)
+	PutBucketCORSConfiguration(ctx context.Context, bucketName BucketName, config *BucketCORSConfiguration) error
+	DeleteBucketCORSConfiguration(ctx context.Context, bucketName BucketName) error
+}
+
+type BucketLifecycleManager interface {
+	GetBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) (*BucketLifecycleConfiguration, error)
+	PutBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName, config *BucketLifecycleConfiguration) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) error
+}
+
+// TaggingManager manages object tagging operations.
+type TaggingManager interface {
+	// GetObjectTagging returns the tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	// PutObjectTagging replaces the entire tag set of the object at key. Returns
+	// ErrNoSuchKey if the object does not exist.
+	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	// DeleteObjectTagging removes the entire tag set of the object at key.
+	// Returns ErrNoSuchKey if the object does not exist.
+	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) error
 }
 
 // ObjectManager manages object operations
@@ -378,6 +514,11 @@ type ObjectManager interface {
 	// Returns the object metadata, a list of readers (one per range), and an error.
 	GetObject(ctx context.Context, bucketName BucketName, key ObjectKey, ranges []ByteRange, opts *GetObjectOptions) (*Object, []io.ReadCloser, error)
 	PutObject(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, data io.Reader, checksumInput *ChecksumInput, opts *PutObjectOptions) (*PutObjectResult, error)
+	// CopyObject performs a server-side copy of srcBucket/srcKey to dstBucket/dstKey.
+	// The whole copy is performed in a single transaction; for a full (non-ranged)
+	// copy the destination preserves the source's part structure and therefore its
+	// exact ETag. opts may be nil.
+	CopyObject(ctx context.Context, srcBucket BucketName, srcKey ObjectKey, dstBucket BucketName, dstKey ObjectKey, opts *CopyObjectOptions) (*CopyObjectResult, error)
 	// AppendObject appends data to an existing object. If the object does not exist,
 	// it behaves like PutObject and creates a new object with the provided data.
 	// The ETag in the result reflects the new whole-object ETag after the append.
@@ -388,8 +529,11 @@ type ObjectManager interface {
 
 // MultipartUploadManager manages multipart upload operations
 type MultipartUploadManager interface {
-	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string) (*InitiateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, contentType *string, checksumType *string, opts *CreateMultipartUploadOptions) (*InitiateMultipartUploadResult, error)
 	UploadPart(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, data io.Reader, checksumInput *ChecksumInput) (*UploadPartResult, error)
+	// UploadPartCopy uploads a part of a multipart upload by copying data (optionally
+	// a byte range) from an existing source object, server-side. opts may be nil.
+	UploadPartCopy(ctx context.Context, srcBucket BucketName, srcKey ObjectKey, dstBucket BucketName, dstKey ObjectKey, uploadId UploadId, partNumber int32, opts *UploadPartCopyOptions) (*UploadPartCopyResult, error)
 	CompleteMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, bucketName BucketName, key ObjectKey, uploadId UploadId) error
 	ListMultipartUploads(ctx context.Context, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
@@ -401,8 +545,16 @@ type Storage interface {
 	lifecycle.Manager
 	BucketManager
 	BucketWebsiteManager
+	BucketCORSManager
+	BucketLifecycleManager
 	ObjectManager
 	MultipartUploadManager
+	TaggingManager
+}
+
+type TransactionalStorage interface {
+	Storage
+	WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage Storage) error) error
 }
 
 func ListAllObjectsOfBucket(ctx context.Context, storage Storage, bucketName BucketName) ([]Object, error) {
@@ -498,7 +650,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err := storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -523,7 +675,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil)
+		initiateMultipartUploadResult, err = storage.CreateMultipartUpload(ctx, bucketName, key, nil, nil, nil)
 		if err != nil {
 			return err
 		}

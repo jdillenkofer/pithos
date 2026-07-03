@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -14,6 +15,7 @@ import (
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	tinkEncryptionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	outboxPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
@@ -28,7 +30,7 @@ const (
 	EncryptionTypeTink EncryptionType = "tink"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
+func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, enablePartStoreCompression bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -45,7 +47,17 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 		slog.Error(fmt.Sprintf("Could not create PartRepository: %s", err))
 		os.Exit(1)
 	}
-	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create TagRepository: %s", err))
+		os.Exit(1)
+	}
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Could not create UserMetadataRepository: %s", err))
+		os.Exit(1)
+	}
+	metadataStore, err = sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 	if err != nil {
 		slog.Error(fmt.Sprint("Error during NewSqlMetadataStore: ", err))
 		os.Exit(1)
@@ -67,6 +79,14 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 		partStore, err = sqlPartStore.New(db, partContentRepository)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewSqlPartStore: ", err))
+			os.Exit(1)
+		}
+	}
+
+	if enablePartStoreCompression {
+		partStore, err = compressionPartStoreMiddleware.New(partStore)
+		if err != nil {
+			slog.Error(fmt.Sprint("Error during NewCompressionPartStoreMiddleware: ", err))
 			os.Exit(1)
 		}
 	}
@@ -96,7 +116,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 			slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 			os.Exit(1)
 		}
-		partStore, err = outboxPartStore.New(db, partStore, partOutboxEntryRepository, registerer)
+		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, registerer, 30*time.Second)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewOutboxPartStore: ", err))
 			os.Exit(1)

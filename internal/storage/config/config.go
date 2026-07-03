@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"crypto/sha512"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -17,11 +18,10 @@ import (
 	signingVault "github.com/jdillenkofer/pithos/internal/auditlog/signing/vault"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 	auditlogSinkConfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
+	cacheConfig "github.com/jdillenkofer/pithos/internal/cache/config"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/cache"
-	cacheConfig "github.com/jdillenkofer/pithos/internal/storage/cache/config"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
@@ -29,6 +29,7 @@ import (
 	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
@@ -37,7 +38,7 @@ import (
 )
 
 const (
-	cacheStorageType                 = "CacheStorage"
+	defaultOutboxId                  = "default"
 	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
 	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
@@ -45,58 +46,10 @@ const (
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
 	s3ClientStorageType              = "S3ClientStorage"
+	objectCacheStorageMiddlewareType = "ObjectCacheStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
-
-type CacheStorageConfiguration struct {
-	CacheInstantiator        cacheConfig.CacheInstantiator `json:"-"`
-	RawCache                 json.RawMessage               `json:"cache"`
-	InnerStorageInstantiator StorageInstantiator           `json:"-"`
-	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
-	internalConfig.DynamicJsonType
-}
-
-func (c *CacheStorageConfiguration) UnmarshalJSON(b []byte) error {
-	type cacheStorageConfiguration CacheStorageConfiguration
-	err := json.Unmarshal(b, (*cacheStorageConfiguration)(c))
-	if err != nil {
-		return err
-	}
-	c.CacheInstantiator, err = cacheConfig.CreateCacheInstantiatorFromJson(c.RawCache)
-	if err != nil {
-		return err
-	}
-	c.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(c.RawInnerStorage)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *CacheStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := c.CacheInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	err = c.InnerStorageInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *CacheStorageConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	cacheImpl, err := c.CacheInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	innerStorage, err := c.InnerStorageInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	return cache.New(cacheImpl, innerStorage)
-}
 
 type MetadataPartStorageConfiguration struct {
 	DatabaseInstantiator      databaseConfig.DatabaseInstantiator           `json:"-"`
@@ -430,6 +383,8 @@ type OutboxStorageConfiguration struct {
 	RawDatabase              json.RawMessage                     `json:"db"`
 	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
 	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
+	OutboxId                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -471,6 +426,18 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
+	outboxId := o.OutboxId.Value()
+	if outboxId == "" {
+		outboxId = defaultOutboxId
+	}
+	claimLeaseDuration := 30 * time.Second
+	if o.ClaimLeaseDurationSecs != nil {
+		claimLeaseDurationSecs := o.ClaimLeaseDurationSecs.Value()
+		if claimLeaseDurationSecs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(claimLeaseDurationSecs) * time.Second
+	}
 	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -480,7 +447,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	return outbox.NewStorage(db, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
 }
 
 type ReplicationStorageConfiguration struct {
@@ -550,6 +517,60 @@ type S3ClientStorageConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type ObjectCacheStorageMiddlewareConfiguration struct {
+	CacheInstantiator        cacheConfig.CacheInstantiator `json:"-"`
+	RawCache                 json.RawMessage               `json:"cache"`
+	MaxObjectSizeBytes       internalConfig.Int64Provider  `json:"maxObjectSizeBytes"`
+	CacheReadErrorsAsMiss    internalConfig.BoolProvider   `json:"cacheReadErrorsAsMiss"`
+	InnerStorageInstantiator StorageInstantiator           `json:"-"`
+	RawInnerStorage          json.RawMessage               `json:"innerStorage"`
+	internalConfig.DynamicJsonType
+}
+
+func (s *ObjectCacheStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type objectCacheStorageMiddlewareConfiguration ObjectCacheStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*objectCacheStorageMiddlewareConfiguration)(s))
+	if err != nil {
+		return err
+	}
+	s.CacheInstantiator, err = cacheConfig.CreateCacheInstantiatorFromJson(s.RawCache)
+	if err != nil {
+		return err
+	}
+	s.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(s.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *ObjectCacheStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := s.CacheInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = s.InnerStorageInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *ObjectCacheStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	cacheImpl, err := s.CacheInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	innerStorage, err := s.InnerStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	return objectcache.NewStorageMiddleware(innerStorage, cacheImpl, objectcache.Options{
+		MaxObjectSizeBytes:    s.MaxObjectSizeBytes.Value(),
+		CacheReadErrorsAsMiss: s.CacheReadErrorsAsMiss.Value(),
+	})
+}
+
 func (s *S3ClientStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	return nil
 }
@@ -579,8 +600,6 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 
 	var si StorageInstantiator
 	switch sc.Type {
-	case cacheStorageType:
-		si = &CacheStorageConfiguration{}
 	case metadataPartStorageType:
 		si = &MetadataPartStorageConfiguration{}
 	case conditionalStorageMiddlewareType:
@@ -595,6 +614,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &ReplicationStorageConfiguration{}
 	case s3ClientStorageType:
 		si = &S3ClientStorageConfiguration{}
+	case objectCacheStorageMiddlewareType:
+		si = &ObjectCacheStorageMiddlewareConfiguration{}
 	default:
 		return nil, errors.New("unknown storage type")
 	}

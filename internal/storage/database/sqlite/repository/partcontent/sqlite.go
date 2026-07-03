@@ -13,24 +13,29 @@ type sqliteRepository struct {
 }
 
 const (
-	findPartContentChunksByIdStmt = "SELECT id, chunk_index, content, created_at, updated_at FROM part_contents WHERE id = $1 ORDER BY chunk_index ASC"
-	findPartContentIdsStmt        = "SELECT DISTINCT id FROM part_contents"
-	insertPartContentStmt         = "INSERT INTO part_contents (id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
-	upsertPartContentStmt         = "INSERT OR REPLACE INTO part_contents (id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
-	deletePartContentByIdStmt     = "DELETE FROM part_contents WHERE id = $1"
+	findPartContentChunksByIdStmt   = "SELECT id, chunk_index, content, created_at, updated_at FROM part_contents WHERE id = $1 ORDER BY chunk_index ASC"
+	findPartContentChunkByIndexStmt = "SELECT id, chunk_index, content, created_at, updated_at FROM part_contents WHERE id = $1 AND chunk_index = $2"
+	findPartContentIdsStmt          = "SELECT DISTINCT id FROM part_contents"
+	insertPartContentStmt           = "INSERT INTO part_contents (id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
+	upsertPartContentStmt           = "INSERT OR REPLACE INTO part_contents (id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5)"
+	deletePartContentByIdStmt       = "DELETE FROM part_contents WHERE id = $1"
 )
 
 func NewRepository() (partcontent.Repository, error) {
 	return &sqliteRepository{}, nil
 }
 
-func convertRowToPartContentEntity(partContentRows *sql.Rows) (*partcontent.Entity, error) {
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func convertRowToPartContentEntity(scanner rowScanner) (*partcontent.Entity, error) {
 	var idStr string
 	var chunkIndex int
 	var content []byte
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := partContentRows.Scan(&idStr, &chunkIndex, &content, &createdAt, &updatedAt)
+	err := scanner.Scan(&idStr, &chunkIndex, &content, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +68,18 @@ func (bcr *sqliteRepository) FindPartContentChunksById(ctx context.Context, tx *
 		return nil, err
 	}
 	return chunks, nil
+}
+
+func (bcr *sqliteRepository) FindPartContentChunkByIndex(ctx context.Context, tx *sql.Tx, id partstore.PartId, chunkIndex int) (*partcontent.Entity, error) {
+	row := tx.QueryRowContext(ctx, findPartContentChunkByIndexStmt, id.String(), chunkIndex)
+	chunk, err := convertRowToPartContentEntity(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return chunk, nil
 }
 
 func (bcr *sqliteRepository) FindPartContentIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {

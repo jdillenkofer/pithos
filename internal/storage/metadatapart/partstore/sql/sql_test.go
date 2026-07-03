@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -92,32 +93,36 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 
 	partId, _ := partstore.NewRandomPartId()
 	ctx := context.Background()
-	tx, _ := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
 
 	// Put the large part
-	err = store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+	})
 	assert.Nil(t, err)
-	tx.Commit()
 
 	// Verify chunks in DB
-	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	chunks, err := partContentRepository.FindPartContentChunksById(ctx, tx, *partId)
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		chunks, err := partContentRepository.FindPartContentChunksById(ctx, tx.SqlTx(), *partId)
+		assert.Nil(t, err)
+		assert.Equal(t, 2, len(chunks), "Expected 2 chunks for 257MB data with 256MB chunkSize")
+		assert.Equal(t, 0, chunks[0].ChunkIndex)
+		assert.Equal(t, 1, chunks[1].ChunkIndex)
+		assert.Equal(t, 256*1000*1000, len(chunks[0].Content))
+		assert.Equal(t, 1*1000*1000, len(chunks[1].Content))
+		return nil
+	})
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(chunks), "Expected 2 chunks for 257MB data with 256MB chunkSize")
-	assert.Equal(t, 0, chunks[0].ChunkIndex)
-	assert.Equal(t, 1, chunks[1].ChunkIndex)
-	assert.Equal(t, 256*1000*1000, len(chunks[0].Content))
-	assert.Equal(t, 1*1000*1000, len(chunks[1].Content))
-	tx.Commit()
 
 	// Get the part back and verify content
-	tx, _ = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	reader, err := store.GetPart(ctx, tx, *partId)
-	assert.Nil(t, err)
-	defer reader.Close()
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		reader, err := store.GetPart(ctx, tx, *partId)
+		assert.Nil(t, err)
+		defer reader.Close()
 
-	retrievedData, err := io.ReadAll(reader)
+		retrievedData, err := io.ReadAll(reader)
+		assert.Nil(t, err)
+		assert.Equal(t, data, retrievedData)
+		return nil
+	})
 	assert.Nil(t, err)
-	assert.Equal(t, data, retrievedData)
-	tx.Commit()
 }

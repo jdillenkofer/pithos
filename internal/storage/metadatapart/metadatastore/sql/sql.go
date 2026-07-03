@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -18,9 +19,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/usermetadata"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -42,27 +46,125 @@ func isUniqueConstraintViolation(err error) bool {
 
 type sqlMetadataStore struct {
 	*lifecycle.ValidatedLifecycle
-	bucketRepository bucket.Repository
-	objectRepository object.Repository
-	partRepository   part.Repository
-	tracer           trace.Tracer
+	bucketRepository       bucket.Repository
+	objectRepository       object.Repository
+	partRepository         part.Repository
+	tagRepository          tag.Repository
+	userMetadataRepository usermetadata.Repository
+	tracer                 trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
 var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
-func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository) (metadatastore.MetadataStore, error) {
+func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository, userMetadataRepository usermetadata.Repository) (metadatastore.MetadataStore, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
 	if err != nil {
 		return nil, err
 	}
 	return &sqlMetadataStore{
-		ValidatedLifecycle: lifecycle,
-		bucketRepository:   bucketRepository,
-		objectRepository:   objectRepository,
-		partRepository:     partRepository,
-		tracer:             otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
+		ValidatedLifecycle:     lifecycle,
+		bucketRepository:       bucketRepository,
+		objectRepository:       objectRepository,
+		partRepository:         partRepository,
+		tagRepository:          tagRepository,
+		userMetadataRepository: userMetadataRepository,
+		tracer:                 otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
 	}, nil
+}
+
+// loadObjectTags loads the tag set for the given object id as a map. An object
+// with no tags yields an empty (non-nil) map.
+func (sms *sqlMetadataStore) loadObjectTags(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (map[string]string, error) {
+	tagEntities, err := sms.tagRepository.FindTagsByObjectIdOrderByKeyAsc(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+	tags := map[string]string{}
+	for _, tagEntity := range tagEntities {
+		tags[tagEntity.Key] = tagEntity.Value
+	}
+	return tags, nil
+}
+
+// replaceObjectTags removes any existing tags for the object id and inserts the
+// supplied tag set.
+func (sms *sqlMetadataStore) replaceObjectTags(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, tags map[string]string) error {
+	err := sms.tagRepository.DeleteTagsByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return err
+	}
+	for key, value := range tags {
+		tagEntity := tag.Entity{
+			ObjectId: objectId,
+			Key:      key,
+			Value:    value,
+		}
+		err = sms.tagRepository.SaveTag(ctx, tx, &tagEntity)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadObjectUserMetadata loads the user-defined metadata for the given object
+// id as a map. An object with no user metadata yields an empty (non-nil) map.
+func (sms *sqlMetadataStore) loadObjectUserMetadata(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (map[string]string, error) {
+	userMetadataEntities, err := sms.userMetadataRepository.FindUserMetadataByObjectIdOrderByKeyAsc(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+	userMetadata := map[string]string{}
+	for _, userMetadataEntity := range userMetadataEntities {
+		userMetadata[userMetadataEntity.Key] = userMetadataEntity.Value
+	}
+	return userMetadata, nil
+}
+
+// replaceObjectUserMetadata removes any existing user-defined metadata for the
+// object id and inserts the supplied entries.
+func (sms *sqlMetadataStore) replaceObjectUserMetadata(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, userMetadata map[string]string) error {
+	err := sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return err
+	}
+	for key, value := range userMetadata {
+		userMetadataEntity := usermetadata.Entity{
+			ObjectId: objectId,
+			Key:      key,
+			Value:    value,
+		}
+		err = sms.userMetadataRepository.SaveUserMetadata(ctx, tx, &userMetadataEntity)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applySystemMetadataToEntity copies the user-modifiable system metadata
+// headers onto the object entity's columns.
+func applySystemMetadataToEntity(objectEntity *object.Entity, metadata metadatastore.ObjectMetadata) {
+	objectEntity.CacheControl = metadata.CacheControl
+	objectEntity.ContentDisposition = metadata.ContentDisposition
+	objectEntity.ContentEncoding = metadata.ContentEncoding
+	objectEntity.ContentLanguage = metadata.ContentLanguage
+	objectEntity.Expires = metadata.Expires
+	objectEntity.WebsiteRedirectLocation = metadata.WebsiteRedirectLocation
+}
+
+// systemMetadataFromEntity reads the user-modifiable system metadata headers
+// from the object entity's columns.
+func systemMetadataFromEntity(objectEntity *object.Entity) metadatastore.ObjectMetadata {
+	return metadatastore.ObjectMetadata{
+		CacheControl:            objectEntity.CacheControl,
+		ContentDisposition:      objectEntity.ContentDisposition,
+		ContentEncoding:         objectEntity.ContentEncoding,
+		ContentLanguage:         objectEntity.ContentLanguage,
+		Expires:                 objectEntity.Expires,
+		WebsiteRedirectLocation: objectEntity.WebsiteRedirectLocation,
+	}
 }
 
 func (sms *sqlMetadataStore) GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
@@ -260,6 +362,136 @@ func (sms *sqlMetadataStore) PutBucketVersioningConfiguration(ctx context.Contex
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
+func (sms *sqlMetadataStore) GetBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketCORSConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+	if bucketEntity.CORSConfigurationJSON == nil {
+		return nil, metadatastore.ErrNoSuchCORSConfiguration
+	}
+
+	var config metadatastore.BucketCORSConfiguration
+	err = json.Unmarshal([]byte(*bucketEntity.CORSConfigurationJSON), &config)
+	if err != nil {
+		return nil, err
+	}
+	if config.Rules == nil {
+		config.Rules = []metadatastore.CORSRule{}
+	}
+	return &config, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketCORSConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	jsonString := string(jsonConfig)
+	bucketEntity.CORSConfigurationJSON = &jsonString
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.CORSConfigurationJSON = nil
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) GetBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketLifecycleConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+	if bucketEntity.LifecycleConfigurationJSON == nil {
+		return nil, metadatastore.ErrNoSuchLifecycleConfiguration
+	}
+
+	var config metadatastore.BucketLifecycleConfiguration
+	err = json.Unmarshal([]byte(*bucketEntity.LifecycleConfigurationJSON), &config)
+	if err != nil {
+		return nil, err
+	}
+	if config.Rules == nil {
+		config.Rules = []metadatastore.LifecycleRule{}
+	}
+	return &config, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketLifecycleConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	jsonString := string(jsonConfig)
+	bucketEntity.LifecycleConfigurationJSON = &jsonString
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	bucketEntity.LifecycleConfigurationJSON = nil
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
 func determineCommonPrefix(prefix, key, delimiter string) *string {
 	prefixSegments := strings.Split(prefix, delimiter)
 	keySegments := strings.Split(key, delimiter)
@@ -288,15 +520,31 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 	maxKeys := opts.MaxKeys
 
-	keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
-	if err != nil {
-		return nil, err
-	}
 	commonPrefixes := []string{}
 	objects := []metadatastore.Object{}
-	objectEntities, err := sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
-	if err != nil {
-		return nil, err
+	listedObjectIds := []ulid.ULID{}
+	var err error
+	isTruncated := false
+	var objectEntities []object.Entity
+	if delimiter == "" {
+		objectEntities, err = sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx, tx, bucketName, prefix, startAfter, maxKeys+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(objectEntities)) > maxKeys {
+			isTruncated = true
+			objectEntities = objectEntities[:maxKeys]
+		}
+	} else {
+		keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
+		if err != nil {
+			return nil, err
+		}
+		isTruncated = int32(*keyCount) > maxKeys
+		objectEntities, err = sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for _, objectEntity := range objectEntities {
@@ -345,14 +593,37 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					Size:              objectEntity.Size,
 					Parts:             parts,
 				})
+				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
 			}
 		}
+	}
+
+	// Load the tag sets of the whole page in one query, so per-object consumers
+	// (e.g. tag-based list filtering in the authorizer) don't need a storage
+	// lookup per key. Every listed object gets a non-nil map.
+	tagEntities, err := sms.tagRepository.FindTagsByObjectIdsOrderByObjectIdAndKeyAsc(ctx, tx, listedObjectIds)
+	if err != nil {
+		return nil, err
+	}
+	tagsByObjectId := map[ulid.ULID]map[string]string{}
+	for _, tagEntity := range tagEntities {
+		if tagsByObjectId[tagEntity.ObjectId] == nil {
+			tagsByObjectId[tagEntity.ObjectId] = map[string]string{}
+		}
+		tagsByObjectId[tagEntity.ObjectId][tagEntity.Key] = tagEntity.Value
+	}
+	for i, objectId := range listedObjectIds {
+		tags := tagsByObjectId[objectId]
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		objects[i].Tags = tags
 	}
 
 	listBucketResult := metadatastore.ListBucketResult{
 		Objects:        objects,
 		CommonPrefixes: commonPrefixes,
-		IsTruncated:    int32(*keyCount) > maxKeys,
+		IsTruncated:    isTruncated,
 	}
 	return &listBucketResult, nil
 }
@@ -522,6 +793,17 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		}
 	}, partEntities)
 
+	tags, err := sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := systemMetadataFromEntity(objectEntity)
+	metadata.UserMetadata, err = sms.loadObjectUserMetadata(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	return &metadatastore.Object{
 		Key:               key,
 		ContentType:       objectEntity.ContentType,
@@ -537,6 +819,8 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumType:      objectEntity.ChecksumType,
 		Size:              objectEntity.Size,
 		Parts:             parts,
+		Tags:              tags,
+		Metadata:          metadata,
 	}, nil
 }
 
@@ -571,7 +855,18 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 		}, partEntities)
 	}
 
-	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, Parts: parts}, nil
+	tags, err := sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	metadata := systemMetadataFromEntity(objectEntity)
+	metadata.UserMetadata, err = sms.loadObjectUserMetadata(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, Parts: parts, Tags: tags, Metadata: metadata}, nil
 }
 
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
@@ -644,6 +939,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		IsLatest:          true,
 		UploadStatus:      object.UploadStatusCompleted,
 	}
+	applySystemMetadataToEntity(&objectEntity, obj.Metadata)
 
 	if versioningEnabled {
 		versionID := metadatastore.NewRandomUploadId().String()
@@ -725,6 +1021,16 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 
 	obj.VersionID = objectEntity.VersionID
 
+	// PutObject replaces the object entirely, so its tag set and user metadata
+	// are replaced with the values supplied on the new object (empty when none
+	// were provided).
+	if err := sms.replaceObjectTags(ctx, tx, *objectId, obj.Tags); err != nil {
+		return err
+	}
+	if err := sms.replaceObjectUserMetadata(ctx, tx, *objectId, obj.Metadata.UserMetadata); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -765,6 +1071,8 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			IsDeleteMarker: false,
 			UploadStatus:   object.UploadStatusCompleted,
 		}
+		// Appends preserve the object's existing metadata (like its content type).
+		applySystemMetadataToEntity(&updatedEntity, systemMetadataFromEntity(oldObjectEntity))
 		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &updatedEntity, oldObjectEntity.OptimisticLockVersion)
 		if err != nil {
 			return err
@@ -814,6 +1122,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		IsDeleteMarker: false,
 		UploadStatus:   object.UploadStatusCompleted,
 	}
+	applySystemMetadataToEntity(&newEntity, obj.Metadata)
 	err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
 	if err != nil {
 		return err
@@ -888,6 +1197,16 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		}
 
+		err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *versionEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *versionEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+
 		_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *versionEntity.Id)
 		if err != nil {
 			return nil, err
@@ -928,6 +1247,16 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return nil, err
 			}
 			if nullVersionEntity != nil {
+				err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *nullVersionEntity.Id)
+				if err != nil {
+					return nil, err
+				}
+
+				err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *nullVersionEntity.Id)
+				if err != nil {
+					return nil, err
+				}
+
 				_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *nullVersionEntity.Id)
 				if err != nil {
 					return nil, err
@@ -976,6 +1305,16 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				}
 			}
 
+			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *lockedObjectEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *lockedObjectEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
 			deleted, deleteErr := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *lockedObjectEntity.Id, lockedObjectEntity.OptimisticLockVersion)
 			if deleteErr != nil {
 				return nil, deleteErr
@@ -991,6 +1330,16 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				}
 			}
 
+			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *currentEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *currentEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
 			_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *currentEntity.Id)
 			if err != nil {
 				return nil, err
@@ -1001,7 +1350,86 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return &metadatastore.DeleteObjectResult{}, nil
 }
 
-func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string) (*metadatastore.InitiateMultipartUploadResult, error) {
+func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (map[string]string, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	return sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+}
+
+func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, tags map[string]string) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil {
+		return metadatastore.ErrNoSuchKey
+	}
+
+	if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, tags); err != nil {
+		return err
+	}
+
+	// Bump the object's updated_at / optimistic lock version so the tag change
+	// is reflected in the object metadata and concurrent writers are detected.
+	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+}
+
+func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObjectTagging")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil {
+		return metadatastore.ErrNoSuchKey
+	}
+
+	if err := sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id); err != nil {
+		return err
+	}
+
+	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
+}
+
+func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
 
@@ -1029,9 +1457,26 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		UploadId:       ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
 		UploadStatus:   object.UploadStatusPending,
 	}
+	if opts != nil && opts.Metadata != nil {
+		applySystemMetadataToEntity(&objectEntity, *opts.Metadata)
+	}
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
 		return nil, err
+	}
+
+	// Persist any tags supplied via x-amz-tagging and any user-defined metadata
+	// on the pending object. They are carried over when the upload is completed
+	// (the object row is reused).
+	if opts != nil && len(opts.Tags) > 0 {
+		if err := sms.replaceObjectTags(ctx, tx, *objectEntity.Id, opts.Tags); err != nil {
+			return nil, err
+		}
+	}
+	if opts != nil && opts.Metadata != nil && len(opts.Metadata.UserMetadata) > 0 {
+		if err := sms.replaceObjectUserMetadata(ctx, tx, *objectEntity.Id, opts.Metadata.UserMetadata); err != nil {
+			return nil, err
+		}
 	}
 
 	return &metadatastore.InitiateMultipartUploadResult{
@@ -1218,6 +1663,16 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 				return nil, err
 			}
 
+			err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *nullVersionEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *nullVersionEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+
 			deletedParts = append(deletedParts, sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
 				return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size}
 			}, oldPartEntities)...)
@@ -1314,6 +1769,16 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
+	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+
 	parts := sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
 		return metadatastore.Part{
 			Id:                partEntity.PartId,
@@ -1366,15 +1831,29 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		delimiter = *opts.Delimiter
 	}
 
-	keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-	if err != nil {
-		return nil, err
-	}
 	commonPrefixes := []string{}
 	uploads := []metadatastore.Upload{}
-	objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-	if err != nil {
-		return nil, err
+	isTruncated := false
+	var objectEntities []object.Entity
+	if delimiter == "" {
+		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker, opts.MaxUploads+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(objectEntities)) > opts.MaxUploads {
+			isTruncated = true
+			objectEntities = objectEntities[:opts.MaxUploads]
+		}
+	} else {
+		keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+		if err != nil {
+			return nil, err
+		}
+		isTruncated = int32(*keyCount) > opts.MaxUploads
+		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	nextKeyMarker := ""
@@ -1412,7 +1891,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		MaxUploads:         opts.MaxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
-		IsTruncated:        int32(*keyCount) > opts.MaxUploads,
+		IsTruncated:        isTruncated,
 	}
 	return &listMultipartUploadsResult, nil
 }

@@ -37,7 +37,7 @@ func CalculateMultipartChecksums(parts []PartChecksums, checksumType string) (Ch
 
 	// -- The following variables are only used by checksumType Composite
 	crc32Hash := crc32.NewIEEE()
-	crc32cHash := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	crc32cHash := crc32.New(crc32CastagnoliTable)
 	sha1Hash := sha1.New()
 	sha256Hash := sha256.New()
 	// --

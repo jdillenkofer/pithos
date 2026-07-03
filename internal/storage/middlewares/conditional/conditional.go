@@ -2,26 +2,37 @@ package conditional
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"slices"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 )
+
+const maxCopyMemoryCacheSize = 10 * 1000 * 1000
 
 type conditionalStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
+	delegator.DelegatingStorage
 	bucketToStorageMap map[string]storage.Storage
-	defaultStorage     storage.Storage
 	tracer             trace.Tracer
 }
 
 // Compile-time check to ensure conditionalStorageMiddleware implements storage.Storage
 var _ storage.Storage = (*conditionalStorageMiddleware)(nil)
+var _ storage.TransactionalStorage = (*conditionalStorageMiddleware)(nil)
+
+func (csm *conditionalStorageMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
+	return delegator.WithTransaction(ctx, opts, csm.Next, csm, fn)
+}
 
 func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, defaultStorage storage.Storage) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("ConditionalStorageMiddleware")
@@ -31,8 +42,8 @@ func NewStorageMiddleware(bucketToStorageMap map[string]storage.Storage, default
 
 	return &conditionalStorageMiddleware{
 		ValidatedLifecycle: lifecycle,
+		DelegatingStorage:  delegator.Wrap(defaultStorage),
 		bucketToStorageMap: bucketToStorageMap,
-		defaultStorage:     defaultStorage,
 		tracer:             otel.Tracer("internal/storage/middlewares/conditional"),
 	}, nil
 }
@@ -48,7 +59,7 @@ func (csm *conditionalStorageMiddleware) Start(ctx context.Context) error {
 		}
 	}
 
-	return csm.defaultStorage.Start(ctx)
+	return csm.Next.Start(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) Stop(ctx context.Context) error {
@@ -62,7 +73,7 @@ func (csm *conditionalStorageMiddleware) Stop(ctx context.Context) error {
 		}
 	}
 
-	return csm.defaultStorage.Stop(ctx)
+	return csm.Next.Stop(ctx)
 }
 
 func (csm *conditionalStorageMiddleware) lookupStorage(bucketName storage.BucketName) storage.Storage {
@@ -70,7 +81,7 @@ func (csm *conditionalStorageMiddleware) lookupStorage(bucketName storage.Bucket
 	if ok {
 		return storage
 	}
-	return csm.defaultStorage
+	return csm.Next
 }
 
 func (csm *conditionalStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -105,7 +116,7 @@ func (csm *conditionalStorageMiddleware) ListBuckets(ctx context.Context) ([]sto
 	}
 
 	// Include buckets from default storage
-	buckets, err := csm.defaultStorage.ListBuckets(ctx)
+	buckets, err := csm.Next.ListBuckets(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +190,114 @@ func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketNa
 	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 }
 
+func copySourceConditionsSatisfied(conditions storage.CopySourceConditions, object *storage.Object) error {
+	ifMatchPassed := false
+	if conditions.IfMatch != nil {
+		ifMatchPassed = *conditions.IfMatch == storage.ETagWildcard || *conditions.IfMatch == object.ETag
+		if !ifMatchPassed {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	if conditions.IfNoneMatch != nil {
+		if *conditions.IfNoneMatch == storage.ETagWildcard || *conditions.IfNoneMatch == object.ETag {
+			return storage.ErrPreconditionFailed
+		}
+	}
+	lastModified := object.LastModified.Truncate(time.Second)
+	if conditions.IfUnmodifiedSince != nil && !(conditions.IfMatch != nil && ifMatchPassed) && lastModified.After(*conditions.IfUnmodifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	if conditions.IfModifiedSince != nil && !lastModified.After(*conditions.IfModifiedSince) {
+		return storage.ErrPreconditionFailed
+	}
+	return nil
+}
+
+func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
+	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := copySourceConditionsSatisfied(conditions, srcObject); err != nil {
+		return nil, nil, err
+	}
+
+	var ranges []storage.ByteRange
+	if copyRange != nil {
+		ranges = []storage.ByteRange{*copyRange}
+	}
+	getOpts := &storage.GetObjectOptions{IfMatchETag: &srcObject.ETag}
+	_, readers, err := srcStorage.GetObject(ctx, srcBucket, srcKey, ranges, getOpts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcObject, readers, nil
+}
+
+func closeReaders(readers []io.ReadCloser) {
+	for _, reader := range readers {
+		_ = reader.Close()
+	}
+}
+
+func multiReader(readers []io.ReadCloser) io.Reader {
+	readerInterfaces := make([]io.Reader, len(readers))
+	for i, reader := range readers {
+		readerInterfaces[i] = reader
+	}
+	return io.MultiReader(readerInterfaces...)
+}
+
+func cachedCopyBody(readers []io.ReadCloser) (io.ReadSeekCloser, error) {
+	return ioutils.NewSmartCachedReadSeekCloser(multiReader(readers), maxCopyMemoryCacheSize)
+}
+
+func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CopyObject")
+	defer span.End()
+
+	srcStorage := csm.lookupStorage(srcBucket)
+	dstStorage := csm.lookupStorage(dstBucket)
+	if srcStorage == dstStorage {
+		return dstStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	}
+
+	var copyRange *storage.ByteRange
+	var conditions storage.CopySourceConditions
+	var contentType *string
+	if opts != nil {
+		copyRange = opts.Range
+		conditions = opts.CopySourceConditions
+	}
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	if err != nil {
+		return nil, err
+	}
+	defer closeReaders(readers)
+
+	if opts != nil && opts.ReplaceMetadata {
+		contentType = opts.ContentType
+	} else {
+		contentType = srcObject.ContentType
+	}
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, body, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &storage.CopyObjectResult{LastModified: time.Now()}
+	if putResult.ETag != nil {
+		result.ETag = *putResult.ETag
+	}
+	return result, nil
+}
+
 func (csm *conditionalStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.AppendObject")
 	defer span.End()
@@ -203,12 +322,36 @@ func (csm *conditionalStorageMiddleware) DeleteObjects(ctx context.Context, buck
 	return s.DeleteObjects(ctx, bucketName, entries)
 }
 
-func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
+func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetObjectTagging")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.GetObjectTagging(ctx, bucketName, key)
+}
+
+func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutObjectTagging")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.PutObjectTagging(ctx, bucketName, key, tags)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteObjectTagging")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.DeleteObjectTagging(ctx, bucketName, key)
+}
+
+func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CreateMultipartUpload")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType)
+	return storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 }
 
 func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
@@ -217,6 +360,44 @@ func (csm *conditionalStorageMiddleware) UploadPart(ctx context.Context, bucketN
 
 	storage := csm.lookupStorage(bucketName)
 	return storage.UploadPart(ctx, bucketName, key, uploadId, partNumber, reader, checksumInput)
+}
+
+func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.UploadPartCopy")
+	defer span.End()
+
+	srcStorage := csm.lookupStorage(srcBucket)
+	dstStorage := csm.lookupStorage(dstBucket)
+	if srcStorage == dstStorage {
+		return dstStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	}
+
+	var copyRange *storage.ByteRange
+	var conditions storage.CopySourceConditions
+	if opts != nil {
+		copyRange = opts.Range
+		conditions = opts.CopySourceConditions
+	}
+	_, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	if err != nil {
+		return nil, err
+	}
+	defer closeReaders(readers)
+
+	body, err := cachedCopyBody(readers)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	uploadResult, err := dstStorage.UploadPart(ctx, dstBucket, dstKey, uploadId, partNumber, body, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &storage.UploadPartCopyResult{
+		ETag:         uploadResult.ETag,
+		LastModified: time.Now(),
+	}, nil
 }
 
 func (csm *conditionalStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
@@ -273,4 +454,52 @@ func (csm *conditionalStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx co
 
 	storage := csm.lookupStorage(bucketName)
 	return storage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketCORSConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketCORSConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketCORSConfiguration(ctx, bucketName, config)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteBucketCORSConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.DeleteBucketCORSConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketLifecycleConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteBucketLifecycleConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }

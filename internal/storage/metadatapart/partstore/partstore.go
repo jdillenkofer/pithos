@@ -16,14 +16,13 @@ var ErrPartNotFound error = errors.New("part not found")
 
 // Core part operations
 type PartManager interface {
-	PutPart(ctx context.Context, tx *sql.Tx, partId PartId, reader io.Reader) error
+	PutPart(ctx context.Context, tx database.Tx, partId PartId, reader io.Reader) error
 	// GetPart returns a ReadCloser for the part with the given partId.
-	// If the part does not exist, ErrPartNotFound is returned
-	// or if we return a LazyReadSeekCloser, ErrPartNotFound is returned upon the first read call.
+	// If the part does not exist, ErrPartNotFound is returned.
 	// The caller is responsible for closing the ReadCloser.
-	GetPart(ctx context.Context, tx *sql.Tx, partId PartId) (io.ReadCloser, error)
-	GetPartIds(ctx context.Context, tx *sql.Tx) ([]PartId, error)
-	DeletePart(ctx context.Context, tx *sql.Tx, partId PartId) error
+	GetPart(ctx context.Context, tx database.Tx, partId PartId) (io.ReadCloser, error)
+	GetPartIds(ctx context.Context, tx database.Tx) ([]PartId, error)
+	DeletePart(ctx context.Context, tx database.Tx, partId PartId) error
 }
 
 // Composite interface
@@ -46,46 +45,38 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 	part := ioutils.NewByteReadSeekCloser(content)
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.PutPart(ctx, tx, *partId, part)
+	})
 	if err != nil {
 		return err
 	}
-	err = partStore.PutPart(ctx, tx, *partId, part)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
 	_, err = part.Seek(0, io.SeekStart)
 	if err != nil {
 		return err
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.PutPart(ctx, tx, *partId, part)
+	})
 	if err != nil {
 		return err
 	}
-	err = partStore.PutPart(ctx, tx, *partId, part)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
+	// Read inside the transaction: a part store reader may stream lazily from the
+	// store (e.g. the SQL store queries chunks on demand), so its lifetime is
+	// bound to the transaction. Production reads honor this via WithTxReadClosers.
+	var getPartResult []byte
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		partReader, err := partStore.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
+		}
+		defer partReader.Close()
+		getPartResult, err = io.ReadAll(partReader)
 		return err
-	}
-	partReader, err := partStore.GetPart(ctx, tx, *partId)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
-
-	getPartResult, err := io.ReadAll(partReader)
-	partReader.Close()
+	})
 	if err != nil {
 		return err
 	}
@@ -93,32 +84,24 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 		return errors.New("read result returned invalid content")
 	}
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return partStore.DeletePart(ctx, tx, *partId)
+	})
 	if err != nil {
 		return err
 	}
-	err = partStore.DeletePart(ctx, tx, *partId)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	tx.Commit()
 
-	tx, err = db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return err
-	}
-	partReader, err = partStore.GetPart(ctx, tx, *partId)
-	if err != ErrPartNotFound {
-		// Maybe we are dealing with a part store that returns a non-nil reader even if the part is not found.
-		_, err = io.ReadAll(partReader)
-		partReader.Close()
-		if err != ErrPartNotFound {
-			tx.Rollback()
-			return errors.New("expected ErrPartNotFound")
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		partReader, err := partStore.GetPart(ctx, tx, *partId)
+		if err != nil {
+			return err
 		}
+		partReader.Close()
+		return nil
+	})
+	if err != ErrPartNotFound {
+		return errors.New("expected ErrPartNotFound")
 	}
-	tx.Commit()
 
 	return nil
 }

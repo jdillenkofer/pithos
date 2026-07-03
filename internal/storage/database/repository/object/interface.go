@@ -16,7 +16,9 @@ type Repository interface {
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]Entity, error)
 	FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) ([]Entity, error)
+	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string, limit int32) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
+	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string, limit int32) ([]Entity, error)
 	FindObjectByBucketNameAndKeyAndUploadId(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) (*Entity, error)
 	FindObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*Entity, error)
 	FindObjectByBucketNameAndKeyAndVersionID(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, versionID string) (*Entity, error)
@@ -31,26 +33,32 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id                    *ulid.ULID
-	BucketName            storage.BucketName
-	Key                   storage.ObjectKey
-	ContentType           *string
-	ETag                  string
-	ChecksumCRC32         *string
-	ChecksumCRC32C        *string
-	ChecksumCRC64NVME     *string
-	ChecksumSHA1          *string
-	ChecksumSHA256        *string
-	ChecksumType          *string
-	Size                  int64
-	VersionID             *string
-	IsDeleteMarker        bool
-	IsLatest              bool
-	UploadStatus          string
-	UploadId              *storage.UploadId
-	OptimisticLockVersion int64
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	Id                      *ulid.ULID
+	BucketName              storage.BucketName
+	Key                     storage.ObjectKey
+	ContentType             *string
+	CacheControl            *string
+	ContentDisposition      *string
+	ContentEncoding         *string
+	ContentLanguage         *string
+	Expires                 *string
+	WebsiteRedirectLocation *string
+	ETag                    string
+	ChecksumCRC32           *string
+	ChecksumCRC32C          *string
+	ChecksumCRC64NVME       *string
+	ChecksumSHA1            *string
+	ChecksumSHA256          *string
+	ChecksumType            *string
+	Size                    int64
+	VersionID               *string
+	IsDeleteMarker          bool
+	IsLatest                bool
+	UploadStatus            string
+	UploadId                *storage.UploadId
+	OptimisticLockVersion   int64
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 const (

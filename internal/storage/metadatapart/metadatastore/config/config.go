@@ -62,7 +62,15 @@ func (s *SqlMetadataStoreConfiguration) Instantiate(diProvider dependencyinjecti
 	if err != nil {
 		return nil, err
 	}
-	return sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	return sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
 }
 
 func CreateMetadataStoreInstantiatorFromJson(b []byte) (MetadataStoreInstantiator, error) {

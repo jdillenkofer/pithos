@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/pkg/vault"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"golang.org/x/crypto/hkdf"
@@ -396,7 +396,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.PutPart")
 	defer span.End()
 
@@ -494,7 +494,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx *sq
 	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (io.ReadCloser, error) {
+func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPart")
 	defer span.End()
 
@@ -503,13 +503,22 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		return nil, err
 	}
 
+	var closeOnce sync.Once
+	closeUnderlying := func() error {
+		var closeErr error
+		closeOnce.Do(func() {
+			closeErr = rc.Close()
+		})
+		return closeErr
+	}
+
 	// Use lazy initialization to defer header parsing and DEK decryption until first read
 	// This allows streaming to start immediately without blocking on KMS/Vault operations
-	return ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+	lazyReader := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
 		// Read the header length (4 bytes big-endian)
 		lengthBytes := make([]byte, 4)
 		if _, err := io.ReadFull(rc, lengthBytes); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
@@ -518,42 +527,42 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		// Read and parse the header
 		headerBytes := make([]byte, headerLen)
 		if _, err := io.ReadFull(rc, headerBytes); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		var header PartHeader
 		if err := json.Unmarshal(headerBytes, &header); err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		if header.Version > PartHeaderVersion || header.Version < 1 {
-			rc.Close()
+			closeUnderlying()
 			return nil, fmt.Errorf("unsupported part header version: %d", header.Version)
 		}
 
 		// Decrypt the classical DEK with master AEAD
 		classicalDEK, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		finalDEK := classicalDEK
 		if len(header.PQEncapsulatedKey) > 0 {
 			if mw.mlkemKey == nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, fmt.Errorf("part is PQ-encrypted but no ML-KEM key is configured")
 			}
 			pqSharedSecret, err := mw.mlkemKey.Decapsulate(header.PQEncapsulatedKey)
 			if err != nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, fmt.Errorf("failed to decapsulate PQ key: %w", err)
 			}
 			finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
 			if err != nil {
-				rc.Close()
+				closeUnderlying()
 				return nil, err
 			}
 		}
@@ -566,20 +575,28 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx *sq
 		// Create streaming AEAD with the final DEK
 		dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(finalDEK, "SHA256", 32, segmentSize, 0)
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		// Create a decrypting reader for the remaining data
 		decryptReader, err := dekStreamingAEAD.NewDecryptingReader(rc, partId.Bytes())
 		if err != nil {
-			rc.Close()
+			closeUnderlying()
 			return nil, err
 		}
 
 		// Return a composite reader that wraps the decrypt reader with the underlying closer
-		return &compositeReadCloser{decryptReader, rc}, nil
-	}), nil
+		return &compositeReadCloser{decryptReader, closerFunc(closeUnderlying)}, nil
+	})
+
+	return ioutils.NewReadCloserWithCloseHook(lazyReader, closeUnderlying), nil
+}
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error {
+	return f()
 }
 
 // compositeReadCloser combines a Reader with a Closer
@@ -592,14 +609,14 @@ func (c *compositeReadCloser) Close() error {
 	return c.closer.Close()
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) GetPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
+func (mw *TinkEncryptionPartStoreMiddleware) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPartIds")
 	defer span.End()
 
 	return mw.innerPartStore.GetPartIds(ctx, tx)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error {
+func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.DeletePart")
 	defer span.End()
 

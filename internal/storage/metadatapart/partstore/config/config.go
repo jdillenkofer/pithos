@@ -7,15 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
+	cacheConfig "github.com/jdillenkofer/pithos/internal/cache/config"
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	partStoreCache "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/erasurecoding"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
@@ -24,11 +29,15 @@ import (
 )
 
 const (
+	defaultOutboxId                       = "default"
 	filesystemPartStoreType               = "FilesystemPartStore"
+	compressionMiddlewareType             = "CompressionPartStoreMiddleware"
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
+	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
+	cachePartStoreType                    = "CachePartStore"
 )
 
 type PartStoreInstantiator = internalConfig.DynamicJsonInstantiator[partstore.PartStore]
@@ -78,6 +87,46 @@ type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
 	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
 	internalConfig.DynamicJsonType
+}
+
+type CompressionPartStoreMiddlewareConfiguration struct {
+	SampleSizeBytes            internalConfig.Int64Provider   `json:"sampleSizeBytes,omitempty"`
+	CompressionAlgorithm       internalConfig.StringProvider  `json:"compressionAlgorithm,omitempty"`
+	MaxCompressionRatio        internalConfig.Float64Provider `json:"maxCompressionRatio,omitempty"`
+	InnerPartStoreInstantiator PartStoreInstantiator          `json:"-"`
+	RawInnerPartStore          json.RawMessage                `json:"innerPartStore"`
+	internalConfig.DynamicJsonType
+}
+
+func (e *CompressionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type compressionPartStoreMiddlewareConfiguration CompressionPartStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*compressionPartStoreMiddlewareConfiguration)(e))
+	if err != nil {
+		return err
+	}
+	e.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(e.RawInnerPartStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *CompressionPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return e.InnerPartStoreInstantiator.RegisterReferences(diCollection)
+}
+
+func (e *CompressionPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	innerPartStore, err := e.InnerPartStoreInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	algorithm := e.CompressionAlgorithm.Value()
+	return compressionPartStoreMiddleware.NewWithConfig(innerPartStore, compressionPartStoreMiddleware.Config{
+		SampleSize:          int(e.SampleSizeBytes.Value()),
+		Algorithm:           compressionPartStoreMiddleware.Algorithm(algorithm),
+		MaxCompressionRatio: e.MaxCompressionRatio.Value(),
+	})
 }
 
 func (t *TinkEncryptionPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
@@ -247,6 +296,8 @@ type OutboxPartStoreConfiguration struct {
 	RawDatabase                json.RawMessage                     `json:"db"`
 	InnerPartStoreInstantiator PartStoreInstantiator               `json:"-"`
 	RawInnerPartStore          json.RawMessage                     `json:"innerPartStore"`
+	OutboxId                   internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs     *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -285,6 +336,18 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
+	outboxId := o.OutboxId.Value()
+	if outboxId == "" {
+		outboxId = defaultOutboxId
+	}
+	claimLeaseDuration := 30 * time.Second
+	if o.ClaimLeaseDurationSecs != nil {
+		claimLeaseDurationSecs := o.ClaimLeaseDurationSecs.Value()
+		if claimLeaseDurationSecs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(claimLeaseDurationSecs) * time.Second
+	}
 	partOutboxEntryRepository, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	if err != nil {
 		return nil, err
@@ -298,7 +361,7 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	return outbox.New(db, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer))
+	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
 }
 
 type SftpPartStoreConfiguration struct {
@@ -344,6 +407,134 @@ type SqlPartStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type ErasureCodedPartStoreMiddlewareConfiguration struct {
+	DataShards             int64                         `json:"dataShards"`
+	ParityShards           int64                         `json:"parityShards"`
+	StreamBlockSize        internalConfig.Int64Provider  `json:"streamBlockSize"`
+	HealScanIntervalSecs   *internalConfig.Int64Provider `json:"healScanIntervalSeconds,omitempty"`
+	PartStoreInstantiators []PartStoreInstantiator       `json:"-"`
+	RawPartStores          []json.RawMessage             `json:"partStores"`
+	internalConfig.DynamicJsonType
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type erasureCodedPartStoreMiddlewareConfiguration ErasureCodedPartStoreMiddlewareConfiguration
+	err := json.Unmarshal(b, (*erasureCodedPartStoreMiddlewareConfiguration)(e))
+	if err != nil {
+		return err
+	}
+	e.PartStoreInstantiators = make([]PartStoreInstantiator, 0, len(e.RawPartStores))
+	for _, raw := range e.RawPartStores {
+		instantiator, err := CreatePartStoreInstantiatorFromJson(raw)
+		if err != nil {
+			return err
+		}
+		e.PartStoreInstantiators = append(e.PartStoreInstantiators, instantiator)
+	}
+	return nil
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	for _, instantiator := range e.PartStoreInstantiators {
+		if err := instantiator.RegisterReferences(diCollection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *ErasureCodedPartStoreMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	blockSize := e.StreamBlockSize.Value()
+	if blockSize == 0 {
+		blockSize = 64 * 1024
+	}
+	if e.DataShards < 1 || e.ParityShards < 1 {
+		return nil, errors.New("dataShards and parityShards must be >= 1")
+	}
+	totalShards := e.DataShards + e.ParityShards
+	if totalShards > 256 {
+		return nil, errors.New("dataShards + parityShards must be <= 256")
+	}
+	if int64(len(e.PartStoreInstantiators)) != totalShards {
+		return nil, errors.New("partStores length must equal dataShards + parityShards")
+	}
+	stores := make([]partstore.PartStore, 0, len(e.PartStoreInstantiators))
+	for _, instantiator := range e.PartStoreInstantiators {
+		store, err := instantiator.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+		stores = append(stores, store)
+	}
+	healScanInterval := erasurecoding.DefaultHealScanInterval
+	if e.HealScanIntervalSecs != nil {
+		healScanIntervalSecs := e.HealScanIntervalSecs.Value()
+		if healScanIntervalSecs < 0 {
+			return nil, errors.New("healScanIntervalSeconds must be >= 0")
+		}
+		healScanInterval = time.Duration(healScanIntervalSecs) * time.Second
+	}
+	return erasurecoding.NewWithPartStores(
+		int(e.DataShards),
+		int(e.ParityShards),
+		int(blockSize),
+		stores,
+		erasurecoding.WithHealScanInterval(healScanInterval),
+	)
+}
+
+type CachePartStoreConfiguration struct {
+	CacheInstantiator          cacheConfig.CacheInstantiator `json:"-"`
+	RawCache                   json.RawMessage               `json:"cache"`
+	MaxPartSizeBytes           internalConfig.Int64Provider  `json:"maxPartSizeBytes"`
+	CacheReadErrorsAsMiss      internalConfig.BoolProvider   `json:"cacheReadErrorsAsMiss"`
+	InnerPartStoreInstantiator PartStoreInstantiator         `json:"-"`
+	RawInnerPartStore          json.RawMessage               `json:"innerPartStore"`
+	internalConfig.DynamicJsonType
+}
+
+func (c *CachePartStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type cachePartStoreConfiguration CachePartStoreConfiguration
+	err := json.Unmarshal(b, (*cachePartStoreConfiguration)(c))
+	if err != nil {
+		return err
+	}
+
+	c.CacheInstantiator, err = cacheConfig.CreateCacheInstantiatorFromJson(c.RawCache)
+	if err != nil {
+		return err
+	}
+	c.InnerPartStoreInstantiator, err = CreatePartStoreInstantiatorFromJson(c.RawInnerPartStore)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *CachePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	err := c.CacheInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	err = c.InnerPartStoreInstantiator.RegisterReferences(diCollection)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c *CachePartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	cache, err := c.CacheInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	innerPartStore, err := c.InnerPartStoreInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	return partStoreCache.New(cache, innerPartStore, partStoreCache.Options{
+		MaxPartSizeBytes:      c.MaxPartSizeBytes.Value(),
+		CacheReadErrorsAsMiss: c.CacheReadErrorsAsMiss.Value(),
+	})
+}
 func (s *SqlPartStoreConfiguration) UnmarshalJSON(b []byte) error {
 	type sqlPartStoreConfiguration SqlPartStoreConfiguration
 	err := json.Unmarshal(b, (*sqlPartStoreConfiguration)(s))
@@ -388,6 +579,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 	switch bc.Type {
 	case filesystemPartStoreType:
 		bi = &FilesystemPartStoreConfiguration{}
+	case compressionMiddlewareType:
+		bi = &CompressionPartStoreMiddlewareConfiguration{}
 	case tinkEncryptionPartStoreMiddlewareType:
 		bi = &TinkEncryptionPartStoreMiddlewareConfiguration{}
 	case outboxPartStoreType:
@@ -396,6 +589,10 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SftpPartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
+	case erasureCodedPartStoreMiddlewareType:
+		bi = &ErasureCodedPartStoreMiddlewareConfiguration{}
+	case cachePartStoreType:
+		bi = &CachePartStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown partStore type")
 	}
