@@ -740,9 +740,6 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 		}
 	}
 
-	if !isTruncated && emittedCount >= maxKeys && int(emittedCount) < len(entities) {
-		isTruncated = true
-	}
 	if isTruncated {
 		nextKeyMarker = lastReturnedKey
 		nextVersionIDMarker = lastReturnedVersionID
