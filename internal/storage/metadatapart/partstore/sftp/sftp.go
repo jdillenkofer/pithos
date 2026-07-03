@@ -33,6 +33,7 @@ const maxStpRetries = 5
 // block read into concurrent 32KB requests, so this also controls download
 // parallelism. Memory cost is up to two blocks per open part reader.
 const readAheadBlockSize = 1024 * 1024
+
 type sftpPartStore struct {
 	addr         string
 	clientConfig *ssh.ClientConfig
