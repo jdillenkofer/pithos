@@ -743,13 +743,38 @@ func (os *outboxStorage) CopyObject(ctx context.Context, srcBucket storage.Bucke
 	return os.innerStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
 }
 
+// bucketHasVersioningStatus reports whether the bucket's versioning has ever
+// been configured (Enabled or Suspended). A bucket whose creation is still
+// queued in the outbox cannot have a versioning configuration yet.
+func (os *outboxStorage) bucketHasVersioningStatus(ctx context.Context, bucketName storage.BucketName) (bool, error) {
+	versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNoSuchBucket) {
+			return false, nil
+		}
+		return false, err
+	}
+	return versioningConfig.Status != nil, nil
+}
+
 func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
 
 	// ETag-conditional deletes must execute synchronously so the precondition
 	// is evaluated against the current object.
-	if opts != nil && opts.IfMatchETag != nil {
+	deleteMustBeSynchronous := opts != nil && opts.IfMatchETag != nil
+	if !deleteMustBeSynchronous {
+		// Deletes on versioning-enabled or -suspended buckets create a delete
+		// marker whose version id must be returned to the caller; an outboxed
+		// entry cannot represent that result.
+		hasVersioningStatus, err := os.bucketHasVersioningStatus(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		deleteMustBeSynchronous = hasVersioningStatus
+	}
+	if deleteMustBeSynchronous {
 		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 		if err != nil {
 			return nil, err
@@ -775,14 +800,24 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()
 
-	hasETagCondition := false
+	deleteMustBeSynchronous := false
 	for _, entry := range entries {
 		if entry.IfMatchETag != nil {
-			hasETagCondition = true
+			deleteMustBeSynchronous = true
 			break
 		}
 	}
-	if hasETagCondition {
+	if !deleteMustBeSynchronous {
+		// Deletes on versioning-enabled or -suspended buckets create delete
+		// markers whose version ids must be returned to the caller; outboxed
+		// entries cannot represent that result.
+		hasVersioningStatus, err := os.bucketHasVersioningStatus(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		deleteMustBeSynchronous = hasVersioningStatus
+	}
+	if deleteMustBeSynchronous {
 		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 		if err != nil {
 			return nil, err
