@@ -481,6 +481,51 @@ func TestListObjectVersions_CommonPrefixWithMultipleKeysNotRepeatedAcrossPages(t
 	assert.False(t, page2.IsTruncated)
 }
 
+func TestListObjectVersions_PaginationIncludesNullVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	// Unversioned put creates the "null" version, then newer ULID versions
+	// are stacked on top after enabling versioning.
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("v-null")), nil, nil)
+	require.NoError(t, err)
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err = st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("v2")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("v3")), nil, nil)
+	require.NoError(t, err)
+
+	collected := map[string]int{}
+	opts := storage.ListObjectVersionsOptions{MaxKeys: 1}
+	for range 10 {
+		page, err := st.ListObjectVersions(ctx, bucket, opts)
+		require.NoError(t, err)
+		for _, version := range page.Versions {
+			collected[version.VersionID]++
+		}
+		if !page.IsTruncated {
+			break
+		}
+		opts.KeyMarker = page.NextKeyMarker
+		opts.VersionIDMarker = page.NextVersionIDMarker
+	}
+
+	assert.Len(t, collected, 3)
+	assert.Equal(t, 1, collected["null"], "null version must appear exactly once across pages")
+	for versionID, count := range collected {
+		assert.Equal(t, 1, count, "version %s listed %d times", versionID, count)
+	}
+}
+
 func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
