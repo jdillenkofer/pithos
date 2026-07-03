@@ -31,6 +31,24 @@ type PartStore interface {
 	PartManager
 }
 
+// TxFreeGetPartSupporter is implemented by part stores whose GetPart can be
+// called with a nil transaction. Streaming reads from such stores do not need
+// to hold a database transaction (and therefore a pooled connection) open for
+// the lifetime of the download. Middlewares delegate to their inner store(s).
+type TxFreeGetPartSupporter interface {
+	SupportsTxFreeGetPart() bool
+}
+
+// SupportsTxFreeGetPart reports whether ps allows GetPart with a nil
+// transaction. Stores that don't implement TxFreeGetPartSupporter are assumed
+// to require one.
+func SupportsTxFreeGetPart(ps PartStore) bool {
+	if s, ok := ps.(TxFreeGetPartSupporter); ok {
+		return s.SupportsTxFreeGetPart()
+	}
+	return false
+}
+
 func Tester(partStore PartStore, db database.Database, content []byte) error {
 	ctx := context.Background()
 	err := partStore.Start(ctx)

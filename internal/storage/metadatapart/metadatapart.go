@@ -696,8 +696,23 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
+	// When the part store can read without an ambient transaction (filesystem,
+	// sftp — everything except DB-backed part content), the metadata lookup
+	// runs in a short transaction that ends before streaming starts. Slow
+	// clients then no longer pin a pooled database connection for the
+	// lifetime of their download. DB-backed part stores keep the transaction
+	// open until every reader is closed, preserving snapshot semantics for
+	// the part content itself.
+	txFreeStreaming := partstore.SupportsTxFreeGetPart(mbs.partStore)
+
+	// The context handed to WithTx carries the (short-lived) transaction;
+	// BeginTx reuses a transaction found in the context, so tx-free readers
+	// must capture the pre-transaction context instead or a later internal
+	// BeginTx (e.g. the outbox lookup) would pick up the finalized one.
+	streamCtx := ctx
+
 	var storageObject storage.Object
-	readers, err := database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+	getObjectInTx := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
 		var object *metadatastore.Object
 		var err error
 		if opts != nil && opts.VersionID != nil {
@@ -745,10 +760,20 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			return nil, err
 		}
 
+		// The range readers are lazy: they don't touch the part store until
+		// first read. With tx-free streaming they carry no transaction at all
+		// and use the pre-transaction context.
+		readerCtx := ctx
+		readerTx := tx
+		if txFreeStreaming {
+			readerCtx = streamCtx
+			readerTx = nil
+		}
+
 		// Create readers for each range
 		var readers []io.ReadCloser
 		for _, byteRange := range effectiveRanges {
-			reader, err := mbs.createRangeReader(ctx, tx, object, byteRange)
+			reader, err := mbs.createRangeReader(readerCtx, readerTx, object, byteRange)
 			if err != nil {
 				for _, r := range readers {
 					r.Close()
@@ -760,7 +785,18 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 
 		storageObject = convertObject(*object)
 		return readers, nil
-	})
+	}
+
+	var readers []io.ReadCloser
+	var err error
+	if txFreeStreaming {
+		err = database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			readers, err = getObjectInTx(ctx, tx)
+			return err
+		})
+	} else {
+		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, getObjectInTx)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

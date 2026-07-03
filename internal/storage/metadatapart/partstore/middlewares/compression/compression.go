@@ -190,6 +190,12 @@ func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (fl
 	return float64(compressed.Len()) / float64(len(sample)), nil
 }
 
+// SupportsTxFreeGetPart delegates to the inner store; the middleware itself
+// never touches the transaction on reads.
+func (mw *PartStoreMiddleware) SupportsTxFreeGetPart() bool {
+	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
+}
+
 func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	rc, err := mw.innerPartStore.GetPart(ctx, tx, partId)
 	if err != nil {

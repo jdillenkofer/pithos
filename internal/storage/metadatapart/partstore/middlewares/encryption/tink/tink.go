@@ -494,6 +494,12 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx dat
 	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
 }
 
+// SupportsTxFreeGetPart delegates to the inner store; the middleware itself
+// never touches the transaction on reads.
+func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreeGetPart() bool {
+	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
+}
+
 func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPart")
 	defer span.End()

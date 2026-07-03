@@ -276,6 +276,11 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	return nil
 }
 
+// SupportsTxFreeGetPart reports that GetPart never uses the transaction.
+func (s *sftpPartStore) SupportsTxFreeGetPart() bool {
+	return true
+}
+
 func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPart")
 	defer span.End()

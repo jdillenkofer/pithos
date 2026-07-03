@@ -112,6 +112,12 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	return nil
 }
 
+// SupportsTxFreeGetPart delegates to the inner store; the cache itself never
+// touches the transaction on reads.
+func (ps *cachePartStore) SupportsTxFreeGetPart() bool {
+	return partstore.SupportsTxFreeGetPart(ps.innerPartStore)
+}
+
 func (ps *cachePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPart")
 	defer span.End()

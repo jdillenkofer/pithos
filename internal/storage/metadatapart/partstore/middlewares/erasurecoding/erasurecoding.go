@@ -310,6 +310,18 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, pa
 	return nil
 }
 
+// SupportsTxFreeGetPart reports true only when every shard store supports
+// tx-free reads (healing may also write, which the shard stores handle via
+// their non-transactional paths when tx is nil).
+func (e *erasureCodingPartStore) SupportsTxFreeGetPart() bool {
+	for _, ps := range e.partStores {
+		if !partstore.SupportsTxFreeGetPart(ps) {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	unlock := e.partLocker.RLock(partId)
 	readers, healShards, err := e.openPartReaders(ctx, tx, partId)
