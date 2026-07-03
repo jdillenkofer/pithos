@@ -220,7 +220,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectIfDue(ctx context.Con
 		}
 		// Guard against the object having been replaced between listing and
 		// deletion: only delete the exact version that was evaluated.
-		err := m.Next.DeleteObject(ctx, bucketName, object.Key, &storage.DeleteObjectOptions{
+		_, err := m.Next.DeleteObject(ctx, bucketName, object.Key, &storage.DeleteObjectOptions{
 			IfMatchETag: ptrutils.ToPtr(object.ETag),
 		})
 		if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {

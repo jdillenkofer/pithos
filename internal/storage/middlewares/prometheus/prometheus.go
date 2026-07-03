@@ -332,6 +332,32 @@ func (psm *prometheusStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx c
 	})
 }
 
+func (psm *prometheusStorageMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	var result *storage.BucketVersioningConfiguration
+	err := psm.run(ctx, "PrometheusStorageMiddleware.GetBucketVersioningConfiguration", "GetBucketVersioning", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.GetBucketVersioningConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.PutBucketVersioningConfiguration", "PutBucketVersioning", func(ctx context.Context) error {
+		return psm.Next.PutBucketVersioningConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (psm *prometheusStorageMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	var result *storage.ListObjectVersionsResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.ListObjectVersions", "ListObjectVersions", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.ListObjectVersions(ctx, bucketName, opts)
+		return err
+	})
+	return result, err
+}
+
 func (psm *prometheusStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	var result *storage.ListBucketResult
 	err := psm.run(ctx, "PrometheusStorageMiddleware.ListObjects", "ListObjects", func(ctx context.Context) error {
@@ -412,10 +438,14 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 	return appendObjectResult, nil
 }
 
-func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
-	return psm.run(ctx, "PrometheusStorageMiddleware.DeleteObject", "DeleteObject", func(ctx context.Context) error {
-		return psm.Next.DeleteObject(ctx, bucketName, key, opts)
+func (psm *prometheusStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+	var result *storage.DeleteObjectResult
+	err := psm.run(ctx, "PrometheusStorageMiddleware.DeleteObject", "DeleteObject", func(ctx context.Context) error {
+		var err error
+		result, err = psm.Next.DeleteObject(ctx, bucketName, key, opts)
+		return err
 	})
+	return result, err
 }
 
 func (psm *prometheusStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

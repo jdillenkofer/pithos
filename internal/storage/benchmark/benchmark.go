@@ -185,7 +185,7 @@ func cleanupObjectsInBucket(ctx context.Context, st storage.Storage, bucketName 
 	}
 
 	for _, obj := range objects {
-		err = st.DeleteObject(ctx, bucketName, obj.Key, nil)
+		_, err = st.DeleteObject(ctx, bucketName, obj.Key, nil)
 		if err != nil {
 			return err
 		}

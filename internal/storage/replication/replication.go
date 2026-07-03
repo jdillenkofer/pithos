@@ -118,6 +118,21 @@ func (rs *replicationStorage) DeleteBucket(ctx context.Context, bucketName stora
 	return nil
 }
 
+func (rs *replicationStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	if err := rs.Next.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		if err := secondaryStorage.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
 	defer span.End()
@@ -229,21 +244,21 @@ func (rs *replicationStorage) CopyObject(ctx context.Context, srcBucket storage.
 	return result, nil
 }
 
-func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
 	defer span.End()
 
-	err := rs.Next.DeleteObject(ctx, bucketName, key, opts)
+	result, err := rs.Next.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
+		_, err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return result, nil
 }
 
 func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

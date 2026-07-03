@@ -31,6 +31,7 @@ type Entity struct {
 	Operation   string
 	Bucket      storage.BucketName
 	Key         string
+	VersionID   *string
 	ContentType *string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

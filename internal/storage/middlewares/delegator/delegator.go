@@ -129,8 +129,20 @@ func (d *DelegatingStorage) AppendObject(ctx context.Context, bucketName storage
 	return d.Next.AppendObject(ctx, bucketName, key, data, checksumInput, opts)
 }
 
-func (d *DelegatingStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (d *DelegatingStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	return d.Next.DeleteObject(ctx, bucketName, key, opts)
+}
+
+func (d *DelegatingStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	return d.Next.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (d *DelegatingStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	return d.Next.PutBucketVersioningConfiguration(ctx, bucketName, config)
+}
+
+func (d *DelegatingStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	return d.Next.ListObjectVersions(ctx, bucketName, opts)
 }
 
 func (d *DelegatingStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {

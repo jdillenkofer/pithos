@@ -43,6 +43,9 @@ const (
 	OpGetBucketLifecycle      Operation = "GetBucketLifecycle"
 	OpPutBucketLifecycle      Operation = "PutBucketLifecycle"
 	OpDeleteBucketLifecycle   Operation = "DeleteBucketLifecycle"
+	OpGetBucketVersioning     Operation = "GetBucketVersioning"
+	OpPutBucketVersioning     Operation = "PutBucketVersioning"
+	OpListObjectVersions      Operation = "ListObjectVersions"
 )
 
 type Phase string

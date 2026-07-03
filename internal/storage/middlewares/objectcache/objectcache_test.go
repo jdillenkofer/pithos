@@ -133,13 +133,13 @@ func (s *fakeStorage) PutObject(ctx context.Context, bucketName storage.BucketNa
 	return &storage.PutObjectResult{ETag: &etag}, nil
 }
 
-func (s *fakeStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+func (s *fakeStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	k := bucketName.String() + "/" + key.String()
 	s.mu.Lock()
 	delete(s.bodyByKey, k)
 	delete(s.objectByKey, k)
 	s.mu.Unlock()
-	return nil
+	return &storage.DeleteObjectResult{}, nil
 }
 
 func TestReadCacheMiddleware_CachesGetObject(t *testing.T) {
@@ -198,7 +198,7 @@ func TestReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	assert.NoError(t, readers[0].Close())
 	assert.Equal(t, []byte("world"), body)
 
-	err = mw.DeleteObject(ctx, bucket, key, nil)
+	_, err = mw.DeleteObject(ctx, bucket, key, nil)
 	assert.NoError(t, err)
 	_, _, err = mw.GetObject(ctx, bucket, key, nil, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)

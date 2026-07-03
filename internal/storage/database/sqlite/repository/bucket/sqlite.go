@@ -14,10 +14,10 @@ type sqliteRepository struct {
 }
 
 const (
-	findAllBucketsStmt     = "SELECT id, name, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at FROM buckets"
-	findBucketByNameStmt   = "SELECT id, name, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
-	insertBucketStmt       = "INSERT INTO buckets (id, name, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
-	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, website_index_document_suffix = $2, website_error_document_key = $3, cors_configuration_json = $4, lifecycle_configuration_json = $5, updated_at = $6 WHERE id = $7"
+	findAllBucketsStmt     = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at FROM buckets"
+	findBucketByNameStmt   = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, versioning_status, website_index_document_suffix, website_error_document_key, cors_configuration_json, lifecycle_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, versioning_status = $2, website_index_document_suffix = $3, website_error_document_key = $4, cors_configuration_json = $5, lifecycle_configuration_json = $6, updated_at = $7 WHERE id = $8"
 	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = $1"
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = $1"
 )
@@ -29,13 +29,14 @@ func NewRepository() (bucket.Repository, error) {
 func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	var id string
 	var name string
+	var versioningStatus *string
 	var websiteIndexDocumentSuffix *string
 	var websiteErrorDocumentKey *string
 	var corsConfigurationJSON *string
 	var lifecycleConfigurationJSON *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := bucketRows.Scan(&id, &name, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &corsConfigurationJSON, &lifecycleConfigurationJSON, &createdAt, &updatedAt)
+	err := bucketRows.Scan(&id, &name, &versioningStatus, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &corsConfigurationJSON, &lifecycleConfigurationJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +44,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	bucketEntity := bucket.Entity{
 		Id:                         &ulidId,
 		Name:                       storage.MustNewBucketName(name),
+		VersioningStatus:           versioningStatus,
 		WebsiteIndexDocumentSuffix: websiteIndexDocumentSuffix,
 		WebsiteErrorDocumentKey:    websiteErrorDocumentKey,
 		CORSConfigurationJSON:      corsConfigurationJSON,
@@ -92,11 +94,11 @@ func (br *sqliteRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 

@@ -20,6 +20,17 @@ type Bucket struct {
 	CreationDate time.Time
 }
 
+type BucketVersioningStatus string
+
+const (
+	BucketVersioningStatusEnabled   BucketVersioningStatus = "Enabled"
+	BucketVersioningStatusSuspended BucketVersioningStatus = "Suspended"
+)
+
+type BucketVersioningConfiguration struct {
+	Status *BucketVersioningStatus
+}
+
 // ObjectMetadata holds the user-controllable object metadata: the
 // user-modifiable system metadata headers and the user-defined x-amz-meta-*
 // key/value pairs. Content-Type is tracked separately on Object.
@@ -41,6 +52,8 @@ type Object struct {
 	Key               ObjectKey
 	ContentType       *string // only set in HeadObject and PutObject
 	LastModified      time.Time
+	VersionID         *string
+	IsDeleteMarker    bool
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -83,6 +96,7 @@ type InitiateMultipartUploadResult struct {
 type CompleteMultipartUploadResult struct {
 	DeletedParts      []Part
 	Location          string
+	VersionID         *string
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -267,11 +281,43 @@ type AppendObjectOptions struct {
 }
 
 type DeleteObjectOptions struct {
+	VersionID *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
 	// value before deleting; otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
 	// returning ErrPreconditionFailed only when the object does not exist.
 	IfMatchETag *string
+}
+
+type DeleteObjectResult struct {
+	VersionID      *string
+	IsDeleteMarker bool
+}
+
+type ObjectVersion struct {
+	Key            ObjectKey
+	VersionID      string
+	IsDeleteMarker bool
+	IsLatest       bool
+	LastModified   time.Time
+	Size           int64
+	ETag           *string
+}
+
+type ListObjectVersionsOptions struct {
+	Prefix          *string
+	Delimiter       *string
+	KeyMarker       *string
+	VersionIDMarker *string
+	MaxKeys         int32
+}
+
+type ListObjectVersionsResult struct {
+	Versions            []ObjectVersion
+	CommonPrefixes      []string
+	IsTruncated         bool
+	NextKeyMarker       *string
+	NextVersionIDMarker *string
 }
 
 // CompleteMultipartUploadOptions holds conditional request options for CompleteMultipartUpload.
@@ -297,6 +343,8 @@ type BucketStore interface {
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
+	GetBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketVersioningConfiguration, error)
+	PutBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketVersioningConfiguration) error
 }
 
 type WebsiteConfiguration struct {
@@ -405,7 +453,9 @@ type BucketLifecycleStore interface {
 
 type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
+	ListObjectVersions(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectVersionsOptions) (*ListObjectVersionsResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
+	HeadObjectVersion(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID string) (*Object, error)
 	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
 	// AppendObject appends a new part to an existing object's part list. The caller
 	// must supply the updated object metadata (including new ETag, size, and the
@@ -413,7 +463,7 @@ type ObjectStore interface {
 	// created. If WriteOffset is set in opts and does not match the current object
 	// size, ErrInvalidWriteOffset is returned.
 	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
-	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
+	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
 	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (map[string]string, error)
@@ -550,7 +600,8 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		_, err := metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		return err
 	})
 	if err != nil {
 		return err
@@ -590,7 +641,8 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		_, err := metadataStore.DeleteObject(ctx, tx, bucketName, key, nil)
+		return err
 	})
 	if err != nil {
 		return err

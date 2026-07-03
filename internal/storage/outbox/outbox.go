@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -299,7 +300,11 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 				_ = body.Close()
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
-			err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), nil)
+			var deleteOpts *storage.DeleteObjectOptions
+			if entry.VersionID != nil {
+				deleteOpts = &storage.DeleteObjectOptions{VersionID: entry.VersionID}
+			}
+			_, err = os.innerStorage.DeleteObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), deleteOpts)
 		default:
 			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
 			err = fmt.Errorf("invalid storage outbox operation: %s", entry.Operation)
@@ -375,11 +380,12 @@ func (os *outboxStorage) Stop(ctx context.Context) error {
 	return os.innerStorage.Stop(ctx)
 }
 
-func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx database.Tx, operation string, bucketName storage.BucketName, key string, contentType *string) (*ulid.ULID, error) {
+func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx database.Tx, operation string, bucketName storage.BucketName, key string, contentType *string, versionID *string) (*ulid.ULID, error) {
 	entry := storageOutboxEntry.Entity{
 		Operation:   operation,
 		Bucket:      bucketName,
 		Key:         key,
+		VersionID:   versionID,
 		ContentType: contentType,
 	}
 	err := os.storageOutboxEntryRepository.SaveStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId, &entry)
@@ -404,7 +410,7 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil)
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
 		return err
 	})
 }
@@ -414,7 +420,7 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	defer span.End()
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil)
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil, nil)
 		return err
 	})
 }
@@ -563,6 +569,42 @@ func (os *outboxStorage) ListObjects(ctx context.Context, bucketName storage.Buc
 	return os.innerStorage.ListObjects(ctx, bucketName, opts)
 }
 
+func (os *outboxStorage) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketVersioningConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketVersioningConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
+}
+
+func (os *outboxStorage) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListObjectVersions")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.ListObjectVersions(ctx, bucketName, opts)
+}
+
 func (os *outboxStorage) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadObject")
 	defer span.End()
@@ -597,7 +639,19 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	// conditional-write preconditions have to be evaluated now, and tag sets and
 	// object metadata are not persisted with the entry (replay would drop them).
 	// Drain the outbox and write through to the inner storage instead.
-	if opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0 || opts.Metadata != nil) {
+	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0 || opts.Metadata != nil)
+	if !putMustBeSynchronous {
+		// Versioning-enabled buckets must write through: an outboxed put cannot
+		// return the new version id and replay would collapse version ordering.
+		versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+		if err != nil && !errors.Is(err, storage.ErrNoSuchBucket) {
+			return nil, err
+		}
+		if err == nil {
+			putMustBeSynchronous = versioningConfig.Status != nil && *versioningConfig.Status == storage.BucketVersioningStatusEnabled
+		}
+	}
+	if putMustBeSynchronous {
 		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 		if err != nil {
 			return nil, err
@@ -608,7 +662,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	var calculatedChecksums *checksumutils.ChecksumValues
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, c, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), contentType)
+			entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), contentType, nil)
 			if err != nil {
 				return err
 			}
@@ -689,23 +743,91 @@ func (os *outboxStorage) CopyObject(ctx context.Context, srcBucket storage.Bucke
 	return os.innerStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
 }
 
-func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
+// bucketHasVersioningStatus reports whether the bucket's versioning has ever
+// been configured (Enabled or Suspended). A bucket whose creation is still
+// queued in the outbox cannot have a versioning configuration yet.
+func (os *outboxStorage) bucketHasVersioningStatus(ctx context.Context, bucketName storage.BucketName) (bool, error) {
+	versioningConfig, err := os.innerStorage.GetBucketVersioningConfiguration(ctx, bucketName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNoSuchBucket) {
+			return false, nil
+		}
+		return false, err
+	}
+	return versioningConfig.Status != nil, nil
+}
+
+func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObject")
 	defer span.End()
 
-	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), nil)
+	// ETag-conditional deletes must execute synchronously so the precondition
+	// is evaluated against the current object.
+	deleteMustBeSynchronous := opts != nil && opts.IfMatchETag != nil
+	if !deleteMustBeSynchronous {
+		// Deletes on versioning-enabled or -suspended buckets create a delete
+		// marker whose version id must be returned to the caller; an outboxed
+		// entry cannot represent that result.
+		hasVersioningStatus, err := os.bucketHasVersioningStatus(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		deleteMustBeSynchronous = hasVersioningStatus
+	}
+	if deleteMustBeSynchronous {
+		err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
+		if err != nil {
+			return nil, err
+		}
+		return os.innerStorage.DeleteObject(ctx, bucketName, key, opts)
+	}
+
+	var versionID *string
+	if opts != nil {
+		versionID = opts.VersionID
+	}
+	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, key.String(), nil, versionID)
 		return err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return &storage.DeleteObjectResult{VersionID: versionID}, nil
 }
 
 func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()
 
+	deleteMustBeSynchronous := false
+	for _, entry := range entries {
+		if entry.IfMatchETag != nil {
+			deleteMustBeSynchronous = true
+			break
+		}
+	}
+	if !deleteMustBeSynchronous {
+		// Deletes on versioning-enabled or -suspended buckets create delete
+		// markers whose version ids must be returned to the caller; outboxed
+		// entries cannot represent that result.
+		hasVersioningStatus, err := os.bucketHasVersioningStatus(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		deleteMustBeSynchronous = hasVersioningStatus
+	}
+	if deleteMustBeSynchronous {
+		err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+		if err != nil {
+			return nil, err
+		}
+		return os.innerStorage.DeleteObjects(ctx, bucketName, entries)
+	}
+
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		for _, entry := range entries {
-			_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), nil)
+			_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteObjectStorageOperation, bucketName, entry.Key.String(), nil, entry.VersionID)
 			if err != nil {
 				return err
 			}
@@ -720,7 +842,7 @@ func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.B
 		Entries: make([]storage.DeleteObjectsEntry, len(entries)),
 	}
 	for i, entry := range entries {
-		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true}
+		result.Entries[i] = storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, Deleted: true}
 	}
 	return result, nil
 }

@@ -19,6 +19,17 @@ type Bucket struct {
 	CreationDate time.Time
 }
 
+type BucketVersioningStatus string
+
+const (
+	BucketVersioningStatusEnabled   BucketVersioningStatus = "Enabled"
+	BucketVersioningStatusSuspended BucketVersioningStatus = "Suspended"
+)
+
+type BucketVersioningConfiguration struct {
+	Status *BucketVersioningStatus
+}
+
 // ObjectMetadata holds the user-controllable object metadata: the
 // user-modifiable system metadata headers and the user-defined x-amz-meta-*
 // key/value pairs. Content-Type is tracked separately.
@@ -28,6 +39,8 @@ type Object struct {
 	Key               ObjectKey
 	ContentType       *string
 	LastModified      time.Time
+	VersionID         *string
+	IsDeleteMarker    bool
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -63,6 +76,7 @@ type ListBucketResult struct {
 }
 
 type PutObjectResult struct {
+	VersionID         *string
 	ETag              *string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -117,6 +131,7 @@ const ChecksumTypeFullObject = metadatastore.ChecksumTypeFullObject
 const ChecksumTypeComposite = metadatastore.ChecksumTypeComposite
 
 type DeleteObjectOptions struct {
+	VersionID *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
 	// value before deleting; otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
@@ -124,9 +139,15 @@ type DeleteObjectOptions struct {
 	IfMatchETag *string
 }
 
+type DeleteObjectResult struct {
+	VersionID      *string
+	IsDeleteMarker bool
+}
+
 // HeadObjectOptions holds conditional request options for HeadObject.
 // ETag values must be bare hex strings (without surrounding quotes).
 type HeadObjectOptions struct {
+	VersionID *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to match;
 	// otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object.
@@ -140,6 +161,7 @@ type HeadObjectOptions struct {
 // GetObjectOptions holds conditional request options for GetObject.
 // ETag values must be bare hex strings (without surrounding quotes).
 type GetObjectOptions struct {
+	VersionID *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to match;
 	// otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object.
@@ -196,6 +218,9 @@ type CopyObjectOptions struct {
 type CopyObjectResult struct {
 	ETag         string
 	LastModified time.Time
+	// VersionID is the version id of the newly created destination object when
+	// the destination bucket has versioning enabled.
+	VersionID *string
 }
 
 // UploadPartCopyOptions holds options for a server-side UploadPartCopy.
@@ -226,6 +251,7 @@ type UploadPartResult struct {
 
 type CompleteMultipartUploadResult struct {
 	Location          string
+	VersionID         *string
 	ETag              string
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -280,10 +306,13 @@ type ListPartsResult struct {
 
 // DeleteObjectsEntry represents the result for a single key in a DeleteObjects operation.
 type DeleteObjectsEntry struct {
-	Key     ObjectKey
-	Deleted bool
-	ErrCode string
-	ErrMsg  string
+	VersionID             *string
+	DeleteMarker          *bool
+	DeleteMarkerVersionID *string
+	Key                   ObjectKey
+	Deleted               bool
+	ErrCode               string
+	ErrMsg                string
 }
 
 // DeleteObjectsResult is the per-key result of a bulk DeleteObjects operation.
@@ -294,7 +323,34 @@ type DeleteObjectsResult struct {
 // DeleteObjectsInputEntry represents a single entry in a bulk DeleteObjects request, optionally with a conditional ETag.
 type DeleteObjectsInputEntry struct {
 	Key         ObjectKey
+	VersionID   *string
 	IfMatchETag *string
+}
+
+type ObjectVersion struct {
+	Key            ObjectKey
+	VersionID      string
+	IsDeleteMarker bool
+	IsLatest       bool
+	LastModified   time.Time
+	Size           int64
+	ETag           *string
+}
+
+type ListObjectVersionsOptions struct {
+	Prefix          *string
+	Delimiter       *string
+	KeyMarker       *string
+	VersionIDMarker *string
+	MaxKeys         int32
+}
+
+type ListObjectVersionsResult struct {
+	Versions            []ObjectVersion
+	CommonPrefixes      []string
+	IsTruncated         bool
+	NextKeyMarker       *string
+	NextVersionIDMarker *string
 }
 
 type ChecksumInput = metadatastore.ChecksumInput
@@ -335,6 +391,23 @@ var ErrNoSuchLifecycleConfiguration error = metadatastore.ErrNoSuchLifecycleConf
 var ErrTooManyParts error = metadatastore.ErrTooManyParts
 var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
 var ErrCASFailure error = metadatastore.ErrCASFailure
+
+type CurrentDeleteMarkerError struct {
+	VersionID string
+}
+
+func (e *CurrentDeleteMarkerError) Error() string {
+	return ErrNoSuchKey.Error()
+}
+
+type VersionDeleteMarkerMethodNotAllowedError struct {
+	VersionID    string
+	LastModified time.Time
+}
+
+func (e *VersionDeleteMarkerMethodNotAllowedError) Error() string {
+	return "MethodNotAllowed"
+}
 
 var MaxEntitySize int64 = 5 * 1000 * 1000 * 1000 // 5 GB
 
@@ -378,6 +451,8 @@ type BucketManager interface {
 	DeleteBucket(ctx context.Context, bucketName BucketName) error
 	ListBuckets(ctx context.Context) ([]Bucket, error)
 	HeadBucket(ctx context.Context, bucketName BucketName) (*Bucket, error)
+	GetBucketVersioningConfiguration(ctx context.Context, bucketName BucketName) (*BucketVersioningConfiguration, error)
+	PutBucketVersioningConfiguration(ctx context.Context, bucketName BucketName, config *BucketVersioningConfiguration) error
 }
 
 type WebsiteConfiguration = metadatastore.WebsiteConfiguration
@@ -431,6 +506,7 @@ type TaggingManager interface {
 // ObjectManager manages object operations
 type ObjectManager interface {
 	ListObjects(ctx context.Context, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
+	ListObjectVersions(ctx context.Context, bucketName BucketName, opts ListObjectVersionsOptions) (*ListObjectVersionsResult, error)
 	HeadObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *HeadObjectOptions) (*Object, error)
 	// GetObject retrieves an object with optional byte ranges.
 	// If ranges is empty or nil, returns the entire object as a single reader.
@@ -447,7 +523,7 @@ type ObjectManager interface {
 	// it behaves like PutObject and creates a new object with the provided data.
 	// The ETag in the result reflects the new whole-object ETag after the append.
 	AppendObject(ctx context.Context, bucketName BucketName, key ObjectKey, data io.Reader, checksumInput *ChecksumInput, opts *AppendObjectOptions) (*AppendObjectResult, error)
-	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) error
+	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
 }
 
@@ -569,7 +645,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return errors.New("invalid object key")
 		}
 
-		err = storage.DeleteObject(ctx, bucketName, key, nil)
+		_, err = storage.DeleteObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return err
 		}
@@ -594,7 +670,7 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 			return err
 		}
 
-		err = storage.DeleteObject(ctx, bucketName, key, nil)
+		_, err = storage.DeleteObject(ctx, bucketName, key, nil)
 		if err != nil {
 			return err
 		}

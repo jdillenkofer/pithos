@@ -15,15 +15,15 @@ type pgxRepository struct {
 
 const (
 	countStorageOutboxEntriesStmt                                 = "SELECT COUNT(*) FROM storage_outbox_entries WHERE outbox_id = $1"
-	findFirstStorageOutboxEntryStmt                               = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryStmt                                = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketStmt                      = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketStmt                       = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
-	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
-	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryStmt                               = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryStmt                                = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketStmt                      = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketStmt                       = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
+	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
+	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
 	findStorageOutboxEntryChunksByIdStmt                          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
-	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8)"
-	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, content_type = $4, updated_at = $5 WHERE id = $6 AND outbox_id = $7"
+	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, version_id, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, version_id = $4, content_type = $5, updated_at = $6 WHERE id = $7 AND outbox_id = $8"
 	upsertStorageOutboxContentChunkStmt                           = "INSERT INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3) ON CONFLICT (outbox_entry_id, chunk_index) DO UPDATE SET content = EXCLUDED.content"
 	claimStorageOutboxEntryStmt                                   = "UPDATE storage_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
 	deleteStorageOutboxEntryByClaimOwnerStmt                      = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
@@ -49,13 +49,14 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 	var operation string
 	var bucket string
 	var key string
+	var versionID *string
 	var contentType *string
 	var createdAt time.Time
 	var updatedAt time.Time
 	var claimOwner *string
 	var claimUntil *time.Time
 	var version int64
-	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &contentType, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
+	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &versionID, &contentType, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -68,6 +69,7 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 		Operation:   operation,
 		Bucket:      storage.MustNewBucketName(bucket),
 		Key:         key,
+		VersionID:   versionID,
 		ContentType: contentType,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
@@ -162,12 +164,12 @@ func (sor *pgxRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx
 		storageOutboxEntry.Id = &id
 		storageOutboxEntry.CreatedAt = time.Now().UTC()
 		storageOutboxEntry.UpdatedAt = storageOutboxEntry.CreatedAt
-		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), outboxId, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertStorageOutboxEntryStmt, storageOutboxEntry.Id.String(), outboxId, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.CreatedAt, storageOutboxEntry.UpdatedAt)
 		return err
 	}
 
 	storageOutboxEntry.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String(), outboxId)
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryByIdStmt, storageOutboxEntry.Operation, storageOutboxEntry.Bucket.String(), storageOutboxEntry.Key, storageOutboxEntry.VersionID, storageOutboxEntry.ContentType, storageOutboxEntry.UpdatedAt, storageOutboxEntry.Id.String(), outboxId)
 	return err
 }
 

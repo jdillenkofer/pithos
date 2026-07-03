@@ -75,7 +75,7 @@ func (f *fakeStorage) GetObjectTagging(_ context.Context, bucketName storage.Buc
 	return nil, storage.ErrNoSuchKey
 }
 
-func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, _ *storage.DeleteObjectOptions) error {
+func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, _ *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deletedKeys = append(f.deletedKeys, key.String())
@@ -87,7 +87,7 @@ func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketN
 		}
 	}
 	f.objects[bucketName.String()] = remaining
-	return nil
+	return &storage.DeleteObjectResult{}, nil
 }
 
 func (f *fakeStorage) ListMultipartUploads(_ context.Context, bucketName storage.BucketName, _ storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {

@@ -80,6 +80,10 @@ func (m *objectCacheStorageMiddleware) HeadObject(ctx context.Context, bucketNam
 	ctx, span := m.tracer.Start(ctx, "ObjectCacheStorageMiddleware.HeadObject")
 	defer span.End()
 
+	if opts != nil && opts.VersionID != nil {
+		return m.Next.HeadObject(ctx, bucketName, key, opts)
+	}
+
 	headKey := headCacheKey(bucketName, key)
 	if obj, err := m.readHeadFromCache(ctx, headKey); err == nil {
 		if err = validateConditionalHead(obj, opts); err != nil {
@@ -131,6 +135,10 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 	defer span.End()
 
 	if len(ranges) > 0 {
+		return m.Next.GetObject(ctx, bucketName, key, ranges, opts)
+	}
+
+	if opts != nil && opts.VersionID != nil {
 		return m.Next.GetObject(ctx, bucketName, key, ranges, opts)
 	}
 
@@ -442,13 +450,13 @@ func (m *objectCacheStorageMiddleware) AppendObject(ctx context.Context, bucketN
 	return result, nil
 }
 
-func (m *objectCacheStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
-	err := m.Next.DeleteObject(ctx, bucketName, key, opts)
+func (m *objectCacheStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+	result, err := m.Next.DeleteObject(ctx, bucketName, key, opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	m.invalidateObjectCaches(ctx, bucketName, key)
-	return nil
+	return result, nil
 }
 
 func (m *objectCacheStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
