@@ -697,6 +697,12 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 			commonPrefix := determineCommonPrefix(prefix, entity.Key.String(), delimiter)
 			if commonPrefix != nil {
 				if _, exists := commonPrefixSet[*commonPrefix]; exists {
+					// The entity is represented by an already-emitted common
+					// prefix; advance the continuation markers past it so the
+					// next page does not re-emit the same prefix.
+					k := entity.Key.String()
+					lastReturnedKey = &k
+					lastReturnedVersionID = entity.VersionID
 					continue
 				}
 				if emittedCount >= maxKeys {

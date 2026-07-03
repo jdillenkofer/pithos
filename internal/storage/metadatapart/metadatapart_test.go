@@ -451,6 +451,36 @@ func TestDeleteObjects_KeyOnlyDeleteReturnsDeleteMarkerVersionID(t *testing.T) {
 	assert.Equal(t, *entry.DeleteMarkerVersionID, currentDeleteMarkerErr.VersionID)
 }
 
+func TestListObjectVersions_CommonPrefixWithMultipleKeysNotRepeatedAcrossPages(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	for _, key := range []string{"a/one", "a/two", "b/one"} {
+		_, err := st.PutObject(ctx, bucket, storage.MustNewObjectKey(key), nil, bytes.NewReader([]byte("data")), nil, nil)
+		require.NoError(t, err)
+	}
+
+	delimiter := "/"
+	page1, err := st.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{Delimiter: &delimiter, MaxKeys: 1})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a/"}, page1.CommonPrefixes)
+	require.True(t, page1.IsTruncated)
+	require.NotNil(t, page1.NextKeyMarker)
+
+	page2, err := st.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{Delimiter: &delimiter, MaxKeys: 1, KeyMarker: page1.NextKeyMarker, VersionIDMarker: page1.NextVersionIDMarker})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b/"}, page2.CommonPrefixes)
+	assert.False(t, page2.IsTruncated)
+}
+
 func TestConditionalDeleteObject_WildcardMatchExistingObject(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
