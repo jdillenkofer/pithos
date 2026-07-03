@@ -25,7 +25,6 @@ type Repository interface {
 	FindNullObjectVersionByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) (*Entity, error)
 	FindLatestObjectByBucketNameAndKeyExcludingID(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey, excludedObjectID ulid.ULID) (*Entity, error)
 	CountObjectsByBucketNameAndPrefixAndStartAfter(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) (*int, error)
-	CountObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) (*int, error)
 	CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) (*int, error)
 	ClearLatestObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) error
 	DeleteObjectById(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*bool, error)

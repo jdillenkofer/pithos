@@ -32,7 +32,6 @@ const (
 	findObjectByBucketNameAndKeyAndVersionIDStmt                                                           = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND version_id = $3 AND upload_status = $4"
 	findNullObjectVersionByBucketNameAndKeyStmt                                                            = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND version_id = 'null' AND upload_status = $3"
 	findLatestObjectByBucketNameAndKeyExcludingIDStmt                                                      = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3 AND id != $4 ORDER BY created_at DESC LIMIT 1"
-	countObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerStmt                             = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND upload_status = $3 AND (key > $4 OR (key = $4 AND COALESCE(version_id, '') < $5))"
 	clearLatestObjectByBucketNameAndKeyStmt                                                                = "UPDATE objects SET is_latest = FALSE, updated_at = $3 WHERE bucket_name = $1 AND key = $2 AND upload_status = $4 AND is_latest = TRUE"
 	deleteObjectByIdStmt                                                                                   = "DELETE FROM objects WHERE id = $1"
 	deleteObjectByIdAndOptimisticLockVersionStmt                                                           = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
@@ -393,16 +392,6 @@ func (or *pgxRepository) FindLatestObjectByBucketNameAndKeyExcludingID(ctx conte
 		return convertRowToObjectEntity(objectRows)
 	}
 	return nil, nil
-}
-
-func (or *pgxRepository) CountObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarker(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) (*int, error) {
-	keyCountRow := tx.QueryRowContext(ctx, countObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerStmt, bucketName.String(), prefix, object.UploadStatusCompleted, keyMarker, versionIDMarker)
-	var keyCount int
-	err := keyCountRow.Scan(&keyCount)
-	if err != nil {
-		return nil, err
-	}
-	return &keyCount, nil
 }
 
 func (or *pgxRepository) ClearLatestObjectByBucketNameAndKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, key storage.ObjectKey) error {
