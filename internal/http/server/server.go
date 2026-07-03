@@ -434,9 +434,9 @@ type VersionEntry struct {
 	VersionID    string `xml:"VersionId"`
 	IsLatest     bool   `xml:"IsLatest"`
 	LastModified string `xml:"LastModified"`
-	ETag         string `xml:"ETag,omitempty"`
-	Size         int64  `xml:"Size,omitempty"`
-	StorageClass string `xml:"StorageClass,omitempty"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+	StorageClass string `xml:"StorageClass"`
 }
 
 type DeleteMarkerVersionEntry struct {
