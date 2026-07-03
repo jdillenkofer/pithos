@@ -512,64 +512,45 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx dat
 		return closeErr
 	}
 
-	// Use lazy initialization to defer header parsing and DEK decryption until first read
-	// This allows streaming to start immediately without blocking on KMS/Vault operations
-	lazyReader := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
-		// Read the header length (4 bytes big-endian)
-		lengthBytes := make([]byte, 4)
-		if _, err := io.ReadFull(rc, lengthBytes); err != nil {
-			closeUnderlying()
-			return nil, err
-		}
-
-		headerLen := binary.BigEndian.Uint32(lengthBytes)
-
-		// Read and parse the header
-		headerBytes := make([]byte, headerLen)
-		if _, err := io.ReadFull(rc, headerBytes); err != nil {
-			closeUnderlying()
-			return nil, err
-		}
-
-		var header PartHeader
-		if err := json.Unmarshal(headerBytes, &header); err != nil {
-			closeUnderlying()
-			return nil, err
-		}
-
-		if header.Version > PartHeaderVersion || header.Version < 1 {
-			closeUnderlying()
-			return nil, fmt.Errorf("unsupported part header version: %d", header.Version)
-		}
-
-		// Decrypt the classical DEK with master AEAD
-		classicalDEK, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
-		if err != nil {
-			closeUnderlying()
-			return nil, err
-		}
-
-		finalDEK := classicalDEK
-		if len(header.PQEncapsulatedKey) > 0 {
-			if mw.mlkemKey == nil {
-				closeUnderlying()
-				return nil, fmt.Errorf("part is PQ-encrypted but no ML-KEM key is configured")
-			}
-			pqSharedSecret, err := mw.mlkemKey.Decapsulate(header.PQEncapsulatedKey)
-			if err != nil {
-				closeUnderlying()
-				return nil, fmt.Errorf("failed to decapsulate PQ key: %w", err)
-			}
-			finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
+	// When the inner store hands out a seekable stream (filesystem, sftp),
+	// return a seekable decrypting reader so range reads can jump to their
+	// offset instead of decrypting everything before it. Otherwise (e.g. a
+	// part still pending in the outbox, served from DB chunks) fall back to
+	// the sequential tink reader.
+	if rs, ok := rc.(io.ReadSeeker); ok {
+		lazyReader := ioutils.NewLazyReadSeekCloser(func() (io.ReadSeekCloser, error) {
+			// The stream may not start at offset 0 of the seekable: the
+			// compression middleware hands out the raw part file positioned
+			// past its own header when the content is stored uncompressed.
+			// All tink offsets are therefore relative to the position the
+			// reader had when we received it.
+			startPos, err := rs.Seek(0, io.SeekCurrent)
 			if err != nil {
 				closeUnderlying()
 				return nil, err
 			}
-		}
+			finalDEK, segmentSize, headerEnd, err := mw.readPartHeaderAndDEK(rc, partId)
+			if err != nil {
+				closeUnderlying()
+				return nil, err
+			}
+			seekableReader, err := newSeekableDecryptingReader(rs, startPos+headerEnd, finalDEK, partId.Bytes(), segmentSize)
+			if err != nil {
+				closeUnderlying()
+				return nil, err
+			}
+			return &compositeReadSeekCloser{seekableReader, closerFunc(closeUnderlying)}, nil
+		})
+		return ioutils.NewReadSeekCloserWithCloseHook(lazyReader, closeUnderlying), nil
+	}
 
-		segmentSize := header.SegmentSize
-		if segmentSize == 0 {
-			segmentSize = LegacySegmentSize
+	// Use lazy initialization to defer header parsing and DEK decryption until first read
+	// This allows streaming to start immediately without blocking on KMS/Vault operations
+	lazyReader := ioutils.NewLazyReadCloser(func() (io.ReadCloser, error) {
+		finalDEK, segmentSize, _, err := mw.readPartHeaderAndDEK(rc, partId)
+		if err != nil {
+			closeUnderlying()
+			return nil, err
 		}
 
 		// Create streaming AEAD with the final DEK
@@ -591,6 +572,73 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx dat
 	})
 
 	return ioutils.NewReadCloserWithCloseHook(lazyReader, closeUnderlying), nil
+}
+
+// readPartHeaderAndDEK consumes the part header from rc, decrypts the DEK via
+// the master AEAD (and ML-KEM when present) and returns the final DEK, the
+// ciphertext segment size and the stream offset where the tink ciphertext
+// begins.
+func (mw *TinkEncryptionPartStoreMiddleware) readPartHeaderAndDEK(rc io.Reader, partId partstore.PartId) ([]byte, int, int64, error) {
+	// Read the header length (4 bytes big-endian)
+	lengthBytes := make([]byte, 4)
+	if _, err := io.ReadFull(rc, lengthBytes); err != nil {
+		return nil, 0, 0, err
+	}
+
+	headerLen := binary.BigEndian.Uint32(lengthBytes)
+
+	// Read and parse the header
+	headerBytes := make([]byte, headerLen)
+	if _, err := io.ReadFull(rc, headerBytes); err != nil {
+		return nil, 0, 0, err
+	}
+
+	var header PartHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, 0, 0, err
+	}
+
+	if header.Version > PartHeaderVersion || header.Version < 1 {
+		return nil, 0, 0, fmt.Errorf("unsupported part header version: %d", header.Version)
+	}
+
+	// Decrypt the classical DEK with master AEAD
+	classicalDEK, err := mw.masterAEAD.Decrypt(header.EncryptedDEK, partId.Bytes())
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	finalDEK := classicalDEK
+	if len(header.PQEncapsulatedKey) > 0 {
+		if mw.mlkemKey == nil {
+			return nil, 0, 0, fmt.Errorf("part is PQ-encrypted but no ML-KEM key is configured")
+		}
+		pqSharedSecret, err := mw.mlkemKey.Decapsulate(header.PQEncapsulatedKey)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("failed to decapsulate PQ key: %w", err)
+		}
+		finalDEK, err = deriveHybridKey(classicalDEK, pqSharedSecret, partId.Bytes())
+		if err != nil {
+			return nil, 0, 0, err
+		}
+	}
+
+	segmentSize := header.SegmentSize
+	if segmentSize == 0 {
+		segmentSize = LegacySegmentSize
+	}
+
+	return finalDEK, segmentSize, int64(4 + headerLen), nil
+}
+
+// compositeReadSeekCloser combines a ReadSeeker with a Closer.
+type compositeReadSeekCloser struct {
+	io.ReadSeeker
+	closer io.Closer
+}
+
+func (c *compositeReadSeekCloser) Close() error {
+	return c.closer.Close()
 }
 
 type closerFunc func() error
