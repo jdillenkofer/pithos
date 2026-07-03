@@ -402,9 +402,22 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId 
 	return nil
 }
 
+// SupportsTxFreeGetPart reports whether GetPart works without an ambient
+// transaction. The outbox lookup itself runs in a short internal transaction
+// when tx is nil (and, in the rare case that the part is still pending in the
+// outbox, that transaction is bound to the returned reader), so support only
+// depends on the inner store.
+func (obs *outboxPartStore) SupportsTxFreeGetPart() bool {
+	return partstore.SupportsTxFreeGetPart(obs.innerPartStore)
+}
+
 func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.GetPart")
 	defer span.End()
+
+	if tx == nil {
+		return obs.getPartTxFree(ctx, partId)
+	}
 
 	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx.SqlTx(), obs.outboxId, partId)
 	if err != nil {
@@ -435,6 +448,58 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 		}
 	}
 	return obs.innerPartStore.GetPart(ctx, tx, partId)
+}
+
+// getPartTxFree performs the outbox lookup in its own short read transaction.
+// In the common case (part already flushed to the inner store) the
+// transaction ends before this function returns and the inner store is read
+// without any transaction. Only when the part is still pending in the outbox
+// is the transaction kept open, bound to the returned reader's Close.
+func (obs *outboxPartStore) getPartTxFree(ctx context.Context, partId partstore.PartId) (io.ReadCloser, error) {
+	txController, err := obs.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	releaseTx := func() {
+		_ = txController.Rollback(ctx)
+	}
+
+	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, txController.SqlTx(), obs.outboxId, partId)
+	if err != nil {
+		releaseTx()
+		return nil, err
+	}
+	if lastEntry == nil {
+		releaseTx()
+		return obs.innerPartStore.GetPart(ctx, nil, partId)
+	}
+	if lastEntry.Operation == partOutboxEntry.DeletePartOperation {
+		releaseTx()
+		return nil, partstore.ErrPartNotFound
+	}
+
+	firstChunk, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndex(ctx, txController.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
+	if err != nil {
+		releaseTx()
+		return nil, err
+	}
+	if firstChunk == nil {
+		releaseTx()
+		return obs.innerPartStore.GetPart(ctx, nil, partId)
+	}
+
+	reader := &lazyOutboxChunkReadCloser{
+		ctx:       ctx,
+		tx:        txController,
+		repo:      obs.partOutboxEntryRepository,
+		outboxId:  obs.outboxId,
+		entryId:   *lastEntry.Id,
+		nextChunk: 1,
+		current:   bytes.NewReader(firstChunk.Content),
+	}
+	return ioutils.NewReadCloserWithCloseHook(reader, func() error {
+		return txController.Rollback(ctx)
+	}), nil
 }
 
 // lazyOutboxChunkReadCloser streams an outbox entry's chunks one at a time,

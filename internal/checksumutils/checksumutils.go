@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"hash"
 	"hash/crc32"
 	"hash/crc64"
 	"io"
 	"math"
+	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"go.opentelemetry.io/otel"
@@ -173,12 +175,125 @@ type ChecksumValues struct {
 	ChecksumSHA256    *string
 }
 
+// hashBlockSize is the block granularity at which buffered data is handed to
+// the hash workers. Large enough that per-block synchronization (one channel
+// send per hash plus a WaitGroup) is negligible against hashing time.
+const hashBlockSize = 256 * 1024
+
+var hashBlockPool = sync.Pool{
+	New: func() any { return make([]byte, hashBlockSize) },
+}
+
+// parallelHashWriter feeds all hashes concurrently, one persistent goroutine
+// per hash. Feeding the hashes serially via io.MultiWriter caps the whole
+// upload path at the *sum* of the hash costs; running them in parallel caps it
+// at the slowest single hash instead.
+//
+// Writes are accumulated into fixed-size blocks so the win is independent of
+// the caller's read chunk size. Blocks are dispatched asynchronously with two
+// buffers ping-ponging between filling and hashing, so hashing also overlaps
+// with the caller's own I/O between writes. Flush must be called before
+// reading any hash sums; Close must be called to release the goroutines.
+type hashBlock struct {
+	data []byte
+	wg   *sync.WaitGroup
+}
+
+type parallelHashWriter struct {
+	inputs []chan hashBlock
+	bufs   [2][]byte
+	wgs    [2]sync.WaitGroup
+	fill   int // bytes filled in the active buffer
+	active int // index of the buffer currently being filled
+	closed bool
+}
+
+func newParallelHashWriter(hashes ...hash.Hash) *parallelHashWriter {
+	phw := &parallelHashWriter{
+		inputs: make([]chan hashBlock, len(hashes)),
+	}
+	phw.bufs[0] = hashBlockPool.Get().([]byte)
+	phw.bufs[1] = hashBlockPool.Get().([]byte)
+	for i, h := range hashes {
+		// Capacity 1 lets the dispatcher queue the next block while a worker
+		// is still hashing the previous one.
+		in := make(chan hashBlock, 1)
+		phw.inputs[i] = in
+		go func(h hash.Hash, in <-chan hashBlock) {
+			for blk := range in {
+				// hash.Hash.Write never returns an error.
+				_, _ = h.Write(blk.data)
+				blk.wg.Done()
+			}
+		}(h, in)
+	}
+	return phw
+}
+
+func (phw *parallelHashWriter) Write(p []byte) (int, error) {
+	total := len(p)
+	for len(p) > 0 {
+		n := copy(phw.bufs[phw.active][phw.fill:], p)
+		phw.fill += n
+		p = p[n:]
+		if phw.fill == hashBlockSize {
+			phw.dispatchActive()
+		}
+	}
+	return total, nil
+}
+
+// dispatchActive hands the filled portion of the active buffer to every hash
+// worker without waiting for them, then swaps to the other buffer. It only
+// blocks until the other buffer's previous block has been fully consumed, so
+// it can be safely refilled.
+func (phw *parallelHashWriter) dispatchActive() {
+	if phw.fill == 0 {
+		return
+	}
+	block := phw.bufs[phw.active][:phw.fill]
+	wg := &phw.wgs[phw.active]
+	wg.Add(len(phw.inputs))
+	for _, in := range phw.inputs {
+		in <- hashBlock{data: block, wg: wg}
+	}
+	phw.active = 1 - phw.active
+	phw.fill = 0
+	phw.wgs[phw.active].Wait()
+}
+
+// Flush dispatches any buffered tail and waits until every hash has consumed
+// all data written so far.
+func (phw *parallelHashWriter) Flush() {
+	phw.dispatchActive()
+	phw.wgs[0].Wait()
+	phw.wgs[1].Wait()
+}
+
+// Close releases the worker goroutines and returns the block buffers to the
+// pool. The buffers may only be recycled once the workers are guaranteed to be
+// done with them, so Close waits for all outstanding blocks first.
+func (phw *parallelHashWriter) Close() {
+	if phw.closed {
+		return
+	}
+	phw.closed = true
+	phw.wgs[0].Wait()
+	phw.wgs[1].Wait()
+	for _, in := range phw.inputs {
+		close(in)
+	}
+	hashBlockPool.Put(phw.bufs[0])
+	hashBlockPool.Put(phw.bufs[1])
+	phw.bufs[0] = nil
+	phw.bufs[1] = nil
+}
+
 func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead func(reader io.Reader) error) (*int64, *ChecksumValues, error) {
 	tracer := otel.Tracer("internal/checksumutils")
 	_, span := tracer.Start(ctx, "CalculateChecksumsStreaming")
 	defer span.End()
 
-	// Create a TeeReader that writes to all hash functions simultaneously
 	etagHash := md5.New()
 	crc32Hash := crc32.NewIEEE()
 	crc32cHash := crc32.New(crc32CastagnoliTable)
@@ -186,8 +301,10 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	sha1Hash := sha1.New()
 	sha256Hash := sha256.New()
 
-	multiWriter := io.MultiWriter(etagHash, crc32Hash, crc32cHash, crc64nvmeHash, sha1Hash, sha256Hash)
-	teeReader := io.TeeReader(reader, multiWriter)
+	hashes := []hash.Hash{etagHash, crc32Hash, crc32cHash, crc64nvmeHash, sha1Hash, sha256Hash}
+	parallelWriter := newParallelHashWriter(hashes...)
+	defer parallelWriter.Close()
+	teeReader := io.TeeReader(reader, parallelWriter)
 
 	// Track bytes read
 	var bytesRead int64
@@ -197,6 +314,9 @@ func CalculateChecksumsStreaming(ctx context.Context, reader io.Reader, doRead f
 	if err := doRead(countingReader); err != nil {
 		return nil, nil, err
 	}
+
+	// Make sure every hash has consumed all buffered data before summing.
+	parallelWriter.Flush()
 
 	// Compute checksums
 	etag := "\"" + hex.EncodeToString(etagHash.Sum(nil)) + "\""

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -521,6 +520,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	maxKeys := opts.MaxKeys
 
 	commonPrefixes := []string{}
+	commonPrefixSet := map[string]struct{}{}
 	objects := []metadatastore.Object{}
 	listedObjectIds := []ulid.ULID{}
 	var err error
@@ -550,8 +550,11 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	for _, objectEntity := range objectEntities {
 		if delimiter != "" {
 			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
-			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
-				commonPrefixes = append(commonPrefixes, *commonPrefix)
+			if commonPrefix != nil {
+				if _, seen := commonPrefixSet[*commonPrefix]; !seen {
+					commonPrefixSet[*commonPrefix] = struct{}{}
+					commonPrefixes = append(commonPrefixes, *commonPrefix)
+				}
 			}
 		}
 		if int32(len(objects)) < maxKeys {
@@ -1842,6 +1845,7 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	}
 
 	commonPrefixes := []string{}
+	commonPrefixSet := map[string]struct{}{}
 	uploads := []metadatastore.Upload{}
 	isTruncated := false
 	var objectEntities []object.Entity
@@ -1872,8 +1876,11 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	for _, objectEntity := range objectEntities {
 		if delimiter != "" {
 			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
-			if commonPrefix != nil && !slices.Contains(commonPrefixes, *commonPrefix) {
-				commonPrefixes = append(commonPrefixes, *commonPrefix)
+			if commonPrefix != nil {
+				if _, seen := commonPrefixSet[*commonPrefix]; !seen {
+					commonPrefixSet[*commonPrefix] = struct{}{}
+					commonPrefixes = append(commonPrefixes, *commonPrefix)
+				}
 			}
 		}
 		if int32(len(uploads)) < opts.MaxUploads {

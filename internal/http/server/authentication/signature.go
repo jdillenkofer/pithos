@@ -85,31 +85,39 @@ func generateCanonicalURI(r *http.Request) string {
 		return "/"
 	}
 
-	canonicalURI := ""
+	var canonicalURI strings.Builder
+	canonicalURI.Grow(len(escapedPath))
 	for idx := 0; idx < len(escapedPath); idx++ {
 		ch := escapedPath[idx]
 		if ch == '/' {
-			canonicalURI += "/"
+			canonicalURI.WriteByte('/')
 			continue
 		}
 
 		if ch == '%' && idx+2 < len(escapedPath) && isHexChar(escapedPath[idx+1]) && isHexChar(escapedPath[idx+2]) {
-			canonicalURI += "%"
-			canonicalURI += strings.ToUpper(string(escapedPath[idx+1]))
-			canonicalURI += strings.ToUpper(string(escapedPath[idx+2]))
+			canonicalURI.WriteByte('%')
+			canonicalURI.WriteByte(upperHexChar(escapedPath[idx+1]))
+			canonicalURI.WriteByte(upperHexChar(escapedPath[idx+2]))
 			idx += 2
 			continue
 		}
 
 		if isUnreservedChar(ch) {
-			canonicalURI += string(ch)
+			canonicalURI.WriteByte(ch)
 			continue
 		}
 
-		canonicalURI += fmt.Sprintf("%%%02X", ch)
+		fmt.Fprintf(&canonicalURI, "%%%02X", ch)
 	}
 
-	return canonicalURI
+	return canonicalURI.String()
+}
+
+func upperHexChar(ch byte) byte {
+	if ch >= 'a' && ch <= 'f' {
+		return ch - 'a' + 'A'
+	}
+	return ch
 }
 
 func isHexChar(ch byte) bool {
@@ -160,14 +168,16 @@ func generateCanonicalQueryString(r *http.Request) string {
 		return cmp.Compare(a.val, b.val)
 	})
 
-	canonicalQueryString := ""
+	var canonicalQueryString strings.Builder
 	for idx, queryStringPair := range queryStrings {
-		canonicalQueryString += queryStringPair.key + "=" + queryStringPair.val
-		if idx < len(queryStrings)-1 {
-			canonicalQueryString += "&"
+		if idx > 0 {
+			canonicalQueryString.WriteByte('&')
 		}
+		canonicalQueryString.WriteString(queryStringPair.key)
+		canonicalQueryString.WriteByte('=')
+		canonicalQueryString.WriteString(queryStringPair.val)
 	}
-	return canonicalQueryString
+	return canonicalQueryString.String()
 }
 
 func includeInCanonicalHeaders(headerKey string, headersToInclude []string) bool {
@@ -184,9 +194,11 @@ func mustBeSignedHeader(headerKey string) bool {
 	return false
 }
 
-func generateCanonicalHeaders(r *http.Request, headersToInclude []string) string {
-	canonicalHeaders := ""
-	headers := []pair{}
+// collectSignedHeaders returns the headers participating in the signature,
+// lowercased and sorted by key, shared by the canonical-headers and
+// signed-headers serializations.
+func collectSignedHeaders(r *http.Request, headersToInclude []string) []pair {
+	headers := make([]pair, 0, len(headersToInclude)+1)
 
 	headers = append(headers, pair{
 		key: "host",
@@ -205,42 +217,29 @@ func generateCanonicalHeaders(r *http.Request, headersToInclude []string) string
 	slices.SortFunc(headers, func(a, b pair) int {
 		return cmp.Compare(a.key, b.key)
 	})
+	return headers
+}
 
-	for _, header := range headers {
-		canonicalHeaders += header.key + ":" + header.val + "\n"
+func generateCanonicalHeaders(r *http.Request, headersToInclude []string) string {
+	var canonicalHeaders strings.Builder
+	for _, header := range collectSignedHeaders(r, headersToInclude) {
+		canonicalHeaders.WriteString(header.key)
+		canonicalHeaders.WriteByte(':')
+		canonicalHeaders.WriteString(header.val)
+		canonicalHeaders.WriteByte('\n')
 	}
-	return canonicalHeaders
+	return canonicalHeaders.String()
 }
 
 func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
-	signedHeaders := ""
-	headers := []pair{}
-
-	headers = append(headers, pair{
-		key: "host",
-		val: strings.TrimSpace(r.Host),
-	})
-	for headerKey, headerValues := range r.Header {
-		headerKey = strings.ToLower(headerKey)
-		if includeInCanonicalHeaders(headerKey, headersToInclude) {
-			headerVal := strings.TrimSpace(strings.Join(headerValues, ","))
-			headers = append(headers, pair{
-				key: headerKey,
-				val: headerVal,
-			})
+	var signedHeaders strings.Builder
+	for idx, header := range collectSignedHeaders(r, headersToInclude) {
+		if idx > 0 {
+			signedHeaders.WriteByte(';')
 		}
+		signedHeaders.WriteString(header.key)
 	}
-	slices.SortFunc(headers, func(a, b pair) int {
-		return cmp.Compare(a.key, b.key)
-	})
-
-	for idx, header := range headers {
-		signedHeaders += header.key
-		if idx < len(headers)-1 {
-			signedHeaders += ";"
-		}
-	}
-	return signedHeaders
+	return signedHeaders.String()
 }
 
 func generateHashedPayload(r *http.Request) (*string, error) {
