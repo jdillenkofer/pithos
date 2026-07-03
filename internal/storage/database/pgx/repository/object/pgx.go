@@ -28,7 +28,8 @@ const (
 	findObjectByBucketNameAndKeyStmt                                                                       = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3 AND is_latest = TRUE"
 	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                                     = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4 AND is_latest = TRUE AND is_delete_marker = FALSE"
 	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                                     = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND (key > $3 OR ($4 <> '' AND key = $3 AND upload_id > $4)) AND upload_status = $5"
-	findObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescStmt = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND upload_status = $3 AND (key > $4 OR (key = $4 AND COALESCE(version_id, '') < $5)) ORDER BY key ASC, created_at DESC"
+	findObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescStmt          = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND upload_status = $3 AND (key > $4 OR (key = $4 AND COALESCE(version_id, '') < $5)) ORDER BY key ASC, created_at DESC"
+	findObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimitStmt = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND upload_status = $3 AND (key > $4 OR (key = $4 AND COALESCE(version_id, '') < $5)) ORDER BY key ASC, created_at DESC LIMIT $6"
 	findObjectByBucketNameAndKeyAndVersionIDStmt                                                           = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND version_id = $3 AND upload_status = $4"
 	findNullObjectVersionByBucketNameAndKeyStmt                                                            = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND version_id = 'null' AND upload_status = $3"
 	findLatestObjectByBucketNameAndKeyExcludingIDStmt                                                      = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3 AND id != $4 ORDER BY created_at DESC LIMIT 1"
@@ -343,6 +344,23 @@ func (or *pgxRepository) DeleteObjectByIdAndOptimisticLockVersion(ctx context.Co
 
 func (or *pgxRepository) FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) ([]object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescStmt, bucketName.String(), prefix, object.UploadStatusCompleted, keyMarker, versionIDMarker)
+	if err != nil {
+		return nil, err
+	}
+	defer objectRows.Close()
+	objects := []object.Entity{}
+	for objectRows.Next() {
+		objectEntity, err := convertRowToObjectEntity(objectRows)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, *objectEntity)
+	}
+	return objects, nil
+}
+
+func (or *pgxRepository) FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string, limit int32) ([]object.Entity, error) {
+	objectRows, err := tx.QueryContext(ctx, findObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimitStmt, bucketName.String(), prefix, object.UploadStatusCompleted, keyMarker, versionIDMarker, limit)
 	if err != nil {
 		return nil, err
 	}

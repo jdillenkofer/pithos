@@ -672,14 +672,21 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 		versionIDMarker = *opts.VersionIDMarker
 	}
 
-	entities, err := sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker)
-	if err != nil {
-		return nil, err
-	}
-
 	maxKeys := opts.MaxKeys
 	if maxKeys <= 0 {
 		maxKeys = 1000
+	}
+
+	var entities []object.Entity
+	if delimiter == "" {
+		// Without a delimiter every row is emitted, so one extra row is enough
+		// to detect truncation and the fetch can be bounded in SQL.
+		entities, err = sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker, maxKeys+1)
+	} else {
+		entities, err = sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	commonPrefixes := []string{}

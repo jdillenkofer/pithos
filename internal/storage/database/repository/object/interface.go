@@ -16,6 +16,7 @@ type Repository interface {
 	ContainsBucketObjectsByBucketName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]Entity, error)
 	FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string) ([]Entity, error)
+	FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, versionIDMarker string, limit int32) ([]Entity, error)
 	FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string, limit int32) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string) ([]Entity, error)
 	FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, keyMarker string, uploadIdMarker string, limit int32) ([]Entity, error)
