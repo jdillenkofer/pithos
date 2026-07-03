@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/oklog/ulid/v2"
@@ -26,6 +27,12 @@ import (
 
 const maxStpRetries = 5
 
+// readAheadBlockSize is the prefetch block size for part downloads. While a
+// consumer processes one block (decrypting, writing to the client), the next
+// block is already in flight, hiding the WAN round trip. pkg/sftp splits each
+// block read into concurrent 32KB requests, so this also controls download
+// parallelism. Memory cost is up to two blocks per open part reader.
+const readAheadBlockSize = 1024 * 1024
 type sftpPartStore struct {
 	addr         string
 	clientConfig *ssh.ClientConfig
@@ -290,7 +297,7 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 		return nil, err
 	}
 
-	return f, nil
+	return ioutils.NewReadAheadReadSeekCloser(f, readAheadBlockSize), nil
 }
 
 func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
