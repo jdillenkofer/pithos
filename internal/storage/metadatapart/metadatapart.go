@@ -1233,11 +1233,13 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 		versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
 		versioningSuspended := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusSuspended
 
-		object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
+		var object *metadatastore.Object
 		if opts != nil && opts.VersionID != nil {
 			object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, *opts.VersionID)
 		} else if versioningSuspended {
 			object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, "null")
+		} else {
+			object, err = mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
 		}
 		if err != nil {
 			if err == storage.ErrNoSuchKey && (opts == nil || opts.VersionID == nil) && (versioningEnabled || versioningSuspended) {
@@ -1317,11 +1319,14 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 		versioningSuspended := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusSuspended
 
 		for _, entry := range entries {
-			object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, entry.Key)
+			var object *metadatastore.Object
+			var err error
 			if entry.VersionID != nil {
 				object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, entry.Key, *entry.VersionID)
 			} else if versioningSuspended {
 				object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, entry.Key, "null")
+			} else {
+				object, err = mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, entry.Key)
 			}
 			if err != nil {
 				if err == storage.ErrNoSuchKey {
