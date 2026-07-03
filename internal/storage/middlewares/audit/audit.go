@@ -322,6 +322,32 @@ func (m *AuditLogMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Cont
 	})
 }
 
+func (m *AuditLogMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	var result *storage.BucketVersioningConfiguration
+	err := m.run(ctx, auditlog.OpGetBucketVersioning, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.GetBucketVersioningConfiguration(ctx, bucketName)
+		return err
+	})
+	return result, err
+}
+
+func (m *AuditLogMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	return m.run(ctx, auditlog.OpPutBucketVersioning, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.PutBucketVersioningConfiguration(ctx, bucketName, config)
+	})
+}
+
+func (m *AuditLogMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	var result *storage.ListObjectVersionsResult
+	err := m.run(ctx, auditlog.OpListObjectVersions, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		var err error
+		result, err = m.Next.ListObjectVersions(ctx, bucketName, opts)
+		return err
+	})
+	return result, err
+}
+
 func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	var result *storage.ListBucketResult
 	err := m.run(ctx, auditlog.OpListObjects, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
