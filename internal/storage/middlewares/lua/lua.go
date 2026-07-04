@@ -714,8 +714,12 @@ func (m *luaStorageMiddleware) AppendObject(ctx context.Context, bucketName stor
 	return results[0].(*storage.AppendObjectResult), resultError(results[1])
 }
 
-func (m *luaStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) error {
-	return oneResult(m.call(ctx, "DeleteObject", ctx, bucketName, key, opts))
+func (m *luaStorageMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+	results, err := m.call(ctx, "DeleteObject", ctx, bucketName, key, opts)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.DeleteObjectResult), resultError(results[1])
 }
 
 func (m *luaStorageMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
@@ -726,8 +730,8 @@ func (m *luaStorageMiddleware) DeleteObjects(ctx context.Context, bucketName sto
 	return results[0].(*storage.DeleteObjectsResult), resultError(results[1])
 }
 
-func (m *luaStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string) (*storage.InitiateMultipartUploadResult, error) {
-	results, err := m.call(ctx, "CreateMultipartUpload", ctx, bucketName, key, contentType, checksumType)
+func (m *luaStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	results, err := m.call(ctx, "CreateMultipartUpload", ctx, bucketName, key, contentType, checksumType, opts)
 	if err != nil {
 		return nil, err
 	}
