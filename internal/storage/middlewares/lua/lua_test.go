@@ -505,3 +505,27 @@ end
 	require.NoError(t, err)
 	assert.Equal(t, "ABCDEF", string(content))
 }
+
+func TestLuaFunctionRoundTripsTagsAndUserMetadata(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
+  if opts.tags.env ~= "prod" or opts.metadata.userMetadata.owner ~= "me" then
+    return nil, "PreconditionFailed"
+  end
+  opts.tags.added = "yes"
+  return innerStorage.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
+end
+`)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), nil, strings.NewReader("content"), nil, &storage.PutObjectOptions{
+		Tags:     map[string]string{"env": "prod"},
+		Metadata: &storage.ObjectMetadata{UserMetadata: map[string]string{"owner": "me"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, inner.putOpts)
+	assert.Equal(t, map[string]string{"env": "prod", "added": "yes"}, inner.putOpts.Tags)
+	require.NotNil(t, inner.putOpts.Metadata)
+	assert.Equal(t, map[string]string{"owner": "me"}, inner.putOpts.Metadata.UserMetadata)
+}

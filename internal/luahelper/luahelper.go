@@ -147,6 +147,16 @@ func pushReflectValue(L *lua.State, value reflect.Value, override PushOverride) 
 			PushGoValueWith(L, fieldValue.Interface(), override)
 			L.SetField(-2, LowerCamel(field.Name))
 		}
+	case reflect.String:
+		L.PushString(value.String())
+	case reflect.Bool:
+		L.PushBoolean(value.Bool())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		L.PushInteger(int(value.Int()))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		L.PushInteger(int(value.Uint()))
+	case reflect.Float32, reflect.Float64:
+		L.PushNumber(value.Float())
 	default:
 		L.PushNil()
 	}

@@ -326,6 +326,32 @@ func luaValueToGo(L *golua.State, index int, targetType reflect.Type) (interface
 		}
 		return result.Interface(), nil
 	}
+	if targetType.Kind() == reflect.Map {
+		if !L.IsTable(index) {
+			return nil, fmt.Errorf("table expected for %s", targetType.String())
+		}
+		result := reflect.MakeMap(targetType)
+		L.PushNil()
+		for L.Next(index) {
+			// Convert a copy of the key: conversion may call ToString, which
+			// would replace a non-string key in place and break table traversal.
+			L.PushValue(-2)
+			key, err := luaValueToGo(L, -1, targetType.Key())
+			L.Pop(1)
+			if err != nil {
+				L.Pop(2)
+				return nil, err
+			}
+			value, err := luaValueToGo(L, -1, targetType.Elem())
+			if err != nil {
+				L.Pop(2)
+				return nil, err
+			}
+			result.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(value))
+			L.Pop(1)
+		}
+		return result.Interface(), nil
+	}
 	if targetType.Kind() == reflect.Struct {
 		return luaTableToStruct(L, index, targetType)
 	}
@@ -335,27 +361,15 @@ func luaValueToGo(L *golua.State, index int, targetType reflect.Type) (interface
 		if !ok {
 			return nil, fmt.Errorf("string expected")
 		}
-		return s, nil
+		return reflect.ValueOf(s).Convert(targetType).Interface(), nil
 	case reflect.Bool:
-		return L.ToBoolean(index), nil
-	case reflect.Int:
+		return reflect.ValueOf(L.ToBoolean(index)).Convert(targetType).Interface(), nil
+	case reflect.Int, reflect.Int32, reflect.Int64:
 		i, ok := L.ToInteger(index)
 		if !ok {
 			return nil, fmt.Errorf("integer expected")
 		}
-		return i, nil
-	case reflect.Int32:
-		i, ok := L.ToInteger(index)
-		if !ok {
-			return nil, fmt.Errorf("int32 expected")
-		}
-		return int32(i), nil
-	case reflect.Int64:
-		i, ok := L.ToInteger(index)
-		if !ok {
-			return nil, fmt.Errorf("int64 expected")
-		}
-		return int64(i), nil
+		return reflect.ValueOf(i).Convert(targetType).Interface(), nil
 	case reflect.Interface:
 		value := L.ToValue(index)
 		if value == nil {
