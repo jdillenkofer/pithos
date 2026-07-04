@@ -336,6 +336,30 @@ function CreateBucket(ctx, bucketName)
 end
 ```
 
+Return values follow Go conventions: return `nil` (or nothing) in the error position for success, or a string to fail the call. Strings that match a known storage error name — `NoSuchBucket`, `BucketAlreadyExists`, `BucketNotEmpty`, `NoSuchKey`, `BadDigest`, `NotImplemented`, `EntityTooLarge`, `PreconditionFailed`, `NotModified`, `InvalidBucketName`, `InvalidObjectKey`, `InvalidUploadId`, `InvalidRange`, `NoSuchWebsiteConfiguration`, `TooManyParts`, `InvalidWriteOffset`, `InvalidStorageClass`, `CASFailure` — are mapped to the corresponding storage error, so the S3 API layer returns the matching error response. Any other string becomes a generic error.
+
+Values are converted between Go and Lua automatically:
+
+- Structs become tables with lowerCamelCase field names (e.g. `object.lastModified`), and tables returned from Lua are converted back the same way.
+- Slices become array tables; maps (such as object tags and user metadata) become key/value tables, in both directions.
+- Timestamps are RFC 3339 strings; bucket names, object keys, and upload IDs are plain strings.
+
+This covers the full storage interface, including versioning, object tagging, multipart/copy operations, object storage-class transitions, and bucket CORS/lifecycle/website configuration:
+
+```lua
+function PutObjectTagging(ctx, bucketName, key, tags, opts)
+  tags["reviewed"] = "false"
+  return innerStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
+end
+
+function TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+  if targetStorageClass == "DEEP_ARCHIVE" then
+    return "InvalidStorageClass"
+  end
+  return innerStorage.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+end
+```
+
 Object streams are exposed as chunked reader tables, so scripts can transform data without loading a whole object into memory:
 
 ```lua
