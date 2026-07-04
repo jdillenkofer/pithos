@@ -66,6 +66,7 @@ var storageErrorByName = map[string]error{
 	"NoSuchWebsiteConfiguration": storage.ErrNoSuchWebsiteConfiguration,
 	"TooManyParts":               storage.ErrTooManyParts,
 	"InvalidWriteOffset":         storage.ErrInvalidWriteOffset,
+	"InvalidStorageClass":        storage.ErrInvalidStorageClass,
 	"CASFailure":                 storage.ErrCASFailure,
 }
 
@@ -688,12 +689,76 @@ func (m *luaStorageMiddleware) DeleteBucketWebsiteConfiguration(ctx context.Cont
 	return oneResult(m.call(ctx, "DeleteBucketWebsiteConfiguration", ctx, bucketName))
 }
 
+func (m *luaStorageMiddleware) GetBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
+	results, err := m.call(ctx, "GetBucketVersioningConfiguration", ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.BucketVersioningConfiguration), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	return oneResult(m.call(ctx, "PutBucketVersioningConfiguration", ctx, bucketName, config))
+}
+
+func (m *luaStorageMiddleware) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	results, err := m.call(ctx, "GetBucketCORSConfiguration", ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.BucketCORSConfiguration), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	return oneResult(m.call(ctx, "PutBucketCORSConfiguration", ctx, bucketName, config))
+}
+
+func (m *luaStorageMiddleware) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return oneResult(m.call(ctx, "DeleteBucketCORSConfiguration", ctx, bucketName))
+}
+
+func (m *luaStorageMiddleware) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	results, err := m.call(ctx, "GetBucketLifecycleConfiguration", ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.BucketLifecycleConfiguration), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	return oneResult(m.call(ctx, "PutBucketLifecycleConfiguration", ctx, bucketName, config))
+}
+
+func (m *luaStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	return oneResult(m.call(ctx, "DeleteBucketLifecycleConfiguration", ctx, bucketName))
+}
+
+func (m *luaStorageMiddleware) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	results, err := m.call(ctx, "GetBucketNotificationConfiguration", ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.BucketNotificationConfiguration), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	return oneResult(m.call(ctx, "PutBucketNotificationConfiguration", ctx, bucketName, config))
+}
+
 func (m *luaStorageMiddleware) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	results, err := m.call(ctx, "ListObjects", ctx, bucketName, opts)
 	if err != nil {
 		return nil, err
 	}
 	return results[0].(*storage.ListBucketResult), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) ListObjectVersions(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	results, err := m.call(ctx, "ListObjectVersions", ctx, bucketName, opts)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.ListObjectVersionsResult), resultError(results[1])
 }
 
 func (m *luaStorageMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
@@ -720,6 +785,14 @@ func (m *luaStorageMiddleware) PutObject(ctx context.Context, bucketName storage
 	return results[0].(*storage.PutObjectResult), resultError(results[1])
 }
 
+func (m *luaStorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	results, err := m.call(ctx, "CopyObject", ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.CopyObjectResult), resultError(results[1])
+}
+
 func (m *luaStorageMiddleware) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	results, err := m.call(ctx, "AppendObject", ctx, bucketName, key, data, checksumInput, opts)
 	if err != nil {
@@ -744,6 +817,10 @@ func (m *luaStorageMiddleware) DeleteObjects(ctx context.Context, bucketName sto
 	return results[0].(*storage.DeleteObjectsResult), resultError(results[1])
 }
 
+func (m *luaStorageMiddleware) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	return oneResult(m.call(ctx, "TransitionObjectStorageClass", ctx, bucketName, key, targetStorageClass, opts))
+}
+
 func (m *luaStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	results, err := m.call(ctx, "CreateMultipartUpload", ctx, bucketName, key, contentType, checksumType, opts)
 	if err != nil {
@@ -758,6 +835,14 @@ func (m *luaStorageMiddleware) UploadPart(ctx context.Context, bucketName storag
 		return nil, err
 	}
 	return results[0].(*storage.UploadPartResult), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	results, err := m.call(ctx, "UploadPartCopy", ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(*storage.UploadPartCopyResult), resultError(results[1])
 }
 
 func (m *luaStorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
@@ -786,4 +871,20 @@ func (m *luaStorageMiddleware) ListParts(ctx context.Context, bucketName storage
 		return nil, err
 	}
 	return results[0].(*storage.ListPartsResult), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
+	results, err := m.call(ctx, "GetObjectTagging", ctx, bucketName, key, opts)
+	if err != nil {
+		return nil, err
+	}
+	return results[0].(map[string]string), resultError(results[1])
+}
+
+func (m *luaStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
+	return oneResult(m.call(ctx, "PutObjectTagging", ctx, bucketName, key, tags, opts))
+}
+
+func (m *luaStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
+	return oneResult(m.call(ctx, "DeleteObjectTagging", ctx, bucketName, key, opts))
 }

@@ -17,14 +17,59 @@ import (
 
 type testStorage struct {
 	delegator.DelegatingStorage
-	createdBuckets []storage.BucketName
-	putContent     string
-	contentType    *string
-	putOpts        *storage.PutObjectOptions
-	headOpts       *storage.HeadObjectOptions
-	getRanges      []storage.ByteRange
-	startCount     int
-	stopCount      int
+	createdBuckets     []storage.BucketName
+	putContent         string
+	contentType        *string
+	putOpts            *storage.PutObjectOptions
+	headOpts           *storage.HeadObjectOptions
+	getRanges          []storage.ByteRange
+	startCount         int
+	stopCount          int
+	versioningConfig   *storage.BucketVersioningConfiguration
+	objectTags         map[string]string
+	taggingOpts        *storage.ObjectTaggingOptions
+	deleteTaggingCount int
+	corsConfig         *storage.BucketCORSConfiguration
+	notificationConfig *storage.BucketNotificationConfiguration
+	transitionClass    string
+	transitionOpts     *storage.TransitionObjectStorageClassOptions
+}
+
+func (s *testStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
+	s.versioningConfig = config
+	return nil
+}
+
+func (s *testStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
+	s.objectTags = tags
+	s.taggingOpts = opts
+	return nil
+}
+
+func (s *testStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
+	s.deleteTaggingCount++
+	s.taggingOpts = opts
+	return nil
+}
+
+func (s *testStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	s.transitionClass = targetStorageClass
+	s.transitionOpts = opts
+	return nil
+}
+
+func (s *testStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	s.corsConfig = config
+	return nil
+}
+
+func (s *testStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	return s.notificationConfig, nil
+}
+
+func (s *testStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	s.notificationConfig = config
+	return nil
 }
 
 func (s *testStorage) Start(ctx context.Context) error {
@@ -142,6 +187,41 @@ func TestMissingPutObjectFunctionDelegatesTypedNilArgumentsToInnerStorage(t *tes
 	_, err = store.PutObject(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), nil, strings.NewReader("content"), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "content", inner.putContent)
+}
+
+func TestBucketNotificationOperationsRouteThroughLuaHooks(t *testing.T) {
+	inner := &testStorage{}
+	id := "queue"
+	store, err := NewStorageMiddleware(inner, `
+function PutBucketNotificationConfiguration(ctx, bucketName, config)
+  return innerStorage.PutBucketNotificationConfiguration(ctx, bucketName, config)
+end
+
+function GetBucketNotificationConfiguration(ctx, bucketName)
+  return innerStorage.GetBucketNotificationConfiguration(ctx, bucketName)
+end
+`)
+	require.NoError(t, err)
+
+	config := &storage.BucketNotificationConfiguration{
+		QueueConfigurations: []storage.NotificationConfigurationRule{{
+			ID:              &id,
+			DestinationARN:  "arn:aws:sqs:eu-central-1:000000000000:queue",
+			DestinationType: storage.NotificationDestinationQueue,
+			Events:          []string{"s3:ObjectCreated:*"},
+			FilterRules:     []storage.NotificationFilterRule{{Name: "prefix", Value: "images/"}},
+		}},
+	}
+	err = store.PutBucketNotificationConfiguration(context.Background(), storage.MustNewBucketName("bucket"), config)
+	require.NoError(t, err)
+
+	loaded, err := store.GetBucketNotificationConfiguration(context.Background(), storage.MustNewBucketName("bucket"))
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.Len(t, loaded.QueueConfigurations, 1)
+	require.NotNil(t, loaded.QueueConfigurations[0].ID)
+	assert.Equal(t, "queue", *loaded.QueueConfigurations[0].ID)
+	assert.Equal(t, []storage.NotificationFilterRule{{Name: "prefix", Value: "images/"}}, loaded.QueueConfigurations[0].FilterRules)
 }
 
 func TestLuaFunctionCanRewriteArguments(t *testing.T) {
@@ -528,4 +608,183 @@ end
 	assert.Equal(t, map[string]string{"env": "prod", "added": "yes"}, inner.putOpts.Tags)
 	require.NotNil(t, inner.putOpts.Metadata)
 	assert.Equal(t, map[string]string{"owner": "me"}, inner.putOpts.Metadata.UserMetadata)
+}
+
+func TestLuaFunctionCanInterceptBucketVersioning(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function GetBucketVersioningConfiguration(ctx, bucketName)
+  return { status = "Enabled" }, nil
+end
+
+function PutBucketVersioningConfiguration(ctx, bucketName, config)
+  if config.status ~= "Suspended" then
+    return "InvalidBucketName"
+  end
+  return innerStorage.PutBucketVersioningConfiguration(ctx, bucketName, config)
+end
+
+function ListObjectVersions(ctx, bucketName, opts)
+  if opts.maxKeys ~= 100 then
+    return nil, "NoSuchBucket"
+  end
+  return {
+    versions = { { key = "a", versionID = "v1", isLatest = true, isDeleteMarker = false, size = 3, lastModified = "2026-01-02T03:04:05Z" } },
+    isTruncated = false,
+  }, nil
+end
+`)
+	require.NoError(t, err)
+
+	config, err := store.GetBucketVersioningConfiguration(context.Background(), storage.MustNewBucketName("bucket"))
+	require.NoError(t, err)
+	require.NotNil(t, config)
+	require.NotNil(t, config.Status)
+	assert.Equal(t, storage.BucketVersioningStatusEnabled, *config.Status)
+
+	status := storage.BucketVersioningStatusSuspended
+	err = store.PutBucketVersioningConfiguration(context.Background(), storage.MustNewBucketName("bucket"), &storage.BucketVersioningConfiguration{Status: &status})
+	require.NoError(t, err)
+	require.NotNil(t, inner.versioningConfig)
+	require.NotNil(t, inner.versioningConfig.Status)
+	assert.Equal(t, storage.BucketVersioningStatusSuspended, *inner.versioningConfig.Status)
+
+	result, err := store.ListObjectVersions(context.Background(), storage.MustNewBucketName("bucket"), storage.ListObjectVersionsOptions{MaxKeys: 100})
+	require.NoError(t, err)
+	require.Len(t, result.Versions, 1)
+	assert.Equal(t, "a", result.Versions[0].Key.String())
+	assert.Equal(t, "v1", result.Versions[0].VersionID)
+	assert.True(t, result.Versions[0].IsLatest)
+	assert.Equal(t, int64(3), result.Versions[0].Size)
+	assert.False(t, result.IsTruncated)
+}
+
+func TestLuaFunctionCanInterceptObjectTagging(t *testing.T) {
+	versionID := "v1"
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function GetObjectTagging(ctx, bucketName, key, opts)
+  if opts.versionID ~= "v1" then
+    return nil, "NoSuchKey"
+  end
+  return { env = "prod" }, nil
+end
+
+function PutObjectTagging(ctx, bucketName, key, tags, opts)
+  if opts.versionID ~= "v1" then
+    return "NoSuchKey"
+  end
+  tags.added = "yes"
+  return innerStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
+end
+`)
+	require.NoError(t, err)
+
+	opts := &storage.ObjectTaggingOptions{VersionID: &versionID}
+	tags, err := store.GetObjectTagging(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), opts)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"env": "prod"}, tags)
+
+	err = store.PutObjectTagging(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), map[string]string{"env": "prod"}, opts)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"env": "prod", "added": "yes"}, inner.objectTags)
+	require.NotNil(t, inner.taggingOpts)
+	require.NotNil(t, inner.taggingOpts.VersionID)
+	assert.Equal(t, "v1", *inner.taggingOpts.VersionID)
+
+	// DeleteObjectTagging has no Lua override and must delegate to the inner storage.
+	err = store.DeleteObjectTagging(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 1, inner.deleteTaggingCount)
+	require.NotNil(t, inner.taggingOpts)
+	require.NotNil(t, inner.taggingOpts.VersionID)
+	assert.Equal(t, "v1", *inner.taggingOpts.VersionID)
+}
+
+func TestLuaFunctionCanInterceptTransitionObjectStorageClass(t *testing.T) {
+	ifMatch := "etag"
+	versionID := "v1"
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+  if targetStorageClass ~= "GLACIER_IR" or opts.ifMatchETag ~= "etag" or opts.versionID ~= "v1" then
+    return "InvalidStorageClass"
+  end
+  return innerStorage.TransitionObjectStorageClass(ctx, bucketName, key, "STANDARD_IA", opts)
+end
+`)
+	require.NoError(t, err)
+
+	err = store.TransitionObjectStorageClass(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), "GLACIER_IR", &storage.TransitionObjectStorageClassOptions{
+		IfMatchETag: &ifMatch,
+		VersionID:   &versionID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "STANDARD_IA", inner.transitionClass)
+	require.NotNil(t, inner.transitionOpts)
+	require.NotNil(t, inner.transitionOpts.IfMatchETag)
+	assert.Equal(t, "etag", *inner.transitionOpts.IfMatchETag)
+	require.NotNil(t, inner.transitionOpts.VersionID)
+	assert.Equal(t, "v1", *inner.transitionOpts.VersionID)
+}
+
+func TestLuaFunctionMapsInvalidStorageClassError(t *testing.T) {
+	store, err := NewStorageMiddleware(&testStorage{}, `
+function TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+  return "InvalidStorageClass"
+end
+`)
+	require.NoError(t, err)
+
+	err = store.TransitionObjectStorageClass(context.Background(), storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), "INVALID", nil)
+	assert.ErrorIs(t, err, storage.ErrInvalidStorageClass)
+}
+
+func TestLuaFunctionCanInterceptCopyObject(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+  if srcBucket ~= "src" or srcKey ~= "a" or dstBucket ~= "dst" or dstKey ~= "b" then
+    return nil, "NoSuchKey"
+  end
+  return { eTag = "etag", lastModified = "2026-01-02T03:04:05Z", versionID = "v7" }, nil
+end
+`)
+	require.NoError(t, err)
+
+	result, err := store.CopyObject(context.Background(), storage.MustNewBucketName("src"), storage.MustNewObjectKey("a"), storage.MustNewBucketName("dst"), storage.MustNewObjectKey("b"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "etag", result.ETag)
+	assert.Equal(t, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), result.LastModified)
+	require.NotNil(t, result.VersionID)
+	assert.Equal(t, "v7", *result.VersionID)
+}
+
+func TestLuaFunctionRoundTripsBucketCORSConfiguration(t *testing.T) {
+	inner := &testStorage{}
+	store, err := NewStorageMiddleware(inner, `
+function PutBucketCORSConfiguration(ctx, bucketName, config)
+  if config.rules[1].allowedOrigins[1] ~= "https://example.com" then
+    return "InvalidBucketName"
+  end
+  return innerStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+end
+`)
+	require.NoError(t, err)
+
+	maxAge := 300
+	err = store.PutBucketCORSConfiguration(context.Background(), storage.MustNewBucketName("bucket"), &storage.BucketCORSConfiguration{
+		Rules: []storage.CORSRule{{
+			AllowedOrigins: []string{"https://example.com"},
+			AllowedMethods: []string{"GET", "PUT"},
+			MaxAgeSeconds:  &maxAge,
+		}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, inner.corsConfig)
+	require.Len(t, inner.corsConfig.Rules, 1)
+	assert.Equal(t, []string{"https://example.com"}, inner.corsConfig.Rules[0].AllowedOrigins)
+	assert.Equal(t, []string{"GET", "PUT"}, inner.corsConfig.Rules[0].AllowedMethods)
+	require.NotNil(t, inner.corsConfig.Rules[0].MaxAgeSeconds)
+	assert.Equal(t, 300, *inner.corsConfig.Rules[0].MaxAgeSeconds)
 }
