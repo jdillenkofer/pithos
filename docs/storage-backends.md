@@ -9,9 +9,11 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **MetadataPartStorage**: Separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
   - Configurable part stores (filesystem, SFTP)
+  - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
   - Compatible with other S3-compatible services
   - Configurable endpoint, region, and credentials
+  - Forwards object metadata, bucket versioning, object version listing, and version-aware object deletes to the upstream S3 service
 
 ### Enhancement Layers
 
@@ -26,7 +28,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **ObjectCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
   - Caches `GetObject` full-object reads and `HeadObject` metadata
   - Invalidates cache entries on successful object mutation operations (`PutObject`, `CopyObject`, `AppendObject`, `DeleteObject`, `DeleteObjects`, `CompleteMultipartUpload`)
-  - Bypasses cache for ranged `GetObject` requests
+  - Bypasses cache for ranged `GetObject` requests and explicit `versionId` reads
 
 ### Part Store Middleware
 
@@ -40,6 +42,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 - **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and TPM 2.0
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)
+  - Uses seekable encrypted part reads for efficient ranged downloads when the inner part store supports seeking
 - **OutboxPartStore**: Implements outbox pattern for reliable part operations
 - **ErasureCodedPartStoreMiddleware**: Reed-Solomon erasure coding for part storage
   - Supports streaming reads/writes for large parts
@@ -177,7 +180,13 @@ Pithos supports multiple storage backends that can be configured in the storage 
 }
 ```
 
-> **Note:** This middleware currently caches only full-object reads. Ranged reads are always fetched from the inner storage. Concurrent cache misses for the same object are coalesced to avoid duplicate backend reads.
+> **Note:** This middleware currently caches only full-object reads of the latest object version. Ranged reads and explicit `versionId` reads are always fetched from the inner storage. Concurrent cache misses for the same object are coalesced to avoid duplicate backend reads.
+
+### Versioning and Metadata Upgrades
+
+SQL-backed `MetadataPartStorage` runs embedded SQLite/PostgreSQL migrations when the database starts. The object metadata migration adds columns for user-controllable system metadata and an `object_user_metadata` table for `x-amz-meta-*` values. The versioning migration adds bucket versioning state and object version columns; existing completed objects are marked as the latest `null` version so they remain accessible after upgrading.
+
+Filesystem and SFTP part stores can serve object bytes without holding a database transaction open for the entire download. This is also used through compatible part-store middlewares, including compression, cache, outbox, erasure coding, and Tink encryption. SQL part stores keep the read transaction open to preserve snapshot semantics for database-backed part content.
 
 ### Cache Part Store
 

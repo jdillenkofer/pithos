@@ -8,9 +8,10 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 ## Features
 
 - S3-compatible API with extensive operation support:
-  - Bucket Operations: Create, Head, Delete, List buckets
-  - Object Operations: Head, Get, Put, Copy, Delete, List objects
+  - Bucket Operations: Create, Head, Delete, List buckets, CORS, lifecycle, website, and versioning
+  - Object Operations: Head, Get, Put, Copy, Append, Delete, multi-delete, List objects, List object versions
   - Multipart Upload Operations: Initiate, Upload, Upload Part Copy, Complete, Abort, List
+- Object metadata, object tagging, delete markers, and S3-style bucket versioning
 - Authentication using AWS Signature Version 4
 - Authorization support via Lua scripts
 - Configurable storage backends (local filesystem, S3, etc.)
@@ -41,6 +42,7 @@ For detailed documentation, see the [docs](docs/) directory:
 - [Getting Started](docs/getting-started.md) – Installation, build, and Docker setup
 - [CLI Reference](docs/cli-reference.md) – All commands and options
 - [Configuration](docs/configuration.md) – Environment variables and authorization
+- [S3 API Behavior](docs/s3-api.md) – Object metadata, versioning, and SDK-facing semantics
 - [Storage Backends](docs/storage-backends.md) – Storage types and configuration examples
 - [Audit Logging](docs/audit-logging.md) – Audit middleware and verification
 - [Verifying Releases](docs/verifying-releases.md) – Cosign verification
