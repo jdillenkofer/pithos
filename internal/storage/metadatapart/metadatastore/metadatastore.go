@@ -124,6 +124,9 @@ type Part struct {
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+	// StoreName is the name of the part store holding this part's data; nil
+	// means the default part store (parts written before named stores).
+	StoreName *string
 }
 
 type InitiateMultipartUploadResult struct {

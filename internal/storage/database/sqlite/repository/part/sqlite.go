@@ -15,9 +15,9 @@ type sqliteRepository struct {
 
 const (
 	findInUsePartIdsStmt                            = "SELECT part_id FROM parts"
-	findPartsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at FROM parts WHERE object_id = $1 ORDER BY sequence_number ASC"
-	insertPartStmt                                  = "INSERT INTO parts (id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
-	updatePartByIdStmt                              = "UPDATE parts SET part_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, updated_at = $11 WHERE id = $12"
+	findPartsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at FROM parts WHERE object_id = $1 ORDER BY sequence_number ASC"
+	insertPartStmt                                  = "INSERT INTO parts (id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"
+	updatePartByIdStmt                              = "UPDATE parts SET part_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, part_store_name = $11, updated_at = $12 WHERE id = $13"
 	deletePartByObjectIdStmt                        = "DELETE FROM parts WHERE object_id = $1"
 )
 
@@ -37,9 +37,10 @@ func convertRowToPartEntity(partRows *sql.Rows) (*part.Entity, error) {
 	var checksumSHA256 *string
 	var size int64
 	var sequenceNumber int
+	var partStoreName *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := partRows.Scan(&id, &partIdStr, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &createdAt, &updatedAt)
+	err := partRows.Scan(&id, &partIdStr, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &partStoreName, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +58,7 @@ func convertRowToPartEntity(partRows *sql.Rows) (*part.Entity, error) {
 		ChecksumSHA256:    checksumSHA256,
 		Size:              size,
 		SequenceNumber:    sequenceNumber,
+		PartStoreName:     partStoreName,
 		CreatedAt:         createdAt,
 		UpdatedAt:         updatedAt,
 	}
@@ -105,12 +107,12 @@ func (br *sqliteRepository) SavePart(ctx context.Context, tx *sql.Tx, part *part
 		part.Id = &id
 		part.CreatedAt = time.Now().UTC()
 		part.UpdatedAt = part.CreatedAt
-		_, err := tx.ExecContext(ctx, insertPartStmt, part.Id.String(), part.PartId.String(), part.ObjectId.String(), part.ETag, part.ChecksumCRC32, part.ChecksumCRC32C, part.ChecksumCRC64NVME, part.ChecksumSHA1, part.ChecksumSHA256, part.Size, part.SequenceNumber, part.CreatedAt, part.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertPartStmt, part.Id.String(), part.PartId.String(), part.ObjectId.String(), part.ETag, part.ChecksumCRC32, part.ChecksumCRC32C, part.ChecksumCRC64NVME, part.ChecksumSHA1, part.ChecksumSHA256, part.Size, part.SequenceNumber, part.PartStoreName, part.CreatedAt, part.UpdatedAt)
 		return err
 	}
 
 	part.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updatePartByIdStmt, part.PartId.String(), part.ObjectId.String(), part.ETag, part.ChecksumCRC32, part.ChecksumCRC32C, part.ChecksumCRC64NVME, part.ChecksumSHA1, part.ChecksumSHA256, part.Size, part.SequenceNumber, part.UpdatedAt, part.Id.String())
+	_, err := tx.ExecContext(ctx, updatePartByIdStmt, part.PartId.String(), part.ObjectId.String(), part.ETag, part.ChecksumCRC32, part.ChecksumCRC32C, part.ChecksumCRC64NVME, part.ChecksumSHA1, part.ChecksumSHA256, part.Size, part.SequenceNumber, part.PartStoreName, part.UpdatedAt, part.Id.String())
 	return err
 }
 
