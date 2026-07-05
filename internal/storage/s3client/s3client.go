@@ -2,11 +2,15 @@ package s3client
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -177,12 +181,18 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 		return nil, err
 	}
 	objects := sliceutils.Map(func(object types.Object) storage.Object {
+		// S3 list responses only carry the checksum type and algorithm, not
+		// the checksum values themselves.
+		var checksumType *string
+		if object.ChecksumType != "" {
+			checksumType = (*string)(&object.ChecksumType)
+		}
 		return storage.Object{
 			Key:          storage.MustNewObjectKey(*object.Key),
 			LastModified: *object.LastModified,
 			ETag:         *object.ETag,
-			// @TODO: checksums
-			Size: *object.Size,
+			ChecksumType: checksumType,
+			Size:         *object.Size,
 		}
 	}, listObjectsResult.Contents)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -337,6 +347,42 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	return object, readers, nil
 }
 
+// checksumAlgorithmFromInput maps the x-amz-sdk-checksum-algorithm value of a
+// request onto the SDK enum, so the backing S3 validates the payload with the
+// same algorithm the client asked for. The algorithm is only forwarded
+// together with a precomputed checksum value: without one, the SDK would
+// compute the checksum itself, which requires a seekable stream when the
+// backend connection cannot use trailing checksums.
+func checksumAlgorithmFromInput(checksumInput *storage.ChecksumInput) types.ChecksumAlgorithm {
+	if checksumInput == nil || checksumInput.ChecksumAlgorithm == nil {
+		return ""
+	}
+	hasChecksumValue := checksumInput.ChecksumCRC32 != nil ||
+		checksumInput.ChecksumCRC32C != nil ||
+		checksumInput.ChecksumCRC64NVME != nil ||
+		checksumInput.ChecksumSHA1 != nil ||
+		checksumInput.ChecksumSHA256 != nil
+	if !hasChecksumValue {
+		return ""
+	}
+	return types.ChecksumAlgorithm(strings.ToUpper(*checksumInput.ChecksumAlgorithm))
+}
+
+// contentMD5FromETag converts the quoted-hex ETag form that a Content-MD5
+// header was parsed into back to the base64 form the SDK expects. Values that
+// are not a hex-encoded MD5 digest are dropped.
+func contentMD5FromETag(etag *string) *string {
+	if etag == nil {
+		return nil
+	}
+	digest, err := hex.DecodeString(strings.Trim(*etag, "\""))
+	if err != nil || len(digest) != md5.Size {
+		return nil
+	}
+	encoded := base64.StdEncoding.EncodeToString(digest)
+	return &encoded
+}
+
 // parseExpires parses the stored raw Expires header value into a time.Time for
 // the AWS SDK, which only accepts a parsed timestamp on requests. Unparseable
 // values are dropped.
@@ -371,7 +417,15 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 			}
 			return nil
 		}(),
-		// @TODO: Use checksumInput
+	}
+	if checksumInput != nil {
+		input.ChecksumAlgorithm = checksumAlgorithmFromInput(checksumInput)
+		input.ContentMD5 = contentMD5FromETag(checksumInput.ETag)
+		input.ChecksumCRC32 = checksumInput.ChecksumCRC32
+		input.ChecksumCRC32C = checksumInput.ChecksumCRC32C
+		input.ChecksumCRC64NVME = checksumInput.ChecksumCRC64NVME
+		input.ChecksumSHA1 = checksumInput.ChecksumSHA1
+		input.ChecksumSHA256 = checksumInput.ChecksumSHA256
 	}
 	if opts != nil && opts.Metadata != nil {
 		input.CacheControl = opts.Metadata.CacheControl
@@ -636,14 +690,23 @@ func (rs *s3ClientStorage) UploadPart(ctx context.Context, bucketName storage.Bu
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.UploadPart")
 	defer span.End()
 
-	uploadPartResult, err := rs.s3Client.UploadPart(ctx, &s3.UploadPartInput{
+	input := &s3.UploadPartInput{
 		Bucket:     aws.String(bucketName.String()),
 		Key:        aws.String(key.String()),
 		UploadId:   aws.String(uploadId.String()),
 		PartNumber: aws.Int32(partNumber),
 		Body:       data,
-		// @TODO: Use checksumInput
-	})
+	}
+	if checksumInput != nil {
+		input.ChecksumAlgorithm = checksumAlgorithmFromInput(checksumInput)
+		input.ContentMD5 = contentMD5FromETag(checksumInput.ETag)
+		input.ChecksumCRC32 = checksumInput.ChecksumCRC32
+		input.ChecksumCRC32C = checksumInput.ChecksumCRC32C
+		input.ChecksumCRC64NVME = checksumInput.ChecksumCRC64NVME
+		input.ChecksumSHA1 = checksumInput.ChecksumSHA1
+		input.ChecksumSHA256 = checksumInput.ChecksumSHA256
+	}
+	uploadPartResult, err := rs.s3Client.UploadPart(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return nil, storage.ErrNoSuchBucket
@@ -723,7 +786,16 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
 		UploadId: aws.String(uploadId.String()),
-		// @TODO: Use checksumInput
+	}
+	if checksumInput != nil {
+		if checksumInput.ChecksumType != nil {
+			input.ChecksumType = types.ChecksumType(strings.ToUpper(*checksumInput.ChecksumType))
+		}
+		input.ChecksumCRC32 = checksumInput.ChecksumCRC32
+		input.ChecksumCRC32C = checksumInput.ChecksumCRC32C
+		input.ChecksumCRC64NVME = checksumInput.ChecksumCRC64NVME
+		input.ChecksumSHA1 = checksumInput.ChecksumSHA1
+		input.ChecksumSHA256 = checksumInput.ChecksumSHA256
 	}
 	if opts != nil && len(opts.Parts) > 0 {
 		input.MultipartUpload = &types.CompletedMultipartUpload{
