@@ -699,16 +699,38 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 	return result, nil
 }
 
+func mapCompleteMultipartUploadParts(parts []storage.CompleteMultipartUploadPart) []types.CompletedPart {
+	completedParts := make([]types.CompletedPart, 0, len(parts))
+	for _, part := range parts {
+		completedParts = append(completedParts, types.CompletedPart{
+			ChecksumCRC32:     part.ChecksumCRC32,
+			ChecksumCRC32C:    part.ChecksumCRC32C,
+			ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+			ChecksumSHA1:      part.ChecksumSHA1,
+			ChecksumSHA256:    part.ChecksumSHA256,
+			ETag:              aws.String(part.ETag),
+			PartNumber:        aws.Int32(part.PartNumber),
+		})
+	}
+	return completedParts
+}
+
 func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CompleteMultipartUpload")
 	defer span.End()
 
-	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+	input := &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucketName.String()),
 		Key:      aws.String(key.String()),
 		UploadId: aws.String(uploadId.String()),
 		// @TODO: Use checksumInput
-	})
+	}
+	if opts != nil && len(opts.Parts) > 0 {
+		input.MultipartUpload = &types.CompletedMultipartUpload{
+			Parts: mapCompleteMultipartUploadParts(opts.Parts),
+		}
+	}
+	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return nil, storage.ErrNoSuchBucket

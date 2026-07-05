@@ -355,6 +355,15 @@ func (rs *replicationStorage) UploadPartCopy(ctx context.Context, srcBucket stor
 	return uploadPartCopyResult, nil
 }
 
+func completeMultipartUploadPartsOnlyOptions(opts *storage.CompleteMultipartUploadOptions) *storage.CompleteMultipartUploadOptions {
+	if opts == nil || len(opts.Parts) == 0 {
+		return nil
+	}
+	return &storage.CompleteMultipartUploadOptions{
+		Parts: opts.Parts,
+	}
+}
+
 func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CompleteMultipartUpload")
 	defer span.End()
@@ -368,8 +377,9 @@ func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucke
 	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
 	rs.mapMutex.Unlock()
 
+	secondaryOpts := completeMultipartUploadPartsOnlyOptions(opts)
 	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, nil)
+		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, secondaryOpts)
 		if err != nil {
 			return nil, err
 		}

@@ -1437,6 +1437,110 @@ func TestPutObjectWithTrailingChecksum(t *testing.T) {
 	})
 }
 
+func TestCompleteMultipartUploadPartVerification(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		// setupUpload creates a bucket and a multipart upload with two
+		// uploaded parts and returns the parts as the client would declare
+		// them in CompleteMultipartUpload.
+		setupUpload := func(t *testing.T) (*s3.Client, *string, []types.CompletedPart) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			require.NoError(t, err)
+
+			completedParts := make([]types.CompletedPart, 0, 2)
+			for partNumber := int32(1); partNumber <= 2; partNumber++ {
+				uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:     bucketName,
+					Key:        key,
+					UploadId:   createResult.UploadId,
+					PartNumber: aws.Int32(partNumber),
+					Body:       bytes.NewReader([]byte(fmt.Sprintf("part %d content", partNumber))),
+				})
+				require.NoError(t, err)
+				completedParts = append(completedParts, types.CompletedPart{
+					ETag:       uploadPartResult.ETag,
+					PartNumber: aws.Int32(partNumber),
+				})
+			}
+			return s3Client, createResult.UploadId, completedParts
+		}
+
+		completeUpload := func(s3Client *s3.Client, uploadId *string, parts []types.CompletedPart) error {
+			_, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: parts,
+				},
+			})
+			return err
+		}
+
+		assertApiError := func(t *testing.T, err error, expectedCode string) {
+			assert.Error(t, err)
+			var apiErr smithy.APIError
+			if errors.As(err, &apiErr) {
+				assert.Equal(t, expectedCode, apiErr.ErrorCode())
+			} else {
+				assert.Fail(t, "Expected API error", "err %v", err)
+			}
+		}
+
+		t.Run("it should reject completing a multipart upload with a wrong part etag"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			completedParts[1].ETag = aws.String("\"00000000000000000000000000000000\"")
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assertApiError(t, err, "InvalidPart")
+		})
+
+		t.Run("it should reject completing a multipart upload with a wrong part checksum"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			completedParts[1].ChecksumCRC32 = aws.String("AAAAAA==")
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assertApiError(t, err, "InvalidPart")
+		})
+
+		t.Run("it should reject completing a multipart upload referencing a part that was never uploaded"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			completedParts[1].PartNumber = aws.Int32(5)
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assertApiError(t, err, "InvalidPart")
+		})
+
+		t.Run("it should reject completing a multipart upload that omits an uploaded part"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUpload(s3Client, uploadId, completedParts[:1])
+			assertApiError(t, err, "InvalidPart")
+		})
+
+		t.Run("it should reject completing a multipart upload with parts out of order"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUpload(s3Client, uploadId, []types.CompletedPart{completedParts[1], completedParts[0]})
+			assertApiError(t, err, "InvalidPartOrder")
+		})
+
+		t.Run("it should complete a multipart upload with matching etags and checksums"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assert.NoError(t, err)
+		})
+	})
+}
+
 func TestMultipartUpload(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

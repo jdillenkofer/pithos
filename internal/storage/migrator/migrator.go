@@ -277,8 +277,29 @@ func (a *StorageToS3UploadAPIClientAdapter) UploadPart(ctx context.Context, inpu
 	}, nil
 }
 
+func completeMultipartUploadOptionsFromInput(input *s3.CompleteMultipartUploadInput) *storage.CompleteMultipartUploadOptions {
+	if input.MultipartUpload == nil || len(input.MultipartUpload.Parts) == 0 {
+		return nil
+	}
+
+	parts := make([]storage.CompleteMultipartUploadPart, 0, len(input.MultipartUpload.Parts))
+	for _, part := range input.MultipartUpload.Parts {
+		parts = append(parts, storage.CompleteMultipartUploadPart{
+			ChecksumCRC32:     part.ChecksumCRC32,
+			ChecksumCRC32C:    part.ChecksumCRC32C,
+			ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+			ChecksumSHA1:      part.ChecksumSHA1,
+			ChecksumSHA256:    part.ChecksumSHA256,
+			ETag:              aws.ToString(part.ETag),
+			PartNumber:        aws.ToInt32(part.PartNumber),
+		})
+	}
+
+	return &storage.CompleteMultipartUploadOptions{Parts: parts}
+}
+
 func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
-	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), nil, nil)
+	result, err := a.storage.CompleteMultipartUpload(ctx, storage.MustNewBucketName(*input.Bucket), storage.MustNewObjectKey(*input.Key), storage.MustNewUploadId(*input.UploadId), nil, completeMultipartUploadOptionsFromInput(input))
 	if err != nil {
 		return nil, err
 	}

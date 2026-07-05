@@ -167,6 +167,16 @@ type ChecksumInput struct {
 	ChecksumSHA256    *string
 }
 
+type CompleteMultipartUploadPart struct {
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
+	ETag              string
+	PartNumber        int32
+}
+
 type ChecksumValues = checksumutils.ChecksumValues
 
 func ValidateChecksums(checksumInput *ChecksumInput, calculatedChecksums ChecksumValues) error {
@@ -212,6 +222,8 @@ var ErrBucketNotEmpty error = errors.New("BucketNotEmpty")
 var ErrNoSuchKey error = errors.New("NoSuchKey")
 var ErrNoSuchUpload error = errors.New("NoSuchUpload")
 var ErrBadDigest error = errors.New("BadDigest")
+var ErrInvalidPart error = errors.New("InvalidPart")
+var ErrInvalidPartOrder error = errors.New("InvalidPartOrder")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
@@ -332,6 +344,11 @@ type CompleteMultipartUploadOptions struct {
 	// IfNoneMatchStar, when true, requires that no object currently exists at the key;
 	// otherwise ErrPreconditionFailed is returned (HTTP 412).
 	IfNoneMatchStar bool
+	// Parts is the client-declared multipart completion manifest. When present,
+	// each declared part must match an uploaded part by number, ETag, and any
+	// supplied checksums. The manifest must be strictly ordered and include every
+	// uploaded part because this storage layer completes all uploaded parts.
+	Parts []CompleteMultipartUploadPart
 }
 
 type MaintenanceStore interface {
