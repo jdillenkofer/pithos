@@ -172,3 +172,77 @@ func TestSftpPartStore(t *testing.T) {
 		})
 	}
 }
+
+func TestSftpPartStoreMigratesLegacyLayoutOnStart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
+
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	sshAddr, clientConfig := prepareSshServer(t, false)
+
+	ctx := context.Background()
+	const root = "/tmp/pithos"
+	ps, err := New(sshAddr, clientConfig, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ps.(*sftpPartStore)
+
+	// Seed legacy flat-layout part files before the store is started.
+	if err := s.reconnectSftpClient(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ensureRootDir(); err != nil {
+		t.Fatal(err)
+	}
+	legacyPartIds := []partstore.PartId{}
+	for range 5 {
+		partId, err := partstore.NewRandomPartId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacyPartIds = append(legacyPartIds, *partId)
+		f, err := s.client.OpenFile(filepath.Join(root, partstore.PartFilename(*partId)), os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte("legacy-" + partId.String())); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Stop(ctx)
+
+	for _, partId := range legacyPartIds {
+		partFilename := partstore.PartFilename(partId)
+		_, err := s.client.Stat(filepath.Join(root, partFilename))
+		assert.Error(t, err, "legacy file %s should have been moved", partFilename)
+		_, err = s.client.Stat(filepath.Join(root, partstore.ShardDirName(partFilename), partFilename))
+		assert.NoError(t, err)
+
+		rc, err := ps.GetPart(ctx, nil, partId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, []byte("legacy-"+partId.String()), content)
+	}
+
+	partIds, err := ps.GetPartIds(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.ElementsMatch(t, legacyPartIds, partIds)
+}

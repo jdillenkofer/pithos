@@ -2,10 +2,11 @@ package filesystem
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -35,23 +36,41 @@ func (bs *filesystemPartStore) ensureRootDir() error {
 }
 
 func (bs *filesystemPartStore) getFilename(partId partstore.PartId) string {
-	partFilename := hex.EncodeToString(partId.Bytes())
-	return filepath.Join(bs.root, partFilename)
+	partFilename := partstore.PartFilename(partId)
+	return filepath.Join(bs.root, partstore.ShardDirName(partFilename), partFilename)
 }
 
-func (bs *filesystemPartStore) tryGetPartIdFromFilename(filename string) (partId *partstore.PartId, ok bool) {
-	if len(filename) != 32 {
-		return nil, false
-	}
-	partIdBytes, err := hex.DecodeString(filename)
+// migrateLegacyParts moves part files from the flat pre-sharding layout
+// (<root>/<hex>) into their shard directories (<root>/<xx>/<hex>). It runs on
+// every start and is a no-op once no legacy files remain, so an interrupted
+// migration resumes on the next start.
+func (bs *filesystemPartStore) migrateLegacyParts() error {
+	dirEntries, err := os.ReadDir(bs.root)
 	if err != nil {
-		return nil, false
+		return err
 	}
-	partId, err = partstore.NewPartIdFromBytes(partIdBytes)
-	if err != nil {
-		return nil, false
+	migrated := 0
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			continue
+		}
+		name := dirEntry.Name()
+		if _, ok := partstore.TryGetPartIdFromFilename(name); !ok {
+			continue
+		}
+		shardDir := filepath.Join(bs.root, partstore.ShardDirName(name))
+		if err := os.MkdirAll(shardDir, os.ModePerm); err != nil {
+			return err
+		}
+		if err := os.Rename(filepath.Join(bs.root, name), filepath.Join(shardDir, name)); err != nil {
+			return err
+		}
+		migrated++
 	}
-	return partId, true
+	if migrated > 0 {
+		slog.Info(fmt.Sprintf("Migrated %d part files to sharded directory layout in %s", migrated, bs.root))
+	}
+	return nil
 }
 
 func New(root string) (partstore.PartStore, error) {
@@ -75,7 +94,10 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	if err := bs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	return bs.ensureRootDir()
+	if err := bs.ensureRootDir(); err != nil {
+		return err
+	}
+	return bs.migrateLegacyParts()
 }
 
 func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
@@ -83,8 +105,12 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 	defer span.End()
 
 	filename := bs.getFilename(partId)
+	shardDir := filepath.Dir(filename)
+	if err := os.MkdirAll(shardDir, os.ModePerm); err != nil {
+		return err
+	}
 	if tx != nil {
-		tempFile, err := os.CreateTemp(bs.root, "."+filepath.Base(filename)+".*.tmp")
+		tempFile, err := os.CreateTemp(shardDir, "."+filepath.Base(filename)+".*.tmp")
 		if err != nil {
 			return err
 		}
@@ -182,10 +208,27 @@ func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx database.Tx) (
 	}
 	partIds := []partstore.PartId{}
 	for _, dirEntry := range dirEntries {
+		name := dirEntry.Name()
 		if dirEntry.IsDir() {
+			if !partstore.IsShardDirName(name) {
+				continue
+			}
+			shardEntries, err := os.ReadDir(filepath.Join(bs.root, name))
+			if err != nil {
+				return nil, err
+			}
+			for _, shardEntry := range shardEntries {
+				if shardEntry.IsDir() {
+					continue
+				}
+				if partId, ok := partstore.TryGetPartIdFromFilename(shardEntry.Name()); ok {
+					partIds = append(partIds, *partId)
+				}
+			}
 			continue
 		}
-		if partId, ok := bs.tryGetPartIdFromFilename(dirEntry.Name()); ok {
+		// Legacy flat layout files only exist until Start's migration has run.
+		if partId, ok := partstore.TryGetPartIdFromFilename(name); ok {
 			partIds = append(partIds, *partId)
 		}
 	}

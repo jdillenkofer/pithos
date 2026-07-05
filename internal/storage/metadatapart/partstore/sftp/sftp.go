@@ -2,7 +2,6 @@ package sftp
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -41,6 +40,8 @@ type sftpPartStore struct {
 	client       *sftp.Client
 	sshClient    *ssh.Client
 	mu           sync.Mutex
+	dirMu        sync.Mutex
+	ensuredDirs  map[string]struct{}
 	tracer       trace.Tracer
 }
 
@@ -55,23 +56,79 @@ func (s *sftpPartStore) ensureRootDir() error {
 }
 
 func (s *sftpPartStore) getFilename(partId partstore.PartId) string {
-	partFilename := hex.EncodeToString(partId.Bytes())
-	return filepath.Join(s.root, partFilename)
+	partFilename := partstore.PartFilename(partId)
+	return filepath.Join(s.root, partstore.ShardDirName(partFilename), partFilename)
 }
 
-func (s *sftpPartStore) tryGetPartIdFromFilename(filename string) (partId *partstore.PartId, ok bool) {
-	if len(filename) != 32 {
-		return nil, false
+// ensureShardDir creates a shard directory if this store hasn't done so yet.
+// Created directories are remembered so each shard costs at most one MkdirAll
+// round trip per process lifetime.
+func (s *sftpPartStore) ensureShardDir(ctx context.Context, dir string) error {
+	s.dirMu.Lock()
+	_, ok := s.ensuredDirs[dir]
+	s.dirMu.Unlock()
+	if ok {
+		return nil
 	}
-	partIdBytes, err := hex.DecodeString(filename)
+	_, err := doRetriableOperation(ctx, func() (*struct{}, error) {
+		return nil, s.client.MkdirAll(dir)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
-		return nil, false
+		return err
 	}
-	partId, err = partstore.NewPartIdFromBytes(partIdBytes)
+	s.dirMu.Lock()
+	s.ensuredDirs[dir] = struct{}{}
+	s.dirMu.Unlock()
+	return nil
+}
+
+// migrateLegacyParts moves part files from the flat pre-sharding layout
+// (<root>/<hex>) into their shard directories (<root>/<xx>/<hex>). It runs on
+// every start and is a no-op once no legacy files remain, so an interrupted
+// migration resumes on the next start.
+func (s *sftpPartStore) migrateLegacyParts(ctx context.Context) error {
+	dirEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
+		return s.client.ReadDir(s.root)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
 	if err != nil {
-		return nil, false
+		return err
 	}
-	return partId, true
+	migrated := 0
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			continue
+		}
+		name := dirEntry.Name()
+		if _, ok := partstore.TryGetPartIdFromFilename(name); !ok {
+			continue
+		}
+		shardDir := filepath.Join(s.root, partstore.ShardDirName(name))
+		if err := s.ensureShardDir(ctx, shardDir); err != nil {
+			return err
+		}
+		oldName := filepath.Join(s.root, name)
+		newName := filepath.Join(shardDir, name)
+		_, err := doRetriableOperation(ctx, func() (*struct{}, error) {
+			return nil, s.client.Rename(oldName, newName)
+		}, maxStpRetries, s.reconnectSftpClient, isNotFoundError)
+		if err != nil {
+			// A lost rename response makes the retry see a missing source; if
+			// the file already arrived at its sharded location, that attempt
+			// succeeded.
+			if isNotFoundError(err) {
+				if _, statErr := s.client.Stat(newName); statErr == nil {
+					migrated++
+					continue
+				}
+			}
+			return err
+		}
+		migrated++
+	}
+	if migrated > 0 {
+		slog.Info(fmt.Sprintf("Migrated %d part files to sharded directory layout in %s", migrated, s.root))
+	}
+	return nil
 }
 
 func (s *sftpPartStore) reconnectSftpClient() error {
@@ -175,6 +232,7 @@ func New(addr string, clientConfig *ssh.ClientConfig, root string) (partstore.Pa
 		clientConfig: clientConfig,
 		root:         root,
 		client:       nil,
+		ensuredDirs:  map[string]struct{}{},
 		tracer:       otel.Tracer("internal/storage/metadatapart/partstore/sftp"),
 	}
 	return bs, nil
@@ -184,7 +242,10 @@ func (s *sftpPartStore) Start(ctx context.Context) error {
 	if err := s.reconnectSftpClient(); err != nil {
 		return err
 	}
-	return s.ensureRootDir()
+	if err := s.ensureRootDir(); err != nil {
+		return err
+	}
+	return s.migrateLegacyParts(ctx)
 }
 
 func (s *sftpPartStore) Stop(ctx context.Context) error {
@@ -205,8 +266,11 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	defer span.End()
 
 	filename := s.getFilename(partId)
+	if err := s.ensureShardDir(ctx, filepath.Dir(filename)); err != nil {
+		return err
+	}
 	if tx != nil {
-		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
+		tempName := filepath.Join(filepath.Dir(filename), "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
 		f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
 			return s.client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 		}, maxStpRetries, s.reconnectSftpClient, nil)
@@ -318,10 +382,29 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]parts
 	}
 	partIds := []partstore.PartId{}
 	for _, dirEntry := range dirEntries {
+		name := dirEntry.Name()
 		if dirEntry.IsDir() {
+			if !partstore.IsShardDirName(name) {
+				continue
+			}
+			shardEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
+				return s.client.ReadDir(filepath.Join(s.root, name))
+			}, maxStpRetries, s.reconnectSftpClient, nil)
+			if err != nil {
+				return nil, err
+			}
+			for _, shardEntry := range shardEntries {
+				if shardEntry.IsDir() {
+					continue
+				}
+				if partId, ok := partstore.TryGetPartIdFromFilename(shardEntry.Name()); ok {
+					partIds = append(partIds, *partId)
+				}
+			}
 			continue
 		}
-		if partId, ok := s.tryGetPartIdFromFilename(dirEntry.Name()); ok {
+		// Legacy flat layout files only exist until Start's migration has run.
+		if partId, ok := partstore.TryGetPartIdFromFilename(name); ok {
 			partIds = append(partIds, *partId)
 		}
 	}

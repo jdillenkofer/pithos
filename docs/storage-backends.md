@@ -188,6 +188,8 @@ SQL-backed `MetadataPartStorage` runs embedded SQLite/PostgreSQL migrations when
 
 Filesystem and SFTP part stores can serve object bytes without holding a database transaction open for the entire download. This is also used through compatible part-store middlewares, including compression, cache, outbox, erasure coding, and Tink encryption. SQL part stores keep the read transaction open to preserve snapshot semantics for database-backed part content.
 
+Filesystem and SFTP part stores shard part files into 256 hex-named subdirectories (`<root>/<xx>/<part filename>`, where `xx` is the last two hex characters of the part filename) to avoid very large flat directories. The trailing characters are used because part ids are ULIDs whose leading characters encode a timestamp and barely vary. On start, both stores automatically move any part files from the flat pre-sharding layout into their shard directories; the migration is idempotent and resumes if interrupted, so no manual steps are needed when upgrading. Downgrading to a pre-sharding version afterwards is not supported without moving the files back to the root directory.
+
 ### Cache Part Store
 
 ```json
