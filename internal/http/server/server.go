@@ -804,6 +804,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 404
 	case ErrInvalidRequest:
 		statusCode = 400
+	case storage.ErrInvalidPart:
+		statusCode = 400
+	case storage.ErrInvalidPartOrder:
+		statusCode = 400
 	case storage.ErrEntityTooLarge:
 		statusCode = 413
 	case storage.ErrTooManyParts:
@@ -2300,6 +2304,22 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 	w.Write(out)
 }
 
+func mapCompleteMultipartUploadParts(parts []*Part) []storage.CompleteMultipartUploadPart {
+	storageParts := make([]storage.CompleteMultipartUploadPart, 0, len(parts))
+	for _, part := range parts {
+		storageParts = append(storageParts, storage.CompleteMultipartUploadPart{
+			ChecksumCRC32:     part.ChecksumCRC32,
+			ChecksumCRC32C:    part.ChecksumCRC32C,
+			ChecksumCRC64NVME: part.ChecksumCRC64NVME,
+			ChecksumSHA1:      part.ChecksumSHA1,
+			ChecksumSHA256:    part.ChecksumSHA256,
+			ETag:              part.ETag,
+			PartNumber:        part.PartNumber,
+		})
+	}
+	return storageParts
+}
+
 func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.completeMultipartUploadHandler")
 	defer span.End()
@@ -2365,12 +2385,17 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 	if len(data) > 0 {
-		// @TODO: if available use part checksums to verify upload
 		completeMultipartUploadRequest := CompleteMultipartUploadRequest{}
 		err = xml.Unmarshal(data, &completeMultipartUploadRequest)
 		if err != nil {
 			handleError(err, w, r)
 			return
+		}
+		if len(completeMultipartUploadRequest.Parts) > 0 {
+			if completeOpts == nil {
+				completeOpts = &storage.CompleteMultipartUploadOptions{}
+			}
+			completeOpts.Parts = mapCompleteMultipartUploadParts(completeMultipartUploadRequest.Parts)
 		}
 	}
 

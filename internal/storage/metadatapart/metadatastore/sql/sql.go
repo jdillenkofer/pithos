@@ -1537,6 +1537,59 @@ func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 	return nil
 }
 
+func trimETagQuotes(etag string) string {
+	return strings.Trim(etag, "\"")
+}
+
+func declaredPartChecksumMatches(declared *string, stored *string) bool {
+	if declared == nil || stored == nil {
+		return true
+	}
+	return *declared == *stored
+}
+
+// validateCompleteMultipartUploadParts checks the client-declared completion
+// manifest against the uploaded parts loaded in this transaction.
+func validateCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity) error {
+	if len(declaredParts) == 0 {
+		return nil
+	}
+
+	storedPartsByNumber := map[int32]part.Entity{}
+	for _, storedPart := range storedParts {
+		storedPartsByNumber[int32(storedPart.SequenceNumber)] = storedPart
+	}
+
+	previousPartNumber := int32(0)
+	for _, declaredPart := range declaredParts {
+		if declaredPart.PartNumber <= previousPartNumber {
+			return metadatastore.ErrInvalidPartOrder
+		}
+		previousPartNumber = declaredPart.PartNumber
+
+		storedPart, ok := storedPartsByNumber[declaredPart.PartNumber]
+		if !ok {
+			return metadatastore.ErrInvalidPart
+		}
+		if declaredPart.ETag != "" && trimETagQuotes(declaredPart.ETag) != trimETagQuotes(storedPart.ETag) {
+			return metadatastore.ErrInvalidPart
+		}
+		if !declaredPartChecksumMatches(declaredPart.ChecksumCRC32, storedPart.ChecksumCRC32) ||
+			!declaredPartChecksumMatches(declaredPart.ChecksumCRC32C, storedPart.ChecksumCRC32C) ||
+			!declaredPartChecksumMatches(declaredPart.ChecksumCRC64NVME, storedPart.ChecksumCRC64NVME) ||
+			!declaredPartChecksumMatches(declaredPart.ChecksumSHA1, storedPart.ChecksumSHA1) ||
+			!declaredPartChecksumMatches(declaredPart.ChecksumSHA256, storedPart.ChecksumSHA256) {
+			return metadatastore.ErrInvalidPart
+		}
+	}
+
+	if len(declaredParts) != len(storedPartsByNumber) {
+		return metadatastore.ErrInvalidPart
+	}
+
+	return nil
+}
+
 func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId, checksumInput *metadatastore.ChecksumInput, opts *metadatastore.CompleteMultipartUploadOptions) (*metadatastore.CompleteMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CompleteMultipartUpload")
 	defer span.End()
@@ -1585,6 +1638,12 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			ChecksumSHA1:      partEntity.ChecksumSHA1,
 			ChecksumSHA256:    partEntity.ChecksumSHA256,
 			Size:              partEntity.Size,
+		}
+	}
+
+	if opts != nil {
+		if err = validateCompleteMultipartUploadParts(opts.Parts, partEntities); err != nil {
+			return nil, err
 		}
 	}
 

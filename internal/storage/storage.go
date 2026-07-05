@@ -126,6 +126,7 @@ type AppendObjectResult struct {
 }
 
 type CompleteMultipartUploadOptions = metadatastore.CompleteMultipartUploadOptions
+type CompleteMultipartUploadPart = metadatastore.CompleteMultipartUploadPart
 
 const ChecksumTypeFullObject = metadatastore.ChecksumTypeFullObject
 const ChecksumTypeComposite = metadatastore.ChecksumTypeComposite
@@ -377,6 +378,8 @@ var ErrBucketAlreadyExists error = metadatastore.ErrBucketAlreadyExists
 var ErrBucketNotEmpty error = metadatastore.ErrBucketNotEmpty
 var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
+var ErrInvalidPart error = metadatastore.ErrInvalidPart
+var ErrInvalidPartOrder error = metadatastore.ErrInvalidPartOrder
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrPreconditionFailed error = metadatastore.ErrPreconditionFailed
