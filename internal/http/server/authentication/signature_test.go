@@ -203,6 +203,33 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeaderWithoutBlankLin
 	assert.Equal(t, []byte(strings.Repeat("a", 65536+1024)), data)
 }
 
+func TestAwsChunkedContentEncodingHelpers(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name             string
+		contentEncoding  string
+		wantIsAwsChunked bool
+		wantStripped     string
+	}{
+		{name: "empty", contentEncoding: "", wantIsAwsChunked: false, wantStripped: ""},
+		{name: "other encoding", contentEncoding: "gzip", wantIsAwsChunked: false, wantStripped: "gzip"},
+		{name: "aws chunked only", contentEncoding: "aws-chunked", wantIsAwsChunked: true, wantStripped: ""},
+		{name: "aws chunked then gzip", contentEncoding: "aws-chunked,gzip", wantIsAwsChunked: true, wantStripped: "gzip"},
+		{name: "aws chunked then spaced gzip", contentEncoding: "aws-chunked, gzip", wantIsAwsChunked: true, wantStripped: "gzip"},
+		{name: "aws chunked with surrounding whitespace", contentEncoding: " aws-chunked , gzip, br ", wantIsAwsChunked: true, wantStripped: "gzip, br"},
+		{name: "aws chunked uppercase", contentEncoding: "AWS-CHUNKED, gzip", wantIsAwsChunked: true, wantStripped: "gzip"},
+		{name: "aws chunked not first", contentEncoding: "gzip, aws-chunked", wantIsAwsChunked: false, wantStripped: "gzip, aws-chunked"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantIsAwsChunked, hasAwsChunkedContentEncoding(tt.contentEncoding))
+			assert.Equal(t, tt.wantStripped, stripAwsChunkedContentEncoding(tt.contentEncoding))
+		})
+	}
+}
+
 // newUnsignedTrailerChunkReader builds a reader for the
 // STREAMING-UNSIGNED-PAYLOAD-TRAILER format, where chunks carry no signatures
 // and only the trailer checksum is validated.

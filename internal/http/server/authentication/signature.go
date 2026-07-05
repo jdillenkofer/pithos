@@ -342,6 +342,27 @@ func createScope(date string, region string, service string, request string) str
 	return date + "/" + region + "/" + service + "/" + request
 }
 
+func hasAwsChunkedContentEncoding(contentEncodingHeader string) bool {
+	firstEncoding, _, _ := strings.Cut(contentEncodingHeader, ",")
+	return strings.EqualFold(strings.TrimSpace(firstEncoding), contentEncodingAwsChunked)
+}
+
+func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
+	encodings := strings.Split(contentEncodingHeader, ",")
+	if len(encodings) == 0 || !strings.EqualFold(strings.TrimSpace(encodings[0]), contentEncodingAwsChunked) {
+		return strings.TrimSpace(contentEncodingHeader)
+	}
+
+	remainingEncodings := make([]string, 0, len(encodings)-1)
+	for _, encoding := range encodings[1:] {
+		encoding = strings.TrimSpace(encoding)
+		if encoding != "" {
+			remainingEncodings = append(remainingEncodings, encoding)
+		}
+	}
+	return strings.Join(remainingEncodings, ", ")
+}
+
 func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
 	now := time.Now().UTC()
 	expectedDate := now.Format("20060102")
@@ -355,7 +376,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	isAwsChunked := false
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
-	if contentEncodingHeader != "" && strings.HasPrefix(contentEncodingHeader, contentEncodingAwsChunked) {
+	if hasAwsChunkedContentEncoding(contentEncodingHeader) {
 		isAwsChunked = true
 	}
 
@@ -511,7 +532,9 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	if isAwsChunked {
 		slog.DebugContext(r.Context(), "Request is using AWS Chunked Transfer Encoding")
-		contentEncodingHeader, _ := strings.CutPrefix(contentEncodingHeader, contentEncodingAwsChunked+",")
+		// aws-chunked is a transport encoding, not object metadata: strip it
+		// whether it is the only encoding or the first of several.
+		contentEncodingHeader = stripAwsChunkedContentEncoding(contentEncodingHeader)
 		if contentEncodingHeader != "" {
 			r.Header.Set("Content-Encoding", contentEncodingHeader)
 		} else {

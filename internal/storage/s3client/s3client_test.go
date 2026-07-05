@@ -27,6 +27,35 @@ func TestByteRangeToAWSRangeUsesExactSuffixLength(t *testing.T) {
 	require.Equal(t, "bytes=-5", byteRangeToAWSRange(storage.ByteRange{End: &suffixLength}))
 }
 
+func TestChecksumAlgorithmFromInputOnlyForDeclaredChecksums(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	algorithm := "crc32c"
+	checksum := "AAAAAA=="
+
+	require.Equal(t, "", string(checksumAlgorithmFromInput(&storage.ChecksumInput{
+		ChecksumAlgorithm: &algorithm,
+	})))
+	require.Equal(t, "CRC32C", string(checksumAlgorithmFromInput(&storage.ChecksumInput{
+		ChecksumAlgorithm: &algorithm,
+		ChecksumCRC32C:    &checksum,
+	})))
+}
+
+func TestContentMD5FromETagConvertsQuotedHexDigest(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	etag := "\"5d41402abc4b2a76b9719d911017c592\""
+	invalidETag := "\"not-md5\""
+
+	md5Header := contentMD5FromETag(&etag)
+
+	require.NotNil(t, md5Header)
+	require.Equal(t, "XUFAKrxLKna5cZ2REBfFkg==", *md5Header)
+	require.Nil(t, contentMD5FromETag(&invalidETag))
+	require.Nil(t, contentMD5FromETag(nil))
+}
+
 func TestTranslateS3CopyErrorMapsS3ErrorCodes(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
