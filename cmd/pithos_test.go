@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -25,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
@@ -1338,6 +1342,97 @@ func TestPutObject(t *testing.T) {
 			if !errors.As(err, &smithyOperationError) {
 				assert.Fail(t, "Expected error smithy.OperationError", "err %v", err)
 			}
+		})
+	})
+}
+
+func TestPutObjectWithTrailingChecksum(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		payload := []byte("Hello, trailing checksum!")
+		checksumBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(checksumBytes, crc32.ChecksumIEEE(payload))
+		payloadChecksum := base64.StdEncoding.EncodeToString(checksumBytes)
+
+		// buildTrailerBody encodes the payload in the aws-chunked format used
+		// with STREAMING-UNSIGNED-PAYLOAD-TRAILER: a single unsigned chunk,
+		// the zero-length chunk, and the checksum trailer.
+		buildTrailerBody := func(trailerName string, trailerValue string) string {
+			return fmt.Sprintf("%x\r\n%s\r\n0\r\n%s:%s\r\n\r\n", len(payload), payload, trailerName, trailerValue)
+		}
+
+		putWithTrailer := func(t *testing.T, listenerAddr string, declaredTrailer string, body string) *http.Response {
+			addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
+			require.NoError(t, err)
+			url := fmt.Sprintf("http://%s:%d/%s/%s", testAPIEndpoint, addr.Port, *bucketName, *key)
+			request, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+			require.NoError(t, err)
+			request.Header.Set("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
+			request.Header.Set("content-encoding", "aws-chunked")
+			request.Header.Set("x-amz-decoded-content-length", strconv.Itoa(len(payload)))
+			request.Header.Set("x-amz-trailer", declaredTrailer)
+
+			signer := v4.NewSigner()
+			err = signer.SignHTTP(context.Background(), aws.Credentials{AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey}, request, "STREAMING-UNSIGNED-PAYLOAD-TRAILER", "s3", region, time.Now().UTC())
+			require.NoError(t, err)
+
+			response, err := buildHttpClient().Do(request)
+			require.NoError(t, err)
+			return response
+		}
+
+		t.Run("it should accept an aws-chunked upload with a valid trailing checksum"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			response := putWithTrailer(t, listenerAddr, "x-amz-checksum-crc32", buildTrailerBody("x-amz-checksum-crc32", payloadChecksum))
+			assert.Equal(t, 200, response.StatusCode)
+
+			getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			require.NoError(t, err)
+			data, err := io.ReadAll(getObjectResult.Body)
+			require.NoError(t, err)
+			assert.Equal(t, payload, data)
+		})
+
+		t.Run("it should reject an aws-chunked upload with a corrupted trailing checksum"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			response := putWithTrailer(t, listenerAddr, "x-amz-checksum-crc32", buildTrailerBody("x-amz-checksum-crc32", "AAAAAA=="))
+			assert.Equal(t, 400, response.StatusCode)
+			responseBody, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(responseBody), "BadDigest")
+		})
+
+		t.Run("it should reject an aws-chunked upload whose trailer does not match the declared x-amz-trailer"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			response := putWithTrailer(t, listenerAddr, "x-amz-checksum-crc32", buildTrailerBody("x-amz-checksum-sha256", payloadChecksum))
+			assert.Equal(t, 400, response.StatusCode)
+			responseBody, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(responseBody), "MalformedTrailerError")
 		})
 	})
 }
