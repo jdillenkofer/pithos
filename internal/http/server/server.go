@@ -786,6 +786,10 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 400
 	case storage.ErrBadDigest:
 		statusCode = 400
+	case authentication.ErrTrailerChecksumMismatch:
+		statusCode = 400
+	case authentication.ErrMalformedTrailer:
+		statusCode = 400
 	case storage.ErrInvalidRange:
 		statusCode = 416
 	case storage.ErrNoSuchBucket:

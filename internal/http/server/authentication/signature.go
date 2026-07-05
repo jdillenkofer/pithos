@@ -8,6 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
@@ -37,11 +39,24 @@ const expectedRequest = "aws4_request"
 
 const contentEncodingAwsChunked = "aws-chunked"
 
+const trailerHeader = "x-amz-trailer"
+const checksumTrailerPrefix = "x-amz-checksum-"
+
 // maxMemoryCacheSize is the maximum size of a payload that will be cached in memory
 // before switching to a disk-based cache.
 const maxMemoryCacheSize = 10 * 1000 * 1000
 
 var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
+
+// ErrTrailerChecksumMismatch is returned when the checksum declared in the
+// trailer of an aws-chunked upload does not match the received payload.
+// Its text is the S3 error code reported to the client.
+var ErrTrailerChecksumMismatch = errors.New("BadDigest")
+
+// ErrMalformedTrailer is returned when the trailer of an aws-chunked upload
+// is missing, unsupported, or does not match the declared x-amz-trailer header.
+// Its text is the S3 error code reported to the client.
+var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
 type AccessKeyIdContextKey struct{}
 type AuthTypeContextKey struct{}
@@ -508,7 +523,8 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing
 		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
+		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
 	return &accessKeyId, isSignatureValid
@@ -528,9 +544,15 @@ type awsChunkReadCloser struct {
 	hasTrailingHeader              bool
 	hasTrailingHeaderWithSignature bool
 	skipChunkValidation            bool
+	trailerChecksumName            string
+	trailerHasher                  hash.Hash
 }
 
-func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool) *awsChunkReadCloser {
+func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
+	var trailerHasher hash.Hash
+	if hasTrailingHeader {
+		trailerHasher, _ = checksumutils.NewChecksumTrailerHash(trailerChecksumName)
+	}
 	return &awsChunkReadCloser{
 		ctx:                            ctx,
 		innerCloser:                    inner,
@@ -545,6 +567,8 @@ func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp s
 		hasTrailingHeader:              hasTrailingHeader,
 		hasTrailingHeaderWithSignature: hasTrailingHeaderWithSignature,
 		skipChunkValidation:            skipChunkValidation,
+		trailerChecksumName:            trailerChecksumName,
+		trailerHasher:                  trailerHasher,
 	}
 }
 
@@ -559,6 +583,64 @@ func (r *awsChunkReadCloser) validateSignature() error {
 
 	r.chunkHasher.Reset()
 	r.previousSignature = r.chunkSignature
+	return nil
+}
+
+// maxTrailerLines bounds the trailer section: S3 allows a single checksum
+// trailer, optionally followed by an x-amz-trailer-signature line.
+const maxTrailerLines = 8
+
+// readTrailerSection reads the trailer lines following the zero-length chunk
+// and returns the checksum trailer line and the trailer signature (without its
+// header name). The section is terminated by a blank line or EOF. A single
+// blank line directly after the zero-length chunk is tolerated, because some
+// clients terminate the zero-length chunk with its own \r\n before the
+// trailers, mirroring the framing of the data chunks.
+func (r *awsChunkReadCloser) readTrailerSection() (checksumHeader string, trailerSignature string) {
+	for i := range maxTrailerLines {
+		line, lineErr := r.innerBuf.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if i == 0 && lineErr == nil {
+				continue
+			}
+			break
+		}
+		if value, found := strings.CutPrefix(line, "x-amz-trailer-signature:"); found {
+			trailerSignature = strings.TrimSpace(value)
+		} else if checksumHeader == "" {
+			checksumHeader = line
+		}
+		if lineErr != nil {
+			break
+		}
+	}
+	return checksumHeader, trailerSignature
+}
+
+// validateTrailerChecksum checks the x-amz-checksum-* trailer line against the
+// checksum of the decoded payload. The trailer must match the algorithm the
+// client declared in the x-amz-trailer header.
+func (r *awsChunkReadCloser) validateTrailerChecksum(checksumHeader string) error {
+	if r.trailerHasher == nil {
+		if strings.HasPrefix(r.trailerChecksumName, checksumTrailerPrefix) {
+			// A checksum trailer was declared, but with an algorithm we cannot
+			// verify. Reject instead of storing unverified data.
+			slog.DebugContext(r.ctx, "Unsupported checksum trailer declared", "trailer", r.trailerChecksumName)
+			return ErrMalformedTrailer
+		}
+		return nil
+	}
+	name, value, found := strings.Cut(checksumHeader, ":")
+	if !found || strings.ToLower(strings.TrimSpace(name)) != r.trailerChecksumName {
+		slog.DebugContext(r.ctx, "Checksum trailer does not match declared x-amz-trailer header", "trailer", checksumHeader)
+		return ErrMalformedTrailer
+	}
+	calculatedChecksum := base64.StdEncoding.EncodeToString(r.trailerHasher.Sum(nil))
+	if strings.TrimSpace(value) != calculatedChecksum {
+		slog.DebugContext(r.ctx, "Trailer checksum does not match calculated payload checksum", "trailer", r.trailerChecksumName)
+		return ErrTrailerChecksumMismatch
+	}
 	return nil
 }
 
@@ -585,10 +667,6 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		}
 		r.chunkBytesRemaining = int64(length)
 		if length == 0 {
-			_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
-			if err != nil {
-				return 0, err
-			}
 			if !r.skipChunkValidation {
 				err = r.validateSignature()
 				if err != nil {
@@ -596,12 +674,7 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				}
 			}
 			if r.hasTrailingHeader {
-				// @TODO: validate the trailing header checksum
-				checksumHeader, _ := r.innerBuf.ReadString('\n')
-				trailerSignature, _ := r.innerBuf.ReadString('\n')
-				checksumHeader = strings.TrimSpace(checksumHeader)
-				trailerSignature = strings.TrimSpace(trailerSignature)
-				trailerSignature = strings.TrimPrefix(trailerSignature, "x-amz-trailer-signature:")
+				checksumHeader, trailerSignature := r.readTrailerSection()
 				slog.DebugContext(r.ctx, "Validating trailing headers")
 
 				if r.hasTrailingHeaderWithSignature {
@@ -612,6 +685,16 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 						slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
 						return 0, ErrChunkSignatureMismatch
 					}
+				}
+
+				err = r.validateTrailerChecksum(checksumHeader)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				_, err := r.innerBuf.Discard(2) // Discard the final \r\n
+				if err != nil {
+					return 0, err
 				}
 			}
 			return 0, io.EOF // End of the chunked transfer
@@ -624,6 +707,9 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 	n, err = io.ReadFull(r.innerBuf, p)
 	if !r.skipChunkValidation {
 		r.chunkHasher.Write(p[:n])
+	}
+	if r.trailerHasher != nil {
+		r.trailerHasher.Write(p[:n])
 	}
 	r.chunkBytesRemaining -= int64(n)
 	if r.chunkBytesRemaining == 0 {

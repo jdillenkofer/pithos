@@ -166,6 +166,24 @@ func CombineCrc64Nvme(a []byte, b []byte, bLen int64) []byte {
 	return createCombineFunction(0xAD93D23594C93659, 64, 0xFFFFFFFFFFFFFFFF)(a, b, bLen)
 }
 
+// NewChecksumTrailerHash returns a fresh hash for the given x-amz-checksum-*
+// trailer header name, or false if the name is not a supported checksum trailer.
+func NewChecksumTrailerHash(checksumHeaderName string) (hash.Hash, bool) {
+	switch checksumHeaderName {
+	case "x-amz-checksum-crc32":
+		return crc32.NewIEEE(), true
+	case "x-amz-checksum-crc32c":
+		return crc32.New(crc32CastagnoliTable), true
+	case "x-amz-checksum-crc64nvme":
+		return crc64.New(crc64NvmeTable), true
+	case "x-amz-checksum-sha1":
+		return sha1.New(), true
+	case "x-amz-checksum-sha256":
+		return sha256.New(), true
+	}
+	return nil, false
+}
+
 type ChecksumValues struct {
 	ETag              *string
 	ChecksumCRC32     *string

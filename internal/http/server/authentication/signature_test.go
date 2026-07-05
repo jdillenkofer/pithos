@@ -103,7 +103,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	hasTrailingHeader := false
 	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "")
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -163,7 +163,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	hasTrailingHeader := true
 	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation)
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c")
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -174,6 +174,92 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 
 	err = r.Body.Close()
 	assert.NoError(t, err)
+}
+
+// Same as TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader, but
+// with the trailer section directly following the zero-length chunk without a
+// blank line in between, which is the framing the AWS SDKs send (RFC 7230
+// chunked trailer part).
+func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeaderWithoutBlankLine(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	content := []byte(
+		"10000;chunk-signature=b474d8862b1487a5145d686f57f013e54db672cee1c953b3010fb58501ef5aa2\r\n" + strings.Repeat("a", 65536) + "\r\n" +
+			"400;chunk-signature=1c1344b170168f8e65b41376b44b20fe354e373826ccbbe2c1d40a8cae51e5c7\r\n" + strings.Repeat("a", 1024) + "\r\n" +
+			"0;chunk-signature=2ca2aba2005185cf7159c6277faf83795951dd77a3a99e6e65d5c9f85863f992\r\n" +
+			"x-amz-checksum-crc32c:sOO8/Q==\r\n" +
+			"x-amz-trailer-signature:d81f82fc3505edab99d459891051a732e8730629a2e4a59689829ca17fe2e435\r\n" +
+			"\r\n")
+
+	secretAccessKey := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	scope := createScope("20130524", "us-east-1", "s3", "aws4_request")
+	signingKey := createSigningKey(secretAccessKey, "20130524", "us-east-1", "s3", "aws4_request")
+	seedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
+
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, signingKey, true, true, false, "x-amz-checksum-crc32c")
+
+	data, err := io.ReadAll(body)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte(strings.Repeat("a", 65536+1024)), data)
+}
+
+// newUnsignedTrailerChunkReader builds a reader for the
+// STREAMING-UNSIGNED-PAYLOAD-TRAILER format, where chunks carry no signatures
+// and only the trailer checksum is validated.
+func newUnsignedTrailerChunkReader(content string, trailerName string) io.ReadCloser {
+	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", nil, true, false, true, trailerName)
+}
+
+func TestAwsChunkReaderValidatesUnsignedTrailerChecksum(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	// crc32 of "hello world" is DUoRhQ==
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n\r\n",
+		"x-amz-checksum-crc32")
+	data, err := io.ReadAll(body)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("hello world"), data)
+}
+
+func TestAwsChunkReaderRejectsWrongUnsignedTrailerChecksum(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n",
+		"x-amz-checksum-crc32")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrTrailerChecksumMismatch)
+}
+
+func TestAwsChunkReaderRejectsTrailerNotMatchingDeclaration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\nx-amz-checksum-sha256:uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=\r\n\r\n",
+		"x-amz-checksum-crc32")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrMalformedTrailer)
+}
+
+func TestAwsChunkReaderRejectsUnsupportedChecksumTrailer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\nx-amz-checksum-foo:AAAAAA==\r\n\r\n",
+		"x-amz-checksum-foo")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrMalformedTrailer)
+}
+
+func TestAwsChunkReaderRejectsMissingDeclaredTrailer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\n\r\n",
+		"x-amz-checksum-crc32")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrMalformedTrailer)
 }
 
 func TestCreateSignatureFromPresignedRequest(t *testing.T) {
