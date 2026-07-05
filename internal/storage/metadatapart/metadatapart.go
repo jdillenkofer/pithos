@@ -443,6 +443,7 @@ func convertObject(mObject metadatastore.Object) storage.Object {
 		ChecksumSHA256:    mObject.ChecksumSHA256,
 		ChecksumType:      mObject.ChecksumType,
 		Size:              mObject.Size,
+		StorageClass:      mObject.StorageClass,
 		Tags:              mObject.Tags,
 		Metadata:          mObject.Metadata,
 	}
@@ -501,7 +502,7 @@ func (mbs *metadataPartStorage) ListObjectVersions(ctx context.Context, bucketNa
 	}
 
 	versions := sliceutils.Map(func(v metadatastore.ObjectVersion) storage.ObjectVersion {
-		return storage.ObjectVersion{Key: v.Key, VersionID: v.VersionID, IsDeleteMarker: v.IsDeleteMarker, IsLatest: v.IsLatest, LastModified: v.LastModified, Size: v.Size, ETag: v.ETag}
+		return storage.ObjectVersion{Key: v.Key, VersionID: v.VersionID, IsDeleteMarker: v.IsDeleteMarker, IsLatest: v.IsLatest, LastModified: v.LastModified, Size: v.Size, ETag: v.ETag, StorageClass: v.StorageClass}
 	}, metaResult.Versions)
 
 	return &storage.ListObjectVersionsResult{
@@ -886,6 +887,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			if opts.Metadata != nil {
 				object.Metadata = *opts.Metadata
 			}
+			object.StorageClass = opts.StorageClass
 		}
 
 		metadataPutObjectOptions := &metadatastore.PutObjectOptions{IfNoneMatchStar: ifNoneMatchStar}
@@ -937,6 +939,11 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 		dstObject := metadatastore.Object{
 			Key:          dstKey,
 			LastModified: lastModified,
+		}
+		if opts != nil {
+			// The destination class comes from the copy request only; the
+			// source's class is never carried over (matching AWS).
+			dstObject.StorageClass = opts.StorageClass
 		}
 
 		if opts != nil && opts.Range != nil {
@@ -1453,7 +1460,7 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
-		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags, Metadata: opts.Metadata}
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
 	}
 
 	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
@@ -1668,9 +1675,10 @@ func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore
 		CommonPrefixes:     mlistMultipartUploadsResult.CommonPrefixes,
 		Uploads: sliceutils.Map(func(mUpload metadatastore.Upload) storage.Upload {
 			return storage.Upload{
-				Key:       mUpload.Key,
-				UploadId:  mUpload.UploadId,
-				Initiated: mUpload.Initiated,
+				Key:          mUpload.Key,
+				UploadId:     mUpload.UploadId,
+				Initiated:    mUpload.Initiated,
+				StorageClass: mUpload.StorageClass,
 			}
 		}, mlistMultipartUploadsResult.Uploads),
 		IsTruncated: mlistMultipartUploadsResult.IsTruncated,
@@ -1723,6 +1731,7 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 				Size:              part.Size,
 			}
 		}, mlistPartsResult.Parts),
+		StorageClass: mlistPartsResult.StorageClass,
 	}
 }
 

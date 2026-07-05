@@ -49,6 +49,8 @@ type Object struct {
 	ChecksumSHA256    *string
 	ChecksumType      *string
 	Size              int64
+	// StorageClass is the object's storage class label; nil means STANDARD.
+	StorageClass *string
 	// Tags holds the object's tag set as key/value pairs.
 	Tags map[string]string
 	// Metadata holds the user-controllable object metadata. Populated by
@@ -95,6 +97,9 @@ type PutObjectOptions struct {
 	// request headers. It replaces any previous metadata on overwrite. Nil
 	// means no metadata.
 	Metadata *ObjectMetadata
+	// StorageClass is the object's storage class, supplied via the
+	// x-amz-storage-class header. Nil means STANDARD.
+	StorageClass *string
 }
 
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
@@ -107,6 +112,9 @@ type CreateMultipartUploadOptions struct {
 	// request headers. It is applied to the object when the upload completes.
 	// Nil means no metadata.
 	Metadata *ObjectMetadata
+	// StorageClass is the storage class for the upload and the resulting
+	// object, supplied via the x-amz-storage-class header. Nil means STANDARD.
+	StorageClass *string
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -214,6 +222,11 @@ type CopyObjectOptions struct {
 	ReplaceTags bool
 	// Tags is the destination tag set used when ReplaceTags is true.
 	Tags map[string]string
+	// StorageClass is the destination object's storage class, supplied via the
+	// x-amz-storage-class header on the copy request. Nil means STANDARD; the
+	// source object's class is never carried over (matching AWS, where the
+	// storage class is not governed by x-amz-metadata-directive).
+	StorageClass *string
 }
 
 type CopyObjectResult struct {
@@ -266,6 +279,9 @@ type Upload struct {
 	Key       ObjectKey
 	UploadId  UploadId
 	Initiated time.Time
+	// StorageClass is the class chosen at CreateMultipartUpload; nil means
+	// STANDARD.
+	StorageClass *string
 }
 
 type ListMultipartUploadsResult struct {
@@ -303,6 +319,9 @@ type ListPartsResult struct {
 	MaxParts             int32
 	IsTruncated          bool
 	Parts                []*MultipartPart
+	// StorageClass is the class chosen at CreateMultipartUpload; nil means
+	// STANDARD.
+	StorageClass *string
 }
 
 // DeleteObjectsEntry represents the result for a single key in a DeleteObjects operation.
@@ -336,6 +355,8 @@ type ObjectVersion struct {
 	LastModified   time.Time
 	Size           int64
 	ETag           *string
+	// StorageClass is the version's storage class label; nil means STANDARD.
+	StorageClass *string
 }
 
 type ListObjectVersionsOptions struct {
@@ -361,6 +382,11 @@ type ObjectKey = metadatastore.ObjectKey
 type UploadId = metadatastore.UploadId
 
 const ETagWildcard = metadatastore.ETagWildcard
+
+const StorageClassStandard = metadatastore.StorageClassStandard
+
+var IsValidStorageClass = metadatastore.IsValidStorageClass
+var EffectiveStorageClass = metadatastore.EffectiveStorageClass
 
 var NewBucketName = metadatastore.NewBucketName
 var MustNewBucketName = metadatastore.MustNewBucketName
@@ -393,6 +419,7 @@ var ErrNoSuchCORSConfiguration error = metadatastore.ErrNoSuchCORSConfiguration
 var ErrNoSuchLifecycleConfiguration error = metadatastore.ErrNoSuchLifecycleConfiguration
 var ErrTooManyParts error = metadatastore.ErrTooManyParts
 var ErrInvalidWriteOffset error = metadatastore.ErrInvalidWriteOffset
+var ErrInvalidStorageClass error = metadatastore.ErrInvalidStorageClass
 var ErrCASFailure error = metadatastore.ErrCASFailure
 
 type CurrentDeleteMarkerError struct {

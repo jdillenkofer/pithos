@@ -51,6 +51,7 @@ type Entity struct {
 	ChecksumSHA256          *string
 	ChecksumType            *string
 	Size                    int64
+	StorageClass            *string
 	VersionID               *string
 	IsDeleteMarker          bool
 	IsLatest                bool

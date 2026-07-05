@@ -31,6 +31,40 @@ type BucketVersioningConfiguration struct {
 	Status *BucketVersioningStatus
 }
 
+// StorageClassStandard is the storage class assigned when a request does not
+// specify one. Storage classes are S3-compatible metadata labels; all classes
+// are immediately readable (no archive/restore semantics).
+const StorageClassStandard = "STANDARD"
+
+// storageClasses is the set of storage class values accepted from clients,
+// matching the classes AWS S3 recognizes.
+var storageClasses = map[string]struct{}{
+	StorageClassStandard:  {},
+	"REDUCED_REDUNDANCY":  {},
+	"STANDARD_IA":         {},
+	"ONEZONE_IA":          {},
+	"INTELLIGENT_TIERING": {},
+	"GLACIER_IR":          {},
+	"GLACIER":             {},
+	"DEEP_ARCHIVE":        {},
+	"EXPRESS_ONEZONE":     {},
+	"OUTPOSTS":            {},
+}
+
+func IsValidStorageClass(storageClass string) bool {
+	_, ok := storageClasses[storageClass]
+	return ok
+}
+
+// EffectiveStorageClass maps the internal representation (nil = unset, used by
+// rows that predate storage class support) to the class reported to clients.
+func EffectiveStorageClass(storageClass *string) string {
+	if storageClass == nil || *storageClass == "" {
+		return StorageClassStandard
+	}
+	return *storageClass
+}
+
 // ObjectMetadata holds the user-controllable object metadata: the
 // user-modifiable system metadata headers and the user-defined x-amz-meta-*
 // key/value pairs. Content-Type is tracked separately on Object.
@@ -62,7 +96,10 @@ type Object struct {
 	ChecksumSHA256    *string
 	ChecksumType      *string
 	Size              int64
-	Parts             []Part
+	// StorageClass is the object's storage class label; nil means STANDARD
+	// (rows created before storage class support have no value).
+	StorageClass *string
+	Parts        []Part
 	// Tags holds the object's tag set as key/value pairs. It is populated by
 	// HeadObject and ListObjects and applied (replacing any existing tags) by
 	// PutObject.
@@ -114,6 +151,9 @@ type Upload struct {
 	Key       ObjectKey
 	UploadId  UploadId
 	Initiated time.Time
+	// StorageClass is the class chosen at CreateMultipartUpload; nil means
+	// STANDARD.
+	StorageClass *string
 }
 
 type ListMultipartUploadsResult struct {
@@ -151,6 +191,9 @@ type ListPartsResult struct {
 	MaxParts             int32
 	IsTruncated          bool
 	Parts                []*MultipartPart
+	// StorageClass is the class chosen at CreateMultipartUpload; nil means
+	// STANDARD.
+	StorageClass *string
 }
 
 const ChecksumTypeFullObject = "FULL_OBJECT"
@@ -234,6 +277,7 @@ var ErrNoSuchCORSConfiguration error = errors.New("NoSuchCORSConfiguration")
 var ErrNoSuchLifecycleConfiguration error = errors.New("NoSuchLifecycleConfiguration")
 var ErrTooManyParts error = errors.New("TooManyParts")
 var ErrInvalidWriteOffset error = errors.New("InvalidWriteOffset")
+var ErrInvalidStorageClass error = errors.New("InvalidStorageClass")
 
 // ErrCASFailure is returned by the storage layer when a compare-and-swap
 // (optimistic lock) operation fails because a concurrent writer modified the
@@ -281,6 +325,9 @@ type CreateMultipartUploadOptions struct {
 	// request headers. It is applied to the object when the upload completes.
 	// Nil means no metadata.
 	Metadata *ObjectMetadata
+	// StorageClass is the storage class for the upload and the resulting
+	// object, supplied via the x-amz-storage-class header. Nil means STANDARD.
+	StorageClass *string
 }
 
 // AppendObjectOptions holds options for an AppendObject operation.
@@ -314,6 +361,8 @@ type ObjectVersion struct {
 	LastModified   time.Time
 	Size           int64
 	ETag           *string
+	// StorageClass is the version's storage class label; nil means STANDARD.
+	StorageClass *string
 }
 
 type ListObjectVersionsOptions struct {

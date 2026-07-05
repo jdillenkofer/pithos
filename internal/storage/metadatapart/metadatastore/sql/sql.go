@@ -631,6 +631,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					ChecksumSHA256:    objectEntity.ChecksumSHA256,
 					ChecksumType:      objectEntity.ChecksumType,
 					Size:              objectEntity.Size,
+					StorageClass:      objectEntity.StorageClass,
 					Parts:             parts,
 				})
 				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
@@ -785,6 +786,7 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 				LastModified:   entity.UpdatedAt,
 				Size:           entity.Size,
 				ETag:           &entity.ETag,
+				StorageClass:   entity.StorageClass,
 			})
 			emittedCount++
 			nextKey := entity.Key.String()
@@ -868,6 +870,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumSHA256:    objectEntity.ChecksumSHA256,
 		ChecksumType:      objectEntity.ChecksumType,
 		Size:              objectEntity.Size,
+		StorageClass:      objectEntity.StorageClass,
 		Parts:             parts,
 		Tags:              tags,
 		Metadata:          metadata,
@@ -916,7 +919,7 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 		return nil, err
 	}
 
-	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, Parts: parts, Tags: tags, Metadata: metadata}, nil
+	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, StorageClass: objectEntity.StorageClass, Parts: parts, Tags: tags, Metadata: metadata}, nil
 }
 
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
@@ -985,6 +988,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		ChecksumSHA256:    obj.ChecksumSHA256,
 		ChecksumType:      obj.ChecksumType,
 		Size:              obj.Size,
+		StorageClass:      obj.StorageClass,
 		IsDeleteMarker:    false,
 		IsLatest:          true,
 		UploadStatus:      object.UploadStatusCompleted,
@@ -1116,6 +1120,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			ETag:           obj.ETag,
 			ChecksumType:   obj.ChecksumType,
 			Size:           obj.Size,
+			StorageClass:   oldObjectEntity.StorageClass,
 			VersionID:      oldObjectEntity.VersionID,
 			IsLatest:       true,
 			IsDeleteMarker: false,
@@ -1167,6 +1172,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		ETag:           obj.ETag,
 		ChecksumType:   obj.ChecksumType,
 		Size:           obj.Size,
+		StorageClass:   obj.StorageClass,
 		VersionID:      ptrutils.ToPtr("null"),
 		IsLatest:       true,
 		IsDeleteMarker: false,
@@ -1506,6 +1512,11 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		IsDeleteMarker: false,
 		UploadId:       ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
 		UploadStatus:   object.UploadStatusPending,
+	}
+	if opts != nil {
+		// The class chosen at CreateMultipartUpload is carried to the final
+		// object because CompleteMultipartUpload reuses this row.
+		objectEntity.StorageClass = opts.StorageClass
 	}
 	if opts != nil && opts.Metadata != nil {
 		applySystemMetadataToEntity(&objectEntity, *opts.Metadata)
@@ -1983,9 +1994,10 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
-					Key:       objectEntity.Key,
-					UploadId:  *objectEntity.UploadId,
-					Initiated: objectEntity.CreatedAt,
+					Key:          objectEntity.Key,
+					UploadId:     *objectEntity.UploadId,
+					Initiated:    objectEntity.CreatedAt,
+					StorageClass: objectEntity.StorageClass,
 				})
 			}
 			nextKeyMarker = objectEntity.Key.String()
@@ -2083,5 +2095,6 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		MaxParts:             opts.MaxParts,
 		IsTruncated:          isTruncated,
 		Parts:                parts,
+		StorageClass:         objectEntity.StorageClass,
 	}, nil
 }
