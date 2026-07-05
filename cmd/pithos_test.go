@@ -3771,6 +3771,243 @@ func TestObjectMetadata(t *testing.T) {
 	})
 }
 
+func TestObjectStorageClass(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		t.Run("it should round-trip the storage class through put, head, get and listings"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:       bucketName,
+				Key:          key,
+				Body:         bytes.NewReader([]byte("cold data")),
+				StorageClass: types.StorageClassGlacier,
+			})
+			assert.Nil(t, err)
+
+			headObjectResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClassGlacier, headObjectResult.StorageClass)
+
+			getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+			body, err := io.ReadAll(getObjectResult.Body)
+			assert.Nil(t, err)
+			getObjectResult.Body.Close()
+			assert.Equal(t, []byte("cold data"), body)
+			assert.Equal(t, types.StorageClassGlacier, getObjectResult.StorageClass)
+
+			listObjectsV2Result, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+			assert.Len(t, listObjectsV2Result.Contents, 1)
+			assert.Equal(t, types.ObjectStorageClassGlacier, listObjectsV2Result.Contents[0].StorageClass)
+
+			listObjectsResult, err := s3Client.ListObjects(context.Background(), &s3.ListObjectsInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+			assert.Len(t, listObjectsResult.Contents, 1)
+			assert.Equal(t, types.ObjectStorageClassGlacier, listObjectsResult.Contents[0].StorageClass)
+
+			listObjectVersionsResult, err := s3Client.ListObjectVersions(context.Background(), &s3.ListObjectVersionsInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+			assert.Len(t, listObjectVersionsResult.Versions, 1)
+			assert.Equal(t, types.ObjectVersionStorageClass("GLACIER"), listObjectVersionsResult.Versions[0].StorageClass)
+		})
+
+		t.Run("it should default to STANDARD and omit the response header"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+				Body:   bytes.NewReader([]byte("plain data")),
+			})
+			assert.Nil(t, err)
+
+			// AWS omits x-amz-storage-class for STANDARD objects, which the SDK
+			// surfaces as the enum zero value.
+			headObjectResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClass(""), headObjectResult.StorageClass)
+
+			listObjectsV2Result, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+			assert.Len(t, listObjectsV2Result.Contents, 1)
+			assert.Equal(t, types.ObjectStorageClassStandard, listObjectsV2Result.Contents[0].StorageClass)
+		})
+
+		t.Run("it should reject an invalid storage class"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:       bucketName,
+				Key:          key,
+				Body:         bytes.NewReader([]byte("data")),
+				StorageClass: types.StorageClass("BOGUS_CLASS"),
+			})
+			assert.NotNil(t, err)
+			var apiErr smithy.APIError
+			assert.True(t, errors.As(err, &apiErr))
+			assert.Equal(t, "InvalidStorageClass", apiErr.ErrorCode())
+		})
+
+		t.Run("it should carry the storage class from CreateMultipartUpload to the completed object"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket:       bucketName,
+				Key:          key,
+				StorageClass: types.StorageClassStandardIa,
+			})
+			assert.Nil(t, err)
+
+			listUploadsResult, err := s3Client.ListMultipartUploads(context.Background(), &s3.ListMultipartUploadsInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+			assert.Len(t, listUploadsResult.Uploads, 1)
+			assert.Equal(t, types.StorageClassStandardIa, listUploadsResult.Uploads[0].StorageClass)
+
+			uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket:     bucketName,
+				Key:        key,
+				UploadId:   createResult.UploadId,
+				PartNumber: aws.Int32(1),
+				Body:       bytes.NewReader([]byte("multipart data")),
+			})
+			assert.Nil(t, err)
+
+			listPartsResult, err := s3Client.ListParts(context.Background(), &s3.ListPartsInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: createResult.UploadId,
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClassStandardIa, listPartsResult.StorageClass)
+
+			_, err = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key,
+				UploadId: createResult.UploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: []types.CompletedPart{
+						{ETag: uploadPartResult.ETag, PartNumber: aws.Int32(1)},
+					},
+				},
+			})
+			assert.Nil(t, err)
+
+			headObjectResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClassStandardIa, headObjectResult.StorageClass)
+		})
+
+		t.Run("it should apply the storage class of the copy request instead of the source's"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			assert.Nil(t, err)
+
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:       bucketName,
+				Key:          key,
+				Body:         bytes.NewReader([]byte("source data")),
+				StorageClass: types.StorageClassGlacier,
+			})
+			assert.Nil(t, err)
+
+			// Copy with an explicit class: destination gets that class.
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:       bucketName,
+				Key:          aws.String("copy-with-class"),
+				CopySource:   aws.String(*bucketName + "/" + *key),
+				StorageClass: types.StorageClassOnezoneIa,
+			})
+			assert.Nil(t, err)
+			headObjectResult, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("copy-with-class"),
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClassOnezoneIa, headObjectResult.StorageClass)
+
+			// Copy without a class: destination defaults to STANDARD even though
+			// the source is GLACIER (matching AWS).
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:     bucketName,
+				Key:        aws.String("copy-without-class"),
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			assert.Nil(t, err)
+			headObjectResult, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("copy-without-class"),
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClass(""), headObjectResult.StorageClass)
+
+			// A self copy that only changes the storage class is allowed.
+			_, err = s3Client.CopyObject(context.Background(), &s3.CopyObjectInput{
+				Bucket:       bucketName,
+				Key:          key,
+				CopySource:   aws.String(*bucketName + "/" + *key),
+				StorageClass: types.StorageClassStandardIa,
+			})
+			assert.Nil(t, err)
+			headObjectResult, err = s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			assert.Nil(t, err)
+			assert.Equal(t, types.StorageClassStandardIa, headObjectResult.StorageClass)
+		})
+	})
+}
+
 func TestTagBasedAuthorization(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

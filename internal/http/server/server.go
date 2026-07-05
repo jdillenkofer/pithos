@@ -239,7 +239,7 @@ const userMetadataHeaderPrefix = "x-amz-meta-"
 
 const applicationXmlContentType = "application/xml"
 
-const storageClassStandard = "STANDARD"
+const storageClassHeader = "x-amz-storage-class"
 
 type BucketResult struct {
 	XMLName      xml.Name `xml:"Bucket"`
@@ -636,6 +636,25 @@ func setETagHeaderFromObject(headers http.Header, object *storage.Object) {
 	headers.Set(etagHeader, object.ETag)
 }
 
+// parseStorageClassHeader extracts the x-amz-storage-class request header.
+// Absent means the default class (nil); an unrecognized value is rejected with
+// ErrInvalidStorageClass.
+func parseStorageClassHeader(headers http.Header) (*string, error) {
+	storageClass := getHeaderAsPtr(headers, storageClassHeader)
+	if storageClass != nil && !storage.IsValidStorageClass(*storageClass) {
+		return nil, storage.ErrInvalidStorageClass
+	}
+	return storageClass, nil
+}
+
+// setStorageClassHeaderFromObject sets the x-amz-storage-class response header.
+// Per S3, the header is omitted for STANDARD objects.
+func setStorageClassHeaderFromObject(headers http.Header, object *storage.Object) {
+	if storageClass := storage.EffectiveStorageClass(object.StorageClass); storageClass != storage.StorageClassStandard {
+		headers.Set(storageClassHeader, storageClass)
+	}
+}
+
 // setTagCountHeaderFromObject sets the x-amz-tag-count header to the number of
 // tags on the object. Per S3, the header is only present when the object has at
 // least one tag.
@@ -836,6 +855,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrMetadataTooLarge:
 		statusCode = 400
 	case storage.ErrInvalidWriteOffset:
+		statusCode = 400
+	case storage.ErrInvalidStorageClass:
 		statusCode = 400
 	case storage.ErrPreconditionFailed:
 		statusCode = 412
@@ -1313,7 +1334,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 			Key:          upload.Key.String(),
 			UploadId:     upload.UploadId.String(),
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
-			StorageClass: storageClassStandard,
+			StorageClass: storage.EffectiveStorageClass(upload.StorageClass),
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
@@ -1474,7 +1495,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 			LastModified: object.LastModified.Format(time.RFC3339),
 			ETag:         object.ETag,
 			Size:         object.Size,
-			StorageClass: storageClassStandard,
+			StorageClass: storage.EffectiveStorageClass(object.StorageClass),
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
@@ -1627,7 +1648,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 			LastModified: object.LastModified.Format(time.RFC3339),
 			ETag:         object.ETag,
 			Size:         object.Size,
-			StorageClass: storageClassStandard,
+			StorageClass: storage.EffectiveStorageClass(object.StorageClass),
 		}
 
 		listBucketV2Result.Contents = append(listBucketV2Result.Contents, contentResult)
@@ -1812,6 +1833,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
+	setStorageClassHeaderFromObject(responseHeaders, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -1992,7 +2014,7 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 				Size:              part.Size,
 			}
 		}, result.Parts),
-		StorageClass: storageClassStandard,
+		StorageClass: storage.EffectiveStorageClass(result.StorageClass),
 	}
 
 	w.WriteHeader(200)
@@ -2035,20 +2057,20 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 				hasMore := partIndex < len(result.Parts)-1 || result.IsTruncated
 				if hasMore {
 					nextPartNumberMarker = lastPartNumberMarker
-					return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nextPartNumberMarker, MaxParts: maxParts, IsTruncated: true, Parts: collectedParts}, nextPartNumberMarker, nil
+					return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nextPartNumberMarker, MaxParts: maxParts, IsTruncated: true, Parts: collectedParts, StorageClass: result.StorageClass}, nextPartNumberMarker, nil
 				}
-				return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+				return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
 			}
 		}
 
 		if !result.IsTruncated {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
 		}
 		if lastPartNumberMarker == nil {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
 		}
 		if partNumberMarker != nil && *partNumberMarker == *lastPartNumberMarker {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts}, nil, nil
+			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
 		}
 		partNumberMarker = ptrutils.ToPtr(*lastPartNumberMarker)
 		nextPartNumberMarker = partNumberMarker
@@ -2192,6 +2214,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.UTC().Format(http.TimeFormat))
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
+	setStorageClassHeaderFromObject(responseHeaders, object)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()
@@ -2303,6 +2326,18 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 			createOpts = &storage.CreateMultipartUploadOptions{}
 		}
 		createOpts.Metadata = metadata
+	}
+
+	storageClass, err := parseStorageClassHeader(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if storageClass != nil {
+		if createOpts == nil {
+			createOpts = &storage.CreateMultipartUploadOptions{}
+		}
+		createOpts.StorageClass = storageClass
 	}
 
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
@@ -2622,6 +2657,18 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		putObjectOptions.Metadata = metadata
 	}
 
+	storageClass, err := parseStorageClassHeader(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if storageClass != nil {
+		if putObjectOptions == nil {
+			putObjectOptions = &storage.PutObjectOptions{}
+		}
+		putObjectOptions.StorageClass = storageClass
+	}
+
 	shouldReturn = validateMaxEntitySize(r, w)
 	if shouldReturn {
 		return
@@ -2907,14 +2954,25 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Disallow a no-op self copy (same bucket+key, COPY directive, no range),
-	// matching S3 which rejects it as an illegal request.
+	// matching S3 which rejects it as an illegal request. A self copy that
+	// supplies x-amz-storage-class is allowed, mirroring S3 where changing the
+	// storage class makes the copy meaningful.
 	if metadataDirective == metadataDirectiveCopy && copyRange == nil &&
+		r.Header.Get(storageClassHeader) == "" &&
 		srcBucketName.Equals(dstBucketName) && srcKey.Equals(dstKey) {
 		handleError(ErrInvalidRequest, w, r)
 		return
 	}
 
 	metadata, err := parseObjectMetadataHeaders(r.Header)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+
+	// The destination storage class follows the x-amz-storage-class header on
+	// the copy request itself; it is not governed by x-amz-metadata-directive.
+	storageClass, err := parseStorageClassHeader(r.Header)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2927,6 +2985,7 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		ReplaceTags:          taggingDirective == taggingDirectiveReplace,
 		Tags:                 replaceTags,
 		Metadata:             metadata,
+		StorageClass:         storageClass,
 	}
 	if opts.ReplaceMetadata {
 		opts.ContentType = getHeaderAsPtr(r.Header, contentTypeHeader)
@@ -3444,7 +3503,7 @@ func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Reques
 			if version.ETag != nil {
 				etag = *version.ETag
 			}
-			response.Versions = append(response.Versions, &VersionEntry{Key: version.Key.String(), VersionID: version.VersionID, IsLatest: version.IsLatest, LastModified: version.LastModified.UTC().Format(time.RFC3339), ETag: etag, Size: version.Size, StorageClass: storageClassStandard})
+			response.Versions = append(response.Versions, &VersionEntry{Key: version.Key.String(), VersionID: version.VersionID, IsLatest: version.IsLatest, LastModified: version.LastModified.UTC().Format(time.RFC3339), ETag: etag, Size: version.Size, StorageClass: storage.EffectiveStorageClass(version.StorageClass)})
 		}
 	}
 	for _, commonPrefix := range result.CommonPrefixes {

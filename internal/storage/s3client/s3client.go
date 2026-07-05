@@ -193,6 +193,7 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 			ETag:         *object.ETag,
 			ChecksumType: checksumType,
 			Size:         *object.Size,
+			StorageClass: storageClassFromAWS(object.StorageClass),
 		}
 	}, listObjectsResult.Contents)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -226,7 +227,7 @@ func (rs *s3ClientStorage) ListObjectVersions(ctx context.Context, bucketName st
 		if version.Key == nil || version.VersionId == nil || version.LastModified == nil {
 			continue
 		}
-		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*version.Key), VersionID: *version.VersionId, IsDeleteMarker: false, IsLatest: aws.ToBool(version.IsLatest), LastModified: *version.LastModified, Size: aws.ToInt64(version.Size), ETag: version.ETag})
+		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*version.Key), VersionID: *version.VersionId, IsDeleteMarker: false, IsLatest: aws.ToBool(version.IsLatest), LastModified: *version.LastModified, Size: aws.ToInt64(version.Size), ETag: version.ETag, StorageClass: storageClassFromAWS(version.StorageClass)})
 	}
 	for _, marker := range result.DeleteMarkers {
 		if marker.Key == nil || marker.VersionId == nil || marker.LastModified == nil {
@@ -277,6 +278,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 		ChecksumSHA256:    headObjectResult.ChecksumSHA256,
 		ChecksumType:      (*string)(&headObjectResult.ChecksumType),
 		Size:              *headObjectResult.ContentLength,
+		StorageClass:      storageClassFromAWS(headObjectResult.StorageClass),
 		Metadata: storage.ObjectMetadata{
 			CacheControl:            headObjectResult.CacheControl,
 			ContentDisposition:      headObjectResult.ContentDisposition,
@@ -383,6 +385,17 @@ func contentMD5FromETag(etag *string) *string {
 	return &encoded
 }
 
+// storageClassFromAWS converts an AWS SDK storage class enum (each API uses
+// its own string type) into the internal representation, mapping the SDK's
+// zero value ("not present") to nil.
+func storageClassFromAWS[T ~string](storageClass T) *string {
+	if storageClass == "" {
+		return nil
+	}
+	value := string(storageClass)
+	return &value
+}
+
 // parseExpires parses the stored raw Expires header value into a time.Time for
 // the AWS SDK, which only accepts a parsed timestamp on requests. Unparseable
 // values are dropped.
@@ -435,6 +448,9 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		input.Expires = parseExpires(opts.Metadata.Expires)
 		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		input.Metadata = opts.Metadata.UserMetadata
+	}
+	if opts != nil && opts.StorageClass != nil {
+		input.StorageClass = types.StorageClass(*opts.StorageClass)
 	}
 	putObjectResult, err := rs.s3Client.PutObject(ctx, input)
 	var notFoundError *types.NotFound
@@ -534,6 +550,9 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 		// metadata directive.
 		if opts.Metadata != nil {
 			input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
+		}
+		if opts.StorageClass != nil {
+			input.StorageClass = types.StorageClass(*opts.StorageClass)
 		}
 		input.CopySourceIfMatch = opts.CopySourceConditions.IfMatch
 		input.CopySourceIfNoneMatch = opts.CopySourceConditions.IfNoneMatch
@@ -672,6 +691,9 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		input.Expires = parseExpires(opts.Metadata.Expires)
 		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		input.Metadata = opts.Metadata.UserMetadata
+	}
+	if opts != nil && opts.StorageClass != nil {
+		input.StorageClass = types.StorageClass(*opts.StorageClass)
 	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound
@@ -864,9 +886,10 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 
 	uploads := sliceutils.Map(func(upload types.MultipartUpload) storage.Upload {
 		return storage.Upload{
-			Key:       storage.MustNewObjectKey(*upload.Key),
-			UploadId:  storage.MustNewUploadId(*upload.UploadId),
-			Initiated: *upload.Initiated,
+			Key:          storage.MustNewObjectKey(*upload.Key),
+			UploadId:     storage.MustNewUploadId(*upload.UploadId),
+			Initiated:    *upload.Initiated,
+			StorageClass: storageClassFromAWS(upload.StorageClass),
 		}
 	}, listMultipartUploadsResult.Uploads)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -926,6 +949,7 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 				Size:              *part.Size,
 			}
 		}, listPartsResult.Parts),
+		StorageClass: storageClassFromAWS(listPartsResult.StorageClass),
 	}, nil
 }
 

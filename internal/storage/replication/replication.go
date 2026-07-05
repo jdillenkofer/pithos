@@ -148,11 +148,11 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 		return nil, err
 	}
 	// Secondaries must not re-evaluate conditional-write preconditions (the
-	// primary already enforced them), but the tag set and object metadata apply
-	// to every replica.
+	// primary already enforced them), but the tag set, object metadata and
+	// storage class apply to every replica.
 	var secondaryOpts *storage.PutObjectOptions
-	if opts != nil && (len(opts.Tags) > 0 || opts.Metadata != nil) {
-		secondaryOpts = &storage.PutObjectOptions{Tags: opts.Tags, Metadata: opts.Metadata}
+	if opts != nil && (len(opts.Tags) > 0 || opts.Metadata != nil || opts.StorageClass != nil) {
+		secondaryOpts = &storage.PutObjectOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
 		_, err = readSeekCloser.Seek(0, io.SeekStart)
