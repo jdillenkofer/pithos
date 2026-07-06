@@ -46,6 +46,10 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
+	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
@@ -4006,6 +4010,184 @@ func TestObjectStorageClass(t *testing.T) {
 			assert.Equal(t, types.StorageClassStandardIa, headObjectResult.StorageClass)
 		})
 	})
+}
+
+// countPartFiles returns the number of stored part files (32-char hex names)
+// directly under a filesystem part store root, or 0 when the root does not
+// exist yet.
+func countPartFiles(t *testing.T, root string) int {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	require.NoError(t, err)
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && len(entry.Name()) == 32 {
+			count++
+		}
+	}
+	return count
+}
+
+// newNamedPartStoreStorage builds a MetadataPartStorage backed by two
+// filesystem part stores: the default store and a "cold" store, with GLACIER
+// and DEEP_ARCHIVE routed to the cold store. It returns the storage plus the
+// two part store roots so tests can assert where part data physically lives.
+func newNamedPartStoreStorage(t *testing.T, addCleanup func(func()), db database.Database) (store storage.Storage, defaultRoot string, coldRoot string) {
+	t.Helper()
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
+	require.NoError(t, err)
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
+	require.NoError(t, err)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
+	require.NoError(t, err)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	require.NoError(t, err)
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	require.NoError(t, err)
+	metadataStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
+	require.NoError(t, err)
+
+	defaultRoot = mustTempDir(addCleanup, "pithos-default-parts-")
+	coldRoot = mustTempDir(addCleanup, "pithos-cold-parts-")
+	defaultStore, err := filesystemPartStore.New(defaultRoot)
+	require.NoError(t, err)
+	coldStore, err := filesystemPartStore.New(coldRoot)
+	require.NoError(t, err)
+
+	store, err = metadatapart.NewStorageWithNamedPartStores(db, metadataStore, defaultStore,
+		map[string]partstore.PartStore{"cold": coldStore},
+		map[string]string{"GLACIER": "cold", "DEEP_ARCHIVE": "cold"})
+	require.NoError(t, err)
+	return store, defaultRoot, coldRoot
+}
+
+func TestStorageClassPartStoreRouting(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	ctx := context.Background()
+	cleanups := make([]func(), 0, 4)
+	addCleanup := func(fn func()) { cleanups = append(cleanups, fn) }
+	t.Cleanup(func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	})
+
+	storagePath := mustTempDir(addCleanup, "pithos-test-data-")
+	db, dbCleanup, err := setupDatabase(ctx, database.DB_TYPE_SQLITE, storagePath)
+	require.NoError(t, err)
+	addDatabaseCleanup(addCleanup, db, dbCleanup, "Couldn't close database")
+
+	store, defaultRoot, coldRoot := newNamedPartStoreStorage(t, addCleanup, db)
+	require.NoError(t, store.Start(ctx))
+	addCleanup(func() { mustNoErr(store.Stop(ctx), "Couldn't stop storage") })
+
+	bucket := storage.MustNewBucketName("routing-test")
+	require.NoError(t, store.CreateBucket(ctx, bucket))
+
+	glacierBody := []byte("cold object data")
+	_, err = store.PutObject(ctx, bucket, storage.MustNewObjectKey("cold.bin"), nil, ioutils.NewByteReadSeekCloser(glacierBody), nil, &storage.PutObjectOptions{
+		StorageClass: aws.String("GLACIER"),
+	})
+	require.NoError(t, err)
+
+	standardBody := []byte("hot object data")
+	_, err = store.PutObject(ctx, bucket, storage.MustNewObjectKey("hot.bin"), nil, ioutils.NewByteReadSeekCloser(standardBody), nil, nil)
+	require.NoError(t, err)
+
+	// The GLACIER object's part lives in the cold store; the STANDARD object's
+	// part lives in the default store.
+	assert.Equal(t, 1, countPartFiles(t, coldRoot), "GLACIER part should be in the cold store")
+	assert.Equal(t, 1, countPartFiles(t, defaultRoot), "STANDARD part should be in the default store")
+
+	// Both objects remain readable byte-identically.
+	obj, readers, err := store.GetObject(ctx, bucket, storage.MustNewObjectKey("cold.bin"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	got, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	readers[0].Close()
+	assert.Equal(t, glacierBody, got)
+	assert.Equal(t, "GLACIER", storage.EffectiveStorageClass(obj.StorageClass))
+}
+
+func TestStorageClassLifecycleTransitionEndToEnd(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	ctx := context.Background()
+	cleanups := make([]func(), 0, 4)
+	addCleanup := func(fn func()) { cleanups = append(cleanups, fn) }
+	t.Cleanup(func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	})
+
+	storagePath := mustTempDir(addCleanup, "pithos-test-data-")
+	db, dbCleanup, err := setupDatabase(ctx, database.DB_TYPE_SQLITE, storagePath)
+	require.NoError(t, err)
+	addDatabaseCleanup(addCleanup, db, dbCleanup, "Couldn't close database")
+
+	innerStore, defaultRoot, coldRoot := newNamedPartStoreStorage(t, addCleanup, db)
+
+	// Run the reconciler frequently and pretend the sweep runs 10 days ahead so
+	// a 1-day transition is due immediately.
+	store := lifecyclereconciler.NewStorageMiddleware(innerStore,
+		lifecyclereconciler.WithReconcileInterval(100*time.Millisecond),
+		lifecyclereconciler.WithNow(func() time.Time { return time.Now().UTC().AddDate(0, 0, 10) }))
+	require.NoError(t, store.Start(ctx))
+	addCleanup(func() { mustNoErr(store.Stop(ctx), "Couldn't stop storage") })
+
+	bucket := storage.MustNewBucketName("transition-test")
+	require.NoError(t, store.CreateBucket(ctx, bucket))
+
+	body := []byte("data to be tiered to cold storage")
+	_, err = store.PutObject(ctx, bucket, storage.MustNewObjectKey("cold/a.bin"), nil, ioutils.NewByteReadSeekCloser(body), nil, nil)
+	require.NoError(t, err)
+
+	// Initially STANDARD: the part is in the default store.
+	assert.Equal(t, 1, countPartFiles(t, defaultRoot))
+	assert.Equal(t, 0, countPartFiles(t, coldRoot))
+
+	require.NoError(t, store.PutBucketLifecycleConfiguration(ctx, bucket, &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{
+			{
+				ID:          aws.String("tier-cold"),
+				Status:      storage.LifecycleRuleStatusEnabled,
+				Filter:      &storage.LifecycleFilter{Prefix: aws.String("cold/")},
+				Transitions: []storage.LifecycleTransition{{Days: aws.Int32(1), StorageClass: "GLACIER"}},
+			},
+		},
+	}))
+
+	// The reconciler transitions the object: class flips to GLACIER and a copy
+	// of the part lands in the cold store.
+	require.Eventually(t, func() bool {
+		obj, err := store.HeadObject(ctx, bucket, storage.MustNewObjectKey("cold/a.bin"), nil)
+		if err != nil {
+			return false
+		}
+		return storage.EffectiveStorageClass(obj.StorageClass) == "GLACIER" &&
+			countPartFiles(t, coldRoot) == 1
+	}, 15*time.Second, 100*time.Millisecond, "object should transition to GLACIER and relocate its part")
+
+	// The object is still readable byte-identically after the transition.
+	_, readers, err := store.GetObject(ctx, bucket, storage.MustNewObjectKey("cold/a.bin"), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	got, err := io.ReadAll(readers[0])
+	require.NoError(t, err)
+	readers[0].Close()
+	assert.Equal(t, body, got)
+
+	// The now-unreferenced part in the default store is reclaimed by the
+	// background GC (which sweeps every ~30s), leaving only the cold-store copy.
+	require.Eventually(t, func() bool {
+		return countPartFiles(t, defaultRoot) == 0 && countPartFiles(t, coldRoot) == 1
+	}, 45*time.Second, 250*time.Millisecond, "the source part should be garbage-collected after the transition")
 }
 
 func TestTagBasedAuthorization(t *testing.T) {
