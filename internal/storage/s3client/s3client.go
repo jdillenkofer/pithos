@@ -1201,11 +1201,44 @@ func convertLifecycleTagToSdk(tag *storage.LifecycleTag) *types.Tag {
 	}
 }
 
+func convertLifecycleTransitionsFromSdk(transitions []types.Transition) []storage.LifecycleTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]storage.LifecycleTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, storage.LifecycleTransition{
+			Days:         transition.Days,
+			Date:         transition.Date,
+			StorageClass: string(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
+func convertLifecycleTransitionsToSdk(transitions []storage.LifecycleTransition) []types.Transition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]types.Transition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, types.Transition{
+			Days:         transition.Days,
+			Date:         transition.Date,
+			StorageClass: types.TransitionStorageClass(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
 func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule {
 	converted := storage.LifecycleRule{
-		ID:     rule.ID,
-		Status: string(rule.Status),
-		Prefix: rule.Prefix,
+		ID:          rule.ID,
+		Status:      string(rule.Status),
+		Prefix:      rule.Prefix,
+		Transitions: convertLifecycleTransitionsFromSdk(rule.Transitions),
 	}
 	if rule.Filter != nil {
 		filter := &storage.LifecycleFilter{
@@ -1244,9 +1277,10 @@ func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule
 
 func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
 	converted := types.LifecycleRule{
-		ID:     rule.ID,
-		Status: types.ExpirationStatus(rule.Status),
-		Prefix: rule.Prefix,
+		ID:          rule.ID,
+		Status:      types.ExpirationStatus(rule.Status),
+		Prefix:      rule.Prefix,
+		Transitions: convertLifecycleTransitionsToSdk(rule.Transitions),
 	}
 	if rule.Filter != nil {
 		filter := &types.LifecycleRuleFilter{

@@ -525,9 +525,17 @@ type LifecycleConfigurationAbortIncompleteMultipartUpload struct {
 	DaysAfterInitiation *int32 `xml:"DaysAfterInitiation"`
 }
 
+type LifecycleConfigurationTransition struct {
+	Days *int32 `xml:"Days"`
+	// Date is kept as a string so that the ISO 8601 variants S3 accepts can be
+	// parsed explicitly (see parseLifecycleDate).
+	Date         *string `xml:"Date"`
+	StorageClass string  `xml:"StorageClass"`
+}
+
 // lifecycleUnsupportedElement captures the presence of lifecycle rule elements
-// pithos does not support (transitions and versioning-dependent actions) so
-// the PUT handler can reject them explicitly instead of silently dropping them.
+// pithos does not support (noncurrent-version actions) so the PUT handler can
+// reject them explicitly instead of silently dropping them.
 type lifecycleUnsupportedElement struct{}
 
 type LifecycleConfigurationRule struct {
@@ -537,7 +545,7 @@ type LifecycleConfigurationRule struct {
 	Filter                         *LifecycleConfigurationFilter                         `xml:"Filter"`
 	Expiration                     *LifecycleConfigurationExpiration                     `xml:"Expiration"`
 	AbortIncompleteMultipartUpload *LifecycleConfigurationAbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload"`
-	Transitions                    []lifecycleUnsupportedElement                         `xml:"Transition"`
+	Transitions                    []LifecycleConfigurationTransition                    `xml:"Transition"`
 	NoncurrentVersionTransitions   []lifecycleUnsupportedElement                         `xml:"NoncurrentVersionTransition"`
 	NoncurrentVersionExpiration    *lifecycleUnsupportedElement                          `xml:"NoncurrentVersionExpiration"`
 }
@@ -3778,6 +3786,23 @@ func convertLifecycleConfigurationFromXML(request *LifecycleConfiguration) (*sto
 				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
 			}
 		}
+		for _, transition := range rule.Transitions {
+			convertedTransition := storage.LifecycleTransition{
+				Days:         transition.Days,
+				StorageClass: transition.StorageClass,
+			}
+			if transition.Date != nil {
+				date, err := parseLifecycleDate(*transition.Date)
+				if err != nil {
+					return nil, &storage.LifecycleValidationError{
+						Code:    "InvalidArgument",
+						Message: "'Date' must be in ISO 8601 format",
+					}
+				}
+				convertedTransition.Date = date
+			}
+			converted.Transitions = append(converted.Transitions, convertedTransition)
+		}
 		config.Rules = append(config.Rules, converted)
 	}
 	return config, nil
@@ -3828,6 +3853,16 @@ func convertLifecycleConfigurationToXML(config *storage.BucketLifecycleConfigura
 			converted.AbortIncompleteMultipartUpload = &LifecycleConfigurationAbortIncompleteMultipartUpload{
 				DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
 			}
+		}
+		for _, transition := range rule.Transitions {
+			convertedTransition := LifecycleConfigurationTransition{
+				Days:         transition.Days,
+				StorageClass: transition.StorageClass,
+			}
+			if transition.Date != nil {
+				convertedTransition.Date = ptrutils.ToPtr(transition.Date.UTC().Format(time.RFC3339))
+			}
+			converted.Transitions = append(converted.Transitions, convertedTransition)
 		}
 		response.Rules = append(response.Rules, converted)
 	}
@@ -3897,8 +3932,8 @@ func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	for _, rule := range request.Rules {
-		if len(rule.Transitions) > 0 || len(rule.NoncurrentVersionTransitions) > 0 {
-			writeNotImplemented(w, r, "Transition actions are not supported")
+		if len(rule.NoncurrentVersionTransitions) > 0 {
+			writeNotImplemented(w, r, "NoncurrentVersionTransition actions are not supported")
 			return
 		}
 		if rule.NoncurrentVersionExpiration != nil {

@@ -503,6 +503,7 @@ type LifecycleFilterAnd = metadatastore.LifecycleFilterAnd
 type LifecycleFilter = metadatastore.LifecycleFilter
 type LifecycleExpiration = metadatastore.LifecycleExpiration
 type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
+type LifecycleTransition = metadatastore.LifecycleTransition
 type LifecycleRule = metadatastore.LifecycleRule
 type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
 

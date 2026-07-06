@@ -3,7 +3,10 @@ package s3client
 import (
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -86,4 +89,31 @@ func TestTranslateS3CopyErrorPreservesUnknownErrors(t *testing.T) {
 	err := translateS3CopyError(unknownErr)
 
 	require.ErrorIs(t, err, unknownErr)
+}
+
+func TestConvertLifecycleRulePreservesTransitions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	date := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	internalRule := storage.LifecycleRule{
+		ID:     aws.String("transition-cold"),
+		Status: storage.LifecycleRuleStatusEnabled,
+		Filter: &storage.LifecycleFilter{
+			Prefix: aws.String("cold/"),
+		},
+		Transitions: []storage.LifecycleTransition{
+			{Days: aws.Int32(30), StorageClass: "STANDARD_IA"},
+			{Date: &date, StorageClass: "GLACIER"},
+		},
+	}
+
+	sdkRule := convertLifecycleRuleToSdk(internalRule)
+	require.Len(t, sdkRule.Transitions, 2)
+	require.Equal(t, int32(30), aws.ToInt32(sdkRule.Transitions[0].Days))
+	require.Equal(t, types.TransitionStorageClassStandardIa, sdkRule.Transitions[0].StorageClass)
+	require.Equal(t, date, aws.ToTime(sdkRule.Transitions[1].Date))
+	require.Equal(t, types.TransitionStorageClassGlacier, sdkRule.Transitions[1].StorageClass)
+
+	converted := convertLifecycleRuleFromSdk(sdkRule)
+	require.Equal(t, internalRule.Transitions, converted.Transitions)
 }

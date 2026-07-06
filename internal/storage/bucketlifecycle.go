@@ -85,7 +85,7 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 			return err
 		}
 	}
-	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil {
+	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 {
 		return invalidLifecycleRequest("At least one action needs to be specified in a rule")
 	}
 	if rule.Expiration != nil {
@@ -100,6 +100,53 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 		}
 		if lifecycleRuleHasTagFilter(rule) || lifecycleRuleHasSizeFilter(rule) {
 			return invalidLifecycleRequest("AbortIncompleteMultipartUpload cannot be specified with Tags or Object Size")
+		}
+	}
+	if len(rule.Transitions) > 0 {
+		if err := validateLifecycleTransitions(rule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateLifecycleTransitions(rule *LifecycleRule) *LifecycleValidationError {
+	seenTargets := map[string]struct{}{}
+	for i := range rule.Transitions {
+		transition := &rule.Transitions[i]
+		if transition.Days != nil && transition.Date != nil {
+			return malformedLifecycleXML("Days and Date are mutually exclusive in a Transition action")
+		}
+		if transition.Days == nil && transition.Date == nil {
+			return malformedLifecycleXML("Transition action must specify one of Days or Date")
+		}
+		// Unlike Expiration, S3 allows Days=0 for transitions.
+		if transition.Days != nil && *transition.Days < 0 {
+			return invalidLifecycleArgument("'Days' for Transition action must be a non-negative integer")
+		}
+		if transition.Date != nil {
+			date := transition.Date.UTC()
+			if !date.Equal(time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, time.UTC)) {
+				return invalidLifecycleArgument("'Date' must be at midnight GMT")
+			}
+		}
+		if transition.StorageClass == "" {
+			return malformedLifecycleXML("Transition action must specify a StorageClass")
+		}
+		if !IsValidStorageClass(transition.StorageClass) {
+			return invalidLifecycleArgument("'StorageClass' must be a valid storage class")
+		}
+		if transition.StorageClass == StorageClassStandard {
+			return invalidLifecycleArgument("'StorageClass' for Transition action must not be STANDARD")
+		}
+		if _, ok := seenTargets[transition.StorageClass]; ok {
+			return invalidLifecycleArgument("'StorageClass' must be different for 'Transition' actions in same 'Rule'")
+		}
+		seenTargets[transition.StorageClass] = struct{}{}
+		// The transition must be due before the expiration deletes the object,
+		// otherwise it can never take effect.
+		if transition.Days != nil && rule.Expiration != nil && rule.Expiration.Days != nil && *transition.Days >= *rule.Expiration.Days {
+			return invalidLifecycleArgument("'Days' in the Expiration action for filter must be greater than 'Days' in the Transition action")
 		}
 	}
 	return nil
@@ -306,6 +353,20 @@ func LifecycleExpirationDueTime(rule *LifecycleRule, objectCreated time.Time) *t
 	}
 	if rule.Expiration.Days != nil {
 		due := lifecycleNextMidnightUTC(objectCreated.AddDate(0, 0, int(*rule.Expiration.Days)))
+		return &due
+	}
+	return nil
+}
+
+// LifecycleTransitionDueTime returns the time at which an object created at
+// the given time becomes due for the given Transition action.
+func LifecycleTransitionDueTime(transition *LifecycleTransition, objectCreated time.Time) *time.Time {
+	if transition.Date != nil {
+		due := transition.Date.UTC()
+		return &due
+	}
+	if transition.Days != nil {
+		due := lifecycleNextMidnightUTC(objectCreated.AddDate(0, 0, int(*transition.Days)))
 		return &due
 	}
 	return nil

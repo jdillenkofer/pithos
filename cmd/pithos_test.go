@@ -5909,6 +5909,17 @@ func TestBucketLifecycle(t *testing.T) {
 								DaysAfterInitiation: aws.Int32(7),
 							},
 						},
+						{
+							ID:     aws.String("transition-cold"),
+							Status: types.ExpirationStatusEnabled,
+							Filter: &types.LifecycleRuleFilter{
+								Prefix: aws.String("cold/"),
+							},
+							Transitions: []types.Transition{{
+								Days:         aws.Int32(30),
+								StorageClass: types.TransitionStorageClassGlacier,
+							}},
+						},
 					},
 				},
 			})
@@ -5916,7 +5927,7 @@ func TestBucketLifecycle(t *testing.T) {
 
 			getResult, err := s3Client.GetBucketLifecycleConfiguration(context.Background(), &s3.GetBucketLifecycleConfigurationInput{Bucket: bucketName})
 			require.NoError(t, err)
-			require.Len(t, getResult.Rules, 3)
+			require.Len(t, getResult.Rules, 4)
 
 			assert.Equal(t, "expire-logs", aws.ToString(getResult.Rules[0].ID))
 			assert.Equal(t, types.ExpirationStatusEnabled, getResult.Rules[0].Status)
@@ -5941,6 +5952,11 @@ func TestBucketLifecycle(t *testing.T) {
 			assert.Equal(t, "abort-uploads", aws.ToString(getResult.Rules[2].ID))
 			require.NotNil(t, getResult.Rules[2].AbortIncompleteMultipartUpload)
 			assert.Equal(t, int32(7), aws.ToInt32(getResult.Rules[2].AbortIncompleteMultipartUpload.DaysAfterInitiation))
+
+			assert.Equal(t, "transition-cold", aws.ToString(getResult.Rules[3].ID))
+			require.Len(t, getResult.Rules[3].Transitions, 1)
+			assert.Equal(t, int32(30), aws.ToInt32(getResult.Rules[3].Transitions[0].Days))
+			assert.Equal(t, types.TransitionStorageClassGlacier, getResult.Rules[3].Transitions[0].StorageClass)
 
 			_, err = s3Client.DeleteBucketLifecycle(context.Background(), &s3.DeleteBucketLifecycleInput{Bucket: bucketName})
 			require.NoError(t, err)
@@ -6012,13 +6028,34 @@ func TestBucketLifecycle(t *testing.T) {
 				},
 			}), "InvalidArgument")
 
-			// Transition actions require storage classes and are not supported.
+			// Transition to STANDARD is rejected (it is not a valid target).
+			expectErrorCode(t, putLifecycle(types.LifecycleRule{
+				Status: types.ExpirationStatusEnabled,
+				Filter: &types.LifecycleRuleFilter{Prefix: aws.String("")},
+				Transitions: []types.Transition{{
+					Days:         aws.Int32(30),
+					StorageClass: types.TransitionStorageClass("STANDARD"),
+				}},
+			}), "InvalidArgument")
+
+			// A transition must be due before the expiration deletes the object.
 			expectErrorCode(t, putLifecycle(types.LifecycleRule{
 				Status: types.ExpirationStatusEnabled,
 				Filter: &types.LifecycleRuleFilter{Prefix: aws.String("")},
 				Transitions: []types.Transition{{
 					Days:         aws.Int32(30),
 					StorageClass: types.TransitionStorageClassGlacier,
+				}},
+				Expiration: &types.LifecycleExpiration{Days: aws.Int32(30)},
+			}), "InvalidArgument")
+
+			// NoncurrentVersionTransition actions are not supported.
+			expectErrorCode(t, putLifecycle(types.LifecycleRule{
+				Status: types.ExpirationStatusEnabled,
+				Filter: &types.LifecycleRuleFilter{Prefix: aws.String("")},
+				NoncurrentVersionTransitions: []types.NoncurrentVersionTransition{{
+					NoncurrentDays: aws.Int32(30),
+					StorageClass:   types.TransitionStorageClassGlacier,
 				}},
 			}), "NotImplemented")
 

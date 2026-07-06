@@ -511,6 +511,21 @@ type LifecycleAbortIncompleteMultipartUpload struct {
 	DaysAfterInitiation *int32
 }
 
+// LifecycleTransition changes an object's storage class (and thereby the part
+// store holding its data) once it reaches the given age. Exactly one of Days
+// or Date is set. Transitioned objects stay immediately readable: storage
+// classes are labels with no archive/restore semantics.
+type LifecycleTransition struct {
+	// Days is the number of days after object creation when the object
+	// transitions. Following S3 semantics, the effective time is rounded to
+	// the next midnight UTC after creation + Days; 0 is allowed.
+	Days *int32
+	// Date is the absolute transition time; it must be midnight UTC.
+	Date *time.Time
+	// StorageClass is the target storage class.
+	StorageClass string
+}
+
 // LifecycleRule is a single rule of a bucket lifecycle configuration.
 type LifecycleRule struct {
 	ID     *string
@@ -521,6 +536,7 @@ type LifecycleRule struct {
 	Filter                         *LifecycleFilter
 	Expiration                     *LifecycleExpiration
 	AbortIncompleteMultipartUpload *LifecycleAbortIncompleteMultipartUpload
+	Transitions                    []LifecycleTransition
 }
 
 type BucketLifecycleConfiguration struct {
