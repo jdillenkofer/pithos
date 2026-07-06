@@ -1403,6 +1403,91 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	return result, nil
 }
 
+func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.TransitionObjectStorageClass")
+	defer span.End()
+
+	if !metadatastore.IsValidStorageClass(targetStorageClass) {
+		return storage.ErrInvalidStorageClass
+	}
+
+	// Blocking GC while relocating parts also bumps its write counter, so the
+	// GC pass that reclaims the now-unreferenced source parts runs afterwards.
+	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
+	defer unblockGC()
+
+	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
+		if err != nil {
+			return err
+		}
+		if object.IsDeleteMarker {
+			return storage.ErrNoSuchKey
+		}
+		if opts != nil && opts.IfMatchETag != nil {
+			if *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
+				return storage.ErrPreconditionFailed
+			}
+		}
+
+		// When every part already lives in the target store (e.g. the class was
+		// only remapped in config, or the classes share a store), just relabel
+		// the object without moving any data.
+		needsMove := false
+		for _, part := range object.Parts {
+			if !partStoreNamesEqual(part.StoreName, targetStoreName) {
+				needsMove = true
+				break
+			}
+		}
+
+		newParts := object.Parts
+		if needsMove {
+			newParts = make([]metadatastore.Part, len(object.Parts))
+			for i, srcPart := range object.Parts {
+				srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
+				if err != nil {
+					return err
+				}
+				newPartId, err := partstore.NewRandomPartId()
+				if err != nil {
+					return err
+				}
+				srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
+				if err != nil {
+					return err
+				}
+				err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
+				srcReader.Close()
+				if err != nil {
+					return err
+				}
+				newParts[i] = srcPart
+				newParts[i].Id = *newPartId
+				newParts[i].StoreName = targetStoreName
+			}
+		}
+
+		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, object.ETag, targetStorageClass, newParts)
+	})
+}
+
+// partStoreNamesEqual compares two part store names where nil means the default
+// store.
+func partStoreNamesEqual(a, b *string) bool {
+	aName := partstore.DefaultPartStoreName
+	if a != nil {
+		aName = *a
+	}
+	bName := partstore.DefaultPartStoreName
+	if b != nil {
+		bName = *b
+	}
+	return aName == bName
+}
+
 func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjects")
 	defer span.End()

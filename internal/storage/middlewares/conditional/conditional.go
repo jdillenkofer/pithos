@@ -190,6 +190,14 @@ func (csm *conditionalStorageMiddleware) PutObject(ctx context.Context, bucketNa
 	return storage.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
 }
 
+func (csm *conditionalStorageMiddleware) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.TransitionObjectStorageClass")
+	defer span.End()
+
+	s := csm.lookupStorage(bucketName)
+	return s.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+}
+
 func copySourceConditionsSatisfied(conditions storage.CopySourceConditions, object *storage.Object) error {
 	ifMatchPassed := false
 	if conditions.IfMatch != nil {

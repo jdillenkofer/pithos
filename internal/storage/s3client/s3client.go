@@ -582,6 +582,28 @@ func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName,
 	return nil, storage.ErrNotImplemented
 }
 
+func (rs *s3ClientStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.TransitionObjectStorageClass")
+	defer span.End()
+
+	// A remote S3 backend changes an object's storage class via an in-place
+	// self copy that keeps the existing metadata.
+	input := &s3.CopyObjectInput{
+		Bucket:            aws.String(bucketName.String()),
+		Key:               aws.String(key.String()),
+		CopySource:        aws.String(copySourceValue(bucketName, key)),
+		MetadataDirective: types.MetadataDirectiveCopy,
+		StorageClass:      types.StorageClass(targetStorageClass),
+	}
+	if opts != nil && opts.IfMatchETag != nil {
+		input.CopySourceIfMatch = opts.IfMatchETag
+	}
+	if _, err := rs.s3Client.CopyObject(ctx, input); err != nil {
+		return translateS3CopyError(err)
+	}
+	return nil
+}
+
 func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObject")
 	defer span.End()

@@ -583,6 +583,12 @@ type ObjectStore interface {
 	// DeleteObjectTagging removes the entire tag set of the object at key.
 	// Returns ErrNoSuchKey if the object does not exist.
 	DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
+	// TransitionObject updates the current object at key to the given storage
+	// class and replaces its part rows with parts (the same content under new
+	// part ids in the target store). expectedETag must match the current
+	// object's ETag; a concurrent replacement surfaces as ErrPreconditionFailed.
+	// Returns ErrNoSuchKey when no current non-delete-marker object exists.
+	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, expectedETag string, storageClass string, parts []Part) error
 }
 
 type MultipartStore interface {

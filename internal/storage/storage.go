@@ -560,6 +560,23 @@ type ObjectManager interface {
 	AppendObject(ctx context.Context, bucketName BucketName, key ObjectKey, data io.Reader, checksumInput *ChecksumInput, opts *AppendObjectOptions) (*AppendObjectResult, error)
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
+	// TransitionObjectStorageClass changes the storage class of the current
+	// object version at key, moving its part data to the part store mapped to
+	// the target class. The object version and its metadata are preserved; the
+	// object stays immediately readable (storage classes are labels, no
+	// archive/restore). opts.IfMatchETag, when set, guards against a concurrent
+	// replacement (ErrPreconditionFailed on mismatch). Returns ErrNoSuchKey
+	// when no current object exists.
+	TransitionObjectStorageClass(ctx context.Context, bucketName BucketName, key ObjectKey, targetStorageClass string, opts *TransitionObjectStorageClassOptions) error
+}
+
+// TransitionObjectStorageClassOptions holds options for
+// TransitionObjectStorageClass. A nil pointer is equivalent to an
+// unconditional transition.
+type TransitionObjectStorageClassOptions struct {
+	// IfMatchETag, when non-nil, requires the current object's ETag to equal
+	// this value; otherwise ErrPreconditionFailed is returned.
+	IfMatchETag *string
 }
 
 // MultipartUploadManager manages multipart upload operations

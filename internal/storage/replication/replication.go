@@ -261,6 +261,21 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName stora
 	return result, nil
 }
 
+func (rs *replicationStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.TransitionObjectStorageClass")
+	defer span.End()
+
+	if err := rs.Next.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
+		return err
+	}
+	for _, secondaryStorage := range rs.secondaryStorages {
+		if err := secondaryStorage.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjects")
 	defer span.End()

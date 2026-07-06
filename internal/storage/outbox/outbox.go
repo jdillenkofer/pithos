@@ -796,6 +796,19 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 	return &storage.DeleteObjectResult{VersionID: versionID}, nil
 }
 
+func (os *outboxStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.TransitionObjectStorageClass")
+	defer span.End()
+
+	// Transitions move part data and evaluate an ETag precondition against the
+	// current object, so they must run synchronously against a drained outbox.
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	return os.innerStorage.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+}
+
 func (os *outboxStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjects")
 	defer span.End()

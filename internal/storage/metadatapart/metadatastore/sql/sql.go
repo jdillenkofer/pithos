@@ -1490,6 +1490,68 @@ func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx
 	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 }
 
+func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, expectedETag string, storageClass string, parts []metadatastore.Part) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.TransitionObject")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil || objectEntity.IsDeleteMarker {
+		return metadatastore.ErrNoSuchKey
+	}
+	if objectEntity.ETag != expectedETag {
+		return metadatastore.ErrPreconditionFailed
+	}
+
+	objectEntity.StorageClass = &storageClass
+	// Guard against a concurrent replacement between the read and the update.
+	updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, objectEntity, objectEntity.OptimisticLockVersion)
+	if err != nil {
+		return err
+	}
+	if !*updated {
+		return metadatastore.ErrPreconditionFailed
+	}
+
+	// Replace the part rows with the relocated parts (new ids in the target
+	// store). The old rows' part data becomes unreferenced and is collected by
+	// the per-store GC.
+	if err := sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id); err != nil {
+		return err
+	}
+	sequenceNumber := 0
+	for _, partStruc := range parts {
+		partEntity := part.Entity{
+			PartId:            partStruc.Id,
+			ObjectId:          *objectEntity.Id,
+			ETag:              partStruc.ETag,
+			ChecksumCRC32:     partStruc.ChecksumCRC32,
+			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
+			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
+			ChecksumSHA1:      partStruc.ChecksumSHA1,
+			ChecksumSHA256:    partStruc.ChecksumSHA256,
+			Size:              partStruc.Size,
+			SequenceNumber:    sequenceNumber,
+			PartStoreName:     partStruc.StoreName,
+		}
+		if err := sms.partRepository.SavePart(ctx, tx, &partEntity); err != nil {
+			return err
+		}
+		sequenceNumber++
+	}
+	return nil
+}
+
 func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
