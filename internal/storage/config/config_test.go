@@ -147,6 +147,105 @@ func TestCanCreateMetadataPartStorageFromJson(t *testing.T) {
 	assert.NotNil(t, storage)
 }
 
+func metadataPartStorageJsonWithExtraPartStores(t *testing.T, extraPartStoresAndMapping string) []byte {
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	return fmt.Appendf(nil, `{
+			"type": "MetadataPartStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"partStore": {
+				"type": "FilesystemPartStore",
+				"root": %s
+			}%s
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath), extraPartStoresAndMapping)
+}
+
+func TestCanCreateMetadataPartStorageWithExtraPartStoresFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	coldDir, coldCleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(coldCleanup)
+
+	jsonData := metadataPartStorageJsonWithExtraPartStores(t, fmt.Sprintf(`,
+			"extraPartStores": {
+				"cold": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			},
+			"storageClassToPartStore": {
+				"GLACIER": "cold",
+				"DEEP_ARCHIVE": "cold",
+				"STANDARD_IA": "default"
+			}`, strconv.Quote(*coldDir)))
+
+	storage, err := createStorageFromJson(jsonData)
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
+func TestMetadataPartStorageRejectsReservedExtraPartStoreName(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	coldDir, coldCleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(coldCleanup)
+
+	jsonData := metadataPartStorageJsonWithExtraPartStores(t, fmt.Sprintf(`,
+			"extraPartStores": {
+				"default": {
+					"type": "FilesystemPartStore",
+					"root": %s
+				}
+			}`, strconv.Quote(*coldDir)))
+
+	_, err = createStorageFromJson(jsonData)
+	assert.ErrorContains(t, err, "reserved name")
+}
+
+func TestMetadataPartStorageRejectsUnknownStorageClassInMapping(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	jsonData := metadataPartStorageJsonWithExtraPartStores(t, `,
+			"storageClassToPartStore": {
+				"FROZEN_SOLID": "default"
+			}`)
+
+	_, err := createStorageFromJson(jsonData)
+	assert.ErrorContains(t, err, "not a recognized storage class")
+}
+
+func TestMetadataPartStorageRejectsMappingToUnknownPartStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	jsonData := metadataPartStorageJsonWithExtraPartStores(t, `,
+			"storageClassToPartStore": {
+				"GLACIER": "cold"
+			}`)
+
+	_, err := createStorageFromJson(jsonData)
+	assert.ErrorContains(t, err, "unknown part store")
+}
+
 func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

@@ -10,6 +10,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
   - Configurable part stores (filesystem, SFTP)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
+  - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
   - Compatible with other S3-compatible services
   - Configurable endpoint, region, and credentials
@@ -109,6 +110,62 @@ Pithos supports multiple storage backends that can be configured in the storage 
   }
 }
 ```
+
+### Storage Class Tiering (Named Part Stores)
+
+`MetadataPartStorage` can route object data to different part stores based on
+the object's storage class (`x-amz-storage-class`). The `partStore` field
+remains the **default** store (reserved name `default`); `extraPartStores`
+defines additional stores by name and `storageClassToPartStore` maps storage
+classes onto store names. Classes without a mapping use the default store, so
+existing configurations keep working unchanged.
+
+```json
+{
+  "type": "MetadataPartStorage",
+  "db": {
+    "type": "RegisterDatabaseReference",
+    "refName": "db",
+    "db": {
+      "type": "SqliteDatabase",
+      "dbPath": "./data/pithos.db"
+    }
+  },
+  "metadataStore": {
+    "type": "SqlMetadataStore",
+    "db": {
+      "type": "DatabaseReference",
+      "refName": "db"
+    }
+  },
+  "partStore": {
+    "type": "FilesystemPartStore",
+    "root": "./data/parts"
+  },
+  "extraPartStores": {
+    "cold": {
+      "type": "FilesystemPartStore",
+      "root": "./data/cold-parts"
+    }
+  },
+  "storageClassToPartStore": {
+    "GLACIER": "cold",
+    "DEEP_ARCHIVE": "cold"
+  }
+}
+```
+
+Notes:
+
+- Each named store accepts the full part store configuration tree, so a class
+  target can itself be encrypted, compressed, cached, or erasure-coded.
+- Every part records the name of the store it was written to, so remapping a
+  class later never breaks reads of existing objects; new writes simply go to
+  the new target. Do not remove or rename a store that still holds parts.
+- Garbage collection sweeps all configured stores.
+- Streaming downloads release their database connection only when **every**
+  configured store supports transaction-free reads (everything except
+  `SqlPartStore`).
 
 ### TPM 2.0 Encryption
 
