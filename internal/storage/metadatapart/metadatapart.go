@@ -1411,8 +1411,10 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 		return storage.ErrInvalidStorageClass
 	}
 
-	// Blocking GC while relocating parts also bumps its write counter, so the
-	// GC pass that reclaims the now-unreferenced source parts runs afterwards.
+	// Source parts are deleted inline in the same transaction as the metadata
+	// swap (crash-safe: the delete is deferred to commit and rolled back on
+	// abort, so a crash mid-transition leaves the source intact). GC remains a
+	// safety net for target parts orphaned by a crash between copy and commit.
 	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
 	defer unblockGC()
 
@@ -1462,6 +1464,13 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 				err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
 				srcReader.Close()
 				if err != nil {
+					return err
+				}
+				// Free the source bytes now that a copy exists in the target
+				// store. DeletePart defers the physical removal to commit, so the
+				// source survives an aborted transition and in-flight readers
+				// holding an open handle keep working.
+				if err := srcStore.DeletePart(ctx, tx, srcPart.Id); err != nil {
 					return err
 				}
 				newParts[i] = srcPart
