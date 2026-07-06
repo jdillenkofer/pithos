@@ -667,6 +667,34 @@ func TestCanCreateSqlPartStoreFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateSqlPartStoreWithPartStoreIdFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	jsonData := fmt.Sprintf(`{
+				 "type": "SqlPartStore",
+				 "partStoreId": "cold",
+				 "db": {
+					 "type": "SqliteDatabase",
+							 "dbPath": %s
+				 }
+			 }`, strconv.Quote(dbPath))
+
+	instantiator, err := CreatePartStoreInstantiatorFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	sqlConfig, ok := instantiator.(*SqlPartStoreConfiguration)
+	assert.True(t, ok)
+	assert.Equal(t, "cold", sqlConfig.PartStoreId.Value())
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
 func TestCanCreateTinkEncryptionPartStoreMiddlewareWithMLKEMFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()

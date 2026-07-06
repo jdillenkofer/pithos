@@ -111,6 +111,11 @@ Pithos supports multiple storage backends that can be configured in the storage 
 }
 ```
 
+`SqlPartStore` accepts an optional `partStoreId` field. Leave it unset for the
+default single-store case. When multiple `SqlPartStore` instances share the
+same database, give each one a distinct `partStoreId` so part reads,
+enumeration, deletion, and garbage collection are scoped to that logical store.
+
 ### Storage Class Tiering (Named Part Stores)
 
 `MetadataPartStorage` can route object data to different part stores based on

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +33,8 @@ func (f *fakePartStore) DeletePart(ctx context.Context, tx database.Tx, partId P
 func (f *fakePartStore) SupportsTxFreeGetPart() bool { return f.txFree }
 
 func TestNamedPartStoresRoutesClassesToMappedStores(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	defaultStore := &fakePartStore{}
 	coldStore := &fakePartStore{}
 	stores, err := NewNamedPartStores(defaultStore, map[string]PartStore{"cold": coldStore}, map[string]string{
@@ -58,6 +61,8 @@ func TestNamedPartStoresRoutesClassesToMappedStores(t *testing.T) {
 }
 
 func TestNamedPartStoresResolvesByName(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	defaultStore := &fakePartStore{}
 	coldStore := &fakePartStore{}
 	stores, err := NewNamedPartStores(defaultStore, map[string]PartStore{"cold": coldStore}, nil)
@@ -78,6 +83,8 @@ func TestNamedPartStoresResolvesByName(t *testing.T) {
 }
 
 func TestNamedPartStoresRejectsInvalidConfigurations(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	defaultStore := &fakePartStore{}
 
 	_, err := NewNamedPartStores(nil, nil, nil)
@@ -91,6 +98,8 @@ func TestNamedPartStoresRejectsInvalidConfigurations(t *testing.T) {
 }
 
 func TestNamedPartStoresSupportsTxFreeGetPartOnlyWhenAllStoresDo(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	stores, err := NewNamedPartStores(&fakePartStore{txFree: true}, map[string]PartStore{"cold": &fakePartStore{txFree: true}}, nil)
 	require.NoError(t, err)
 	assert.True(t, stores.SupportsTxFreeGetPart())

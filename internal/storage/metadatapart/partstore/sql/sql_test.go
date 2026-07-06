@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,10 +14,12 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
+	partContent "github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSqlPartStore(t *testing.T) {
@@ -102,7 +105,7 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 
 	// Verify chunks in DB
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		chunks, err := partContentRepository.FindPartContentChunksById(ctx, tx.SqlTx(), *partId)
+		chunks, err := partContentRepository.FindPartContentChunksById(ctx, tx.SqlTx(), partContent.DefaultPartStoreId, *partId)
 		assert.Nil(t, err)
 		assert.Equal(t, 2, len(chunks), "Expected 2 chunks for 257MB data with 256MB chunkSize")
 		assert.Equal(t, 0, chunks[0].ChunkIndex)
@@ -125,4 +128,77 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 		return nil
 	})
 	assert.Nil(t, err)
+}
+
+func TestSqlPartStore_PartStoreIdScopesSharedTable(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
+	require.NoError(t, err)
+	defer os.RemoveAll(storagePath)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
+	require.NoError(t, err)
+	hotStore, err := New(db, partContentRepository, WithPartStoreId("hot"))
+	require.NoError(t, err)
+	coldStore, err := New(db, partContentRepository, WithPartStoreId("cold"))
+	require.NoError(t, err)
+
+	hotPartId, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	coldPartId, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := hotStore.PutPart(ctx, tx, *hotPartId, bytes.NewReader([]byte("hot"))); err != nil {
+			return err
+		}
+		return coldStore.PutPart(ctx, tx, *coldPartId, bytes.NewReader([]byte("cold")))
+	})
+	require.NoError(t, err)
+
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		hotIds, err := hotStore.GetPartIds(ctx, tx)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []partstore.PartId{*hotPartId}, hotIds)
+
+		coldIds, err := coldStore.GetPartIds(ctx, tx)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []partstore.PartId{*coldPartId}, coldIds)
+
+		reader, err := hotStore.GetPart(ctx, tx, *coldPartId)
+		assert.Nil(t, reader)
+		assert.True(t, errors.Is(err, partstore.ErrPartNotFound))
+		return nil
+	})
+	require.NoError(t, err)
+
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return hotStore.DeletePart(ctx, tx, *hotPartId)
+	})
+	require.NoError(t, err)
+
+	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		hotIds, err := hotStore.GetPartIds(ctx, tx)
+		require.NoError(t, err)
+		assert.Empty(t, hotIds)
+
+		coldIds, err := coldStore.GetPartIds(ctx, tx)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []partstore.PartId{*coldPartId}, coldIds)
+
+		reader, err := coldStore.GetPart(ctx, tx, *coldPartId)
+		require.NoError(t, err)
+		defer reader.Close()
+		got, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("cold"), got)
+		return nil
+	})
+	require.NoError(t, err)
 }
