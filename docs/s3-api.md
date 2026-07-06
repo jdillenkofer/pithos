@@ -52,6 +52,38 @@ Supported website redirect behavior:
 
 Remaining difference from AWS: Pithos does not implement unrelated static website features beyond index/error documents, redirects, routing rules, and the directory index redirect behavior described above.
 
+## Storage Class
+
+Pithos accepts, persists, and returns a per-object storage class.
+
+The `x-amz-storage-class` request header is accepted on:
+
+- `PutObject`
+- `CreateMultipartUpload`, then applied to the completed object (all parts of one upload share the class chosen at creation)
+- `CopyObject`
+
+The class defaults to `STANDARD` when the header is absent. Recognized values are `STANDARD`, `REDUCED_REDUNDANCY`, `STANDARD_IA`, `ONEZONE_IA`, `INTELLIGENT_TIERING`, `GLACIER_IR`, `GLACIER`, `DEEP_ARCHIVE`, `EXPRESS_ONEZONE`, and `OUTPOSTS`. An unrecognized value is rejected with `InvalidStorageClass` (HTTP 400).
+
+The class is returned as the `x-amz-storage-class` response header on `GetObject` and `HeadObject` (omitted for `STANDARD`, matching AWS) and as the `StorageClass` element in `ListObjects`, `ListObjectsV2`, `ListObjectVersions`, `ListMultipartUploads`, and `ListParts`.
+
+For `CopyObject`, the destination storage class comes from the `x-amz-storage-class` header on the copy request only; it is never carried over from the source, and it is not governed by `x-amz-metadata-directive`. A self copy (same bucket and key) is normally rejected, but is allowed when it supplies `x-amz-storage-class` to change the class in place.
+
+**Storage classes are metadata labels.** Pithos does not implement AWS-style archival or a retrieval/restore workflow: every class, including `GLACIER` and `DEEP_ARCHIVE`, is immediately readable. Storage classes can optionally map to different part stores so a single bucket can tier data across backends — see [Storage Class Tiering](storage-backends.md#storage-class-tiering-named-part-stores).
+
+## Bucket Lifecycle
+
+Pithos supports the bucket lifecycle subresource (`PUT`/`GET`/`DELETE /<bucket>?lifecycle`) with the following actions:
+
+- `Expiration` (by `Days` or `Date`).
+- `AbortIncompleteMultipartUpload` (by `DaysAfterInitiation`).
+- `Transition` (by `Days` or `Date`, to a target `StorageClass`).
+
+A background reconciler enforces these rules; because day-based due times round to the next midnight UTC, enforcement is prompt but never earlier than S3 semantics allow.
+
+A `Transition` moves the object to the target storage class (relocating its part data to that class's part store) while preserving the object version and its metadata. Transitioned objects stay immediately readable — this is `STANDARD_IA`/`GLACIER_IR`-like behavior, not `GLACIER`/`DEEP_ARCHIVE` archival, regardless of the target class name. Transition validation follows S3: exactly one of `Days`/`Date`, `Days` may be `0`, `Date` must be midnight UTC, the target must be a recognized non-`STANDARD` class, targets must be distinct within a rule, and a `Days`-based transition must be strictly earlier than a `Days`-based expiration in the same rule. When an object is due for both expiration and transition, expiration wins.
+
+`NoncurrentVersionExpiration` and `NoncurrentVersionTransition` are rejected with `NotImplemented`.
+
 ## Bucket Versioning
 
 Pithos supports S3 bucket versioning with the `?versioning` and `?versions` bucket subresources.
