@@ -28,15 +28,15 @@ import (
 
 type partRange struct {
 	id    partstore.PartId
+	store partstore.PartStore
 	skip  int64
 	limit *int64
 }
 
 type lazyPartSequenceReadCloser struct {
-	ctx       context.Context
-	tx        database.Tx
-	partStore partstore.PartStore
-	parts     []partRange
+	ctx   context.Context
+	tx    database.Tx
+	parts []partRange
 
 	partIndex int
 	current   io.ReadCloser
@@ -48,7 +48,7 @@ func (l *lazyPartSequenceReadCloser) openNextPart() error {
 		part := l.parts[l.partIndex]
 		l.partIndex++
 
-		rc, err := l.partStore.GetPart(l.ctx, l.tx, part.id)
+		rc, err := part.store.GetPart(l.ctx, l.tx, part.id)
 		if err != nil {
 			return err
 		}
@@ -113,7 +113,7 @@ type metadataPartStorage struct {
 	*lifecycle.ValidatedLifecycle
 	db            database.Database
 	metadataStore metadatastore.MetadataStore
-	partStore     partstore.PartStore
+	partStores    *partstore.NamedPartStores
 	partGC        gc.PartGarbageCollector
 	gcTaskHandle  *task.TaskHandle
 	tracer        trace.Tracer
@@ -124,11 +124,28 @@ var _ storage.Storage = (*metadataPartStorage)(nil)
 var _ storage.TransactionalStorage = (*metadataPartStorage)(nil)
 
 func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, partStore partstore.PartStore) (storage.Storage, error) {
+	return NewStorageWithNamedPartStores(db, metadataStore, partStore, nil, nil)
+}
+
+// NewStorageWithNamedPartStores builds a storage whose part data is spread
+// over named part stores: writes route to the store mapped from the object's
+// storage class (falling back to defaultPartStore), reads resolve the store
+// recorded per part.
+func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatastore.MetadataStore, defaultPartStore partstore.PartStore, extraPartStores map[string]partstore.PartStore, storageClassToPartStore map[string]string) (storage.Storage, error) {
+	for storageClass := range storageClassToPartStore {
+		if !metadatastore.IsValidStorageClass(storageClass) {
+			return nil, fmt.Errorf("storage class %q in part store mapping is not a recognized storage class", storageClass)
+		}
+	}
+	partStores, err := partstore.NewNamedPartStores(defaultPartStore, extraPartStores, storageClassToPartStore)
+	if err != nil {
+		return nil, err
+	}
 	lifecycle, err := lifecycle.NewValidatedLifecycle("MetadataPartStorage")
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStore)
+	partGC, err := gc.New(db, metadataStore, partStores)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +153,7 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 		ValidatedLifecycle: lifecycle,
 		db:                 db,
 		metadataStore:      metadataStore,
-		partStore:          partStore,
+		partStores:         partStores,
 		partGC:             partGC,
 		gcTaskHandle:       nil,
 		tracer:             otel.Tracer("internal/storage/metadatapart"),
@@ -156,7 +173,7 @@ func (mbs *metadataPartStorage) Start(ctx context.Context) error {
 	if err := mbs.metadataStore.Start(ctx); err != nil {
 		return err
 	}
-	if err := mbs.partStore.Start(ctx); err != nil {
+	if err := mbs.partStores.Start(ctx); err != nil {
 		return err
 	}
 
@@ -182,7 +199,7 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 	if err := mbs.metadataStore.Stop(ctx); err != nil {
 		return err
 	}
-	if err := mbs.partStore.Stop(ctx); err != nil {
+	if err := mbs.partStores.Stop(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -672,9 +689,15 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx databa
 			return nil, fmt.Errorf("invalid part range computed")
 		}
 
+		store, err := mbs.partStores.ByName(part.StoreName)
+		if err != nil {
+			return nil, err
+		}
+
 		limit := rangeEndInPart - rangeStartInPart
 		parts = append(parts, partRange{
 			id:    part.Id,
+			store: store,
 			skip:  rangeStartInPart,
 			limit: &limit,
 		})
@@ -686,10 +709,9 @@ func (mbs *metadataPartStorage) createRangeReader(ctx context.Context, tx databa
 	}
 
 	return &lazyPartSequenceReadCloser{
-		ctx:       ctx,
-		tx:        tx,
-		partStore: mbs.partStore,
-		parts:     parts,
+		ctx:   ctx,
+		tx:    tx,
+		parts: parts,
 	}, nil
 }
 
@@ -697,14 +719,15 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
-	// When the part store can read without an ambient transaction (filesystem,
-	// sftp — everything except DB-backed part content), the metadata lookup
-	// runs in a short transaction that ends before streaming starts. Slow
-	// clients then no longer pin a pooled database connection for the
-	// lifetime of their download. DB-backed part stores keep the transaction
-	// open until every reader is closed, preserving snapshot semantics for
-	// the part content itself.
-	txFreeStreaming := partstore.SupportsTxFreeGetPart(mbs.partStore)
+	// When every part store can read without an ambient transaction
+	// (filesystem, sftp — everything except DB-backed part content), the
+	// metadata lookup runs in a short transaction that ends before streaming
+	// starts. Slow clients then no longer pin a pooled database connection for
+	// the lifetime of their download. A single DB-backed part store in the set
+	// keeps the transaction open until every reader is closed (an object's
+	// parts may live in any store), preserving snapshot semantics for the part
+	// content itself.
+	txFreeStreaming := mbs.partStores.SupportsTxFreeGetPart()
 
 	// The context handed to WithTx carries the (short-lived) transaction;
 	// BeginTx reuses a transaction found in the context, so tx-free readers
@@ -831,7 +854,11 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 				}
 				if previousObject != nil {
 					for _, part := range previousObject.Parts {
-						err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+						store, err := mbs.partStores.ByName(part.StoreName)
+						if err != nil {
+							return err
+						}
+						err = store.DeletePart(ctx, tx, part.Id)
 						if err != nil {
 							return err
 						}
@@ -845,8 +872,14 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			return err
 		}
 
+		var requestedStorageClass *string
+		if opts != nil {
+			requestedStorageClass = opts.StorageClass
+		}
+		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(requestedStorageClass))
+
 		originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			return mbs.partStore.PutPart(ctx, tx, *partId, reader)
+			return store.PutPart(ctx, tx, *partId, reader)
 		})
 		if err != nil {
 			return err
@@ -879,6 +912,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 					ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
 					ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 					Size:              *originalSize,
+					StoreName:         storeName,
 				},
 			},
 		}
@@ -945,6 +979,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			// source's class is never carried over (matching AWS).
 			dstObject.StorageClass = opts.StorageClass
 		}
+		dstStoreName, dstStore := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(dstObject.StorageClass))
 
 		if opts != nil && opts.Range != nil {
 			// Ranged copy: produce a single-part destination object containing the
@@ -964,7 +999,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				return err
 			}
 			size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
-				return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+				return dstStore.PutPart(ctx, tx, *newPartId, r)
 			})
 			if err != nil {
 				return err
@@ -987,6 +1022,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 					ChecksumSHA1:      checksums.ChecksumSHA1,
 					ChecksumSHA256:    checksums.ChecksumSHA256,
 					Size:              *size,
+					StoreName:         dstStoreName,
 				},
 			}
 		} else {
@@ -998,17 +1034,22 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				if err != nil {
 					return err
 				}
-				srcReader, err := mbs.partStore.GetPart(ctx, tx, srcPart.Id)
+				srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
 				if err != nil {
 					return err
 				}
-				err = mbs.partStore.PutPart(ctx, tx, *newPartId, srcReader)
+				srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
+				if err != nil {
+					return err
+				}
+				err = dstStore.PutPart(ctx, tx, *newPartId, srcReader)
 				srcReader.Close()
 				if err != nil {
 					return err
 				}
 				newParts[i] = srcPart
 				newParts[i].Id = *newPartId
+				newParts[i].StoreName = dstStoreName
 			}
 			dstObject.ETag = srcObject.ETag
 			dstObject.ChecksumCRC32 = srcObject.ChecksumCRC32
@@ -1064,7 +1105,11 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			}
 			if previousDst != nil {
 				for _, part := range previousDst.Parts {
-					if err := mbs.partStore.DeletePart(ctx, tx, part.Id); err != nil {
+					store, err := mbs.partStores.ByName(part.StoreName)
+					if err != nil {
+						return err
+					}
+					if err := store.DeletePart(ctx, tx, part.Id); err != nil {
 						return err
 					}
 				}
@@ -1125,14 +1170,21 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			}
 		}
 
-		// Write the new part's bytes.
+		// Write the new part's bytes. Appends keep the existing object's
+		// storage class, so new data routes to the store of that class.
+		var existingStorageClass *string
+		if existingObject != nil {
+			existingStorageClass = existingObject.StorageClass
+		}
+		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(existingStorageClass))
+
 		newPartId, err := partstore.NewRandomPartId()
 		if err != nil {
 			return err
 		}
 
 		newPartSize, newPartChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
-			return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+			return store.PutPart(ctx, tx, *newPartId, r)
 		})
 		if err != nil {
 			return err
@@ -1152,6 +1204,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			ChecksumSHA1:      newPartChecksums.ChecksumSHA1,
 			ChecksumSHA256:    newPartChecksums.ChecksumSHA256,
 			Size:              *newPartSize,
+			StoreName:         storeName,
 		}
 
 		// Build the combined part list (existing parts first, then new part).
@@ -1177,7 +1230,11 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 				// fresh IDs instead of being reused in the new version metadata.
 				allParts = make([]metadatastore.Part, 0, len(existingObject.Parts)+1)
 				for _, existingPart := range existingObject.Parts {
-					existingPartReader, partErr := mbs.partStore.GetPart(ctx, tx, existingPart.Id)
+					existingPartStore, partErr := mbs.partStores.ByName(existingPart.StoreName)
+					if partErr != nil {
+						return partErr
+					}
+					existingPartReader, partErr := existingPartStore.GetPart(ctx, tx, existingPart.Id)
 					if partErr != nil {
 						return partErr
 					}
@@ -1188,7 +1245,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 						return partErr
 					}
 
-					partErr = mbs.partStore.PutPart(ctx, tx, *newExistingPartID, existingPartReader)
+					partErr = existingPartStore.PutPart(ctx, tx, *newExistingPartID, existingPartReader)
 					existingPartReader.Close()
 					if partErr != nil {
 						return partErr
@@ -1314,7 +1371,11 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 
 		if shouldDeleteParts && object != nil && !object.IsDeleteMarker {
 			for _, part := range object.Parts {
-				err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+				store, err := mbs.partStores.ByName(part.StoreName)
+				if err != nil {
+					return err
+				}
+				err = store.DeletePart(ctx, tx, part.Id)
 				if err != nil {
 					return err
 				}
@@ -1415,7 +1476,11 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 
 			if shouldDeleteParts && object != nil && !object.IsDeleteMarker {
 				for _, part := range object.Parts {
-					err = mbs.partStore.DeletePart(ctx, tx, part.Id)
+					store, err := mbs.partStores.ByName(part.StoreName)
+					if err != nil {
+						return err
+					}
+					err = store.DeletePart(ctx, tx, part.Id)
 					if err != nil {
 						return err
 					}
@@ -1489,13 +1554,22 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 
 	var calculatedChecksums *checksumutils.ChecksumValues
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		// Parts route to the store of the class chosen at
+		// CreateMultipartUpload, so the upload must be resolved before the
+		// part bytes are streamed.
+		upload, err := mbs.metadataStore.GetMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
+		if err != nil {
+			return err
+		}
+		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(upload.StorageClass))
+
 		partId, err := partstore.NewRandomPartId()
 		if err != nil {
 			return err
 		}
 
 		originalSize, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			return mbs.partStore.PutPart(ctx, tx, *partId, reader)
+			return store.PutPart(ctx, tx, *partId, reader)
 		})
 		if err != nil {
 			return err
@@ -1516,6 +1590,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			ChecksumSHA1:      calculatedChecksums.ChecksumSHA1,
 			ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 			Size:              *originalSize,
+			StoreName:         storeName,
 		})
 	})
 	if err != nil {
@@ -1566,12 +1641,20 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		}
 		defer rangeReader.Close()
 
+		// The copied part routes to the store of the class chosen at
+		// CreateMultipartUpload for the destination upload.
+		upload, err := mbs.metadataStore.GetMultipartUpload(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId)
+		if err != nil {
+			return err
+		}
+		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(upload.StorageClass))
+
 		newPartId, err := partstore.NewRandomPartId()
 		if err != nil {
 			return err
 		}
 		size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
-			return mbs.partStore.PutPart(ctx, tx, *newPartId, r)
+			return store.PutPart(ctx, tx, *newPartId, r)
 		})
 		if err != nil {
 			return err
@@ -1586,6 +1669,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			ChecksumSHA1:      checksums.ChecksumSHA1,
 			ChecksumSHA256:    checksums.ChecksumSHA256,
 			Size:              *size,
+			StoreName:         storeName,
 		})
 		if err != nil {
 			return err
@@ -1627,7 +1711,11 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 			return err
 		}
 		for _, deletedPart := range result.DeletedParts {
-			err = mbs.partStore.DeletePart(ctx, tx, deletedPart.Id)
+			store, err := mbs.partStores.ByName(deletedPart.StoreName)
+			if err != nil {
+				return err
+			}
+			err = store.DeletePart(ctx, tx, deletedPart.Id)
 			if err != nil {
 				return err
 			}
@@ -1653,7 +1741,11 @@ func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucket
 			return err
 		}
 		for _, deletedPart := range abortMultipartUploadResult.DeletedParts {
-			err = mbs.partStore.DeletePart(ctx, tx, deletedPart.Id)
+			store, err := mbs.partStores.ByName(deletedPart.StoreName)
+			if err != nil {
+				return err
+			}
+			err = store.DeletePart(ctx, tx, deletedPart.Id)
 			if err != nil {
 				return err
 			}

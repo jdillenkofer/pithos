@@ -1550,6 +1550,34 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	}, nil
 }
 
+func (sms *sqlMetadataStore) GetMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.Upload, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetMultipartUpload")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	return &metadatastore.Upload{
+		Key:          objectEntity.Key,
+		UploadId:     *objectEntity.UploadId,
+		Initiated:    objectEntity.CreatedAt,
+		StorageClass: objectEntity.StorageClass,
+	}, nil
+}
+
 func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.UploadPart")
 	defer span.End()

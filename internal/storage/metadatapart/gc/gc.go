@@ -25,18 +25,18 @@ type partGC struct {
 	db              database.Database
 	collectionMutex sync.RWMutex
 	metadataStore   metadatastore.MetadataStore
-	partStore       partstore.PartStore
+	partStores      *partstore.NamedPartStores
 	writeOperations atomic.Int64
 	tracer          trace.Tracer
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStore partstore.PartStore) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores) (PartGarbageCollector, error) {
 	return &partGC{
 		db:              db,
 		collectionMutex: sync.RWMutex{},
 		writeOperations: atomic.Int64{},
 		metadataStore:   metadataStore,
-		partStore:       partStore,
+		partStores:      partStores,
 		tracer:          otel.Tracer("internal/storage/metadatapart/gc"),
 	}, nil
 }
@@ -93,11 +93,8 @@ func (partGC *partGC) runGC() error {
 
 	numDeletedParts := 0
 	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		existingPartIds, err := partGC.partStore.GetPartIds(ctx, tx)
-		if err != nil {
-			return err
-		}
-
+		// Part ids are ULIDs and therefore globally unique across stores, so
+		// each store can be swept against the single global in-use set.
 		inUsePartIdMap := make(map[partstore.PartId]struct{})
 		inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx.SqlTx())
 		if err != nil {
@@ -107,14 +104,21 @@ func (partGC *partGC) runGC() error {
 			inUsePartIdMap[inUsePartId] = struct{}{}
 		}
 
-		for _, existingPartId := range existingPartIds {
-			if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
-				err = partGC.partStore.DeletePart(ctx, tx, existingPartId)
-				if err != nil {
-					return err
-				}
+		for _, partStore := range partGC.partStores.All() {
+			existingPartIds, err := partStore.GetPartIds(ctx, tx)
+			if err != nil {
+				return err
+			}
 
-				numDeletedParts += 1
+			for _, existingPartId := range existingPartIds {
+				if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
+					err = partStore.DeletePart(ctx, tx, existingPartId)
+					if err != nil {
+						return err
+					}
+
+					numDeletedParts += 1
+				}
 			}
 		}
 		return nil
