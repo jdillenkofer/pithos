@@ -139,7 +139,7 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 
 	// Carry the source object's tag set over to the destination. The tags are
 	// fetched explicitly because list results don't include them.
-	tags, err := source.GetObjectTagging(ctx, bucketName, sourceObject.Key)
+	tags, err := source.GetObjectTagging(ctx, bucketName, sourceObject.Key, nil)
 	if err != nil && err != storage.ErrNoSuchKey {
 		return err
 	}

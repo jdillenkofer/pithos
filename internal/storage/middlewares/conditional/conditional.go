@@ -221,8 +221,9 @@ func copySourceConditionsSatisfied(conditions storage.CopySourceConditions, obje
 	return nil
 }
 
-func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
-	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, nil)
+func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, sourceVersionID *string, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
+	headOpts := &storage.HeadObjectOptions{VersionID: sourceVersionID}
+	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, headOpts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,7 +235,7 @@ func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucke
 	if copyRange != nil {
 		ranges = []storage.ByteRange{*copyRange}
 	}
-	getOpts := &storage.GetObjectOptions{IfMatchETag: &srcObject.ETag}
+	getOpts := &storage.GetObjectOptions{VersionID: sourceVersionID, IfMatchETag: &srcObject.ETag}
 	_, readers, err := srcStorage.GetObject(ctx, srcBucket, srcKey, ranges, getOpts)
 	if err != nil {
 		return nil, nil, err
@@ -272,12 +273,14 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 
 	var copyRange *storage.ByteRange
 	var conditions storage.CopySourceConditions
+	var sourceVersionID *string
 	var contentType *string
 	if opts != nil {
+		sourceVersionID = opts.SourceVersionID
 		copyRange = opts.Range
 		conditions = opts.CopySourceConditions
 	}
-	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, sourceVersionID, copyRange, conditions)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +306,8 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 	if putResult.ETag != nil {
 		result.ETag = *putResult.ETag
 	}
+	result.SourceVersionID = srcObject.VersionID
+	result.VersionID = putResult.VersionID
 	return result, nil
 }
 
@@ -330,28 +335,28 @@ func (csm *conditionalStorageMiddleware) DeleteObjects(ctx context.Context, buck
 	return s.DeleteObjects(ctx, bucketName, entries)
 }
 
-func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.GetObjectTagging(ctx, bucketName, key)
+	return s.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
-func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.PutObjectTagging(ctx, bucketName, key, tags)
+	return s.PutObjectTagging(ctx, bucketName, key, tags, opts)
 }
 
-func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.DeleteObjectTagging(ctx, bucketName, key)
+	return s.DeleteObjectTagging(ctx, bucketName, key, opts)
 }
 
 func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
@@ -382,11 +387,13 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 
 	var copyRange *storage.ByteRange
 	var conditions storage.CopySourceConditions
+	var sourceVersionID *string
 	if opts != nil {
+		sourceVersionID = opts.SourceVersionID
 		copyRange = opts.Range
 		conditions = opts.CopySourceConditions
 	}
-	_, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, sourceVersionID, copyRange, conditions)
 	if err != nil {
 		return nil, err
 	}
@@ -403,8 +410,9 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 		return nil, err
 	}
 	return &storage.UploadPartCopyResult{
-		ETag:         uploadResult.ETag,
-		LastModified: time.Now(),
+		ETag:            uploadResult.ETag,
+		LastModified:    time.Now(),
+		SourceVersionID: srcObject.VersionID,
 	}, nil
 }
 

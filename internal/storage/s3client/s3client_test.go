@@ -19,7 +19,9 @@ func TestCopySourceValueEscapesSourceKey(t *testing.T) {
 	srcBucket := storage.MustNewBucketName("source-bucket")
 	srcKey := storage.MustNewObjectKey("folder/a b#c%25.txt")
 
-	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt", copySourceValue(srcBucket, srcKey))
+	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt", copySourceValue(srcBucket, srcKey, nil))
+	versionID := "v 1/2"
+	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt?versionId=v+1%2F2", copySourceValue(srcBucket, srcKey, &versionID))
 }
 
 func TestByteRangeToAWSRangeUsesExactSuffixLength(t *testing.T) {
@@ -116,4 +118,32 @@ func TestConvertLifecycleRulePreservesTransitions(t *testing.T) {
 
 	converted := convertLifecycleRuleFromSdk(sdkRule)
 	require.Equal(t, internalRule.Transitions, converted.Transitions)
+}
+
+func TestConvertLifecycleRulePreservesNoncurrentVersionTransitions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	internalRule := storage.LifecycleRule{
+		ID:     aws.String("noncurrent-transition-cold"),
+		Status: storage.LifecycleRuleStatusEnabled,
+		Filter: &storage.LifecycleFilter{
+			Prefix: aws.String("cold/"),
+		},
+		NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{
+			{
+				NoncurrentDays:          aws.Int32(30),
+				NewerNoncurrentVersions: aws.Int32(2),
+				StorageClass:            "GLACIER",
+			},
+		},
+	}
+
+	sdkRule := convertLifecycleRuleToSdk(internalRule)
+	require.Len(t, sdkRule.NoncurrentVersionTransitions, 1)
+	require.Equal(t, int32(30), aws.ToInt32(sdkRule.NoncurrentVersionTransitions[0].NoncurrentDays))
+	require.Equal(t, int32(2), aws.ToInt32(sdkRule.NoncurrentVersionTransitions[0].NewerNoncurrentVersions))
+	require.Equal(t, types.TransitionStorageClassGlacier, sdkRule.NoncurrentVersionTransitions[0].StorageClass)
+
+	converted := convertLifecycleRuleFromSdk(sdkRule)
+	require.Equal(t, internalRule.NoncurrentVersionTransitions, converted.NoncurrentVersionTransitions)
 }

@@ -85,7 +85,7 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 			return err
 		}
 	}
-	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 {
+	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 && rule.NoncurrentVersionExpiration == nil && len(rule.NoncurrentVersionTransitions) == 0 {
 		return invalidLifecycleRequest("At least one action needs to be specified in a rule")
 	}
 	if rule.Expiration != nil {
@@ -104,6 +104,16 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 	}
 	if len(rule.Transitions) > 0 {
 		if err := validateLifecycleTransitions(rule); err != nil {
+			return err
+		}
+	}
+	if rule.NoncurrentVersionExpiration != nil {
+		if err := validateLifecycleNoncurrentVersionExpiration(rule); err != nil {
+			return err
+		}
+	}
+	if len(rule.NoncurrentVersionTransitions) > 0 {
+		if err := validateLifecycleNoncurrentVersionTransitions(rule); err != nil {
 			return err
 		}
 	}
@@ -147,6 +157,63 @@ func validateLifecycleTransitions(rule *LifecycleRule) *LifecycleValidationError
 		// otherwise it can never take effect.
 		if transition.Days != nil && rule.Expiration != nil && rule.Expiration.Days != nil && *transition.Days >= *rule.Expiration.Days {
 			return invalidLifecycleArgument("'Days' in the Expiration action for filter must be greater than 'Days' in the Transition action")
+		}
+	}
+	return nil
+}
+
+func validateLifecycleNoncurrentVersionExpiration(rule *LifecycleRule) *LifecycleValidationError {
+	expiration := rule.NoncurrentVersionExpiration
+	if expiration.NoncurrentDays == nil {
+		return malformedLifecycleXML("NoncurrentVersionExpiration action must specify NoncurrentDays")
+	}
+	if *expiration.NoncurrentDays <= 0 {
+		return invalidLifecycleArgument("'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer")
+	}
+	if expiration.NewerNoncurrentVersions != nil {
+		if *expiration.NewerNoncurrentVersions < 1 || *expiration.NewerNoncurrentVersions > 100 {
+			return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be between 1 and 100")
+		}
+		if rule.Filter == nil {
+			return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action requires a Filter")
+		}
+	}
+	return nil
+}
+
+func validateLifecycleNoncurrentVersionTransitions(rule *LifecycleRule) *LifecycleValidationError {
+	seenTargets := map[string]struct{}{}
+	for i := range rule.NoncurrentVersionTransitions {
+		transition := &rule.NoncurrentVersionTransitions[i]
+		if transition.NoncurrentDays == nil {
+			return malformedLifecycleXML("NoncurrentVersionTransition action must specify NoncurrentDays")
+		}
+		if *transition.NoncurrentDays <= 0 {
+			return invalidLifecycleArgument("'NoncurrentDays' for NoncurrentVersionTransition action must be a positive integer")
+		}
+		if transition.StorageClass == "" {
+			return malformedLifecycleXML("NoncurrentVersionTransition action must specify a StorageClass")
+		}
+		if !IsValidStorageClass(transition.StorageClass) {
+			return invalidLifecycleArgument("'StorageClass' must be a valid storage class")
+		}
+		if transition.StorageClass == StorageClassStandard {
+			return invalidLifecycleArgument("'StorageClass' for NoncurrentVersionTransition action must not be STANDARD")
+		}
+		if _, ok := seenTargets[transition.StorageClass]; ok {
+			return invalidLifecycleArgument("'StorageClass' must be different for 'NoncurrentVersionTransition' actions in same 'Rule'")
+		}
+		seenTargets[transition.StorageClass] = struct{}{}
+		if transition.NewerNoncurrentVersions != nil {
+			if *transition.NewerNoncurrentVersions < 1 || *transition.NewerNoncurrentVersions > 100 {
+				return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionTransition action must be between 1 and 100")
+			}
+			if rule.Filter == nil {
+				return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionTransition action requires a Filter")
+			}
+		}
+		if rule.NoncurrentVersionExpiration != nil && rule.NoncurrentVersionExpiration.NoncurrentDays != nil && *transition.NoncurrentDays >= *rule.NoncurrentVersionExpiration.NoncurrentDays {
+			return invalidLifecycleArgument("'NoncurrentDays' in the NoncurrentVersionExpiration action must be greater than 'NoncurrentDays' in the NoncurrentVersionTransition action")
 		}
 	}
 	return nil
@@ -380,5 +447,26 @@ func LifecycleAbortDueTime(rule *LifecycleRule, uploadInitiated time.Time) *time
 		return nil
 	}
 	due := lifecycleNextMidnightUTC(uploadInitiated.AddDate(0, 0, int(*rule.AbortIncompleteMultipartUpload.DaysAfterInitiation)))
+	return &due
+}
+
+// LifecycleNoncurrentExpirationDueTime returns the time at which a noncurrent
+// object version becomes old enough for NoncurrentVersionExpiration, or nil
+// when the rule has no NoncurrentDays condition.
+func LifecycleNoncurrentExpirationDueTime(rule *LifecycleRule, versionLastModified time.Time) *time.Time {
+	if rule.NoncurrentVersionExpiration == nil || rule.NoncurrentVersionExpiration.NoncurrentDays == nil {
+		return nil
+	}
+	due := lifecycleNextMidnightUTC(versionLastModified.AddDate(0, 0, int(*rule.NoncurrentVersionExpiration.NoncurrentDays)))
+	return &due
+}
+
+// LifecycleNoncurrentTransitionDueTime returns the time at which a noncurrent
+// object version becomes due for the given NoncurrentVersionTransition action.
+func LifecycleNoncurrentTransitionDueTime(transition *LifecycleNoncurrentVersionTransition, versionLastModified time.Time) *time.Time {
+	if transition.NoncurrentDays == nil {
+		return nil
+	}
+	due := lifecycleNextMidnightUTC(versionLastModified.AddDate(0, 0, int(*transition.NoncurrentDays)))
 	return &due
 }

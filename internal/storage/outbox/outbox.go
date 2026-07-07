@@ -1052,7 +1052,7 @@ func (os *outboxStorage) DeleteBucketLifecycleConfiguration(ctx context.Context,
 	return os.innerStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }
 
-func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObjectTagging")
 	defer span.End()
 
@@ -1061,10 +1061,10 @@ func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storag
 		return nil, err
 	}
 
-	return os.innerStorage.GetObjectTagging(ctx, bucketName, key)
+	return os.innerStorage.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
-func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObjectTagging")
 	defer span.End()
 
@@ -1073,10 +1073,10 @@ func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storag
 		return err
 	}
 
-	return os.innerStorage.PutObjectTagging(ctx, bucketName, key, tags)
+	return os.innerStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
 }
 
-func (os *outboxStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (os *outboxStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjectTagging")
 	defer span.End()
 
@@ -1085,5 +1085,5 @@ func (os *outboxStorage) DeleteObjectTagging(ctx context.Context, bucketName sto
 		return err
 	}
 
-	return os.innerStorage.DeleteObjectTagging(ctx, bucketName, key)
+	return os.innerStorage.DeleteObjectTagging(ctx, bucketName, key, opts)
 }

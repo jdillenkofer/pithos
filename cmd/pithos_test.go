@@ -6098,6 +6098,18 @@ func TestBucketLifecycle(t *testing.T) {
 								StorageClass: types.TransitionStorageClassGlacier,
 							}},
 						},
+						{
+							ID:     aws.String("transition-noncurrent-cold"),
+							Status: types.ExpirationStatusEnabled,
+							Filter: &types.LifecycleRuleFilter{
+								Prefix: aws.String("cold/"),
+							},
+							NoncurrentVersionTransitions: []types.NoncurrentVersionTransition{{
+								NoncurrentDays:          aws.Int32(30),
+								NewerNoncurrentVersions: aws.Int32(2),
+								StorageClass:            types.TransitionStorageClassDeepArchive,
+							}},
+						},
 					},
 				},
 			})
@@ -6105,7 +6117,7 @@ func TestBucketLifecycle(t *testing.T) {
 
 			getResult, err := s3Client.GetBucketLifecycleConfiguration(context.Background(), &s3.GetBucketLifecycleConfigurationInput{Bucket: bucketName})
 			require.NoError(t, err)
-			require.Len(t, getResult.Rules, 4)
+			require.Len(t, getResult.Rules, 5)
 
 			assert.Equal(t, "expire-logs", aws.ToString(getResult.Rules[0].ID))
 			assert.Equal(t, types.ExpirationStatusEnabled, getResult.Rules[0].Status)
@@ -6135,6 +6147,12 @@ func TestBucketLifecycle(t *testing.T) {
 			require.Len(t, getResult.Rules[3].Transitions, 1)
 			assert.Equal(t, int32(30), aws.ToInt32(getResult.Rules[3].Transitions[0].Days))
 			assert.Equal(t, types.TransitionStorageClassGlacier, getResult.Rules[3].Transitions[0].StorageClass)
+
+			assert.Equal(t, "transition-noncurrent-cold", aws.ToString(getResult.Rules[4].ID))
+			require.Len(t, getResult.Rules[4].NoncurrentVersionTransitions, 1)
+			assert.Equal(t, int32(30), aws.ToInt32(getResult.Rules[4].NoncurrentVersionTransitions[0].NoncurrentDays))
+			assert.Equal(t, int32(2), aws.ToInt32(getResult.Rules[4].NoncurrentVersionTransitions[0].NewerNoncurrentVersions))
+			assert.Equal(t, types.TransitionStorageClassDeepArchive, getResult.Rules[4].NoncurrentVersionTransitions[0].StorageClass)
 
 			_, err = s3Client.DeleteBucketLifecycle(context.Background(), &s3.DeleteBucketLifecycleInput{Bucket: bucketName})
 			require.NoError(t, err)
@@ -6227,15 +6245,15 @@ func TestBucketLifecycle(t *testing.T) {
 				Expiration: &types.LifecycleExpiration{Days: aws.Int32(30)},
 			}), "InvalidArgument")
 
-			// NoncurrentVersionTransition actions are not supported.
+			// NoncurrentVersionTransition days must be positive.
 			expectErrorCode(t, putLifecycle(types.LifecycleRule{
 				Status: types.ExpirationStatusEnabled,
 				Filter: &types.LifecycleRuleFilter{Prefix: aws.String("")},
 				NoncurrentVersionTransitions: []types.NoncurrentVersionTransition{{
-					NoncurrentDays: aws.Int32(30),
+					NoncurrentDays: aws.Int32(0),
 					StorageClass:   types.TransitionStorageClassGlacier,
 				}},
-			}), "NotImplemented")
+			}), "InvalidArgument")
 
 			// AbortIncompleteMultipartUpload cannot be combined with tag filters.
 			expectErrorCode(t, putLifecycle(types.LifecycleRule{

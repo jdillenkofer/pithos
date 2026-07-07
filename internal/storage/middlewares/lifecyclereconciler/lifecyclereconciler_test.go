@@ -24,8 +24,11 @@ type fakeStorage struct {
 	buckets         []storage.Bucket
 	lifecycleConfig map[string]*storage.BucketLifecycleConfiguration
 	objects         map[string][]storage.Object
+	versions        map[string][]storage.ObjectVersion
+	versionTags     map[string]map[string]string
 	uploads         map[string][]storage.Upload
 	deletedKeys     []string
+	deletedVersions []string
 	abortedUploads  []string
 	transitions     []transitionCall
 }
@@ -34,6 +37,7 @@ type transitionCall struct {
 	key          string
 	storageClass string
 	ifMatchETag  *string
+	versionID    *string
 }
 
 func newFakeStorage() *fakeStorage {
@@ -41,6 +45,8 @@ func newFakeStorage() *fakeStorage {
 		DelegatingStorage: delegator.Wrap(nil),
 		lifecycleConfig:   map[string]*storage.BucketLifecycleConfiguration{},
 		objects:           map[string][]storage.Object{},
+		versions:          map[string][]storage.ObjectVersion{},
+		versionTags:       map[string]map[string]string{},
 		uploads:           map[string][]storage.Upload{},
 	}
 }
@@ -71,9 +77,22 @@ func (f *fakeStorage) ListObjects(_ context.Context, bucketName storage.BucketNa
 	return &storage.ListBucketResult{Objects: f.objects[bucketName.String()]}, nil
 }
 
-func (f *fakeStorage) GetObjectTagging(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+func (f *fakeStorage) ListObjectVersions(_ context.Context, bucketName storage.BucketName, _ storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return &storage.ListObjectVersionsResult{Versions: f.versions[bucketName.String()]}, nil
+}
+
+func (f *fakeStorage) GetObjectTagging(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if opts != nil && opts.VersionID != nil {
+		tags, ok := f.versionTags[key.String()+"\x00"+*opts.VersionID]
+		if !ok {
+			return map[string]string{}, nil
+		}
+		return tags, nil
+	}
 	for _, object := range f.objects[bucketName.String()] {
 		if object.Key.Equals(key) {
 			return object.Tags, nil
@@ -82,9 +101,21 @@ func (f *fakeStorage) GetObjectTagging(_ context.Context, bucketName storage.Buc
 	return nil, storage.ErrNoSuchKey
 }
 
-func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, _ *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+func (f *fakeStorage) DeleteObject(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if opts != nil && opts.VersionID != nil {
+		f.deletedVersions = append(f.deletedVersions, key.String()+"\x00"+*opts.VersionID)
+		versions := f.versions[bucketName.String()]
+		remainingVersions := make([]storage.ObjectVersion, 0, len(versions))
+		for _, version := range versions {
+			if !version.Key.Equals(key) || version.VersionID != *opts.VersionID {
+				remainingVersions = append(remainingVersions, version)
+			}
+		}
+		f.versions[bucketName.String()] = remainingVersions
+		return &storage.DeleteObjectResult{VersionID: opts.VersionID}, nil
+	}
 	f.deletedKeys = append(f.deletedKeys, key.String())
 	objects := f.objects[bucketName.String()]
 	remaining := make([]storage.Object, 0, len(objects))
@@ -114,10 +145,20 @@ func (f *fakeStorage) TransitionObjectStorageClass(_ context.Context, bucketName
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ifMatchETag *string
+	var versionID *string
 	if opts != nil {
 		ifMatchETag = opts.IfMatchETag
+		versionID = opts.VersionID
 	}
-	f.transitions = append(f.transitions, transitionCall{key: key.String(), storageClass: targetStorageClass, ifMatchETag: ifMatchETag})
+	f.transitions = append(f.transitions, transitionCall{key: key.String(), storageClass: targetStorageClass, ifMatchETag: ifMatchETag, versionID: versionID})
+	if versionID != nil {
+		for i := range f.versions[bucketName.String()] {
+			if f.versions[bucketName.String()][i].Key.Equals(key) && f.versions[bucketName.String()][i].VersionID == *versionID {
+				f.versions[bucketName.String()][i].StorageClass = &targetStorageClass
+			}
+		}
+		return nil
+	}
 	for i := range f.objects[bucketName.String()] {
 		if f.objects[bucketName.String()][i].Key.Equals(key) {
 			f.objects[bucketName.String()][i].StorageClass = &targetStorageClass
@@ -146,6 +187,21 @@ func (f *fakeStorage) addObject(bucket string, key string, size int64, lastModif
 		Size:         size,
 		Tags:         tags,
 	})
+}
+
+func (f *fakeStorage) addVersion(bucket string, key string, versionID string, isLatest bool, isDeleteMarker bool, size int64, lastModified time.Time, tags map[string]string) {
+	f.versions[bucket] = append(f.versions[bucket], storage.ObjectVersion{
+		Key:            storage.MustNewObjectKey(key),
+		VersionID:      versionID,
+		IsLatest:       isLatest,
+		IsDeleteMarker: isDeleteMarker,
+		LastModified:   lastModified,
+		Size:           size,
+		ETag:           ptrutils.ToPtr("etag-" + versionID),
+	})
+	if tags != nil {
+		f.versionTags[key+"\x00"+versionID] = tags
+	}
 }
 
 func reconcile(f *fakeStorage, now time.Time) {
@@ -444,4 +500,338 @@ func TestReconcileDoesNotTransitionNotYetDueObjects(t *testing.T) {
 	reconcile(f, now)
 
 	assert.Empty(t, f.transitions)
+}
+
+func TestReconcileExpiresEligibleNoncurrentVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "v4", true, false, 10, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/a", "v3", false, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "v2", false, false, 10, now.AddDate(0, 0, -20), nil)
+	f.addVersion(bucket.String(), "logs/a", "v1", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.addVersion(bucket.String(), "logs/a", "dm", false, true, 0, now.AddDate(0, 0, -40), nil)
+	f.addVersion(bucket.String(), "data/a", "data-v1", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays:          ptrutils.ToPtr(int32(3)),
+				NewerNoncurrentVersions: ptrutils.ToPtr(int32(1)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/a\x00v1"}, f.deletedVersions)
+}
+
+func TestReconcileNoncurrentVersionAgeStartsWhenSuccessorWasCreated(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/recent-overwrite", "latest", true, false, 10, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/recent-overwrite", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.addVersion(bucket.String(), "logs/old-overwrite", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/old-overwrite", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/old-overwrite\x00old"}, f.deletedVersions)
+}
+
+func TestReconcileNoncurrentVersionAgeStartsFromDeleteMarkerSuccessor(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/recent-delete", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/recent-delete", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.addVersion(bucket.String(), "logs/old-delete", "dm", true, true, 0, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/old-delete", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/old-delete\x00old"}, f.deletedVersions)
+}
+
+func TestReconcileNoncurrentVersionsHonorsTagAndSizeFilters(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "match", false, false, 150, now.AddDate(0, 0, -30), map[string]string{"env": "prod"})
+	f.addVersion(bucket.String(), "logs/a", "wrong-tag", false, false, 150, now.AddDate(0, 0, -31), map[string]string{"env": "dev"})
+	f.addVersion(bucket.String(), "logs/a", "too-small", false, false, 50, now.AddDate(0, 0, -32), map[string]string{"env": "prod"})
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{And: &storage.LifecycleFilterAnd{
+				Prefix:                ptrutils.ToPtr("logs/"),
+				Tags:                  []storage.LifecycleTag{{Key: "env", Value: "prod"}},
+				ObjectSizeGreaterThan: ptrutils.ToPtr(int64(100)),
+			}},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/a\x00match"}, f.deletedVersions)
+}
+
+func TestReconcileTransitionsEligibleNoncurrentVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "old", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+				StorageClass:   "GLACIER",
+			}},
+		}},
+	}
+
+	reconcile(f, now)
+
+	require.Len(t, f.transitions, 1)
+	assert.Equal(t, "logs/a", f.transitions[0].key)
+	assert.Equal(t, "GLACIER", f.transitions[0].storageClass)
+	require.NotNil(t, f.transitions[0].versionID)
+	assert.Equal(t, "old", *f.transitions[0].versionID)
+	require.NotNil(t, f.transitions[0].ifMatchETag)
+	assert.Equal(t, "etag-old", *f.transitions[0].ifMatchETag)
+}
+
+func TestReconcileNoncurrentTransitionHonorsNewerNoncurrentVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "v4", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "v3", false, false, 10, now.AddDate(0, 0, -20), nil)
+	f.addVersion(bucket.String(), "logs/a", "v2", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.addVersion(bucket.String(), "logs/a", "v1", false, false, 10, now.AddDate(0, 0, -40), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays:          ptrutils.ToPtr(int32(3)),
+				NewerNoncurrentVersions: ptrutils.ToPtr(int32(1)),
+				StorageClass:            "GLACIER",
+			}},
+		}},
+	}
+
+	reconcile(f, now)
+
+	require.Len(t, f.transitions, 1)
+	assert.Equal(t, "v1", *f.transitions[0].versionID)
+}
+
+func TestReconcileNoncurrentTransitionHonorsTagFilter(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "match", false, false, 10, now.AddDate(0, 0, -30), map[string]string{"env": "prod"})
+	f.addVersion(bucket.String(), "logs/a", "wrong", false, false, 10, now.AddDate(0, 0, -31), map[string]string{"env": "dev"})
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Tag: &storage.LifecycleTag{Key: "env", Value: "prod"}},
+			NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+				StorageClass:   "GLACIER",
+			}},
+		}},
+	}
+
+	reconcile(f, now)
+
+	require.Len(t, f.transitions, 1)
+	assert.Equal(t, "match", *f.transitions[0].versionID)
+}
+
+func TestReconcileSkipsNoncurrentTransitionWhenAlreadyInTargetClass(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "old", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.versions[bucket.String()][1].StorageClass = ptrutils.ToPtr("GLACIER")
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+				StorageClass:   "GLACIER",
+			}},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.transitions)
+}
+
+func TestReconcileNoncurrentExpirationTakesPrecedenceOverTransition(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/a", "old", false, false, 10, now.AddDate(0, 0, -30), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(5)),
+			},
+			NoncurrentVersionTransitions: []storage.LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+				StorageClass:   "GLACIER",
+			}},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/a\x00old"}, f.deletedVersions)
+	assert.Empty(t, f.transitions)
+}
+
+func TestReconcileExpiresCurrentDeleteMarkerWithoutObjectVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/deleted\x00dm"}, f.deletedVersions)
+}
+
+func TestReconcileKeepsCurrentDeleteMarkerWithObjectVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/deleted", "v1", false, false, 10, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
+}
+
+func TestReconcileSkipsNoncurrentDeleteMarkers(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/restored", "latest", true, false, 10, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/restored", "dm", false, true, 0, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
+}
+
+func TestReconcileExpiredDeleteMarkerHonorsFilter(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "data/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
 }

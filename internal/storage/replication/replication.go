@@ -167,16 +167,16 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	return putObjectResult, nil
 }
 
-func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObjectTagging")
 	defer span.End()
 
-	err := rs.Next.PutObjectTagging(ctx, bucketName, key, tags)
+	err := rs.Next.PutObjectTagging(ctx, bucketName, key, tags, opts)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.PutObjectTagging(ctx, bucketName, key, tags)
+		err = secondaryStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
 		if err != nil {
 			return err
 		}
@@ -184,16 +184,16 @@ func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName s
 	return nil
 }
 
-func (rs *replicationStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (rs *replicationStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjectTagging")
 	defer span.End()
 
-	err := rs.Next.DeleteObjectTagging(ctx, bucketName, key)
+	err := rs.Next.DeleteObjectTagging(ctx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}
 	for _, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObjectTagging(ctx, bucketName, key)
+		err = secondaryStorage.DeleteObjectTagging(ctx, bucketName, key, opts)
 		if err != nil {
 			return err
 		}

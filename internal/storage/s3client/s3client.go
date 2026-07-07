@@ -490,8 +490,12 @@ func byteRangeToAWSRange(byteRange storage.ByteRange) string {
 	return ""
 }
 
-func copySourceValue(srcBucket storage.BucketName, srcKey storage.ObjectKey) string {
-	return srcBucket.String() + "/" + url.PathEscape(srcKey.String())
+func copySourceValue(srcBucket storage.BucketName, srcKey storage.ObjectKey, sourceVersionID *string) string {
+	value := srcBucket.String() + "/" + url.PathEscape(srcKey.String())
+	if sourceVersionID != nil {
+		value += "?versionId=" + url.QueryEscape(*sourceVersionID)
+	}
+	return value
 }
 
 func translateS3CopyError(err error) error {
@@ -524,9 +528,10 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 	input := &s3.CopyObjectInput{
 		Bucket:     aws.String(dstBucket.String()),
 		Key:        aws.String(dstKey.String()),
-		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey, nil)),
 	}
 	if opts != nil {
+		input.CopySource = aws.String(copySourceValue(srcBucket, srcKey, opts.SourceVersionID))
 		// Ranged CopyObject is a pithos extension that AWS CopyObject cannot
 		// express (ranges only exist for UploadPartCopy), so it cannot be forwarded
 		// to a remote S3 backend.
@@ -567,6 +572,7 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 
 	result := &storage.CopyObjectResult{}
 	result.VersionID = copyObjectResult.VersionId
+	result.SourceVersionID = copyObjectResult.CopySourceVersionId
 	if copyObjectResult.CopyObjectResult != nil {
 		if copyObjectResult.CopyObjectResult.ETag != nil {
 			result.ETag = *copyObjectResult.CopyObjectResult.ETag
@@ -586,12 +592,16 @@ func (rs *s3ClientStorage) TransitionObjectStorageClass(ctx context.Context, buc
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.TransitionObjectStorageClass")
 	defer span.End()
 
+	if opts != nil && opts.VersionID != nil {
+		return storage.ErrNotImplemented
+	}
+
 	// A remote S3 backend changes an object's storage class via an in-place
 	// self copy that keeps the existing metadata.
 	input := &s3.CopyObjectInput{
 		Bucket:            aws.String(bucketName.String()),
 		Key:               aws.String(key.String()),
-		CopySource:        aws.String(copySourceValue(bucketName, key)),
+		CopySource:        aws.String(copySourceValue(bucketName, key, nil)),
 		MetadataDirective: types.MetadataDirectiveCopy,
 		StorageClass:      types.StorageClass(targetStorageClass),
 	}
@@ -777,9 +787,10 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 		Key:        aws.String(dstKey.String()),
 		UploadId:   aws.String(uploadId.String()),
 		PartNumber: aws.Int32(partNumber),
-		CopySource: aws.String(copySourceValue(srcBucket, srcKey)),
+		CopySource: aws.String(copySourceValue(srcBucket, srcKey, nil)),
 	}
 	if opts != nil {
+		input.CopySource = aws.String(copySourceValue(srcBucket, srcKey, opts.SourceVersionID))
 		if opts.Range != nil {
 			input.CopySourceRange = aws.String(byteRangeToAWSRange(*opts.Range))
 		}
@@ -795,6 +806,7 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 	}
 
 	result := &storage.UploadPartCopyResult{}
+	result.SourceVersionID = uploadPartCopyResult.CopySourceVersionId
 	if uploadPartCopyResult.CopyPartResult != nil {
 		if uploadPartCopyResult.CopyPartResult.ETag != nil {
 			result.ETag = *uploadPartCopyResult.CopyPartResult.ETag
@@ -1255,12 +1267,45 @@ func convertLifecycleTransitionsToSdk(transitions []storage.LifecycleTransition)
 	return converted
 }
 
+func convertLifecycleNoncurrentVersionTransitionsFromSdk(transitions []types.NoncurrentVersionTransition) []storage.LifecycleNoncurrentVersionTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]storage.LifecycleNoncurrentVersionTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, storage.LifecycleNoncurrentVersionTransition{
+			NoncurrentDays:          transition.NoncurrentDays,
+			NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+			StorageClass:            string(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
+func convertLifecycleNoncurrentVersionTransitionsToSdk(transitions []storage.LifecycleNoncurrentVersionTransition) []types.NoncurrentVersionTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]types.NoncurrentVersionTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, types.NoncurrentVersionTransition{
+			NoncurrentDays:          transition.NoncurrentDays,
+			NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+			StorageClass:            types.TransitionStorageClass(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
 func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule {
 	converted := storage.LifecycleRule{
-		ID:          rule.ID,
-		Status:      string(rule.Status),
-		Prefix:      rule.Prefix,
-		Transitions: convertLifecycleTransitionsFromSdk(rule.Transitions),
+		ID:                           rule.ID,
+		Status:                       string(rule.Status),
+		Prefix:                       rule.Prefix,
+		Transitions:                  convertLifecycleTransitionsFromSdk(rule.Transitions),
+		NoncurrentVersionTransitions: convertLifecycleNoncurrentVersionTransitionsFromSdk(rule.NoncurrentVersionTransitions),
 	}
 	if rule.Filter != nil {
 		filter := &storage.LifecycleFilter{
@@ -1294,15 +1339,22 @@ func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule
 			DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
 		}
 	}
+	if rule.NoncurrentVersionExpiration != nil {
+		converted.NoncurrentVersionExpiration = &storage.LifecycleNoncurrentVersionExpiration{
+			NoncurrentDays:          rule.NoncurrentVersionExpiration.NoncurrentDays,
+			NewerNoncurrentVersions: rule.NoncurrentVersionExpiration.NewerNoncurrentVersions,
+		}
+	}
 	return converted
 }
 
 func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
 	converted := types.LifecycleRule{
-		ID:          rule.ID,
-		Status:      types.ExpirationStatus(rule.Status),
-		Prefix:      rule.Prefix,
-		Transitions: convertLifecycleTransitionsToSdk(rule.Transitions),
+		ID:                           rule.ID,
+		Status:                       types.ExpirationStatus(rule.Status),
+		Prefix:                       rule.Prefix,
+		Transitions:                  convertLifecycleTransitionsToSdk(rule.Transitions),
+		NoncurrentVersionTransitions: convertLifecycleNoncurrentVersionTransitionsToSdk(rule.NoncurrentVersionTransitions),
 	}
 	if rule.Filter != nil {
 		filter := &types.LifecycleRuleFilter{
@@ -1334,6 +1386,12 @@ func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
 	if rule.AbortIncompleteMultipartUpload != nil {
 		converted.AbortIncompleteMultipartUpload = &types.AbortIncompleteMultipartUpload{
 			DaysAfterInitiation: rule.AbortIncompleteMultipartUpload.DaysAfterInitiation,
+		}
+	}
+	if rule.NoncurrentVersionExpiration != nil {
+		converted.NoncurrentVersionExpiration = &types.NoncurrentVersionExpiration{
+			NoncurrentDays:          rule.NoncurrentVersionExpiration.NoncurrentDays,
+			NewerNoncurrentVersions: rule.NoncurrentVersionExpiration.NewerNoncurrentVersions,
 		}
 	}
 	return converted
@@ -1407,14 +1465,18 @@ func (rs *s3ClientStorage) DeleteBucketLifecycleConfiguration(ctx context.Contex
 	return nil
 }
 
-func (rs *s3ClientStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+func (rs *s3ClientStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetObjectTagging")
 	defer span.End()
 
-	result, err := rs.s3Client.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+	input := &s3.GetObjectTaggingInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
-	})
+	}
+	if opts != nil {
+		input.VersionId = opts.VersionID
+	}
+	result, err := rs.s3Client.GetObjectTagging(ctx, input)
 	var ae smithy.APIError
 	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
 		return nil, storage.ErrNoSuchKey
@@ -1430,7 +1492,7 @@ func (rs *s3ClientStorage) GetObjectTagging(ctx context.Context, bucketName stor
 	return tags, nil
 }
 
-func (rs *s3ClientStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (rs *s3ClientStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutObjectTagging")
 	defer span.End()
 
@@ -1442,11 +1504,15 @@ func (rs *s3ClientStorage) PutObjectTagging(ctx context.Context, bucketName stor
 		})
 	}
 
-	_, err := rs.s3Client.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+	input := &s3.PutObjectTaggingInput{
 		Bucket:  aws.String(bucketName.String()),
 		Key:     aws.String(key.String()),
 		Tagging: &types.Tagging{TagSet: tagSet},
-	})
+	}
+	if opts != nil {
+		input.VersionId = opts.VersionID
+	}
+	_, err := rs.s3Client.PutObjectTagging(ctx, input)
 	var ae smithy.APIError
 	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
 		return storage.ErrNoSuchKey
@@ -1457,14 +1523,18 @@ func (rs *s3ClientStorage) PutObjectTagging(ctx context.Context, bucketName stor
 	return nil
 }
 
-func (rs *s3ClientStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (rs *s3ClientStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObjectTagging")
 	defer span.End()
 
-	_, err := rs.s3Client.DeleteObjectTagging(ctx, &s3.DeleteObjectTaggingInput{
+	input := &s3.DeleteObjectTaggingInput{
 		Bucket: aws.String(bucketName.String()),
 		Key:    aws.String(key.String()),
-	})
+	}
+	if opts != nil {
+		input.VersionId = opts.VersionID
+	}
+	_, err := rs.s3Client.DeleteObjectTagging(ctx, input)
 	var ae smithy.APIError
 	if err != nil && errors.As(err, &ae) && ae.ErrorCode() == "NoSuchKey" {
 		return storage.ErrNoSuchKey

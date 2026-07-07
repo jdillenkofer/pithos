@@ -201,6 +201,8 @@ type CopySourceConditions struct {
 // CopyObjectOptions holds options for a server-side CopyObject. A nil pointer is
 // equivalent to a plain COPY of the whole object with no preconditions.
 type CopyObjectOptions struct {
+	// SourceVersionID, when non-nil, copies this exact source object version.
+	SourceVersionID *string
 	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
 	// ContentType and Metadata are used for the destination instead of the
 	// source's content type and metadata.
@@ -232,6 +234,8 @@ type CopyObjectOptions struct {
 type CopyObjectResult struct {
 	ETag         string
 	LastModified time.Time
+	// SourceVersionID is the version id of the copied source object when known.
+	SourceVersionID *string
 	// VersionID is the version id of the newly created destination object when
 	// the destination bucket has versioning enabled.
 	VersionID *string
@@ -239,6 +243,8 @@ type CopyObjectResult struct {
 
 // UploadPartCopyOptions holds options for a server-side UploadPartCopy.
 type UploadPartCopyOptions struct {
+	// SourceVersionID, when non-nil, copies this exact source object version.
+	SourceVersionID *string
 	// Range, when non-nil, copies only the given byte range of the source into the part.
 	Range *ByteRange
 	// CopySourceConditions holds preconditions evaluated against the source object.
@@ -246,8 +252,9 @@ type UploadPartCopyOptions struct {
 }
 
 type UploadPartCopyResult struct {
-	ETag         string
-	LastModified time.Time
+	ETag            string
+	LastModified    time.Time
+	SourceVersionID *string
 }
 
 type InitiateMultipartUploadResult struct {
@@ -504,6 +511,8 @@ type LifecycleFilter = metadatastore.LifecycleFilter
 type LifecycleExpiration = metadatastore.LifecycleExpiration
 type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
 type LifecycleTransition = metadatastore.LifecycleTransition
+type LifecycleNoncurrentVersionExpiration = metadatastore.LifecycleNoncurrentVersionExpiration
+type LifecycleNoncurrentVersionTransition = metadatastore.LifecycleNoncurrentVersionTransition
 type LifecycleRule = metadatastore.LifecycleRule
 type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
 
@@ -529,13 +538,17 @@ type BucketLifecycleManager interface {
 type TaggingManager interface {
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) (map[string]string, error)
 	// PutObjectTagging replaces the entire tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string, opts *ObjectTaggingOptions) error
 	// DeleteObjectTagging removes the entire tag set of the object at key.
 	// Returns ErrNoSuchKey if the object does not exist.
-	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) error
+	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) error
+}
+
+type ObjectTaggingOptions struct {
+	VersionID *string
 }
 
 // ObjectManager manages object operations
@@ -561,12 +574,13 @@ type ObjectManager interface {
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
 	// TransitionObjectStorageClass changes the storage class of the current
-	// object version at key, moving its part data to the part store mapped to
-	// the target class. The object version and its metadata are preserved; the
-	// object stays immediately readable (storage classes are labels, no
-	// archive/restore). opts.IfMatchETag, when set, guards against a concurrent
-	// replacement (ErrPreconditionFailed on mismatch). Returns ErrNoSuchKey
-	// when no current object exists.
+	// object version at key, or of opts.VersionID when set, moving its part data
+	// to the part store mapped to the target class. The object version and its
+	// metadata are preserved; the object stays immediately readable (storage
+	// classes are labels, no archive/restore). opts.IfMatchETag, when set,
+	// guards against a concurrent replacement/update (ErrPreconditionFailed on
+	// mismatch). Returns ErrNoSuchKey when no matching non-delete-marker object
+	// exists.
 	TransitionObjectStorageClass(ctx context.Context, bucketName BucketName, key ObjectKey, targetStorageClass string, opts *TransitionObjectStorageClassOptions) error
 }
 
@@ -574,9 +588,12 @@ type ObjectManager interface {
 // TransitionObjectStorageClass. A nil pointer is equivalent to an
 // unconditional transition.
 type TransitionObjectStorageClassOptions struct {
-	// IfMatchETag, when non-nil, requires the current object's ETag to equal
+	// IfMatchETag, when non-nil, requires the selected object's ETag to equal
 	// this value; otherwise ErrPreconditionFailed is returned.
 	IfMatchETag *string
+	// VersionID selects an explicit object version. When nil, the current
+	// version at key is selected.
+	VersionID *string
 }
 
 // MultipartUploadManager manages multipart upload operations
