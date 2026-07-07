@@ -48,8 +48,9 @@ Supported website redirect behavior:
 - A rule cannot specify both `ReplaceKeyWith` and `ReplaceKeyPrefixWith`.
 - Object-level `x-amz-website-redirect-location` still redirects successfully fetched objects when no routing rule has already matched.
 - `HEAD` website requests return the same redirect status and `Location` header as `GET`, without a response body.
+- When a request for `/<prefix>` misses but `/<prefix>/<index-suffix>` exists, Pithos returns a `302` redirect to `/<prefix>/`, matching browser-oriented S3 website directory behavior.
 
-Remaining difference from AWS: Pithos does not implement browser-oriented directory probing beyond the configured index suffix; redirect routing is limited to the conditions and redirect fields listed above.
+Remaining difference from AWS: Pithos does not implement unrelated static website features beyond index/error documents, redirects, routing rules, and the directory index redirect behavior described above.
 
 ## Bucket Versioning
 

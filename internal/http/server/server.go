@@ -4432,6 +4432,32 @@ func writeWebsiteRedirect(w http.ResponseWriter, location string, code *string) 
 	w.WriteHeader(statusCode)
 }
 
+func websiteDirectoryRedirectLocation(r *http.Request, requestKey string) string {
+	u := url.URL{
+		Path:     "/" + strings.TrimPrefix(requestKey, "/") + "/",
+		RawQuery: r.URL.RawQuery,
+	}
+	return u.String()
+}
+
+func (s *Server) tryWebsiteDirectoryRedirect(ctx context.Context, w http.ResponseWriter, r *http.Request, bucketName storage.BucketName, websiteConfig *storage.WebsiteConfiguration, requestKey string) bool {
+	if requestKey == "" || strings.HasSuffix(requestKey, "/") || websiteConfig.IndexDocumentSuffix == "" {
+		return false
+	}
+
+	indexKey, err := storage.NewObjectKey(requestKey + "/" + websiteConfig.IndexDocumentSuffix)
+	if err != nil {
+		return false
+	}
+	if _, err := s.storage.HeadObject(ctx, bucketName, indexKey, nil); err != nil {
+		return false
+	}
+
+	statusCode := strconv.Itoa(http.StatusFound)
+	writeWebsiteRedirect(w, websiteDirectoryRedirectLocation(r, requestKey), &statusCode)
+	return true
+}
+
 // websitePrepare fetches the website configuration, resolves the request key,
 // and authorizes the request. It writes an error response and returns false if
 // any step fails; on success it returns the resolved config, object key, and
@@ -4529,6 +4555,9 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
+			if s.tryWebsiteDirectoryRedirect(ctx, w, r, bucketName, websiteConfig, requestKey) {
+				return
+			}
 			statusCode := http.StatusNotFound
 			if rule := websiteFindRoutingRule(websiteConfig, requestKey, &statusCode); rule != nil {
 				writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)
@@ -4605,6 +4634,9 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 	object, err := s.storage.HeadObject(ctx, bucketName, objectKey, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
+			if s.tryWebsiteDirectoryRedirect(ctx, w, r, bucketName, websiteConfig, requestKey) {
+				return
+			}
 			statusCode := http.StatusNotFound
 			if rule := websiteFindRoutingRule(websiteConfig, requestKey, &statusCode); rule != nil {
 				writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)

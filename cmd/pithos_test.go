@@ -6012,6 +6012,36 @@ func TestWebsiteHosting(t *testing.T) {
 			assert.Contains(t, string(bodyBytes), "Subdirectory")
 		})
 
+		t.Run("it should redirect directory requests to trailing slash when index exists"+testSuffix, func(t *testing.T) {
+			_, listenerAddr := setupWebsiteBucket(t)
+			httpClient := buildWebsiteHttpClientNoRedirect(listenerAddr)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/subdir", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/subdir/", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should redirect directory HEAD requests to trailing slash when index exists"+testSuffix, func(t *testing.T) {
+			_, listenerAddr := setupWebsiteBucket(t)
+			httpClient := buildWebsiteHttpClientNoRedirect(listenerAddr)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/subdir", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("HEAD", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/subdir/", resp.Header.Get("Location"))
+		})
+
 		t.Run("it should serve direct object access"+testSuffix, func(t *testing.T) {
 			httpClient, listenerAddr := setupWebsiteBucket(t)
 
@@ -6321,6 +6351,35 @@ func TestWebsiteHosting(t *testing.T) {
 			defer resp.Body.Close()
 			assert.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
 			assert.Equal(t, "http://errors.example.com/not-found.html", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should apply directory redirects before 404 routing rules"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, s3Client := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{HttpErrorCodeReturnedEquals: aws.String("404")},
+					Redirect: &types.Redirect{
+						HostName:         aws.String("errors.example.com"),
+						ReplaceKeyWith:   aws.String("not-found.html"),
+						HttpRedirectCode: aws.String("307"),
+					},
+				}},
+			})
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("docs/index.html"),
+				Body:   bytes.NewReader([]byte("docs")),
+			})
+			require.NoError(t, err)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/docs", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/docs/", resp.Header.Get("Location"))
 		})
 
 		t.Run("it should require both prefix and error code routing conditions"+testSuffix, func(t *testing.T) {
