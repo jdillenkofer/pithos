@@ -83,7 +83,7 @@ func (n *NamedPartStores) Default() PartStore {
 
 // All returns every configured store keyed by name, including the default.
 func (n *NamedPartStores) All() map[string]PartStore {
-	return n.stores
+	return maps.Clone(n.stores)
 }
 
 // SupportsTxFreeGetPart reports whether every configured store allows GetPart
