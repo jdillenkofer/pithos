@@ -954,6 +954,39 @@ func (rs *s3ClientStorage) GetBucketWebsiteConfiguration(ctx context.Context, bu
 	if result.ErrorDocument != nil && result.ErrorDocument.Key != nil {
 		config.ErrorDocumentKey = result.ErrorDocument.Key
 	}
+	if result.RedirectAllRequestsTo != nil && result.RedirectAllRequestsTo.HostName != nil {
+		config.RedirectAllRequestsTo = &storage.WebsiteRedirectAllRequestsTo{
+			HostName: *result.RedirectAllRequestsTo.HostName,
+		}
+		if result.RedirectAllRequestsTo.Protocol != "" {
+			protocol := string(result.RedirectAllRequestsTo.Protocol)
+			config.RedirectAllRequestsTo.Protocol = &protocol
+		}
+	}
+	for _, rule := range result.RoutingRules {
+		if rule.Redirect == nil {
+			continue
+		}
+		storageRule := storage.WebsiteRoutingRule{
+			Redirect: storage.WebsiteRedirect{
+				HostName:             rule.Redirect.HostName,
+				ReplaceKeyPrefixWith: rule.Redirect.ReplaceKeyPrefixWith,
+				ReplaceKeyWith:       rule.Redirect.ReplaceKeyWith,
+				HttpRedirectCode:     rule.Redirect.HttpRedirectCode,
+			},
+		}
+		if rule.Redirect.Protocol != "" {
+			protocol := string(rule.Redirect.Protocol)
+			storageRule.Redirect.Protocol = &protocol
+		}
+		if rule.Condition != nil {
+			storageRule.Condition = &storage.WebsiteRoutingRuleCondition{
+				KeyPrefixEquals:             rule.Condition.KeyPrefixEquals,
+				HttpErrorCodeReturnedEquals: rule.Condition.HttpErrorCodeReturnedEquals,
+			}
+		}
+		config.RoutingRules = append(config.RoutingRules, storageRule)
+	}
 	return config, nil
 }
 
@@ -961,15 +994,44 @@ func (rs *s3ClientStorage) PutBucketWebsiteConfiguration(ctx context.Context, bu
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketWebsiteConfiguration")
 	defer span.End()
 
-	websiteConfig := &types.WebsiteConfiguration{
-		IndexDocument: &types.IndexDocument{
+	websiteConfig := &types.WebsiteConfiguration{}
+	if config.IndexDocumentSuffix != "" {
+		websiteConfig.IndexDocument = &types.IndexDocument{
 			Suffix: aws.String(config.IndexDocumentSuffix),
-		},
+		}
 	}
 	if config.ErrorDocumentKey != nil {
 		websiteConfig.ErrorDocument = &types.ErrorDocument{
 			Key: config.ErrorDocumentKey,
 		}
+	}
+	if config.RedirectAllRequestsTo != nil {
+		websiteConfig.RedirectAllRequestsTo = &types.RedirectAllRequestsTo{
+			HostName: aws.String(config.RedirectAllRequestsTo.HostName),
+		}
+		if config.RedirectAllRequestsTo.Protocol != nil {
+			websiteConfig.RedirectAllRequestsTo.Protocol = types.Protocol(*config.RedirectAllRequestsTo.Protocol)
+		}
+	}
+	for _, rule := range config.RoutingRules {
+		routingRule := types.RoutingRule{
+			Redirect: &types.Redirect{
+				HostName:             rule.Redirect.HostName,
+				ReplaceKeyPrefixWith: rule.Redirect.ReplaceKeyPrefixWith,
+				ReplaceKeyWith:       rule.Redirect.ReplaceKeyWith,
+				HttpRedirectCode:     rule.Redirect.HttpRedirectCode,
+			},
+		}
+		if rule.Redirect.Protocol != nil {
+			routingRule.Redirect.Protocol = types.Protocol(*rule.Redirect.Protocol)
+		}
+		if rule.Condition != nil {
+			routingRule.Condition = &types.Condition{
+				KeyPrefixEquals:             rule.Condition.KeyPrefixEquals,
+				HttpErrorCodeReturnedEquals: rule.Condition.HttpErrorCodeReturnedEquals,
+			}
+		}
+		websiteConfig.RoutingRules = append(websiteConfig.RoutingRules, routingRule)
 	}
 
 	_, err := rs.s3Client.PutBucketWebsite(ctx, &s3.PutBucketWebsiteInput{

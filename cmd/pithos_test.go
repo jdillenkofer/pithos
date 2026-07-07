@@ -132,6 +132,14 @@ func buildWebsiteHttpClient(listenerAddr string) *http.Client {
 	return &client
 }
 
+func buildWebsiteHttpClientNoRedirect(listenerAddr string) *http.Client {
+	client := buildWebsiteHttpClient(listenerAddr)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
+}
+
 func mustNoErr(err error, message string) {
 	if err != nil {
 		slog.Error(fmt.Sprintf("%s: %s", message, err))
@@ -5317,6 +5325,167 @@ func TestBucketWebsite(t *testing.T) {
 			assert.NotNil(t, getResult.ErrorDocument)
 			assert.Equal(t, "404.html", *getResult.ErrorDocument.Key)
 		})
+
+		t.Run("it should put and get redirect all website configuration"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					RedirectAllRequestsTo: &types.RedirectAllRequestsTo{
+						HostName: aws.String("www.example.com"),
+						Protocol: types.ProtocolHttps,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			getResult, err := s3Client.GetBucketWebsite(context.Background(), &s3.GetBucketWebsiteInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.NotNil(t, getResult.RedirectAllRequestsTo)
+			assert.Equal(t, "www.example.com", *getResult.RedirectAllRequestsTo.HostName)
+			assert.Equal(t, types.ProtocolHttps, getResult.RedirectAllRequestsTo.Protocol)
+			assert.Nil(t, getResult.IndexDocument)
+			assert.Nil(t, getResult.ErrorDocument)
+		})
+
+		t.Run("it should put and get ordered website routing rules"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+					RoutingRules: []types.RoutingRule{
+						{
+							Condition: &types.Condition{KeyPrefixEquals: aws.String("docs/")},
+							Redirect: &types.Redirect{
+								ReplaceKeyPrefixWith: aws.String("documents/"),
+								HttpRedirectCode:     aws.String("302"),
+							},
+						},
+						{
+							Condition: &types.Condition{HttpErrorCodeReturnedEquals: aws.String("404")},
+							Redirect: &types.Redirect{
+								HostName:         aws.String("errors.example.com"),
+								ReplaceKeyWith:   aws.String("not-found.html"),
+								HttpRedirectCode: aws.String("307"),
+							},
+						},
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			getResult, err := s3Client.GetBucketWebsite(context.Background(), &s3.GetBucketWebsiteInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.Len(t, getResult.RoutingRules, 2)
+			assert.Equal(t, "docs/", *getResult.RoutingRules[0].Condition.KeyPrefixEquals)
+			assert.Equal(t, "documents/", *getResult.RoutingRules[0].Redirect.ReplaceKeyPrefixWith)
+			assert.Equal(t, "302", *getResult.RoutingRules[0].Redirect.HttpRedirectCode)
+			assert.Equal(t, "404", *getResult.RoutingRules[1].Condition.HttpErrorCodeReturnedEquals)
+			assert.Equal(t, "errors.example.com", *getResult.RoutingRules[1].Redirect.HostName)
+			assert.Equal(t, "not-found.html", *getResult.RoutingRules[1].Redirect.ReplaceKeyWith)
+			assert.Equal(t, "307", *getResult.RoutingRules[1].Redirect.HttpRedirectCode)
+		})
+
+		t.Run("it should overwrite between index and redirect website configurations"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				},
+			})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					RedirectAllRequestsTo: &types.RedirectAllRequestsTo{HostName: aws.String("www.example.com")},
+				},
+			})
+			require.NoError(t, err)
+			redirectResult, err := s3Client.GetBucketWebsite(context.Background(), &s3.GetBucketWebsiteInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.NotNil(t, redirectResult.RedirectAllRequestsTo)
+			assert.Nil(t, redirectResult.IndexDocument)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					IndexDocument: &types.IndexDocument{Suffix: aws.String("default.html")},
+				},
+			})
+			require.NoError(t, err)
+			indexResult, err := s3Client.GetBucketWebsite(context.Background(), &s3.GetBucketWebsiteInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.NotNil(t, indexResult.IndexDocument)
+			assert.Equal(t, "default.html", *indexResult.IndexDocument.Suffix)
+			assert.Nil(t, indexResult.RedirectAllRequestsTo)
+		})
+
+		t.Run("it should delete redirect website configuration"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					RedirectAllRequestsTo: &types.RedirectAllRequestsTo{HostName: aws.String("www.example.com")},
+				},
+			})
+			require.NoError(t, err)
+
+			_, err = s3Client.DeleteBucketWebsite(context.Background(), &s3.DeleteBucketWebsiteInput{Bucket: bucketName})
+			require.NoError(t, err)
+			_, err = s3Client.GetBucketWebsite(context.Background(), &s3.GetBucketWebsiteInput{Bucket: bucketName})
+			require.Error(t, err)
+			var apiErr smithy.APIError
+			require.True(t, errors.As(err, &apiErr))
+			assert.Equal(t, "NoSuchWebsiteConfiguration", apiErr.ErrorCode())
+		})
+
+		t.Run("it should reject invalid website redirect rules"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			_, err = s3Client.PutBucketWebsite(context.Background(), &s3.PutBucketWebsiteInput{
+				Bucket: bucketName,
+				WebsiteConfiguration: &types.WebsiteConfiguration{
+					IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+					RoutingRules: []types.RoutingRule{{
+						Condition: &types.Condition{KeyPrefixEquals: aws.String("docs/")},
+						Redirect: &types.Redirect{
+							ReplaceKeyPrefixWith: aws.String("documents/"),
+							ReplaceKeyWith:       aws.String("single.html"),
+						},
+					}},
+				},
+			})
+			require.Error(t, err)
+			var apiErr smithy.APIError
+			require.True(t, errors.As(err, &apiErr))
+			assert.Equal(t, "InvalidArgument", apiErr.ErrorCode())
+		})
 	})
 }
 
@@ -5792,6 +5961,22 @@ func TestWebsiteHosting(t *testing.T) {
 			return buildWebsiteHttpClient(addr), addr
 		}
 
+		setupWebsiteRedirectBucket := func(t *testing.T, websiteConfig *types.WebsiteConfiguration) (httpClient *http.Client, listenerAddr string, s3Client *s3.Client) {
+			s3Client, addr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			ctx := context.Background()
+			_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+			_, err = s3Client.PutBucketWebsite(ctx, &s3.PutBucketWebsiteInput{
+				Bucket:               bucketName,
+				WebsiteConfiguration: websiteConfig,
+			})
+			require.NoError(t, err)
+
+			return buildWebsiteHttpClientNoRedirect(addr), addr, s3Client
+		}
+
 		t.Run("it should serve index document at root"+testSuffix, func(t *testing.T) {
 			httpClient, listenerAddr := setupWebsiteBucket(t)
 
@@ -5825,6 +6010,36 @@ func TestWebsiteHosting(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			assert.Contains(t, string(bodyBytes), "Subdirectory")
+		})
+
+		t.Run("it should redirect directory requests to trailing slash when index exists"+testSuffix, func(t *testing.T) {
+			_, listenerAddr := setupWebsiteBucket(t)
+			httpClient := buildWebsiteHttpClientNoRedirect(listenerAddr)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/subdir", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/subdir/", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should redirect directory HEAD requests to trailing slash when index exists"+testSuffix, func(t *testing.T) {
+			_, listenerAddr := setupWebsiteBucket(t)
+			httpClient := buildWebsiteHttpClientNoRedirect(listenerAddr)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/subdir", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("HEAD", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/subdir/", resp.Header.Get("Location"))
 		})
 
 		t.Run("it should serve direct object access"+testSuffix, func(t *testing.T) {
@@ -6044,6 +6259,201 @@ func TestWebsiteHosting(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			assert.Contains(t, string(bodyBytes), "Welcome")
+		})
+
+		t.Run("it should redirect all website requests"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, _ := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				RedirectAllRequestsTo: &types.RedirectAllRequestsTo{
+					HostName: aws.String("www.example.com"),
+					Protocol: types.ProtocolHttps,
+				},
+			})
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+
+			rootURL := fmt.Sprintf("http://%s.%s:%d/", *bucketName, testWebsiteEndpoint, addr.Port)
+			rootReq, _ := http.NewRequest("GET", rootURL, nil)
+			rootResp, err := httpClient.Do(rootReq)
+			require.NoError(t, err)
+			defer rootResp.Body.Close()
+			assert.Equal(t, http.StatusMovedPermanently, rootResp.StatusCode)
+			assert.Equal(t, "https://www.example.com/", rootResp.Header.Get("Location"))
+
+			nestedURL := fmt.Sprintf("http://%s.%s:%d/docs/page.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			nestedReq, _ := http.NewRequest("GET", nestedURL, nil)
+			nestedResp, err := httpClient.Do(nestedReq)
+			require.NoError(t, err)
+			defer nestedResp.Body.Close()
+			assert.Equal(t, http.StatusMovedPermanently, nestedResp.StatusCode)
+			assert.Equal(t, "https://www.example.com/docs/page.html", nestedResp.Header.Get("Location"))
+
+			headReq, _ := http.NewRequest("HEAD", nestedURL, nil)
+			headResp, err := httpClient.Do(headReq)
+			require.NoError(t, err)
+			defer headResp.Body.Close()
+			assert.Equal(t, http.StatusMovedPermanently, headResp.StatusCode)
+			assert.Equal(t, "https://www.example.com/docs/page.html", headResp.Header.Get("Location"))
+
+			customDomainURL := fmt.Sprintf("http://%s:%d/custom.html", *bucketName, addr.Port)
+			customReq, _ := http.NewRequest("GET", customDomainURL, nil)
+			customResp, err := httpClient.Do(customReq)
+			require.NoError(t, err)
+			defer customResp.Body.Close()
+			assert.Equal(t, http.StatusMovedPermanently, customResp.StatusCode)
+			assert.Equal(t, "https://www.example.com/custom.html", customResp.Header.Get("Location"))
+		})
+
+		t.Run("it should apply prefix routing rules before object lookup"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, s3Client := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{KeyPrefixEquals: aws.String("docs/")},
+					Redirect: &types.Redirect{
+						ReplaceKeyPrefixWith: aws.String("documents/"),
+						HttpRedirectCode:     aws.String("302"),
+					},
+				}},
+			})
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("docs/page.html"),
+				Body:   bytes.NewReader([]byte("would be served without redirect")),
+			})
+			require.NoError(t, err)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/docs/page.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/documents/page.html", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should apply 404 routing rules after failed object lookup"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, _ := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{HttpErrorCodeReturnedEquals: aws.String("404")},
+					Redirect: &types.Redirect{
+						HostName:         aws.String("errors.example.com"),
+						ReplaceKeyWith:   aws.String("not-found.html"),
+						HttpRedirectCode: aws.String("307"),
+					},
+				}},
+			})
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/missing.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
+			assert.Equal(t, "http://errors.example.com/not-found.html", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should apply directory redirects before 404 routing rules"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, s3Client := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{HttpErrorCodeReturnedEquals: aws.String("404")},
+					Redirect: &types.Redirect{
+						HostName:         aws.String("errors.example.com"),
+						ReplaceKeyWith:   aws.String("not-found.html"),
+						HttpRedirectCode: aws.String("307"),
+					},
+				}},
+			})
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("docs/index.html"),
+				Body:   bytes.NewReader([]byte("docs")),
+			})
+			require.NoError(t, err)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/docs", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusFound, resp.StatusCode)
+			assert.Equal(t, "/docs/", resp.Header.Get("Location"))
+		})
+
+		t.Run("it should require both prefix and error code routing conditions"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, s3Client := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{
+						KeyPrefixEquals:             aws.String("docs/"),
+						HttpErrorCodeReturnedEquals: aws.String("404"),
+					},
+					Redirect: &types.Redirect{
+						ReplaceKeyWith:   aws.String("docs-missing.html"),
+						HttpRedirectCode: aws.String("308"),
+					},
+				}},
+			})
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket: bucketName,
+				Key:    aws.String("docs/existing.html"),
+				Body:   bytes.NewReader([]byte("existing")),
+			})
+			require.NoError(t, err)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			existingURL := fmt.Sprintf("http://%s.%s:%d/docs/existing.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			existingReq, _ := http.NewRequest("GET", existingURL, nil)
+			existingResp, err := httpClient.Do(existingReq)
+			require.NoError(t, err)
+			defer existingResp.Body.Close()
+			assert.Equal(t, http.StatusOK, existingResp.StatusCode)
+
+			outsideURL := fmt.Sprintf("http://%s.%s:%d/other/missing.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			outsideReq, _ := http.NewRequest("GET", outsideURL, nil)
+			outsideResp, err := httpClient.Do(outsideReq)
+			require.NoError(t, err)
+			defer outsideResp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, outsideResp.StatusCode)
+
+			missingURL := fmt.Sprintf("http://%s.%s:%d/docs/missing.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			missingReq, _ := http.NewRequest("GET", missingURL, nil)
+			missingResp, err := httpClient.Do(missingReq)
+			require.NoError(t, err)
+			defer missingResp.Body.Close()
+			assert.Equal(t, http.StatusPermanentRedirect, missingResp.StatusCode)
+			assert.Equal(t, "/docs-missing.html", missingResp.Header.Get("Location"))
+		})
+
+		t.Run("it should serve object level website redirects when no routing rule intercepts"+testSuffix, func(t *testing.T) {
+			httpClient, listenerAddr, s3Client := setupWebsiteRedirectBucket(t, &types.WebsiteConfiguration{
+				IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")},
+				RoutingRules: []types.RoutingRule{{
+					Condition: &types.Condition{KeyPrefixEquals: aws.String("docs/")},
+					Redirect: &types.Redirect{
+						ReplaceKeyPrefixWith: aws.String("documents/"),
+						HttpRedirectCode:     aws.String("302"),
+					},
+				}},
+			})
+			_, err := s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+				Bucket:                  bucketName,
+				Key:                     aws.String("legacy.html"),
+				Body:                    bytes.NewReader([]byte("legacy")),
+				WebsiteRedirectLocation: aws.String("/new.html"),
+			})
+			require.NoError(t, err)
+
+			addr, _ := net.ResolveTCPAddr("tcp", listenerAddr)
+			url := fmt.Sprintf("http://%s.%s:%d/legacy.html", *bucketName, testWebsiteEndpoint, addr.Port)
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusMovedPermanently, resp.StatusCode)
+			assert.Equal(t, "/new.html", resp.Header.Get("Location"))
 		})
 
 		t.Run("it should return 404 for nonexistent bucket via website endpoint"+testSuffix, func(t *testing.T) {

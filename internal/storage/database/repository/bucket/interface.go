@@ -23,6 +23,9 @@ type Entity struct {
 	VersioningStatus           *string
 	WebsiteIndexDocumentSuffix *string
 	WebsiteErrorDocumentKey    *string
+	WebsiteRedirectAllHostName *string
+	WebsiteRedirectAllProtocol *string
+	WebsiteRoutingRulesJSON    *string
 	CORSConfigurationJSON      *string
 	LifecycleConfigurationJSON *string
 	CreatedAt                  time.Time

@@ -33,6 +33,25 @@ For `CopyObject`, `x-amz-metadata-directive` controls destination metadata:
 - `REPLACE` uses the content type and metadata supplied on the copy request.
 - `x-amz-website-redirect-location` is not copied from the source object. It is applied only when supplied on the copy request.
 
+## Bucket Website Redirects
+
+Pithos supports S3-style bucket website configuration through `PUT /<bucket>?website`, `GET /<bucket>?website`, and `DELETE /<bucket>?website`.
+
+Supported website redirect behavior:
+
+- `RedirectAllRequestsTo` redirects every authorized website endpoint request without looking up an object. `HostName` is required and `Protocol` may be `http` or `https`.
+- `RoutingRules` are evaluated in order for normal index/error website configurations.
+- Prefix-only routing rules apply before object lookup.
+- `HttpErrorCodeReturnedEquals` rules apply after a generated website error, including missing objects that produce `404`.
+- Rules with both `KeyPrefixEquals` and `HttpErrorCodeReturnedEquals` require both conditions to match.
+- Redirect status codes `301`, `302`, `303`, `307`, and `308` are accepted. If omitted, Pithos stores and returns `301`.
+- A rule cannot specify both `ReplaceKeyWith` and `ReplaceKeyPrefixWith`.
+- Object-level `x-amz-website-redirect-location` still redirects successfully fetched objects when no routing rule has already matched.
+- `HEAD` website requests return the same redirect status and `Location` header as `GET`, without a response body.
+- When a request for `/<prefix>` misses but `/<prefix>/<index-suffix>` exists, Pithos returns a `302` redirect to `/<prefix>/`, matching browser-oriented S3 website directory behavior.
+
+Remaining difference from AWS: Pithos does not implement unrelated static website features beyond index/error documents, redirects, routing rules, and the directory index redirect behavior described above.
+
 ## Bucket Versioning
 
 Pithos supports S3 bucket versioning with the `?versioning` and `?versions` bucket subresources.
