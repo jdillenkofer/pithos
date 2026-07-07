@@ -36,7 +36,7 @@ func TestLifecycleNoncurrentVersionExpirationRoundTrips(t *testing.T) {
 func TestLifecycleTransitionElementsAreRecognized(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	body := `<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter></Filter><Transition><Days>1</Days><StorageClass>GLACIER</StorageClass></Transition><NoncurrentVersionTransition><NoncurrentDays>1</NoncurrentDays><StorageClass>GLACIER</StorageClass></NoncurrentVersionTransition></Rule></LifecycleConfiguration>`
+	body := `<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter></Filter><Transition><Days>1</Days><StorageClass>GLACIER</StorageClass></Transition><NoncurrentVersionTransition><NoncurrentDays>2</NoncurrentDays><NewerNoncurrentVersions>3</NewerNoncurrentVersions><StorageClass>DEEP_ARCHIVE</StorageClass></NoncurrentVersionTransition></Rule></LifecycleConfiguration>`
 
 	var request LifecycleConfiguration
 	require.NoError(t, xml.Unmarshal([]byte(body), &request))
@@ -44,7 +44,6 @@ func TestLifecycleTransitionElementsAreRecognized(t *testing.T) {
 	require.Len(t, request.Rules[0].Transitions, 1)
 	require.Len(t, request.Rules[0].NoncurrentVersionTransitions, 1)
 
-	request.Rules[0].NoncurrentVersionTransitions = nil
 	config, validationErr := convertLifecycleConfigurationFromXML(&request)
 	require.Nil(t, validationErr)
 	require.Nil(t, storage.ValidateBucketLifecycleConfiguration(config))
@@ -52,6 +51,16 @@ func TestLifecycleTransitionElementsAreRecognized(t *testing.T) {
 	require.Len(t, config.Rules[0].Transitions, 1)
 	require.Equal(t, int32(1), *config.Rules[0].Transitions[0].Days)
 	require.Equal(t, "GLACIER", config.Rules[0].Transitions[0].StorageClass)
+	require.Len(t, config.Rules[0].NoncurrentVersionTransitions, 1)
+	require.Equal(t, int32(2), *config.Rules[0].NoncurrentVersionTransitions[0].NoncurrentDays)
+	require.Equal(t, int32(3), *config.Rules[0].NoncurrentVersionTransitions[0].NewerNoncurrentVersions)
+	require.Equal(t, "DEEP_ARCHIVE", config.Rules[0].NoncurrentVersionTransitions[0].StorageClass)
+
+	response := convertLifecycleConfigurationToXML(config)
+	require.Len(t, response.Rules[0].NoncurrentVersionTransitions, 1)
+	require.Equal(t, int32(2), *response.Rules[0].NoncurrentVersionTransitions[0].NoncurrentDays)
+	require.Equal(t, int32(3), *response.Rules[0].NoncurrentVersionTransitions[0].NewerNoncurrentVersions)
+	require.Equal(t, "DEEP_ARCHIVE", response.Rules[0].NoncurrentVersionTransitions[0].StorageClass)
 }
 
 func TestLifecycleNoncurrentVersionExpirationToXML(t *testing.T) {

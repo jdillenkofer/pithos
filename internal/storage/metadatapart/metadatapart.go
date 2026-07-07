@@ -1480,7 +1480,17 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		object, err := mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
+		var object *metadatastore.Object
+		var err error
+		var versionID *string
+		if opts != nil {
+			versionID = opts.VersionID
+		}
+		if versionID != nil {
+			object, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, *versionID)
+		} else {
+			object, err = mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), bucketName, key)
+		}
 		if err != nil {
 			return err
 		}
@@ -1538,7 +1548,7 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			}
 		}
 
-		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, object.ETag, targetStorageClass, newParts)
+		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
 	})
 }
 

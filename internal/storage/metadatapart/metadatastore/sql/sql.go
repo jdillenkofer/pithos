@@ -1480,7 +1480,7 @@ func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx
 	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 }
 
-func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, expectedETag string, storageClass string, parts []metadatastore.Part) error {
+func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, versionID *string, expectedETag string, storageClass string, parts []metadatastore.Part) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.TransitionObject")
 	defer span.End()
 
@@ -1492,7 +1492,12 @@ func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, b
 		return metadatastore.ErrNoSuchBucket
 	}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	var objectEntity *object.Entity
+	if versionID != nil {
+		objectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKeyAndVersionID(ctx, tx, bucketName, key, *versionID)
+	} else {
+		objectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	}
 	if err != nil {
 		return err
 	}

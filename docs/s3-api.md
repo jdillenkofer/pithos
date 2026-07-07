@@ -78,12 +78,13 @@ Pithos supports the bucket lifecycle subresource (`PUT`/`GET`/`DELETE /<bucket>?
 - `AbortIncompleteMultipartUpload` (by `DaysAfterInitiation`).
 - `Transition` (by `Days` or `Date`, to a target `StorageClass`).
 - `NoncurrentVersionExpiration` (by `NoncurrentDays`, optionally keeping `NewerNoncurrentVersions`).
+- `NoncurrentVersionTransition` (by `NoncurrentDays`, optionally keeping `NewerNoncurrentVersions`, to a target `StorageClass`).
 
 A background reconciler enforces these rules; because day-based due times round to the next midnight UTC, enforcement is prompt but never earlier than S3 semantics allow.
 
 A `Transition` moves the object to the target storage class (relocating its part data to that class's part store) while preserving the object version and its metadata. Transitioned objects stay immediately readable — this is `STANDARD_IA`/`GLACIER_IR`-like behavior, not `GLACIER`/`DEEP_ARCHIVE` archival, regardless of the target class name. Transition validation follows S3: exactly one of `Days`/`Date`, `Days` may be `0`, `Date` must be midnight UTC, the target must be a recognized non-`STANDARD` class, targets must be distinct within a rule, and a `Days`-based transition must be strictly earlier than a `Days`-based expiration in the same rule. When an object is due for both expiration and transition, expiration wins.
 
-`NoncurrentVersionTransition` is rejected with `NotImplemented`.
+`NoncurrentVersionExpiration` and `NoncurrentVersionTransition` use S3 noncurrent-version age semantics: the age clock starts when a newer version makes the version noncurrent. `NewerNoncurrentVersions`, when set, must be between 1 and 100 and requires a `Filter`; those newer noncurrent versions are retained from expiration or transition. Noncurrent transition targets must be recognized non-`STANDARD` storage classes, targets must be distinct within a rule, and a day-based noncurrent transition must be strictly earlier than day-based noncurrent expiration in the same rule. When a noncurrent version is due for both expiration and transition, expiration wins.
 
 ## Bucket Versioning
 

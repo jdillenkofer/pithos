@@ -539,10 +539,11 @@ type LifecycleConfigurationNoncurrentVersionExpiration struct {
 	NewerNoncurrentVersions *int32 `xml:"NewerNoncurrentVersions"`
 }
 
-// lifecycleUnsupportedElement captures the presence of lifecycle rule elements
-// pithos does not support (noncurrent-version actions) so the PUT handler can
-// reject them explicitly instead of silently dropping them.
-type lifecycleUnsupportedElement struct{}
+type LifecycleConfigurationNoncurrentVersionTransition struct {
+	NoncurrentDays          *int32 `xml:"NoncurrentDays"`
+	NewerNoncurrentVersions *int32 `xml:"NewerNoncurrentVersions"`
+	StorageClass            string `xml:"StorageClass"`
+}
 
 type LifecycleConfigurationRule struct {
 	ID                             *string                                               `xml:"ID"`
@@ -552,7 +553,7 @@ type LifecycleConfigurationRule struct {
 	Expiration                     *LifecycleConfigurationExpiration                     `xml:"Expiration"`
 	AbortIncompleteMultipartUpload *LifecycleConfigurationAbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload"`
 	Transitions                    []LifecycleConfigurationTransition                    `xml:"Transition"`
-	NoncurrentVersionTransitions   []lifecycleUnsupportedElement                         `xml:"NoncurrentVersionTransition"`
+	NoncurrentVersionTransitions   []LifecycleConfigurationNoncurrentVersionTransition   `xml:"NoncurrentVersionTransition"`
 	NoncurrentVersionExpiration    *LifecycleConfigurationNoncurrentVersionExpiration    `xml:"NoncurrentVersionExpiration"`
 }
 
@@ -3836,6 +3837,13 @@ func convertLifecycleConfigurationFromXML(request *LifecycleConfiguration) (*sto
 			}
 			converted.Transitions = append(converted.Transitions, convertedTransition)
 		}
+		for _, transition := range rule.NoncurrentVersionTransitions {
+			converted.NoncurrentVersionTransitions = append(converted.NoncurrentVersionTransitions, storage.LifecycleNoncurrentVersionTransition{
+				NoncurrentDays:          transition.NoncurrentDays,
+				NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+				StorageClass:            transition.StorageClass,
+			})
+		}
 		if rule.NoncurrentVersionExpiration != nil {
 			converted.NoncurrentVersionExpiration = &storage.LifecycleNoncurrentVersionExpiration{
 				NoncurrentDays:          rule.NoncurrentVersionExpiration.NoncurrentDays,
@@ -3902,6 +3910,13 @@ func convertLifecycleConfigurationToXML(config *storage.BucketLifecycleConfigura
 				convertedTransition.Date = ptrutils.ToPtr(transition.Date.UTC().Format(time.RFC3339))
 			}
 			converted.Transitions = append(converted.Transitions, convertedTransition)
+		}
+		for _, transition := range rule.NoncurrentVersionTransitions {
+			converted.NoncurrentVersionTransitions = append(converted.NoncurrentVersionTransitions, LifecycleConfigurationNoncurrentVersionTransition{
+				NoncurrentDays:          transition.NoncurrentDays,
+				NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+				StorageClass:            transition.StorageClass,
+			})
 		}
 		if rule.NoncurrentVersionExpiration != nil {
 			converted.NoncurrentVersionExpiration = &LifecycleConfigurationNoncurrentVersionExpiration{
@@ -3974,13 +3989,6 @@ func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeMalformedXML(w, r)
 		return
-	}
-
-	for _, rule := range request.Rules {
-		if len(rule.NoncurrentVersionTransitions) > 0 {
-			writeNotImplemented(w, r, "Transition actions are not supported")
-			return
-		}
 	}
 
 	config, validationErr := convertLifecycleConfigurationFromXML(&request)

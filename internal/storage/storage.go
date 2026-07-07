@@ -512,6 +512,7 @@ type LifecycleExpiration = metadatastore.LifecycleExpiration
 type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
 type LifecycleTransition = metadatastore.LifecycleTransition
 type LifecycleNoncurrentVersionExpiration = metadatastore.LifecycleNoncurrentVersionExpiration
+type LifecycleNoncurrentVersionTransition = metadatastore.LifecycleNoncurrentVersionTransition
 type LifecycleRule = metadatastore.LifecycleRule
 type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
 
@@ -573,12 +574,13 @@ type ObjectManager interface {
 	DeleteObject(ctx context.Context, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	DeleteObjects(ctx context.Context, bucketName BucketName, entries []DeleteObjectsInputEntry) (*DeleteObjectsResult, error)
 	// TransitionObjectStorageClass changes the storage class of the current
-	// object version at key, moving its part data to the part store mapped to
-	// the target class. The object version and its metadata are preserved; the
-	// object stays immediately readable (storage classes are labels, no
-	// archive/restore). opts.IfMatchETag, when set, guards against a concurrent
-	// replacement (ErrPreconditionFailed on mismatch). Returns ErrNoSuchKey
-	// when no current object exists.
+	// object version at key, or of opts.VersionID when set, moving its part data
+	// to the part store mapped to the target class. The object version and its
+	// metadata are preserved; the object stays immediately readable (storage
+	// classes are labels, no archive/restore). opts.IfMatchETag, when set,
+	// guards against a concurrent replacement/update (ErrPreconditionFailed on
+	// mismatch). Returns ErrNoSuchKey when no matching non-delete-marker object
+	// exists.
 	TransitionObjectStorageClass(ctx context.Context, bucketName BucketName, key ObjectKey, targetStorageClass string, opts *TransitionObjectStorageClassOptions) error
 }
 
@@ -586,9 +588,12 @@ type ObjectManager interface {
 // TransitionObjectStorageClass. A nil pointer is equivalent to an
 // unconditional transition.
 type TransitionObjectStorageClassOptions struct {
-	// IfMatchETag, when non-nil, requires the current object's ETag to equal
+	// IfMatchETag, when non-nil, requires the selected object's ETag to equal
 	// this value; otherwise ErrPreconditionFailed is returned.
 	IfMatchETag *string
+	// VersionID selects an explicit object version. When nil, the current
+	// version at key is selected.
+	VersionID *string
 }
 
 // MultipartUploadManager manages multipart upload operations

@@ -548,6 +548,85 @@ func TestValidateLifecycleRejectsInvalidNoncurrentVersionExpiration(t *testing.T
 	assert.Equal(t, "InvalidArgument", err.Code)
 }
 
+func TestValidateLifecycleAcceptsNoncurrentVersionTransition(t *testing.T) {
+	config := &BucketLifecycleConfiguration{Rules: []LifecycleRule{{
+		Status: LifecycleRuleStatusEnabled,
+		Filter: &LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+		NoncurrentVersionTransitions: []LifecycleNoncurrentVersionTransition{{
+			NoncurrentDays:          ptrutils.ToPtr(int32(3)),
+			NewerNoncurrentVersions: ptrutils.ToPtr(int32(2)),
+			StorageClass:            "GLACIER",
+		}},
+	}}}
+
+	assert.Nil(t, ValidateBucketLifecycleConfiguration(config))
+}
+
+func TestValidateLifecycleRejectsInvalidNoncurrentVersionTransition(t *testing.T) {
+	baseRule := func() LifecycleRule {
+		return LifecycleRule{
+			Status: LifecycleRuleStatusEnabled,
+			Filter: &LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionTransitions: []LifecycleNoncurrentVersionTransition{{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+				StorageClass:   "GLACIER",
+			}},
+		}
+	}
+
+	rule := baseRule()
+	rule.NoncurrentVersionTransitions[0].NoncurrentDays = nil
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "MalformedXML", err.Code)
+
+	for _, days := range []int32{0, -1} {
+		rule = baseRule()
+		rule.NoncurrentVersionTransitions[0].NoncurrentDays = ptrutils.ToPtr(days)
+		err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+		require.NotNil(t, err)
+		assert.Equal(t, "InvalidArgument", err.Code)
+	}
+
+	for _, storageClass := range []string{"", "NOT_A_CLASS", StorageClassStandard} {
+		rule = baseRule()
+		rule.NoncurrentVersionTransitions[0].StorageClass = storageClass
+		err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+		require.NotNil(t, err)
+	}
+
+	rule = baseRule()
+	rule.NoncurrentVersionTransitions = append(rule.NoncurrentVersionTransitions, LifecycleNoncurrentVersionTransition{
+		NoncurrentDays: ptrutils.ToPtr(int32(7)),
+		StorageClass:   "GLACIER",
+	})
+	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+
+	for _, newerNoncurrentVersions := range []int32{0, -1, 101} {
+		rule = baseRule()
+		rule.NoncurrentVersionTransitions[0].NewerNoncurrentVersions = ptrutils.ToPtr(newerNoncurrentVersions)
+		err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+		require.NotNil(t, err)
+		assert.Equal(t, "InvalidArgument", err.Code)
+	}
+
+	rule = baseRule()
+	rule.Filter = nil
+	rule.Prefix = ptrutils.ToPtr("logs/")
+	rule.NoncurrentVersionTransitions[0].NewerNoncurrentVersions = ptrutils.ToPtr(int32(2))
+	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+
+	rule = baseRule()
+	rule.NoncurrentVersionExpiration = &LifecycleNoncurrentVersionExpiration{NoncurrentDays: ptrutils.ToPtr(int32(3))}
+	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
 func TestLifecycleNoncurrentExpirationDueTimeRoundsToNextMidnightUTC(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

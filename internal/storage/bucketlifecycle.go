@@ -85,7 +85,7 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 			return err
 		}
 	}
-	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 && rule.NoncurrentVersionExpiration == nil {
+	if rule.Expiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 && rule.NoncurrentVersionExpiration == nil && len(rule.NoncurrentVersionTransitions) == 0 {
 		return invalidLifecycleRequest("At least one action needs to be specified in a rule")
 	}
 	if rule.Expiration != nil {
@@ -109,6 +109,11 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 	}
 	if rule.NoncurrentVersionExpiration != nil {
 		if err := validateLifecycleNoncurrentVersionExpiration(rule); err != nil {
+			return err
+		}
+	}
+	if len(rule.NoncurrentVersionTransitions) > 0 {
+		if err := validateLifecycleNoncurrentVersionTransitions(rule); err != nil {
 			return err
 		}
 	}
@@ -171,6 +176,44 @@ func validateLifecycleNoncurrentVersionExpiration(rule *LifecycleRule) *Lifecycl
 		}
 		if rule.Filter == nil {
 			return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action requires a Filter")
+		}
+	}
+	return nil
+}
+
+func validateLifecycleNoncurrentVersionTransitions(rule *LifecycleRule) *LifecycleValidationError {
+	seenTargets := map[string]struct{}{}
+	for i := range rule.NoncurrentVersionTransitions {
+		transition := &rule.NoncurrentVersionTransitions[i]
+		if transition.NoncurrentDays == nil {
+			return malformedLifecycleXML("NoncurrentVersionTransition action must specify NoncurrentDays")
+		}
+		if *transition.NoncurrentDays <= 0 {
+			return invalidLifecycleArgument("'NoncurrentDays' for NoncurrentVersionTransition action must be a positive integer")
+		}
+		if transition.StorageClass == "" {
+			return malformedLifecycleXML("NoncurrentVersionTransition action must specify a StorageClass")
+		}
+		if !IsValidStorageClass(transition.StorageClass) {
+			return invalidLifecycleArgument("'StorageClass' must be a valid storage class")
+		}
+		if transition.StorageClass == StorageClassStandard {
+			return invalidLifecycleArgument("'StorageClass' for NoncurrentVersionTransition action must not be STANDARD")
+		}
+		if _, ok := seenTargets[transition.StorageClass]; ok {
+			return invalidLifecycleArgument("'StorageClass' must be different for 'NoncurrentVersionTransition' actions in same 'Rule'")
+		}
+		seenTargets[transition.StorageClass] = struct{}{}
+		if transition.NewerNoncurrentVersions != nil {
+			if *transition.NewerNoncurrentVersions < 1 || *transition.NewerNoncurrentVersions > 100 {
+				return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionTransition action must be between 1 and 100")
+			}
+			if rule.Filter == nil {
+				return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionTransition action requires a Filter")
+			}
+		}
+		if rule.NoncurrentVersionExpiration != nil && rule.NoncurrentVersionExpiration.NoncurrentDays != nil && *transition.NoncurrentDays >= *rule.NoncurrentVersionExpiration.NoncurrentDays {
+			return invalidLifecycleArgument("'NoncurrentDays' in the NoncurrentVersionExpiration action must be greater than 'NoncurrentDays' in the NoncurrentVersionTransition action")
 		}
 	}
 	return nil
@@ -415,5 +458,15 @@ func LifecycleNoncurrentExpirationDueTime(rule *LifecycleRule, versionLastModifi
 		return nil
 	}
 	due := lifecycleNextMidnightUTC(versionLastModified.AddDate(0, 0, int(*rule.NoncurrentVersionExpiration.NoncurrentDays)))
+	return &due
+}
+
+// LifecycleNoncurrentTransitionDueTime returns the time at which a noncurrent
+// object version becomes due for the given NoncurrentVersionTransition action.
+func LifecycleNoncurrentTransitionDueTime(transition *LifecycleNoncurrentVersionTransition, versionLastModified time.Time) *time.Time {
+	if transition.NoncurrentDays == nil {
+		return nil
+	}
+	due := lifecycleNextMidnightUTC(versionLastModified.AddDate(0, 0, int(*transition.NoncurrentDays)))
 	return &due
 }

@@ -592,6 +592,10 @@ func (rs *s3ClientStorage) TransitionObjectStorageClass(ctx context.Context, buc
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.TransitionObjectStorageClass")
 	defer span.End()
 
+	if opts != nil && opts.VersionID != nil {
+		return storage.ErrNotImplemented
+	}
+
 	// A remote S3 backend changes an object's storage class via an in-place
 	// self copy that keeps the existing metadata.
 	input := &s3.CopyObjectInput{
@@ -1263,12 +1267,45 @@ func convertLifecycleTransitionsToSdk(transitions []storage.LifecycleTransition)
 	return converted
 }
 
+func convertLifecycleNoncurrentVersionTransitionsFromSdk(transitions []types.NoncurrentVersionTransition) []storage.LifecycleNoncurrentVersionTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]storage.LifecycleNoncurrentVersionTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, storage.LifecycleNoncurrentVersionTransition{
+			NoncurrentDays:          transition.NoncurrentDays,
+			NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+			StorageClass:            string(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
+func convertLifecycleNoncurrentVersionTransitionsToSdk(transitions []storage.LifecycleNoncurrentVersionTransition) []types.NoncurrentVersionTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]types.NoncurrentVersionTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, types.NoncurrentVersionTransition{
+			NoncurrentDays:          transition.NoncurrentDays,
+			NewerNoncurrentVersions: transition.NewerNoncurrentVersions,
+			StorageClass:            types.TransitionStorageClass(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
 func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule {
 	converted := storage.LifecycleRule{
-		ID:          rule.ID,
-		Status:      string(rule.Status),
-		Prefix:      rule.Prefix,
-		Transitions: convertLifecycleTransitionsFromSdk(rule.Transitions),
+		ID:                           rule.ID,
+		Status:                       string(rule.Status),
+		Prefix:                       rule.Prefix,
+		Transitions:                  convertLifecycleTransitionsFromSdk(rule.Transitions),
+		NoncurrentVersionTransitions: convertLifecycleNoncurrentVersionTransitionsFromSdk(rule.NoncurrentVersionTransitions),
 	}
 	if rule.Filter != nil {
 		filter := &storage.LifecycleFilter{
@@ -1313,10 +1350,11 @@ func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule
 
 func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
 	converted := types.LifecycleRule{
-		ID:          rule.ID,
-		Status:      types.ExpirationStatus(rule.Status),
-		Prefix:      rule.Prefix,
-		Transitions: convertLifecycleTransitionsToSdk(rule.Transitions),
+		ID:                           rule.ID,
+		Status:                       types.ExpirationStatus(rule.Status),
+		Prefix:                       rule.Prefix,
+		Transitions:                  convertLifecycleTransitionsToSdk(rule.Transitions),
+		NoncurrentVersionTransitions: convertLifecycleNoncurrentVersionTransitionsToSdk(rule.NoncurrentVersionTransitions),
 	}
 	if rule.Filter != nil {
 		filter := &types.LifecycleRuleFilter{
