@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -146,6 +147,7 @@ func (m *lifecycleReconcilerStorageMiddleware) ReconcileOnce(ctx context.Context
 
 func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration, cancelTask *atomic.Bool) {
 	expirationRules := []*storage.LifecycleRule{}
+	noncurrentExpirationRules := []*storage.LifecycleRule{}
 	abortRules := []*storage.LifecycleRule{}
 	transitionRules := []*storage.LifecycleRule{}
 	for i := range config.Rules {
@@ -155,6 +157,9 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 		}
 		if rule.Expiration != nil && (rule.Expiration.Days != nil || rule.Expiration.Date != nil) {
 			expirationRules = append(expirationRules, rule)
+		}
+		if rule.NoncurrentVersionExpiration != nil {
+			noncurrentExpirationRules = append(noncurrentExpirationRules, rule)
 		}
 		if rule.AbortIncompleteMultipartUpload != nil {
 			abortRules = append(abortRules, rule)
@@ -169,11 +174,106 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 	if len(expirationRules) > 0 {
 		m.expireObjects(ctx, bucketName, expirationRules, cancelTask)
 	}
+	if len(noncurrentExpirationRules) > 0 {
+		m.expireNoncurrentObjectVersions(ctx, bucketName, noncurrentExpirationRules, cancelTask)
+	}
 	if len(transitionRules) > 0 {
 		m.transitionObjects(ctx, bucketName, transitionRules, cancelTask)
 	}
 	if len(abortRules) > 0 {
 		m.abortIncompleteUploads(ctx, bucketName, abortRules, cancelTask)
+	}
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersions(ctx context.Context, bucketName storage.BucketName, rules []*storage.LifecycleRule, cancelTask *atomic.Bool) {
+	versionsByKey := map[string][]storage.ObjectVersion{}
+	var keyMarker, versionIDMarker *string
+	for {
+		if isCancelled(cancelTask) {
+			return
+		}
+		listResult, err := m.Next.ListObjectVersions(ctx, bucketName, storage.ListObjectVersionsOptions{
+			KeyMarker:       keyMarker,
+			VersionIDMarker: versionIDMarker,
+			MaxKeys:         listPageSize,
+		})
+		if err != nil {
+			slog.Warn("lifecycle reconciler failed to list object versions", "bucket", bucketName.String(), "err", err)
+			return
+		}
+		for _, version := range listResult.Versions {
+			versionsByKey[version.Key.String()] = append(versionsByKey[version.Key.String()], version)
+		}
+		if !listResult.IsTruncated {
+			break
+		}
+		keyMarker = listResult.NextKeyMarker
+		versionIDMarker = listResult.NextVersionIDMarker
+		if keyMarker == nil {
+			break
+		}
+	}
+
+	for _, versions := range versionsByKey {
+		if isCancelled(cancelTask) {
+			return
+		}
+		sort.SliceStable(versions, func(i, j int) bool {
+			return versions[i].LastModified.After(versions[j].LastModified)
+		})
+		newerNoncurrentVersions := 0
+		for i := range versions {
+			if isCancelled(cancelTask) {
+				return
+			}
+			version := &versions[i]
+			if version.IsLatest || version.IsDeleteMarker {
+				continue
+			}
+			m.expireNoncurrentObjectVersionIfDue(ctx, bucketName, version, newerNoncurrentVersions, rules)
+			newerNoncurrentVersions++
+		}
+	}
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDue(ctx context.Context, bucketName storage.BucketName, version *storage.ObjectVersion, newerNoncurrentVersions int, rules []*storage.LifecycleRule) {
+	now := m.now()
+	var tags map[string]string
+	tagsFetched := false
+	for _, rule := range rules {
+		expiration := rule.NoncurrentVersionExpiration
+		if expiration == nil {
+			continue
+		}
+		dueTime := storage.LifecycleNoncurrentExpirationDueTime(rule, version.LastModified)
+		if dueTime == nil || now.Before(*dueTime) {
+			continue
+		}
+		if expiration.NewerNoncurrentVersions != nil && newerNoncurrentVersions <= int(*expiration.NewerNoncurrentVersions) {
+			continue
+		}
+		if storage.LifecycleRuleNeedsObjectTags(rule) && !tagsFetched {
+			fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, version.Key, &storage.ObjectTaggingOptions{VersionID: &version.VersionID})
+			if err != nil {
+				slog.Warn("lifecycle reconciler failed to fetch object version tags", "bucket", bucketName.String(), "key", version.Key.String(), "versionId", version.VersionID, "err", err)
+				continue
+			}
+			tags = fetchedTags
+			tagsFetched = true
+		}
+		if !storage.LifecycleRuleMatchesObject(rule, version.Key.String(), version.Size, tags) {
+			continue
+		}
+		_, err := m.Next.DeleteObject(ctx, bucketName, version.Key, &storage.DeleteObjectOptions{VersionID: &version.VersionID})
+		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+			return
+		}
+		if err != nil {
+			slog.Warn("lifecycle reconciler failed to expire noncurrent object version", "bucket", bucketName.String(), "key", version.Key.String(), "versionId", version.VersionID, "err", err)
+			return
+		}
+		slog.Info("lifecycle reconciler expired noncurrent object version", "bucket", bucketName.String(), "key", version.Key.String(), "versionId", version.VersionID)
+		return
 	}
 }
 
@@ -216,7 +316,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectIfDue(ctx context.Con
 		// The listing may not carry the tag set on every backend; fetch it
 		// lazily the first time a tag-based rule has to be evaluated.
 		if storage.LifecycleRuleNeedsObjectTags(rule) && !tagsFetched {
-			fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, object.Key)
+			fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, object.Key, nil)
 			if err != nil {
 				slog.Warn("lifecycle reconciler failed to fetch object tags", "bucket", bucketName.String(), "key", object.Key.String(), "err", err)
 				continue
@@ -285,7 +385,7 @@ func (m *lifecycleReconcilerStorageMiddleware) transitionObjectIfDue(ctx context
 	for _, rule := range rules {
 		matches := func() bool {
 			if storage.LifecycleRuleNeedsObjectTags(rule) && !tagsFetched {
-				fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, object.Key)
+				fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, object.Key, nil)
 				if err != nil {
 					slog.Warn("lifecycle reconciler failed to fetch object tags", "bucket", bucketName.String(), "key", object.Key.String(), "err", err)
 					return false

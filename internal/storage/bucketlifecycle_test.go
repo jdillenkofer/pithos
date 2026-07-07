@@ -484,3 +484,51 @@ func TestLifecycleTransitionDueTimeUsesDateVerbatim(t *testing.T) {
 	require.NotNil(t, due)
 	assert.Equal(t, date, *due)
 }
+
+func TestValidateLifecycleAcceptsNoncurrentVersionExpiration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	config := &BucketLifecycleConfiguration{Rules: []LifecycleRule{{
+		Status: LifecycleRuleStatusEnabled,
+		Filter: &LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+		NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{
+			NoncurrentDays:          ptrutils.ToPtr(int32(30)),
+			NewerNoncurrentVersions: ptrutils.ToPtr(int32(2)),
+		},
+	}}}
+	require.Nil(t, ValidateBucketLifecycleConfiguration(config))
+}
+
+func TestValidateLifecycleRejectsInvalidNoncurrentVersionExpiration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := LifecycleRule{
+		Status: LifecycleRuleStatusEnabled,
+		Filter: &LifecycleFilter{},
+		NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{
+			NoncurrentDays: ptrutils.ToPtr(int32(0)),
+		},
+	}
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+
+	rule.NoncurrentVersionExpiration = &LifecycleNoncurrentVersionExpiration{
+		NewerNoncurrentVersions: ptrutils.ToPtr(int32(-1)),
+	}
+	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestLifecycleNoncurrentExpirationDueTimeRoundsToNextMidnightUTC(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := LifecycleRule{
+		NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{NoncurrentDays: ptrutils.ToPtr(int32(3))},
+	}
+	created := time.Date(2014, 1, 15, 10, 30, 0, 0, time.UTC)
+	due := LifecycleNoncurrentExpirationDueTime(&rule, created)
+	require.NotNil(t, due)
+	assert.Equal(t, time.Date(2014, 1, 19, 0, 0, 0, 0, time.UTC), *due)
+}

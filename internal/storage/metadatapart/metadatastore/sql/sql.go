@@ -1411,10 +1411,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	return &metadatastore.DeleteObjectResult{}, nil
 }
 
-func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) (map[string]string, error) {
-	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetObjectTagging")
-	defer span.End()
-
+func (sms *sqlMetadataStore) findObjectForTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.ObjectTaggingOptions) (*object.Entity, error) {
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
@@ -1422,8 +1419,17 @@ func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, b
 	if !*exists {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
+	if opts != nil && opts.VersionID != nil {
+		return sms.objectRepository.FindObjectByBucketNameAndKeyAndVersionID(ctx, tx, bucketName, key, *opts.VersionID)
+	}
+	return sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+}
 
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.ObjectTaggingOptions) (map[string]string, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetObjectTagging")
+	defer span.End()
+
+	objectEntity, err := sms.findObjectForTagging(ctx, tx, bucketName, key, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1434,19 +1440,11 @@ func (sms *sqlMetadataStore) GetObjectTagging(ctx context.Context, tx *sql.Tx, b
 	return sms.loadObjectTags(ctx, tx, *objectEntity.Id)
 }
 
-func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, tags map[string]string) error {
+func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, tags map[string]string, opts *metadatastore.ObjectTaggingOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObjectTagging")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
-	if err != nil {
-		return err
-	}
-	if !*exists {
-		return metadatastore.ErrNoSuchBucket
-	}
-
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	objectEntity, err := sms.findObjectForTagging(ctx, tx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}
@@ -1463,19 +1461,11 @@ func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, b
 	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 }
 
-func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey) error {
+func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.ObjectTaggingOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObjectTagging")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
-	if err != nil {
-		return err
-	}
-	if !*exists {
-		return metadatastore.ErrNoSuchBucket
-	}
-
-	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	objectEntity, err := sms.findObjectForTagging(ctx, tx, bucketName, key, opts)
 	if err != nil {
 		return err
 	}

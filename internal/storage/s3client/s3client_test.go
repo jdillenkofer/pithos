@@ -19,7 +19,9 @@ func TestCopySourceValueEscapesSourceKey(t *testing.T) {
 	srcBucket := storage.MustNewBucketName("source-bucket")
 	srcKey := storage.MustNewObjectKey("folder/a b#c%25.txt")
 
-	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt", copySourceValue(srcBucket, srcKey))
+	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt", copySourceValue(srcBucket, srcKey, nil))
+	versionID := "v 1/2"
+	require.Equal(t, "source-bucket/folder%2Fa%20b%23c%2525.txt?versionId=v+1%2F2", copySourceValue(srcBucket, srcKey, &versionID))
 }
 
 func TestByteRangeToAWSRangeUsesExactSuffixLength(t *testing.T) {

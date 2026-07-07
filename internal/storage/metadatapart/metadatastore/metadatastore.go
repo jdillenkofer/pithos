@@ -526,6 +526,14 @@ type LifecycleTransition struct {
 	StorageClass string
 }
 
+// LifecycleNoncurrentVersionExpiration describes deletion of noncurrent object
+// versions after they have aged past NoncurrentDays. NewerNoncurrentVersions,
+// when set, keeps that many newer noncurrent versions per key.
+type LifecycleNoncurrentVersionExpiration struct {
+	NoncurrentDays          *int32
+	NewerNoncurrentVersions *int32
+}
+
 // LifecycleRule is a single rule of a bucket lifecycle configuration.
 type LifecycleRule struct {
 	ID     *string
@@ -537,6 +545,7 @@ type LifecycleRule struct {
 	Expiration                     *LifecycleExpiration
 	AbortIncompleteMultipartUpload *LifecycleAbortIncompleteMultipartUpload
 	Transitions                    []LifecycleTransition
+	NoncurrentVersionExpiration    *LifecycleNoncurrentVersionExpiration
 }
 
 type BucketLifecycleConfiguration struct {
@@ -576,19 +585,23 @@ type ObjectStore interface {
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) (map[string]string, error)
 	// PutObjectTagging replaces the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	PutObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, tags map[string]string, opts *ObjectTaggingOptions) error
 	// DeleteObjectTagging removes the entire tag set of the object at key.
 	// Returns ErrNoSuchKey if the object does not exist.
-	DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) error
+	DeleteObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) error
 	// TransitionObject updates the current object at key to the given storage
 	// class and replaces its part rows with parts (the same content under new
 	// part ids in the target store). expectedETag must match the current
 	// object's ETag; a concurrent replacement surfaces as ErrPreconditionFailed.
 	// Returns ErrNoSuchKey when no current non-delete-marker object exists.
 	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, expectedETag string, storageClass string, parts []Part) error
+}
+
+type ObjectTaggingOptions struct {
+	VersionID *string
 }
 
 type MultipartStore interface {

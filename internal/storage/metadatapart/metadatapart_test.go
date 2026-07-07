@@ -289,6 +289,127 @@ func versionIDsForKey(t *testing.T, st *metadataPartStorage, bucket storage.Buck
 	return latestVersionID, olderVersionIDs
 }
 
+func enableVersioning(t *testing.T, st *metadataPartStorage, bucket storage.BucketName) {
+	t.Helper()
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, st.PutBucketVersioningConfiguration(context.Background(), bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+}
+
+func TestCopyObjectCopiesExplicitSourceVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	enableVersioning(t, st, bucket)
+
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("old")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("new")), nil, nil)
+	require.NoError(t, err)
+	_, olderVersions := versionIDsForKey(t, st, bucket, srcKey)
+	require.Len(t, olderVersions, 1)
+
+	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, &storage.CopyObjectOptions{SourceVersionID: &olderVersions[0]})
+	require.NoError(t, err)
+
+	assert.Equal(t, "old", readObjectContent(t, st, bucket, dstKey, nil))
+}
+
+func TestUploadPartCopyCopiesExplicitSourceVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	enableVersioning(t, st, bucket)
+
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("old")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("new")), nil, nil)
+	require.NoError(t, err)
+	_, olderVersions := versionIDsForKey(t, st, bucket, srcKey)
+	require.Len(t, olderVersions, 1)
+
+	createResult, err := st.CreateMultipartUpload(ctx, bucket, dstKey, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, createResult.UploadId, 1, &storage.UploadPartCopyOptions{SourceVersionID: &olderVersions[0]})
+	require.NoError(t, err)
+	_, err = st.CompleteMultipartUpload(ctx, bucket, dstKey, createResult.UploadId, nil, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, "old", readObjectContent(t, st, bucket, dstKey, nil))
+}
+
+func TestObjectTaggingTargetsExplicitVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	enableVersioning(t, st, bucket)
+
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("old")), nil, &storage.PutObjectOptions{Tags: map[string]string{"version": "old"}})
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("new")), nil, &storage.PutObjectOptions{Tags: map[string]string{"version": "new"}})
+	require.NoError(t, err)
+	latestVersion, olderVersions := versionIDsForKey(t, st, bucket, key)
+	require.Len(t, olderVersions, 1)
+
+	err = st.PutObjectTagging(ctx, bucket, key, map[string]string{"version": "retagged-old"}, &storage.ObjectTaggingOptions{VersionID: &olderVersions[0]})
+	require.NoError(t, err)
+
+	oldTags, err := st.GetObjectTagging(ctx, bucket, key, &storage.ObjectTaggingOptions{VersionID: &olderVersions[0]})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"version": "retagged-old"}, oldTags)
+	latestTags, err := st.GetObjectTagging(ctx, bucket, key, &storage.ObjectTaggingOptions{VersionID: &latestVersion})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"version": "new"}, latestTags)
+
+	err = st.DeleteObjectTagging(ctx, bucket, key, &storage.ObjectTaggingOptions{VersionID: &olderVersions[0]})
+	require.NoError(t, err)
+	oldTags, err = st.GetObjectTagging(ctx, bucket, key, &storage.ObjectTaggingOptions{VersionID: &olderVersions[0]})
+	require.NoError(t, err)
+	assert.Empty(t, oldTags)
+	latestTags, err = st.GetObjectTagging(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"version": "new"}, latestTags)
+}
+
+func TestObjectTaggingExplicitDeleteMarkerReturnsMethodNotAllowed(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	enableVersioning(t, st, bucket)
+
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("data")), nil, nil)
+	require.NoError(t, err)
+	deleteResult, err := st.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, deleteResult.VersionID)
+
+	_, err = st.GetObjectTagging(ctx, bucket, key, &storage.ObjectTaggingOptions{VersionID: deleteResult.VersionID})
+	var methodNotAllowed *storage.VersionDeleteMarkerMethodNotAllowedError
+	require.ErrorAs(t, err, &methodNotAllowed)
+	assert.Equal(t, *deleteResult.VersionID, methodNotAllowed.VersionID)
+}
+
 func TestConditionalDeleteObject_MatchingETag(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()

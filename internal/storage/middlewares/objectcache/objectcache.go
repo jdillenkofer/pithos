@@ -320,16 +320,16 @@ func (m *objectCacheStorageMiddleware) CopyObject(ctx context.Context, srcBucket
 	return result, err
 }
 
-func (m *objectCacheStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (m *objectCacheStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	// Cached Object metadata includes the tag set (and drives the
 	// x-amz-tagging-count header), so tag mutations must invalidate it.
-	err := m.Next.PutObjectTagging(ctx, bucketName, key, tags)
+	err := m.Next.PutObjectTagging(ctx, bucketName, key, tags, opts)
 	m.invalidateObjectCaches(ctx, bucketName, key)
 	return err
 }
 
-func (m *objectCacheStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
-	err := m.Next.DeleteObjectTagging(ctx, bucketName, key)
+func (m *objectCacheStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
+	err := m.Next.DeleteObjectTagging(ctx, bucketName, key, opts)
 	m.invalidateObjectCaches(ctx, bucketName, key)
 	return err
 }

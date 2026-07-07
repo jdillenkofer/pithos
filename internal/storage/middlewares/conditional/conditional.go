@@ -330,28 +330,28 @@ func (csm *conditionalStorageMiddleware) DeleteObjects(ctx context.Context, buck
 	return s.DeleteObjects(ctx, bucketName, entries)
 }
 
-func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
+func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.GetObjectTagging(ctx, bucketName, key)
+	return s.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
-func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
+func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.PutObjectTagging(ctx, bucketName, key, tags)
+	return s.PutObjectTagging(ctx, bucketName, key, tags, opts)
 }
 
-func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
+func (csm *conditionalStorageMiddleware) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.DeleteObjectTagging")
 	defer span.End()
 
 	s := csm.lookupStorage(bucketName)
-	return s.DeleteObjectTagging(ctx, bucketName, key)
+	return s.DeleteObjectTagging(ctx, bucketName, key, opts)
 }
 
 func (csm *conditionalStorageMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {

@@ -201,6 +201,8 @@ type CopySourceConditions struct {
 // CopyObjectOptions holds options for a server-side CopyObject. A nil pointer is
 // equivalent to a plain COPY of the whole object with no preconditions.
 type CopyObjectOptions struct {
+	// SourceVersionID, when non-nil, copies this exact source object version.
+	SourceVersionID *string
 	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
 	// ContentType and Metadata are used for the destination instead of the
 	// source's content type and metadata.
@@ -239,6 +241,8 @@ type CopyObjectResult struct {
 
 // UploadPartCopyOptions holds options for a server-side UploadPartCopy.
 type UploadPartCopyOptions struct {
+	// SourceVersionID, when non-nil, copies this exact source object version.
+	SourceVersionID *string
 	// Range, when non-nil, copies only the given byte range of the source into the part.
 	Range *ByteRange
 	// CopySourceConditions holds preconditions evaluated against the source object.
@@ -504,6 +508,7 @@ type LifecycleFilter = metadatastore.LifecycleFilter
 type LifecycleExpiration = metadatastore.LifecycleExpiration
 type LifecycleAbortIncompleteMultipartUpload = metadatastore.LifecycleAbortIncompleteMultipartUpload
 type LifecycleTransition = metadatastore.LifecycleTransition
+type LifecycleNoncurrentVersionExpiration = metadatastore.LifecycleNoncurrentVersionExpiration
 type LifecycleRule = metadatastore.LifecycleRule
 type BucketLifecycleConfiguration = metadatastore.BucketLifecycleConfiguration
 
@@ -529,13 +534,17 @@ type BucketLifecycleManager interface {
 type TaggingManager interface {
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) (map[string]string, error)
+	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) (map[string]string, error)
 	// PutObjectTagging replaces the entire tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
-	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string) error
+	PutObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, tags map[string]string, opts *ObjectTaggingOptions) error
 	// DeleteObjectTagging removes the entire tag set of the object at key.
 	// Returns ErrNoSuchKey if the object does not exist.
-	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey) error
+	DeleteObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) error
+}
+
+type ObjectTaggingOptions struct {
+	VersionID *string
 }
 
 // ObjectManager manages object operations

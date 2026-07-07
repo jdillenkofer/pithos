@@ -93,16 +93,16 @@ func (d *DelegatingStorage) DeleteBucketLifecycleConfiguration(ctx context.Conte
 	return d.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }
 
-func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) (map[string]string, error) {
-	return d.Next.GetObjectTagging(ctx, bucketName, key)
+func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
+	return d.Next.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
-func (d *DelegatingStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string) error {
-	return d.Next.PutObjectTagging(ctx, bucketName, key, tags)
+func (d *DelegatingStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
+	return d.Next.PutObjectTagging(ctx, bucketName, key, tags, opts)
 }
 
-func (d *DelegatingStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
-	return d.Next.DeleteObjectTagging(ctx, bucketName, key)
+func (d *DelegatingStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
+	return d.Next.DeleteObjectTagging(ctx, bucketName, key, opts)
 }
 
 func (d *DelegatingStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {

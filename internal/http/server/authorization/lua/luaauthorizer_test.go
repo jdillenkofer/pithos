@@ -91,6 +91,36 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestVersionTaggingOperationNamesPassedThrough(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  return request.operation == "GetObjectVersionTagging"
+	    or request.operation == "PutObjectVersionTagging"
+	    or request.operation == "DeleteObjectVersionTagging"
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+
+	for _, operation := range []string{
+		authorization.OperationGetObjectVersionTagging,
+		authorization.OperationPutObjectVersionTagging,
+		authorization.OperationDeleteObjectVersionTagging,
+	} {
+		request := authorization.Request{
+			Operation: operation,
+			Authorization: authorization.Authorization{
+				AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+			},
+		}
+		authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+		assert.Nil(t, err)
+		assert.True(t, authorized, operation)
+	}
+}
+
 func TestNestedStructWorks(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

@@ -533,6 +533,11 @@ type LifecycleConfigurationTransition struct {
 	StorageClass string  `xml:"StorageClass"`
 }
 
+type LifecycleConfigurationNoncurrentVersionExpiration struct {
+	NoncurrentDays          *int32 `xml:"NoncurrentDays"`
+	NewerNoncurrentVersions *int32 `xml:"NewerNoncurrentVersions"`
+}
+
 // lifecycleUnsupportedElement captures the presence of lifecycle rule elements
 // pithos does not support (noncurrent-version actions) so the PUT handler can
 // reject them explicitly instead of silently dropping them.
@@ -547,7 +552,7 @@ type LifecycleConfigurationRule struct {
 	AbortIncompleteMultipartUpload *LifecycleConfigurationAbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload"`
 	Transitions                    []LifecycleConfigurationTransition                    `xml:"Transition"`
 	NoncurrentVersionTransitions   []lifecycleUnsupportedElement                         `xml:"NoncurrentVersionTransition"`
-	NoncurrentVersionExpiration    *lifecycleUnsupportedElement                          `xml:"NoncurrentVersionExpiration"`
+	NoncurrentVersionExpiration    *LifecycleConfigurationNoncurrentVersionExpiration    `xml:"NoncurrentVersionExpiration"`
 }
 
 type LifecycleConfiguration struct {
@@ -817,6 +822,26 @@ func extractChecksumInput(r *http.Request) (*storage.ChecksumInput, error) {
 }
 
 func handleError(err error, w http.ResponseWriter, r *http.Request) {
+	if currentDeleteMarkerErr, ok := err.(*storage.CurrentDeleteMarkerError); ok {
+		responseHeaders := w.Header()
+		responseHeaders.Set(deleteMarkerHeader, "true")
+		if currentDeleteMarkerErr.VersionID != "" {
+			responseHeaders.Set(versionIDHeader, currentDeleteMarkerErr.VersionID)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if versionDeleteMarkerErr, ok := err.(*storage.VersionDeleteMarkerMethodNotAllowedError); ok {
+		responseHeaders := w.Header()
+		responseHeaders.Set(deleteMarkerHeader, "true")
+		if versionDeleteMarkerErr.VersionID != "" {
+			responseHeaders.Set(versionIDHeader, versionDeleteMarkerErr.VersionID)
+		}
+		responseHeaders.Set(lastModifiedHeader, versionDeleteMarkerErr.LastModified.UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	statusCode := 500
 	errResponse := ErrorResponse{}
 	errResponse.Code = err.Error()
@@ -953,7 +978,7 @@ func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string) fun
 		return nil
 	}
 	return func(ctx context.Context) (map[string]string, error) {
-		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey)
+		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey, nil)
 		if err == storage.ErrNoSuchKey {
 			return map[string]string{}, nil
 		}
@@ -2812,37 +2837,34 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 }
 
 // parseCopySource parses the x-amz-copy-source header value into its source
-// bucket and object key. The expected form is "/sourceBucket/sourceKey" or
-// "sourceBucket/sourceKey"; the key portion is URL-encoded by S3 clients and is
-// decoded here. Any "?versionId=..." suffix is ignored as versioning is not
-// supported.
-func parseCopySource(value string) (bucket string, key string, err error) {
+// bucket, object key, and optional source version id. The expected form is
+// "/sourceBucket/sourceKey" or "sourceBucket/sourceKey"; the key portion is
+// URL-encoded by S3 clients and is decoded here.
+func parseCopySource(value string) (bucket string, key string, versionID *string, err error) {
 	if value == "" {
-		return "", "", ErrInvalidRequest
+		return "", "", nil, ErrInvalidRequest
 	}
 	if qIdx := strings.IndexByte(value, '?'); qIdx != -1 {
 		query, parseErr := url.ParseQuery(value[qIdx+1:])
 		if parseErr != nil {
-			return "", "", ErrInvalidRequest
+			return "", "", nil, ErrInvalidRequest
 		}
 		if query.Has(versionIDQuery) {
-			// Copying a specific source version is not supported yet; reject
-			// instead of silently copying the latest version.
-			return "", "", storage.ErrNotImplemented
+			versionID = ptrutils.ToPtr(query.Get(versionIDQuery))
 		}
 		value = value[:qIdx]
 	}
 	value = strings.TrimPrefix(value, "/")
 	slashIdx := strings.IndexByte(value, '/')
 	if slashIdx <= 0 || slashIdx == len(value)-1 {
-		return "", "", ErrInvalidRequest
+		return "", "", nil, ErrInvalidRequest
 	}
 	bucket = value[:slashIdx]
 	decodedKey, err := url.PathUnescape(value[slashIdx+1:])
 	if err != nil {
-		return "", "", ErrInvalidRequest
+		return "", "", nil, ErrInvalidRequest
 	}
-	return bucket, decodedKey, nil
+	return bucket, decodedKey, versionID, nil
 }
 
 // parseCopySourceConditions extracts the x-amz-copy-source-if-* preconditions
@@ -2884,7 +2906,7 @@ func parseCopySourceRange(r *http.Request) (*storage.ByteRange, error) {
 // parseCopyHandlerSource parses and validates the destination path values and
 // the x-amz-copy-source header, writing the appropriate error response and
 // returning ok=false on failure.
-func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, ok bool) {
+func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket storage.BucketName, srcKey storage.ObjectKey, sourceVersionID *string, dstBucket storage.BucketName, dstKey storage.ObjectKey, ok bool) {
 	dstBucket, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -2895,7 +2917,7 @@ func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket s
 		handleError(err, w, r)
 		return
 	}
-	srcBucketStr, srcKeyStr, err := parseCopySource(r.Header.Get(copySourceHeader))
+	srcBucketStr, srcKeyStr, sourceVersionID, err := parseCopySource(r.Header.Get(copySourceHeader))
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -2910,14 +2932,14 @@ func parseCopyHandlerSource(w http.ResponseWriter, r *http.Request) (srcBucket s
 		handleError(err, w, r)
 		return
 	}
-	return srcBucket, srcKey, dstBucket, dstKey, true
+	return srcBucket, srcKey, sourceVersionID, dstBucket, dstKey, true
 }
 
 func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.copyObjectHandler")
 	defer span.End()
 
-	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	srcBucketName, srcKey, sourceVersionID, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
 	if !ok {
 		return
 	}
@@ -2987,6 +3009,7 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := &storage.CopyObjectOptions{
+		SourceVersionID:      sourceVersionID,
 		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
 		Range:                copyRange,
 		CopySourceConditions: parseCopySourceConditions(r),
@@ -3029,7 +3052,7 @@ func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.uploadPartCopyHandler")
 	defer span.End()
 
-	srcBucketName, srcKey, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
+	srcBucketName, srcKey, sourceVersionID, dstBucketName, dstKey, ok := parseCopyHandlerSource(w, r)
 	if !ok {
 		return
 	}
@@ -3067,6 +3090,7 @@ func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := &storage.UploadPartCopyOptions{
+		SourceVersionID:      sourceVersionID,
 		Range:                copyRange,
 		CopySourceConditions: parseCopySourceConditions(r),
 	}
@@ -3803,6 +3827,12 @@ func convertLifecycleConfigurationFromXML(request *LifecycleConfiguration) (*sto
 			}
 			converted.Transitions = append(converted.Transitions, convertedTransition)
 		}
+		if rule.NoncurrentVersionExpiration != nil {
+			converted.NoncurrentVersionExpiration = &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays:          rule.NoncurrentVersionExpiration.NoncurrentDays,
+				NewerNoncurrentVersions: rule.NoncurrentVersionExpiration.NewerNoncurrentVersions,
+			}
+		}
 		config.Rules = append(config.Rules, converted)
 	}
 	return config, nil
@@ -3863,6 +3893,12 @@ func convertLifecycleConfigurationToXML(config *storage.BucketLifecycleConfigura
 				convertedTransition.Date = ptrutils.ToPtr(transition.Date.UTC().Format(time.RFC3339))
 			}
 			converted.Transitions = append(converted.Transitions, convertedTransition)
+		}
+		if rule.NoncurrentVersionExpiration != nil {
+			converted.NoncurrentVersionExpiration = &LifecycleConfigurationNoncurrentVersionExpiration{
+				NoncurrentDays:          rule.NoncurrentVersionExpiration.NoncurrentDays,
+				NewerNoncurrentVersions: rule.NoncurrentVersionExpiration.NewerNoncurrentVersions,
+			}
 		}
 		response.Rules = append(response.Rules, converted)
 	}
@@ -3932,12 +3968,8 @@ func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	for _, rule := range request.Rules {
-		if len(rule.NoncurrentVersionTransitions) > 0 {
-			writeNotImplemented(w, r, "NoncurrentVersionTransition actions are not supported")
-			return
-		}
-		if rule.NoncurrentVersionExpiration != nil {
-			writeNotImplemented(w, r, "NoncurrentVersionExpiration requires bucket versioning, which is not supported")
+		if len(rule.Transitions) > 0 || len(rule.NoncurrentVersionTransitions) > 0 {
+			writeNotImplemented(w, r, "Transition actions are not supported")
 			return
 		}
 	}
@@ -4019,13 +4051,6 @@ func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 	ctx, span := s.tracer.Start(r.Context(), "Server.getObjectTaggingHandler")
 	defer span.End()
 
-	if r.URL.Query().Has(versionIDQuery) {
-		// Version-specific tagging is not supported yet; reject instead of
-		// silently targeting the latest version.
-		handleError(storage.ErrNotImplemented, w, r)
-		return
-	}
-
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
 		handleError(err, w, r)
@@ -4037,12 +4062,21 @@ func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationGetObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationGetObjectTagging
+	if versionID != nil {
+		authOperation = authorization.OperationGetObjectVersionTagging
+	}
+	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
 	if shouldReturn {
 		return
 	}
 
-	tags, err := s.storage.GetObjectTagging(ctx, bucketName, key)
+	var opts *storage.ObjectTaggingOptions
+	if versionID != nil {
+		opts = &storage.ObjectTaggingOptions{VersionID: versionID}
+	}
+	tags, err := s.storage.GetObjectTagging(ctx, bucketName, key, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -4058,6 +4092,9 @@ func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	if versionID != nil {
+		responseHeaders.Set(versionIDHeader, *versionID)
+	}
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(response)
 	w.Write(out)
@@ -4066,13 +4103,6 @@ func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.putObjectTaggingHandler")
 	defer span.End()
-
-	if r.URL.Query().Has(versionIDQuery) {
-		// Version-specific tagging is not supported yet; reject instead of
-		// silently targeting the latest version.
-		handleError(storage.ErrNotImplemented, w, r)
-		return
-	}
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
@@ -4104,7 +4134,12 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 		tags = nil
 	}
 
-	shouldReturn := s.authorizeRequestWithRequestTags(ctx, authorization.OperationPutObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), tags, w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationPutObjectTagging
+	if versionID != nil {
+		authOperation = authorization.OperationPutObjectVersionTagging
+	}
+	shouldReturn := s.authorizeRequestWithRequestTags(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), tags, w, r)
 	if shouldReturn {
 		return
 	}
@@ -4118,10 +4153,17 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err = s.storage.PutObjectTagging(ctx, bucketName, key, tags)
+	var opts *storage.ObjectTaggingOptions
+	if versionID != nil {
+		opts = &storage.ObjectTaggingOptions{VersionID: versionID}
+	}
+	err = s.storage.PutObjectTagging(ctx, bucketName, key, tags, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
+	}
+	if versionID != nil {
+		w.Header().Set(versionIDHeader, *versionID)
 	}
 	w.WriteHeader(200)
 }
@@ -4129,13 +4171,6 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 func (s *Server) deleteObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.deleteObjectTaggingHandler")
 	defer span.End()
-
-	if r.URL.Query().Has(versionIDQuery) {
-		// Version-specific tagging is not supported yet; reject instead of
-		// silently targeting the latest version.
-		handleError(storage.ErrNotImplemented, w, r)
-		return
-	}
 
 	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
 	if err != nil {
@@ -4148,15 +4183,27 @@ func (s *Server) deleteObjectTaggingHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjectTagging, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	authOperation := authorization.OperationDeleteObjectTagging
+	if versionID != nil {
+		authOperation = authorization.OperationDeleteObjectVersionTagging
+	}
+	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
 	if shouldReturn {
 		return
 	}
 
-	err = s.storage.DeleteObjectTagging(ctx, bucketName, key)
+	var opts *storage.ObjectTaggingOptions
+	if versionID != nil {
+		opts = &storage.ObjectTaggingOptions{VersionID: versionID}
+	}
+	err = s.storage.DeleteObjectTagging(ctx, bucketName, key, opts)
 	if err != nil {
 		handleError(err, w, r)
 		return
+	}
+	if versionID != nil {
+		w.Header().Set(versionIDHeader, *versionID)
 	}
 	w.WriteHeader(204)
 }
