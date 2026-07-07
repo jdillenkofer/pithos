@@ -113,7 +113,86 @@ func (m *MetadataPartStorageConfiguration) UnmarshalJSON(b []byte) error {
 			}
 		}
 	}
+	if err := m.validateSqlPartStoreIds(); err != nil {
+		return err
+	}
 	return nil
+}
+
+type sqlPartStoreConfig struct {
+	name        string
+	dbIdentity  string
+	partStoreId string
+}
+
+func (m *MetadataPartStorageConfiguration) validateSqlPartStoreIds() error {
+	sqlStores := collectSqlPartStoreConfigs(partstore.DefaultPartStoreName, m.PartStoreInstantiator)
+	for name, instantiator := range m.ExtraPartStoreInstantiators {
+		sqlStores = append(sqlStores, collectSqlPartStoreConfigs(name, instantiator)...)
+	}
+
+	byDb := map[string][]sqlPartStoreConfig{}
+	for _, sqlStore := range sqlStores {
+		byDb[sqlStore.dbIdentity] = append(byDb[sqlStore.dbIdentity], sqlStore)
+	}
+	for dbIdentity, stores := range byDb {
+		if len(stores) < 2 {
+			continue
+		}
+		seenIds := map[string]string{}
+		for _, store := range stores {
+			if store.partStoreId == "" {
+				return fmt.Errorf("multiple SqlPartStore configurations share database %q; part store %q must set partStoreId", dbIdentity, store.name)
+			}
+			if existingName, ok := seenIds[store.partStoreId]; ok {
+				return fmt.Errorf("multiple SqlPartStore configurations share database %q and partStoreId %q (%q and %q)", dbIdentity, store.partStoreId, existingName, store.name)
+			}
+			seenIds[store.partStoreId] = store.name
+		}
+	}
+	return nil
+}
+
+func collectSqlPartStoreConfigs(name string, instantiator partStoreConfig.PartStoreInstantiator) []sqlPartStoreConfig {
+	switch i := instantiator.(type) {
+	case *partStoreConfig.SqlPartStoreConfiguration:
+		return []sqlPartStoreConfig{{
+			name:        name,
+			dbIdentity:  databaseInstantiatorIdentity(i.DatabaseInstantiator),
+			partStoreId: i.PartStoreId.Value(),
+		}}
+	case *partStoreConfig.CompressionPartStoreMiddlewareConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.TinkEncryptionPartStoreMiddlewareConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.OutboxPartStoreConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.CachePartStoreConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.ErasureCodedPartStoreMiddlewareConfiguration:
+		var sqlStores []sqlPartStoreConfig
+		for idx, child := range i.PartStoreInstantiators {
+			sqlStores = append(sqlStores, collectSqlPartStoreConfigs(fmt.Sprintf("%s[%d]", name, idx), child)...)
+		}
+		return sqlStores
+	default:
+		return nil
+	}
+}
+
+func databaseInstantiatorIdentity(instantiator databaseConfig.DatabaseInstantiator) string {
+	switch i := instantiator.(type) {
+	case *databaseConfig.SqliteDatabaseConfiguration:
+		return "sqlite:" + i.DbPath.Value()
+	case *databaseConfig.PostgresDatabaseConfiguration:
+		return "postgres:" + i.DbUrl.Value()
+	case *databaseConfig.DatabaseReferenceConfiguration:
+		return "ref:" + i.RefName.Value()
+	case *databaseConfig.RegisterDatabaseReferenceConfiguration:
+		return "ref:" + i.RefName.Value()
+	default:
+		return fmt.Sprintf("%T", instantiator)
+	}
 }
 
 func (m *MetadataPartStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {

@@ -246,6 +246,109 @@ func TestMetadataPartStorageRejectsMappingToUnknownPartStore(t *testing.T) {
 	assert.ErrorContains(t, err, "unknown part store")
 }
 
+func TestMetadataPartStorageRejectsSharedSqlPartStoresWithoutExplicitIds(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	dbPath := filepath.Join(*tempDir, "pithos.db")
+	jsonData := fmt.Sprintf(`{
+			"type": "MetadataPartStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"partStore": {
+				"type": "SqlPartStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"extraPartStores": {
+				"cold": {
+					"type": "SqlPartStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					}
+				}
+			},
+			"storageClassToPartStore": {
+				"GLACIER": "cold"
+			}
+		}`, strconv.Quote(dbPath))
+
+	_, err = createStorageFromJson([]byte(jsonData))
+	assert.ErrorContains(t, err, "must set partStoreId")
+}
+
+func TestMetadataPartStorageAllowsSharedSqlPartStoresWithUniqueExplicitIds(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	dbPath := filepath.Join(*tempDir, "pithos.db")
+	jsonData := fmt.Sprintf(`{
+			"type": "MetadataPartStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"partStore": {
+				"type": "SqlPartStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				},
+				"partStoreId": "hot"
+			},
+			"extraPartStores": {
+				"cold": {
+					"type": "SqlPartStore",
+					"db": {
+						"type": "DatabaseReference",
+						"refName": "db"
+					},
+					"partStoreId": "cold"
+				}
+			},
+			"storageClassToPartStore": {
+				"GLACIER": "cold"
+			}
+		}`, strconv.Quote(dbPath))
+
+	storage, err := createStorageFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, storage)
+}
+
 func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
