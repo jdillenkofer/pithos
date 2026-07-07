@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -148,38 +147,45 @@ func TestSqlPartStore_PartStoreIdScopesSharedTable(t *testing.T) {
 	coldStore, err := New(db, partContentRepository, WithPartStoreId("cold"))
 	require.NoError(t, err)
 
-	hotPartId, err := partstore.NewRandomPartId()
-	require.NoError(t, err)
-	coldPartId, err := partstore.NewRandomPartId()
-	require.NoError(t, err)
+	sharedPartId := *partstore.MustNewPartIdFromString("01JZ8X56Z0Y3Q1NQ1ZQ0S8J4V9")
 
 	ctx := context.Background()
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := hotStore.PutPart(ctx, tx, *hotPartId, bytes.NewReader([]byte("hot"))); err != nil {
+		if err := hotStore.PutPart(ctx, tx, sharedPartId, bytes.NewReader([]byte("hot"))); err != nil {
 			return err
 		}
-		return coldStore.PutPart(ctx, tx, *coldPartId, bytes.NewReader([]byte("cold")))
+		return coldStore.PutPart(ctx, tx, sharedPartId, bytes.NewReader([]byte("cold")))
 	})
 	require.NoError(t, err)
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		hotIds, err := hotStore.GetPartIds(ctx, tx)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []partstore.PartId{*hotPartId}, hotIds)
+		assert.ElementsMatch(t, []partstore.PartId{sharedPartId}, hotIds)
 
 		coldIds, err := coldStore.GetPartIds(ctx, tx)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []partstore.PartId{*coldPartId}, coldIds)
+		assert.ElementsMatch(t, []partstore.PartId{sharedPartId}, coldIds)
 
-		reader, err := hotStore.GetPart(ctx, tx, *coldPartId)
-		assert.Nil(t, reader)
-		assert.True(t, errors.Is(err, partstore.ErrPartNotFound))
+		hotReader, err := hotStore.GetPart(ctx, tx, sharedPartId)
+		require.NoError(t, err)
+		defer hotReader.Close()
+		hotContent, err := io.ReadAll(hotReader)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("hot"), hotContent)
+
+		coldReader, err := coldStore.GetPart(ctx, tx, sharedPartId)
+		require.NoError(t, err)
+		defer coldReader.Close()
+		coldContent, err := io.ReadAll(coldReader)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("cold"), coldContent)
 		return nil
 	})
 	require.NoError(t, err)
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return hotStore.DeletePart(ctx, tx, *hotPartId)
+		return hotStore.DeletePart(ctx, tx, sharedPartId)
 	})
 	require.NoError(t, err)
 
@@ -190,9 +196,9 @@ func TestSqlPartStore_PartStoreIdScopesSharedTable(t *testing.T) {
 
 		coldIds, err := coldStore.GetPartIds(ctx, tx)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []partstore.PartId{*coldPartId}, coldIds)
+		assert.ElementsMatch(t, []partstore.PartId{sharedPartId}, coldIds)
 
-		reader, err := coldStore.GetPart(ctx, tx, *coldPartId)
+		reader, err := coldStore.GetPart(ctx, tx, sharedPartId)
 		require.NoError(t, err)
 		defer reader.Close()
 		got, err := io.ReadAll(reader)
