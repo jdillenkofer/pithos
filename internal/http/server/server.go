@@ -404,8 +404,22 @@ type WebsiteConfigurationRedirectAllRequestsTo struct {
 	Protocol string `xml:"Protocol,omitempty"`
 }
 
+type WebsiteConfigurationRoutingRuleCondition struct {
+	KeyPrefixEquals             *string `xml:"KeyPrefixEquals"`
+	HttpErrorCodeReturnedEquals *string `xml:"HttpErrorCodeReturnedEquals"`
+}
+
+type WebsiteConfigurationRedirect struct {
+	HostName             *string `xml:"HostName,omitempty"`
+	Protocol             *string `xml:"Protocol,omitempty"`
+	ReplaceKeyPrefixWith *string `xml:"ReplaceKeyPrefixWith,omitempty"`
+	ReplaceKeyWith       *string `xml:"ReplaceKeyWith,omitempty"`
+	HttpRedirectCode     *string `xml:"HttpRedirectCode,omitempty"`
+}
+
 type WebsiteConfigurationRoutingRule struct {
-	// We only need to detect presence, not parse contents
+	Condition *WebsiteConfigurationRoutingRuleCondition `xml:"Condition"`
+	Redirect  *WebsiteConfigurationRedirect             `xml:"Redirect"`
 }
 
 type WebsiteConfigurationRequest struct {
@@ -417,10 +431,12 @@ type WebsiteConfigurationRequest struct {
 }
 
 type WebsiteConfigurationResponse struct {
-	XMLName       xml.Name                           `xml:"WebsiteConfiguration"`
-	Xmlns         string                             `xml:"xmlns,attr"`
-	IndexDocument *WebsiteConfigurationIndexDocument `xml:"IndexDocument"`
-	ErrorDocument *WebsiteConfigurationErrorDocument `xml:"ErrorDocument,omitempty"`
+	XMLName               xml.Name                                   `xml:"WebsiteConfiguration"`
+	Xmlns                 string                                     `xml:"xmlns,attr"`
+	IndexDocument         *WebsiteConfigurationIndexDocument         `xml:"IndexDocument,omitempty"`
+	ErrorDocument         *WebsiteConfigurationErrorDocument         `xml:"ErrorDocument,omitempty"`
+	RedirectAllRequestsTo *WebsiteConfigurationRedirectAllRequestsTo `xml:"RedirectAllRequestsTo,omitempty"`
+	RoutingRules          []WebsiteConfigurationRoutingRule          `xml:"RoutingRules>RoutingRule,omitempty"`
 }
 
 type BucketVersioningConfiguration struct {
@@ -588,6 +604,7 @@ type CopyPartResult struct {
 }
 
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
+var ErrInvalidArgument = fmt.Errorf("InvalidArgument")
 
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"Error"`
@@ -803,6 +820,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrNoSuchWebsiteConfiguration:
 		statusCode = 404
 	case ErrInvalidRequest:
+		statusCode = 400
+	case ErrInvalidArgument:
 		statusCode = 400
 	case storage.ErrInvalidPart:
 		statusCode = 400
@@ -4107,23 +4126,148 @@ func (s *Server) getBucketWebsiteHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	response := WebsiteConfigurationResponse{
-		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
-		IndexDocument: &WebsiteConfigurationIndexDocument{
-			Suffix: config.IndexDocumentSuffix,
-		},
-	}
-	if config.ErrorDocumentKey != nil {
-		response.ErrorDocument = &WebsiteConfigurationErrorDocument{
-			Key: *config.ErrorDocumentKey,
-		}
-	}
+	response := websiteConfigurationResponseFromStorage(config)
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(response)
 	w.Write(out)
+}
+
+func websiteConfigurationResponseFromStorage(config *storage.WebsiteConfiguration) WebsiteConfigurationResponse {
+	response := WebsiteConfigurationResponse{
+		Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/",
+	}
+	if config.IndexDocumentSuffix != "" {
+		response.IndexDocument = &WebsiteConfigurationIndexDocument{
+			Suffix: config.IndexDocumentSuffix,
+		}
+	}
+	if config.ErrorDocumentKey != nil {
+		response.ErrorDocument = &WebsiteConfigurationErrorDocument{
+			Key: *config.ErrorDocumentKey,
+		}
+	}
+	if config.RedirectAllRequestsTo != nil {
+		response.RedirectAllRequestsTo = &WebsiteConfigurationRedirectAllRequestsTo{
+			HostName: config.RedirectAllRequestsTo.HostName,
+		}
+		if config.RedirectAllRequestsTo.Protocol != nil {
+			response.RedirectAllRequestsTo.Protocol = *config.RedirectAllRequestsTo.Protocol
+		}
+	}
+	for _, rule := range config.RoutingRules {
+		responseRule := WebsiteConfigurationRoutingRule{
+			Redirect: &WebsiteConfigurationRedirect{
+				HostName:             rule.Redirect.HostName,
+				Protocol:             rule.Redirect.Protocol,
+				ReplaceKeyPrefixWith: rule.Redirect.ReplaceKeyPrefixWith,
+				ReplaceKeyWith:       rule.Redirect.ReplaceKeyWith,
+				HttpRedirectCode:     rule.Redirect.HttpRedirectCode,
+			},
+		}
+		if rule.Condition != nil {
+			responseRule.Condition = &WebsiteConfigurationRoutingRuleCondition{
+				KeyPrefixEquals:             rule.Condition.KeyPrefixEquals,
+				HttpErrorCodeReturnedEquals: rule.Condition.HttpErrorCodeReturnedEquals,
+			}
+		}
+		response.RoutingRules = append(response.RoutingRules, responseRule)
+	}
+	return response
+}
+
+func validateWebsiteProtocol(protocol *string) bool {
+	if protocol == nil || *protocol == "" {
+		return true
+	}
+	return *protocol == "http" || *protocol == "https"
+}
+
+func normalizeRedirectCode(code *string) (*string, bool) {
+	if code == nil || *code == "" {
+		return ptrutils.ToPtr(strconv.Itoa(http.StatusMovedPermanently)), true
+	}
+	switch *code {
+	case "301", "302", "303", "307", "308":
+		return code, true
+	default:
+		return nil, false
+	}
+}
+
+func websiteConfigurationRequestToStorage(request WebsiteConfigurationRequest) (*storage.WebsiteConfiguration, error) {
+	if request.RedirectAllRequestsTo != nil {
+		if request.IndexDocument != nil || request.ErrorDocument != nil || len(request.RoutingRules) > 0 {
+			return nil, ErrInvalidArgument
+		}
+		if request.RedirectAllRequestsTo.HostName == "" {
+			return nil, ErrInvalidArgument
+		}
+		var protocol *string
+		if request.RedirectAllRequestsTo.Protocol != "" {
+			protocol = &request.RedirectAllRequestsTo.Protocol
+		}
+		if !validateWebsiteProtocol(protocol) {
+			return nil, ErrInvalidArgument
+		}
+		return &storage.WebsiteConfiguration{
+			RedirectAllRequestsTo: &storage.WebsiteRedirectAllRequestsTo{
+				HostName: request.RedirectAllRequestsTo.HostName,
+				Protocol: protocol,
+			},
+		}, nil
+	}
+
+	if request.IndexDocument == nil || request.IndexDocument.Suffix == "" {
+		return nil, ErrInvalidArgument
+	}
+
+	config := &storage.WebsiteConfiguration{
+		IndexDocumentSuffix: request.IndexDocument.Suffix,
+	}
+	if request.ErrorDocument != nil && request.ErrorDocument.Key != "" {
+		config.ErrorDocumentKey = &request.ErrorDocument.Key
+	}
+
+	for _, rule := range request.RoutingRules {
+		if rule.Redirect == nil {
+			return nil, ErrInvalidArgument
+		}
+		redirectCode, ok := normalizeRedirectCode(rule.Redirect.HttpRedirectCode)
+		if !ok || !validateWebsiteProtocol(rule.Redirect.Protocol) {
+			return nil, ErrInvalidArgument
+		}
+		if rule.Redirect.ReplaceKeyWith != nil && rule.Redirect.ReplaceKeyPrefixWith != nil {
+			return nil, ErrInvalidArgument
+		}
+		if rule.Redirect.HostName == nil && rule.Redirect.Protocol == nil && rule.Redirect.ReplaceKeyWith == nil && rule.Redirect.ReplaceKeyPrefixWith == nil {
+			return nil, ErrInvalidArgument
+		}
+		if rule.Condition != nil && rule.Condition.KeyPrefixEquals == nil && rule.Condition.HttpErrorCodeReturnedEquals == nil {
+			return nil, ErrInvalidArgument
+		}
+
+		storageRule := storage.WebsiteRoutingRule{
+			Redirect: storage.WebsiteRedirect{
+				HostName:             rule.Redirect.HostName,
+				Protocol:             rule.Redirect.Protocol,
+				ReplaceKeyPrefixWith: rule.Redirect.ReplaceKeyPrefixWith,
+				ReplaceKeyWith:       rule.Redirect.ReplaceKeyWith,
+				HttpRedirectCode:     redirectCode,
+			},
+		}
+		if rule.Condition != nil {
+			storageRule.Condition = &storage.WebsiteRoutingRuleCondition{
+				KeyPrefixEquals:             rule.Condition.KeyPrefixEquals,
+				HttpErrorCodeReturnedEquals: rule.Condition.HttpErrorCodeReturnedEquals,
+			}
+		}
+		config.RoutingRules = append(config.RoutingRules, storageRule)
+	}
+
+	return config, nil
 }
 
 func (s *Server) putBucketWebsiteHandler(w http.ResponseWriter, r *http.Request) {
@@ -4154,27 +4298,10 @@ func (s *Server) putBucketWebsiteHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Reject unsupported features
-	if request.RedirectAllRequestsTo != nil {
-		handleError(storage.ErrNotImplemented, w, r)
+	config, err := websiteConfigurationRequestToStorage(request)
+	if err != nil {
+		handleError(err, w, r)
 		return
-	}
-	if len(request.RoutingRules) > 0 {
-		handleError(storage.ErrNotImplemented, w, r)
-		return
-	}
-
-	// Validate IndexDocument is present
-	if request.IndexDocument == nil || request.IndexDocument.Suffix == "" {
-		handleError(fmt.Errorf("InvalidArgument"), w, r)
-		return
-	}
-
-	config := &storage.WebsiteConfiguration{
-		IndexDocumentSuffix: request.IndexDocument.Suffix,
-	}
-	if request.ErrorDocument != nil && request.ErrorDocument.Key != "" {
-		config.ErrorDocumentKey = &request.ErrorDocument.Key
 	}
 
 	slog.InfoContext(r.Context(), "Putting bucket website configuration", "bucket", bucketName.String())
@@ -4217,6 +4344,92 @@ func websiteResolveKey(keyStr string, websiteConfig *storage.WebsiteConfiguratio
 		return keyStr + websiteConfig.IndexDocumentSuffix
 	}
 	return keyStr
+}
+
+func websiteFindRoutingRule(config *storage.WebsiteConfiguration, requestKey string, errorStatusCode *int) *storage.WebsiteRoutingRule {
+	if config == nil {
+		return nil
+	}
+	for i := range config.RoutingRules {
+		rule := &config.RoutingRules[i]
+		if rule.Condition == nil {
+			return rule
+		}
+		if rule.Condition.KeyPrefixEquals != nil && !strings.HasPrefix(requestKey, *rule.Condition.KeyPrefixEquals) {
+			continue
+		}
+		if rule.Condition.HttpErrorCodeReturnedEquals != nil {
+			if errorStatusCode == nil || *rule.Condition.HttpErrorCodeReturnedEquals != strconv.Itoa(*errorStatusCode) {
+				continue
+			}
+		}
+		return rule
+	}
+	return nil
+}
+
+func websiteRedirectLocation(r *http.Request, requestKey string, rule *storage.WebsiteRoutingRule) string {
+	redirect := rule.Redirect
+	targetKey := requestKey
+	if redirect.ReplaceKeyWith != nil {
+		targetKey = *redirect.ReplaceKeyWith
+	} else if redirect.ReplaceKeyPrefixWith != nil {
+		targetKey = *redirect.ReplaceKeyPrefixWith
+		if rule.Condition != nil && rule.Condition.KeyPrefixEquals != nil {
+			targetKey += strings.TrimPrefix(requestKey, *rule.Condition.KeyPrefixEquals)
+		}
+	}
+
+	if redirect.HostName == nil && redirect.Protocol == nil {
+		if strings.HasPrefix(targetKey, "/") {
+			return targetKey
+		}
+		return "/" + targetKey
+	}
+
+	scheme := "http"
+	if redirect.Protocol != nil && *redirect.Protocol != "" {
+		scheme = *redirect.Protocol
+	} else if r.URL.Scheme != "" {
+		scheme = r.URL.Scheme
+	}
+	host := r.Host
+	if redirect.HostName != nil && *redirect.HostName != "" {
+		host = *redirect.HostName
+	}
+	u := url.URL{
+		Scheme: scheme,
+		Host:   host,
+		Path:   "/" + strings.TrimPrefix(targetKey, "/"),
+	}
+	return u.String()
+}
+
+func websiteRedirectAllLocation(r *http.Request, requestKey string, redirect *storage.WebsiteRedirectAllRequestsTo) string {
+	scheme := "http"
+	if redirect.Protocol != nil && *redirect.Protocol != "" {
+		scheme = *redirect.Protocol
+	} else if r.URL.Scheme != "" {
+		scheme = r.URL.Scheme
+	}
+	u := url.URL{
+		Scheme:   scheme,
+		Host:     redirect.HostName,
+		Path:     "/" + strings.TrimPrefix(requestKey, "/"),
+		RawQuery: r.URL.RawQuery,
+	}
+	return u.String()
+}
+
+func writeWebsiteRedirect(w http.ResponseWriter, location string, code *string) {
+	statusCode := http.StatusMovedPermanently
+	if code != nil {
+		if parsedCode, err := strconv.Atoi(*code); err == nil {
+			statusCode = parsedCode
+		}
+	}
+	w.Header().Set(locationHeader, location)
+	w.WriteHeader(statusCode)
 }
 
 // websitePrepare fetches the website configuration, resolves the request key,
@@ -4278,7 +4491,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		return nil, storage.ObjectKey{}, "", false
 	}
 
-	if keyStr == nil {
+	if keyStr == nil && websiteConfig.RedirectAllRequestsTo == nil {
 		s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
 			fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 		return nil, storage.ObjectKey{}, "", false
@@ -4301,12 +4514,26 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	requestKey := r.PathValue(keyPath)
+	if websiteConfig.RedirectAllRequestsTo != nil {
+		writeWebsiteRedirect(w, websiteRedirectAllLocation(r, requestKey, websiteConfig.RedirectAllRequestsTo), nil)
+		return
+	}
+	if rule := websiteFindRoutingRule(websiteConfig, requestKey, nil); rule != nil {
+		writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)
+		return
+	}
 
 	slog.InfoContext(r.Context(), "Website: getting object", "bucket", bucketName.String(), "key", resolvedKey)
 
 	object, readers, err := s.storage.GetObject(ctx, bucketName, objectKey, nil, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
+			statusCode := http.StatusNotFound
+			if rule := websiteFindRoutingRule(websiteConfig, requestKey, &statusCode); rule != nil {
+				writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)
+				return
+			}
 			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return
@@ -4363,12 +4590,26 @@ func (s *Server) serveWebsiteHeadObject(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	requestKey := r.PathValue(keyPath)
+	if websiteConfig.RedirectAllRequestsTo != nil {
+		writeWebsiteRedirect(w, websiteRedirectAllLocation(r, requestKey, websiteConfig.RedirectAllRequestsTo), nil)
+		return
+	}
+	if rule := websiteFindRoutingRule(websiteConfig, requestKey, nil); rule != nil {
+		writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)
+		return
+	}
 
 	slog.InfoContext(r.Context(), "Website: head object", "bucket", bucketName.String(), "key", resolvedKey)
 
 	object, err := s.storage.HeadObject(ctx, bucketName, objectKey, nil)
 	if err != nil {
 		if err == storage.ErrNoSuchKey {
+			statusCode := http.StatusNotFound
+			if rule := websiteFindRoutingRule(websiteConfig, requestKey, &statusCode); rule != nil {
+				writeWebsiteRedirect(w, websiteRedirectLocation(r, requestKey, rule), rule.Redirect.HttpRedirectCode)
+				return
+			}
 			s.serveErrorDocument(w, r, bucketName, websiteConfig, http.StatusNotFound, "NoSuchKey",
 				fmt.Sprintf("The specified key does not exist: %s", resolvedKey))
 			return

@@ -273,14 +273,29 @@ func (sms *sqlMetadataStore) GetBucketWebsiteConfiguration(ctx context.Context, 
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
-	if bucketEntity.WebsiteIndexDocumentSuffix == nil {
+	if bucketEntity.WebsiteIndexDocumentSuffix == nil && bucketEntity.WebsiteRedirectAllHostName == nil && bucketEntity.WebsiteRoutingRulesJSON == nil {
 		return nil, metadatastore.ErrNoSuchWebsiteConfiguration
 	}
 
-	return &metadatastore.WebsiteConfiguration{
-		IndexDocumentSuffix: *bucketEntity.WebsiteIndexDocumentSuffix,
-		ErrorDocumentKey:    bucketEntity.WebsiteErrorDocumentKey,
-	}, nil
+	config := &metadatastore.WebsiteConfiguration{
+		ErrorDocumentKey: bucketEntity.WebsiteErrorDocumentKey,
+	}
+	if bucketEntity.WebsiteIndexDocumentSuffix != nil {
+		config.IndexDocumentSuffix = *bucketEntity.WebsiteIndexDocumentSuffix
+	}
+	if bucketEntity.WebsiteRedirectAllHostName != nil {
+		config.RedirectAllRequestsTo = &metadatastore.WebsiteRedirectAllRequestsTo{
+			HostName: *bucketEntity.WebsiteRedirectAllHostName,
+			Protocol: bucketEntity.WebsiteRedirectAllProtocol,
+		}
+	}
+	if bucketEntity.WebsiteRoutingRulesJSON != nil {
+		if err := json.Unmarshal([]byte(*bucketEntity.WebsiteRoutingRulesJSON), &config.RoutingRules); err != nil {
+			return nil, err
+		}
+	}
+
+	return config, nil
 }
 
 func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.WebsiteConfiguration) error {
@@ -295,8 +310,27 @@ func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, 
 		return metadatastore.ErrNoSuchBucket
 	}
 
-	bucketEntity.WebsiteIndexDocumentSuffix = &config.IndexDocumentSuffix
+	if config.IndexDocumentSuffix == "" {
+		bucketEntity.WebsiteIndexDocumentSuffix = nil
+	} else {
+		bucketEntity.WebsiteIndexDocumentSuffix = &config.IndexDocumentSuffix
+	}
 	bucketEntity.WebsiteErrorDocumentKey = config.ErrorDocumentKey
+	bucketEntity.WebsiteRedirectAllHostName = nil
+	bucketEntity.WebsiteRedirectAllProtocol = nil
+	if config.RedirectAllRequestsTo != nil {
+		bucketEntity.WebsiteRedirectAllHostName = &config.RedirectAllRequestsTo.HostName
+		bucketEntity.WebsiteRedirectAllProtocol = config.RedirectAllRequestsTo.Protocol
+	}
+	bucketEntity.WebsiteRoutingRulesJSON = nil
+	if len(config.RoutingRules) > 0 {
+		routingRulesJSON, err := json.Marshal(config.RoutingRules)
+		if err != nil {
+			return err
+		}
+		routingRulesJSONStr := string(routingRulesJSON)
+		bucketEntity.WebsiteRoutingRulesJSON = &routingRulesJSONStr
+	}
 
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
@@ -315,6 +349,9 @@ func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Contex
 
 	bucketEntity.WebsiteIndexDocumentSuffix = nil
 	bucketEntity.WebsiteErrorDocumentKey = nil
+	bucketEntity.WebsiteRedirectAllHostName = nil
+	bucketEntity.WebsiteRedirectAllProtocol = nil
+	bucketEntity.WebsiteRoutingRulesJSON = nil
 
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }

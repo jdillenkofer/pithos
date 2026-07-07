@@ -365,8 +365,33 @@ type BucketStore interface {
 }
 
 type WebsiteConfiguration struct {
-	IndexDocumentSuffix string
-	ErrorDocumentKey    *string
+	IndexDocumentSuffix   string
+	ErrorDocumentKey      *string
+	RedirectAllRequestsTo *WebsiteRedirectAllRequestsTo
+	RoutingRules          []WebsiteRoutingRule
+}
+
+type WebsiteRedirectAllRequestsTo struct {
+	HostName string
+	Protocol *string
+}
+
+type WebsiteRoutingRule struct {
+	Condition *WebsiteRoutingRuleCondition
+	Redirect  WebsiteRedirect
+}
+
+type WebsiteRoutingRuleCondition struct {
+	KeyPrefixEquals             *string
+	HttpErrorCodeReturnedEquals *string
+}
+
+type WebsiteRedirect struct {
+	HostName             *string
+	Protocol             *string
+	ReplaceKeyPrefixWith *string
+	ReplaceKeyWith       *string
+	HttpRedirectCode     *string
 }
 
 type CORSRule struct {

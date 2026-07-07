@@ -459,6 +459,10 @@ type BucketManager interface {
 }
 
 type WebsiteConfiguration = metadatastore.WebsiteConfiguration
+type WebsiteRedirectAllRequestsTo = metadatastore.WebsiteRedirectAllRequestsTo
+type WebsiteRoutingRule = metadatastore.WebsiteRoutingRule
+type WebsiteRoutingRuleCondition = metadatastore.WebsiteRoutingRuleCondition
+type WebsiteRedirect = metadatastore.WebsiteRedirect
 
 type CORSRule = metadatastore.CORSRule
 
