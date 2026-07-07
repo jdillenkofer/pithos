@@ -17,7 +17,7 @@ const (
 	findPartContentChunkByIndexStmt = "SELECT id, chunk_index, content, created_at, updated_at FROM part_contents WHERE part_store_id = $1 AND id = $2 AND chunk_index = $3"
 	findPartContentIdsStmt          = "SELECT DISTINCT id FROM part_contents WHERE part_store_id = $1"
 	insertPartContentStmt           = "INSERT INTO part_contents (id, part_store_id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
-	upsertPartContentStmt           = "INSERT INTO part_contents (id, part_store_id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6) ON CONFLICT (id, chunk_index) DO UPDATE SET part_store_id = EXCLUDED.part_store_id, content = EXCLUDED.content, updated_at = EXCLUDED.updated_at"
+	upsertPartContentStmt           = "INSERT INTO part_contents (id, part_store_id, chunk_index, content, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6) ON CONFLICT (part_store_id, id, chunk_index) DO UPDATE SET content = EXCLUDED.content, updated_at = EXCLUDED.updated_at"
 	deletePartContentByIdStmt       = "DELETE FROM part_contents WHERE part_store_id = $1 AND id = $2"
 )
 
