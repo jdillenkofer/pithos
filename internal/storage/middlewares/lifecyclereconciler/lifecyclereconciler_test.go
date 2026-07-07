@@ -597,3 +597,93 @@ func TestReconcileNoncurrentVersionsHonorsTagAndSizeFilters(t *testing.T) {
 
 	assert.Equal(t, []string{"logs/a\x00match"}, f.deletedVersions)
 }
+
+func TestReconcileExpiresCurrentDeleteMarkerWithoutObjectVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/deleted\x00dm"}, f.deletedVersions)
+}
+
+func TestReconcileKeepsCurrentDeleteMarkerWithObjectVersions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/deleted", "v1", false, false, 10, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
+}
+
+func TestReconcileSkipsNoncurrentDeleteMarkers(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/restored", "latest", true, false, 10, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/restored", "dm", false, true, 0, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
+}
+
+func TestReconcileExpiredDeleteMarkerHonorsFilter(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "data/deleted", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			Expiration: &storage.LifecycleExpiration{
+				ExpiredObjectDeleteMarker: ptrutils.ToPtr(true),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.deletedVersions)
+}

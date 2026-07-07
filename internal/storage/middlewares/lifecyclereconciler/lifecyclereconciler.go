@@ -147,6 +147,7 @@ func (m *lifecycleReconcilerStorageMiddleware) ReconcileOnce(ctx context.Context
 
 func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration, cancelTask *atomic.Bool) {
 	expirationRules := []*storage.LifecycleRule{}
+	expiredObjectDeleteMarkerRules := []*storage.LifecycleRule{}
 	noncurrentExpirationRules := []*storage.LifecycleRule{}
 	abortRules := []*storage.LifecycleRule{}
 	transitionRules := []*storage.LifecycleRule{}
@@ -157,6 +158,9 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 		}
 		if rule.Expiration != nil && (rule.Expiration.Days != nil || rule.Expiration.Date != nil) {
 			expirationRules = append(expirationRules, rule)
+		}
+		if rule.Expiration != nil && rule.Expiration.ExpiredObjectDeleteMarker != nil && *rule.Expiration.ExpiredObjectDeleteMarker {
+			expiredObjectDeleteMarkerRules = append(expiredObjectDeleteMarkerRules, rule)
 		}
 		if rule.NoncurrentVersionExpiration != nil {
 			noncurrentExpirationRules = append(noncurrentExpirationRules, rule)
@@ -174,6 +178,9 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 	if len(expirationRules) > 0 {
 		m.expireObjects(ctx, bucketName, expirationRules, cancelTask)
 	}
+	if len(expiredObjectDeleteMarkerRules) > 0 {
+		m.expireObjectDeleteMarkers(ctx, bucketName, expiredObjectDeleteMarkerRules, cancelTask)
+	}
 	if len(noncurrentExpirationRules) > 0 {
 		m.expireNoncurrentObjectVersions(ctx, bucketName, noncurrentExpirationRules, cancelTask)
 	}
@@ -182,6 +189,82 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 	}
 	if len(abortRules) > 0 {
 		m.abortIncompleteUploads(ctx, bucketName, abortRules, cancelTask)
+	}
+}
+
+type deleteMarkerExpirationCandidate struct {
+	currentDeleteMarker *storage.ObjectVersion
+	hasObjectVersion    bool
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) expireObjectDeleteMarkers(ctx context.Context, bucketName storage.BucketName, rules []*storage.LifecycleRule, cancelTask *atomic.Bool) {
+	candidatesByKey := map[string]*deleteMarkerExpirationCandidate{}
+	var keyMarker, versionIDMarker *string
+	for {
+		if isCancelled(cancelTask) {
+			return
+		}
+		listResult, err := m.Next.ListObjectVersions(ctx, bucketName, storage.ListObjectVersionsOptions{
+			KeyMarker:       keyMarker,
+			VersionIDMarker: versionIDMarker,
+			MaxKeys:         listPageSize,
+		})
+		if err != nil {
+			slog.Warn("lifecycle reconciler failed to list object versions", "bucket", bucketName.String(), "err", err)
+			return
+		}
+		for i := range listResult.Versions {
+			version := &listResult.Versions[i]
+			key := version.Key.String()
+			candidate := candidatesByKey[key]
+			if candidate == nil {
+				candidate = &deleteMarkerExpirationCandidate{}
+				candidatesByKey[key] = candidate
+			}
+			if version.IsLatest && version.IsDeleteMarker {
+				versionCopy := *version
+				candidate.currentDeleteMarker = &versionCopy
+			}
+			if !version.IsDeleteMarker {
+				candidate.hasObjectVersion = true
+			}
+		}
+		if !listResult.IsTruncated {
+			break
+		}
+		keyMarker = listResult.NextKeyMarker
+		versionIDMarker = listResult.NextVersionIDMarker
+		if keyMarker == nil {
+			break
+		}
+	}
+
+	for _, candidate := range candidatesByKey {
+		if isCancelled(cancelTask) {
+			return
+		}
+		if candidate.currentDeleteMarker == nil || candidate.hasObjectVersion {
+			continue
+		}
+		m.expireObjectDeleteMarkerIfDue(ctx, bucketName, candidate.currentDeleteMarker, rules)
+	}
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) expireObjectDeleteMarkerIfDue(ctx context.Context, bucketName storage.BucketName, deleteMarker *storage.ObjectVersion, rules []*storage.LifecycleRule) {
+	for _, rule := range rules {
+		if !storage.LifecycleRuleMatchesObject(rule, deleteMarker.Key.String(), deleteMarker.Size, nil) {
+			continue
+		}
+		_, err := m.Next.DeleteObject(ctx, bucketName, deleteMarker.Key, &storage.DeleteObjectOptions{VersionID: &deleteMarker.VersionID})
+		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+			return
+		}
+		if err != nil {
+			slog.Warn("lifecycle reconciler failed to expire object delete marker", "bucket", bucketName.String(), "key", deleteMarker.Key.String(), "versionId", deleteMarker.VersionID, "err", err)
+			return
+		}
+		slog.Info("lifecycle reconciler expired object delete marker", "bucket", bucketName.String(), "key", deleteMarker.Key.String(), "versionId", deleteMarker.VersionID)
+		return
 	}
 }
 
