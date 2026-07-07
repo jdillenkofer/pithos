@@ -203,6 +203,7 @@ const versionIDHeader = "x-amz-version-id"
 const deleteMarkerHeader = "x-amz-delete-marker"
 
 const copySourceHeader = "x-amz-copy-source"
+const copySourceVersionIDHeader = "x-amz-copy-source-version-id"
 const copySourceRangeHeader = "x-amz-copy-source-range"
 const metadataDirectiveHeader = "x-amz-metadata-directive"
 const copySourceIfMatchHeader = "x-amz-copy-source-if-match"
@@ -960,7 +961,8 @@ func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation 
 	if requestTags != nil {
 		request.RequestObjectTags = requestTags
 	}
-	s.bindExistingObjectTagsResolver(request, bucket, key)
+	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	s.bindExistingObjectTagsResolver(request, bucket, key, versionID)
 	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
@@ -968,7 +970,7 @@ func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation 
 // object's currently stored tags, so Lua policies can gate on
 // s3:ExistingObjectTag. A missing object resolves to an empty tag set; other
 // lookup errors fail closed. Returns nil when bucket/key are absent or invalid.
-func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string) func(ctx context.Context) (map[string]string, error) {
+func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string, versionID *string) func(ctx context.Context) (map[string]string, error) {
 	if bucket == nil || key == nil {
 		return nil
 	}
@@ -977,8 +979,9 @@ func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string) fun
 	if errB != nil || errK != nil {
 		return nil
 	}
+	opts := &storage.ObjectTaggingOptions{VersionID: versionID}
 	return func(ctx context.Context) (map[string]string, error) {
-		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey, nil)
+		tags, err := s.storage.GetObjectTagging(ctx, bucketName, objectKey, opts)
 		if err == storage.ErrNoSuchKey {
 			return map[string]string{}, nil
 		}
@@ -991,8 +994,8 @@ func (s *Server) makeExistingObjectTagsResolver(bucket *string, key *string) fun
 
 // bindExistingObjectTagsResolver attaches the lazy tag resolver for the
 // request's target object.
-func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, bucket *string, key *string) {
-	if resolver := s.makeExistingObjectTagsResolver(bucket, key); resolver != nil {
+func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, bucket *string, key *string, versionID *string) {
+	if resolver := s.makeExistingObjectTagsResolver(bucket, key, versionID); resolver != nil {
 		request.ResolveExistingObjectTags = resolver
 	}
 }
@@ -1023,7 +1026,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 // UploadPartCopy). Bucket/Key identify the destination; SourceBucket/SourceKey
 // identify the copy source, so a policy can reason about both ends in a single
 // check.
-func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, srcBucket, srcKey, dstBucket, dstKey string, w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, srcBucket, srcKey string, sourceVersionID *string, dstBucket, dstKey string, w http.ResponseWriter, r *http.Request) bool {
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
 	request.SourceBucket = ptrutils.ToPtr(srcBucket)
 	request.SourceKey = ptrutils.ToPtr(srcKey)
@@ -1031,8 +1034,8 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	// created/overwritten; sourceObjectTag* predicates refer to the copy source
 	// (matching AWS, which evaluates s3:ExistingObjectTag against the source for
 	// the copy's read side).
-	s.bindExistingObjectTagsResolver(request, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey))
-	request.ResolveExistingSourceObjectTags = s.makeExistingObjectTagsResolver(ptrutils.ToPtr(srcBucket), ptrutils.ToPtr(srcKey))
+	s.bindExistingObjectTagsResolver(request, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), nil)
+	request.ResolveExistingSourceObjectTags = s.makeExistingObjectTagsResolver(ptrutils.ToPtr(srcBucket), ptrutils.ToPtr(srcKey), sourceVersionID)
 	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
@@ -1111,7 +1114,7 @@ func (s *Server) authorizeListObject(ctx context.Context, request *authorization
 			return existingTags, nil
 		}
 	} else {
-		s.bindExistingObjectTagsResolver(request, request.Bucket, &key)
+		s.bindExistingObjectTagsResolver(request, request.Bucket, &key, nil)
 	}
 	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
 }
@@ -2944,7 +2947,7 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationCopyObject, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationCopyObject, srcBucketName.String(), srcKey.String(), sourceVersionID, dstBucketName.String(), dstKey.String(), w, r)
 	if shouldReturn {
 		return
 	}
@@ -3043,6 +3046,9 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if result.VersionID != nil {
 		responseHeaders.Set(versionIDHeader, *result.VersionID)
 	}
+	if result.SourceVersionID != nil {
+		responseHeaders.Set(copySourceVersionIDHeader, *result.SourceVersionID)
+	}
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(copyObjectResult)
 	w.Write(out)
@@ -3057,7 +3063,7 @@ func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationUploadPartCopy, srcBucketName.String(), srcKey.String(), dstBucketName.String(), dstKey.String(), w, r)
+	shouldReturn := s.authorizeCopyRequest(ctx, authorization.OperationUploadPartCopy, srcBucketName.String(), srcKey.String(), sourceVersionID, dstBucketName.String(), dstKey.String(), w, r)
 	if shouldReturn {
 		return
 	}
@@ -3113,6 +3119,9 @@ func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)
+	if result.SourceVersionID != nil {
+		responseHeaders.Set(copySourceVersionIDHeader, *result.SourceVersionID)
+	}
 	w.WriteHeader(200)
 	out, _ := xmlMarshalWithDocType(copyPartResult)
 	w.Write(out)

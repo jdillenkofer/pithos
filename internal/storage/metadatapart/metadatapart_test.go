@@ -314,8 +314,10 @@ func TestCopyObjectCopiesExplicitSourceVersion(t *testing.T) {
 	_, olderVersions := versionIDsForKey(t, st, bucket, srcKey)
 	require.Len(t, olderVersions, 1)
 
-	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, &storage.CopyObjectOptions{SourceVersionID: &olderVersions[0]})
+	copyResult, err := st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, &storage.CopyObjectOptions{SourceVersionID: &olderVersions[0]})
 	require.NoError(t, err)
+	require.NotNil(t, copyResult.SourceVersionID)
+	assert.Equal(t, olderVersions[0], *copyResult.SourceVersionID)
 
 	assert.Equal(t, "old", readObjectContent(t, st, bucket, dstKey, nil))
 }
@@ -341,8 +343,10 @@ func TestUploadPartCopyCopiesExplicitSourceVersion(t *testing.T) {
 
 	createResult, err := st.CreateMultipartUpload(ctx, bucket, dstKey, nil, nil, nil)
 	require.NoError(t, err)
-	_, err = st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, createResult.UploadId, 1, &storage.UploadPartCopyOptions{SourceVersionID: &olderVersions[0]})
+	copyResult, err := st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, createResult.UploadId, 1, &storage.UploadPartCopyOptions{SourceVersionID: &olderVersions[0]})
 	require.NoError(t, err)
+	require.NotNil(t, copyResult.SourceVersionID)
+	assert.Equal(t, olderVersions[0], *copyResult.SourceVersionID)
 	_, err = st.CompleteMultipartUpload(ctx, bucket, dstKey, createResult.UploadId, nil, nil)
 	require.NoError(t, err)
 

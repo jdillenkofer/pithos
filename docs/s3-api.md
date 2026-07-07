@@ -77,12 +77,13 @@ Pithos supports the bucket lifecycle subresource (`PUT`/`GET`/`DELETE /<bucket>?
 - `Expiration` (by `Days` or `Date`).
 - `AbortIncompleteMultipartUpload` (by `DaysAfterInitiation`).
 - `Transition` (by `Days` or `Date`, to a target `StorageClass`).
+- `NoncurrentVersionExpiration` (by `NoncurrentDays`, optionally keeping `NewerNoncurrentVersions`).
 
 A background reconciler enforces these rules; because day-based due times round to the next midnight UTC, enforcement is prompt but never earlier than S3 semantics allow.
 
 A `Transition` moves the object to the target storage class (relocating its part data to that class's part store) while preserving the object version and its metadata. Transitioned objects stay immediately readable — this is `STANDARD_IA`/`GLACIER_IR`-like behavior, not `GLACIER`/`DEEP_ARCHIVE` archival, regardless of the target class name. Transition validation follows S3: exactly one of `Days`/`Date`, `Days` may be `0`, `Date` must be midnight UTC, the target must be a recognized non-`STANDARD` class, targets must be distinct within a rule, and a `Days`-based transition must be strictly earlier than a `Days`-based expiration in the same rule. When an object is due for both expiration and transition, expiration wins.
 
-`NoncurrentVersionExpiration` and `NoncurrentVersionTransition` are rejected with `NotImplemented`.
+`NoncurrentVersionTransition` is rejected with `NotImplemented`.
 
 ## Bucket Versioning
 

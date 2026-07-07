@@ -572,6 +572,7 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 
 	result := &storage.CopyObjectResult{}
 	result.VersionID = copyObjectResult.VersionId
+	result.SourceVersionID = copyObjectResult.CopySourceVersionId
 	if copyObjectResult.CopyObjectResult != nil {
 		if copyObjectResult.CopyObjectResult.ETag != nil {
 			result.ETag = *copyObjectResult.CopyObjectResult.ETag
@@ -801,6 +802,7 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 	}
 
 	result := &storage.UploadPartCopyResult{}
+	result.SourceVersionID = uploadPartCopyResult.CopySourceVersionId
 	if uploadPartCopyResult.CopyPartResult != nil {
 		if uploadPartCopyResult.CopyPartResult.ETag != nil {
 			result.ETag = *uploadPartCopyResult.CopyPartResult.ETag

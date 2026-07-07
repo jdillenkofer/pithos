@@ -1179,7 +1179,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			return err
 		}
 
-		result = storage.CopyObjectResult{ETag: dstObject.ETag, LastModified: lastModified, VersionID: dstObject.VersionID}
+		result = storage.CopyObjectResult{ETag: dstObject.ETag, LastModified: lastModified, SourceVersionID: srcObject.VersionID, VersionID: dstObject.VersionID}
 		return nil
 	})
 	if err != nil {
@@ -1844,7 +1844,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 
-		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now()}
+		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
 		return nil
 	})
 	if err != nil {

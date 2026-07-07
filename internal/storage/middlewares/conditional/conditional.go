@@ -221,8 +221,9 @@ func copySourceConditionsSatisfied(conditions storage.CopySourceConditions, obje
 	return nil
 }
 
-func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
-	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, nil)
+func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucket storage.BucketName, srcKey storage.ObjectKey, sourceVersionID *string, copyRange *storage.ByteRange, conditions storage.CopySourceConditions) (*storage.Object, []io.ReadCloser, error) {
+	headOpts := &storage.HeadObjectOptions{VersionID: sourceVersionID}
+	srcObject, err := srcStorage.HeadObject(ctx, srcBucket, srcKey, headOpts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -234,7 +235,7 @@ func readSourceForCopy(ctx context.Context, srcStorage storage.Storage, srcBucke
 	if copyRange != nil {
 		ranges = []storage.ByteRange{*copyRange}
 	}
-	getOpts := &storage.GetObjectOptions{IfMatchETag: &srcObject.ETag}
+	getOpts := &storage.GetObjectOptions{VersionID: sourceVersionID, IfMatchETag: &srcObject.ETag}
 	_, readers, err := srcStorage.GetObject(ctx, srcBucket, srcKey, ranges, getOpts)
 	if err != nil {
 		return nil, nil, err
@@ -272,12 +273,14 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 
 	var copyRange *storage.ByteRange
 	var conditions storage.CopySourceConditions
+	var sourceVersionID *string
 	var contentType *string
 	if opts != nil {
+		sourceVersionID = opts.SourceVersionID
 		copyRange = opts.Range
 		conditions = opts.CopySourceConditions
 	}
-	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, sourceVersionID, copyRange, conditions)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +306,8 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 	if putResult.ETag != nil {
 		result.ETag = *putResult.ETag
 	}
+	result.SourceVersionID = srcObject.VersionID
+	result.VersionID = putResult.VersionID
 	return result, nil
 }
 
@@ -382,11 +387,13 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 
 	var copyRange *storage.ByteRange
 	var conditions storage.CopySourceConditions
+	var sourceVersionID *string
 	if opts != nil {
+		sourceVersionID = opts.SourceVersionID
 		copyRange = opts.Range
 		conditions = opts.CopySourceConditions
 	}
-	_, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, copyRange, conditions)
+	srcObject, readers, err := readSourceForCopy(ctx, srcStorage, srcBucket, srcKey, sourceVersionID, copyRange, conditions)
 	if err != nil {
 		return nil, err
 	}
@@ -403,8 +410,9 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 		return nil, err
 	}
 	return &storage.UploadPartCopyResult{
-		ETag:         uploadResult.ETag,
-		LastModified: time.Now(),
+		ETag:            uploadResult.ETag,
+		LastModified:    time.Now(),
+		SourceVersionID: srcObject.VersionID,
 	}, nil
 }
 

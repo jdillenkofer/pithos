@@ -1,15 +1,27 @@
 package server
 
 import (
+	"context"
 	"encoding/xml"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+type objectTaggingResolverStorage struct {
+	delegator.DelegatingStorage
+	seenOpts *storage.ObjectTaggingOptions
+}
+
+func (s *objectTaggingResolverStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
+	s.seenOpts = opts
+	return map[string]string{"state": "archived"}, nil
+}
 
 func TestTaggingHeaderAppliesOnlyToTagStoringOperations(t *testing.T) {
 	testutils.SkipIfIntegration(t)
@@ -29,6 +41,26 @@ func TestTaggingHeaderAppliesOnlyToTagStoringOperations(t *testing.T) {
 	copyRequest := httptest.NewRequest("PUT", "/bucket/key", nil)
 	copyRequest.Header.Set(taggingDirectiveHeader, "COPY")
 	require.False(t, taggingHeaderApplies(authorization.OperationCopyObject, copyRequest))
+}
+
+func TestExistingObjectTagsResolverUsesVersionID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	st := &objectTaggingResolverStorage{}
+	server := &Server{storage: st}
+	bucket := "bucket"
+	key := "key"
+	versionID := "version-1"
+
+	resolver := server.makeExistingObjectTagsResolver(&bucket, &key, &versionID)
+	require.NotNil(t, resolver)
+	tags, err := resolver(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"state": "archived"}, tags)
+	require.NotNil(t, st.seenOpts)
+	require.NotNil(t, st.seenOpts.VersionID)
+	require.Equal(t, versionID, *st.seenOpts.VersionID)
 }
 
 func TestUnmarshalTaggingParsesTagSet(t *testing.T) {

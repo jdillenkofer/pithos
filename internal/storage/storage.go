@@ -234,6 +234,8 @@ type CopyObjectOptions struct {
 type CopyObjectResult struct {
 	ETag         string
 	LastModified time.Time
+	// SourceVersionID is the version id of the copied source object when known.
+	SourceVersionID *string
 	// VersionID is the version id of the newly created destination object when
 	// the destination bucket has versioning enabled.
 	VersionID *string
@@ -250,8 +252,9 @@ type UploadPartCopyOptions struct {
 }
 
 type UploadPartCopyResult struct {
-	ETag         string
-	LastModified time.Time
+	ETag            string
+	LastModified    time.Time
+	SourceVersionID *string
 }
 
 type InitiateMultipartUploadResult struct {
