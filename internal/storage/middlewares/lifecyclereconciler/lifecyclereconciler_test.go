@@ -519,13 +519,63 @@ func TestReconcileExpiresEligibleNoncurrentVersions(t *testing.T) {
 	assert.Equal(t, []string{"logs/a\x00v1"}, f.deletedVersions)
 }
 
+func TestReconcileNoncurrentVersionAgeStartsWhenSuccessorWasCreated(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/recent-overwrite", "latest", true, false, 10, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/recent-overwrite", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.addVersion(bucket.String(), "logs/old-overwrite", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/old-overwrite", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/old-overwrite\x00old"}, f.deletedVersions)
+}
+
+func TestReconcileNoncurrentVersionAgeStartsFromDeleteMarkerSuccessor(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "logs/recent-delete", "dm", true, true, 0, now.Add(-time.Hour), nil)
+	f.addVersion(bucket.String(), "logs/recent-delete", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.addVersion(bucket.String(), "logs/old-delete", "dm", true, true, 0, now.AddDate(0, 0, -10), nil)
+	f.addVersion(bucket.String(), "logs/old-delete", "old", false, false, 10, now.AddDate(-1, 0, 0), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{{
+			Status: storage.LifecycleRuleStatusEnabled,
+			Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+			NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(3)),
+			},
+		}},
+	}
+
+	reconcile(f, now)
+
+	assert.Equal(t, []string{"logs/old-delete\x00old"}, f.deletedVersions)
+}
+
 func TestReconcileNoncurrentVersionsHonorsTagAndSizeFilters(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	f := newFakeStorage()
 	bucket := f.addBucket("test-bucket")
 	now := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
-	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now, nil)
+	f.addVersion(bucket.String(), "logs/a", "latest", true, false, 10, now.AddDate(0, 0, -10), nil)
 	f.addVersion(bucket.String(), "logs/a", "match", false, false, 150, now.AddDate(0, 0, -30), map[string]string{"env": "prod"})
 	f.addVersion(bucket.String(), "logs/a", "wrong-tag", false, false, 150, now.AddDate(0, 0, -31), map[string]string{"env": "dev"})
 	f.addVersion(bucket.String(), "logs/a", "too-small", false, false, 50, now.AddDate(0, 0, -32), map[string]string{"env": "prod"})

@@ -230,13 +230,17 @@ func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersions(ct
 			if version.IsLatest || version.IsDeleteMarker {
 				continue
 			}
-			m.expireNoncurrentObjectVersionIfDue(ctx, bucketName, version, newerNoncurrentVersions, rules)
+			if i == 0 {
+				continue
+			}
+			noncurrentSince := versions[i-1].LastModified
+			m.expireNoncurrentObjectVersionIfDue(ctx, bucketName, version, noncurrentSince, newerNoncurrentVersions, rules)
 			newerNoncurrentVersions++
 		}
 	}
 }
 
-func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDue(ctx context.Context, bucketName storage.BucketName, version *storage.ObjectVersion, newerNoncurrentVersions int, rules []*storage.LifecycleRule) {
+func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDue(ctx context.Context, bucketName storage.BucketName, version *storage.ObjectVersion, noncurrentSince time.Time, newerNoncurrentVersions int, rules []*storage.LifecycleRule) {
 	now := m.now()
 	var tags map[string]string
 	tagsFetched := false
@@ -245,7 +249,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDu
 		if expiration == nil {
 			continue
 		}
-		dueTime := storage.LifecycleNoncurrentExpirationDueTime(rule, version.LastModified)
+		dueTime := storage.LifecycleNoncurrentExpirationDueTime(rule, noncurrentSince)
 		if dueTime == nil || now.Before(*dueTime) {
 			continue
 		}
