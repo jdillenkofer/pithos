@@ -33,7 +33,7 @@ func TestLifecycleNoncurrentVersionExpirationRoundTrips(t *testing.T) {
 	require.Equal(t, int32(2), *response.Rules[0].NoncurrentVersionExpiration.NewerNoncurrentVersions)
 }
 
-func TestLifecycleTransitionElementsAreRecognizedForRejection(t *testing.T) {
+func TestLifecycleTransitionElementsAreRecognized(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	body := `<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter></Filter><Transition><Days>1</Days><StorageClass>GLACIER</StorageClass></Transition><NoncurrentVersionTransition><NoncurrentDays>1</NoncurrentDays><StorageClass>GLACIER</StorageClass></NoncurrentVersionTransition></Rule></LifecycleConfiguration>`
@@ -43,6 +43,15 @@ func TestLifecycleTransitionElementsAreRecognizedForRejection(t *testing.T) {
 	require.Len(t, request.Rules, 1)
 	require.Len(t, request.Rules[0].Transitions, 1)
 	require.Len(t, request.Rules[0].NoncurrentVersionTransitions, 1)
+
+	request.Rules[0].NoncurrentVersionTransitions = nil
+	config, validationErr := convertLifecycleConfigurationFromXML(&request)
+	require.Nil(t, validationErr)
+	require.Nil(t, storage.ValidateBucketLifecycleConfiguration(config))
+	require.Len(t, config.Rules, 1)
+	require.Len(t, config.Rules[0].Transitions, 1)
+	require.Equal(t, int32(1), *config.Rules[0].Transitions[0].Days)
+	require.Equal(t, "GLACIER", config.Rules[0].Transitions[0].StorageClass)
 }
 
 func TestLifecycleNoncurrentVersionExpirationToXML(t *testing.T) {

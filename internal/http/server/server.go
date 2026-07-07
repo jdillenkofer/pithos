@@ -3977,7 +3977,7 @@ func (s *Server) putBucketLifecycleHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	for _, rule := range request.Rules {
-		if len(rule.Transitions) > 0 || len(rule.NoncurrentVersionTransitions) > 0 {
+		if len(rule.NoncurrentVersionTransitions) > 0 {
 			writeNotImplemented(w, r, "Transition actions are not supported")
 			return
 		}
