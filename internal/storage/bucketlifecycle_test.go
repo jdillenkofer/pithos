@@ -502,19 +502,46 @@ func TestValidateLifecycleAcceptsNoncurrentVersionExpiration(t *testing.T) {
 func TestValidateLifecycleRejectsInvalidNoncurrentVersionExpiration(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	rule := LifecycleRule{
-		Status: LifecycleRuleStatusEnabled,
-		Filter: &LifecycleFilter{},
-		NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{
-			NoncurrentDays: ptrutils.ToPtr(int32(0)),
-		},
+	baseRule := func() LifecycleRule {
+		return LifecycleRule{
+			Status: LifecycleRuleStatusEnabled,
+			Filter: &LifecycleFilter{},
+			NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{
+				NoncurrentDays: ptrutils.ToPtr(int32(30)),
+			},
+		}
 	}
+
+	rule := baseRule()
+	rule.NoncurrentVersionExpiration.NoncurrentDays = ptrutils.ToPtr(int32(0))
 	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
 	require.NotNil(t, err)
 	assert.Equal(t, "InvalidArgument", err.Code)
 
-	rule.NoncurrentVersionExpiration = &LifecycleNoncurrentVersionExpiration{
-		NewerNoncurrentVersions: ptrutils.ToPtr(int32(-1)),
+	rule = baseRule()
+	rule.NoncurrentVersionExpiration = &LifecycleNoncurrentVersionExpiration{}
+	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "MalformedXML", err.Code)
+
+	for _, newerNoncurrentVersions := range []int32{0, -1, 101} {
+		rule = baseRule()
+		rule.NoncurrentVersionExpiration = &LifecycleNoncurrentVersionExpiration{
+			NoncurrentDays:          ptrutils.ToPtr(int32(30)),
+			NewerNoncurrentVersions: ptrutils.ToPtr(newerNoncurrentVersions),
+		}
+		err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+		require.NotNil(t, err)
+		assert.Equal(t, "InvalidArgument", err.Code)
+	}
+
+	rule = LifecycleRule{
+		Status: LifecycleRuleStatusEnabled,
+		Prefix: ptrutils.ToPtr("logs/"),
+		NoncurrentVersionExpiration: &LifecycleNoncurrentVersionExpiration{
+			NoncurrentDays:          ptrutils.ToPtr(int32(30)),
+			NewerNoncurrentVersions: ptrutils.ToPtr(int32(2)),
+		},
 	}
 	err = ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
 	require.NotNil(t, err)

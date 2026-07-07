@@ -108,7 +108,7 @@ func validateLifecycleRule(rule *LifecycleRule) *LifecycleValidationError {
 		}
 	}
 	if rule.NoncurrentVersionExpiration != nil {
-		if err := validateLifecycleNoncurrentVersionExpiration(rule.NoncurrentVersionExpiration); err != nil {
+		if err := validateLifecycleNoncurrentVersionExpiration(rule); err != nil {
 			return err
 		}
 	}
@@ -157,15 +157,21 @@ func validateLifecycleTransitions(rule *LifecycleRule) *LifecycleValidationError
 	return nil
 }
 
-func validateLifecycleNoncurrentVersionExpiration(expiration *LifecycleNoncurrentVersionExpiration) *LifecycleValidationError {
-	if expiration.NoncurrentDays == nil && expiration.NewerNoncurrentVersions == nil {
-		return malformedLifecycleXML("NoncurrentVersionExpiration action must specify NoncurrentDays or NewerNoncurrentVersions")
+func validateLifecycleNoncurrentVersionExpiration(rule *LifecycleRule) *LifecycleValidationError {
+	expiration := rule.NoncurrentVersionExpiration
+	if expiration.NoncurrentDays == nil {
+		return malformedLifecycleXML("NoncurrentVersionExpiration action must specify NoncurrentDays")
 	}
-	if expiration.NoncurrentDays != nil && *expiration.NoncurrentDays <= 0 {
+	if *expiration.NoncurrentDays <= 0 {
 		return invalidLifecycleArgument("'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer")
 	}
-	if expiration.NewerNoncurrentVersions != nil && *expiration.NewerNoncurrentVersions < 0 {
-		return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be a non-negative integer")
+	if expiration.NewerNoncurrentVersions != nil {
+		if *expiration.NewerNoncurrentVersions < 1 || *expiration.NewerNoncurrentVersions > 100 {
+			return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be between 1 and 100")
+		}
+		if rule.Filter == nil {
+			return invalidLifecycleArgument("'NewerNoncurrentVersions' for NoncurrentVersionExpiration action requires a Filter")
+		}
 	}
 	return nil
 }
