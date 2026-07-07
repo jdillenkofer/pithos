@@ -612,6 +612,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 						ChecksumSHA1:      partEntity.ChecksumSHA1,
 						ChecksumSHA256:    partEntity.ChecksumSHA256,
 						Size:              partEntity.Size,
+						StoreName:         partEntity.PartStoreName,
 					}
 					parts = append(parts, partStruc)
 				}
@@ -631,6 +632,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					ChecksumSHA256:    objectEntity.ChecksumSHA256,
 					ChecksumType:      objectEntity.ChecksumType,
 					Size:              objectEntity.Size,
+					StorageClass:      objectEntity.StorageClass,
 					Parts:             parts,
 				})
 				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
@@ -785,6 +787,7 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 				LastModified:   entity.UpdatedAt,
 				Size:           entity.Size,
 				ETag:           &entity.ETag,
+				StorageClass:   entity.StorageClass,
 			})
 			emittedCount++
 			nextKey := entity.Key.String()
@@ -840,6 +843,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 			ChecksumSHA1:      partEntity.ChecksumSHA1,
 			ChecksumSHA256:    partEntity.ChecksumSHA256,
 			Size:              partEntity.Size,
+			StoreName:         partEntity.PartStoreName,
 		}
 	}, partEntities)
 
@@ -868,6 +872,7 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumSHA256:    objectEntity.ChecksumSHA256,
 		ChecksumType:      objectEntity.ChecksumType,
 		Size:              objectEntity.Size,
+		StorageClass:      objectEntity.StorageClass,
 		Parts:             parts,
 		Tags:              tags,
 		Metadata:          metadata,
@@ -901,7 +906,7 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 			return nil, err
 		}
 		parts = sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
-			return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size}
+			return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size, StoreName: partEntity.PartStoreName}
 		}, partEntities)
 	}
 
@@ -916,7 +921,7 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 		return nil, err
 	}
 
-	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, Parts: parts, Tags: tags, Metadata: metadata}, nil
+	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, StorageClass: objectEntity.StorageClass, Parts: parts, Tags: tags, Metadata: metadata}, nil
 }
 
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
@@ -985,6 +990,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		ChecksumSHA256:    obj.ChecksumSHA256,
 		ChecksumType:      obj.ChecksumType,
 		Size:              obj.Size,
+		StorageClass:      obj.StorageClass,
 		IsDeleteMarker:    false,
 		IsLatest:          true,
 		UploadStatus:      object.UploadStatusCompleted,
@@ -1061,6 +1067,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 			ChecksumSHA256:    partStruc.ChecksumSHA256,
 			Size:              partStruc.Size,
 			SequenceNumber:    sequenceNumber,
+			PartStoreName:     partStruc.StoreName,
 		}
 		err = sms.partRepository.SavePart(ctx, tx, &partEntity)
 		if err != nil {
@@ -1116,6 +1123,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			ETag:           obj.ETag,
 			ChecksumType:   obj.ChecksumType,
 			Size:           obj.Size,
+			StorageClass:   oldObjectEntity.StorageClass,
 			VersionID:      oldObjectEntity.VersionID,
 			IsLatest:       true,
 			IsDeleteMarker: false,
@@ -1149,6 +1157,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 				ChecksumSHA256:    partStruc.ChecksumSHA256,
 				Size:              partStruc.Size,
 				SequenceNumber:    sequenceNumber,
+				PartStoreName:     partStruc.StoreName,
 			}
 			err = sms.partRepository.SavePart(ctx, tx, &partEntity)
 			if err != nil {
@@ -1167,6 +1176,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		ETag:           obj.ETag,
 		ChecksumType:   obj.ChecksumType,
 		Size:           obj.Size,
+		StorageClass:   obj.StorageClass,
 		VersionID:      ptrutils.ToPtr("null"),
 		IsLatest:       true,
 		IsDeleteMarker: false,
@@ -1191,6 +1201,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 			ChecksumSHA256:    partStruc.ChecksumSHA256,
 			Size:              partStruc.Size,
 			SequenceNumber:    sequenceNumber,
+			PartStoreName:     partStruc.StoreName,
 		}
 		err = sms.partRepository.SavePart(ctx, tx, &partEntity)
 		if err != nil {
@@ -1479,6 +1490,68 @@ func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx
 	return sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 }
 
+func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, expectedETag string, storageClass string, parts []metadatastore.Part) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.TransitionObject")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if !*exists {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
+	if err != nil {
+		return err
+	}
+	if objectEntity == nil || objectEntity.IsDeleteMarker {
+		return metadatastore.ErrNoSuchKey
+	}
+	if objectEntity.ETag != expectedETag {
+		return metadatastore.ErrPreconditionFailed
+	}
+
+	objectEntity.StorageClass = &storageClass
+	// Guard against a concurrent replacement between the read and the update.
+	updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, objectEntity, objectEntity.OptimisticLockVersion)
+	if err != nil {
+		return err
+	}
+	if !*updated {
+		return metadatastore.ErrPreconditionFailed
+	}
+
+	// Replace the part rows with the relocated parts (new ids in the target
+	// store). The old rows' part data becomes unreferenced and is collected by
+	// the per-store GC.
+	if err := sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id); err != nil {
+		return err
+	}
+	sequenceNumber := 0
+	for _, partStruc := range parts {
+		partEntity := part.Entity{
+			PartId:            partStruc.Id,
+			ObjectId:          *objectEntity.Id,
+			ETag:              partStruc.ETag,
+			ChecksumCRC32:     partStruc.ChecksumCRC32,
+			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
+			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
+			ChecksumSHA1:      partStruc.ChecksumSHA1,
+			ChecksumSHA256:    partStruc.ChecksumSHA256,
+			Size:              partStruc.Size,
+			SequenceNumber:    sequenceNumber,
+			PartStoreName:     partStruc.StoreName,
+		}
+		if err := sms.partRepository.SavePart(ctx, tx, &partEntity); err != nil {
+			return err
+		}
+		sequenceNumber++
+	}
+	return nil
+}
+
 func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
@@ -1507,6 +1580,11 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		UploadId:       ptrutils.ToPtr(metadatastore.NewRandomUploadId()),
 		UploadStatus:   object.UploadStatusPending,
 	}
+	if opts != nil {
+		// The class chosen at CreateMultipartUpload is carried to the final
+		// object because CompleteMultipartUpload reuses this row.
+		objectEntity.StorageClass = opts.StorageClass
+	}
 	if opts != nil && opts.Metadata != nil {
 		applySystemMetadataToEntity(&objectEntity, *opts.Metadata)
 	}
@@ -1531,6 +1609,34 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 
 	return &metadatastore.InitiateMultipartUploadResult{
 		UploadId: *objectEntity.UploadId,
+	}, nil
+}
+
+func (sms *sqlMetadataStore) GetMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.Upload, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetMultipartUpload")
+	defer span.End()
+
+	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if !*exists {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
+	if err != nil {
+		return nil, err
+	}
+	if objectEntity == nil {
+		return nil, metadatastore.ErrNoSuchKey
+	}
+
+	return &metadatastore.Upload{
+		Key:          objectEntity.Key,
+		UploadId:     *objectEntity.UploadId,
+		Initiated:    objectEntity.CreatedAt,
+		StorageClass: objectEntity.StorageClass,
 	}, nil
 }
 
@@ -1565,6 +1671,7 @@ func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketN
 		ChecksumSHA256:    blb.ChecksumSHA256,
 		Size:              blb.Size,
 		SequenceNumber:    int(partNumber),
+		PartStoreName:     blb.StoreName,
 	}
 	err = sms.partRepository.SavePart(ctx, tx, &partEntity)
 	if err != nil {
@@ -1783,7 +1890,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			}
 
 			deletedParts = append(deletedParts, sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
-				return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size}
+				return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size, StoreName: partEntity.PartStoreName}
 			}, oldPartEntities)...)
 
 			if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil && latestObjectEntity.Id != nil && nullVersionEntity.Id != nil && *latestObjectEntity.Id == *nullVersionEntity.Id {
@@ -1898,6 +2005,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 			ChecksumSHA1:      partEntity.ChecksumSHA1,
 			ChecksumSHA256:    partEntity.ChecksumSHA256,
 			Size:              partEntity.Size,
+			StoreName:         partEntity.PartStoreName,
 		}
 	}, partEntities)
 
@@ -1983,9 +2091,10 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
 				uploads = append(uploads, metadatastore.Upload{
-					Key:       objectEntity.Key,
-					UploadId:  *objectEntity.UploadId,
-					Initiated: objectEntity.CreatedAt,
+					Key:          objectEntity.Key,
+					UploadId:     *objectEntity.UploadId,
+					Initiated:    objectEntity.CreatedAt,
+					StorageClass: objectEntity.StorageClass,
 				})
 			}
 			nextKeyMarker = objectEntity.Key.String()
@@ -2083,5 +2192,6 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		MaxParts:             opts.MaxParts,
 		IsTruncated:          isTruncated,
 		Parts:                parts,
+		StorageClass:         objectEntity.StorageClass,
 	}, nil
 }

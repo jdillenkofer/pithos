@@ -193,6 +193,7 @@ func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.B
 			ETag:         *object.ETag,
 			ChecksumType: checksumType,
 			Size:         *object.Size,
+			StorageClass: storageClassFromAWS(object.StorageClass),
 		}
 	}, listObjectsResult.Contents)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -226,7 +227,7 @@ func (rs *s3ClientStorage) ListObjectVersions(ctx context.Context, bucketName st
 		if version.Key == nil || version.VersionId == nil || version.LastModified == nil {
 			continue
 		}
-		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*version.Key), VersionID: *version.VersionId, IsDeleteMarker: false, IsLatest: aws.ToBool(version.IsLatest), LastModified: *version.LastModified, Size: aws.ToInt64(version.Size), ETag: version.ETag})
+		versions = append(versions, storage.ObjectVersion{Key: storage.MustNewObjectKey(*version.Key), VersionID: *version.VersionId, IsDeleteMarker: false, IsLatest: aws.ToBool(version.IsLatest), LastModified: *version.LastModified, Size: aws.ToInt64(version.Size), ETag: version.ETag, StorageClass: storageClassFromAWS(version.StorageClass)})
 	}
 	for _, marker := range result.DeleteMarkers {
 		if marker.Key == nil || marker.VersionId == nil || marker.LastModified == nil {
@@ -277,6 +278,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 		ChecksumSHA256:    headObjectResult.ChecksumSHA256,
 		ChecksumType:      (*string)(&headObjectResult.ChecksumType),
 		Size:              *headObjectResult.ContentLength,
+		StorageClass:      storageClassFromAWS(headObjectResult.StorageClass),
 		Metadata: storage.ObjectMetadata{
 			CacheControl:            headObjectResult.CacheControl,
 			ContentDisposition:      headObjectResult.ContentDisposition,
@@ -383,6 +385,17 @@ func contentMD5FromETag(etag *string) *string {
 	return &encoded
 }
 
+// storageClassFromAWS converts an AWS SDK storage class enum (each API uses
+// its own string type) into the internal representation, mapping the SDK's
+// zero value ("not present") to nil.
+func storageClassFromAWS[T ~string](storageClass T) *string {
+	if storageClass == "" {
+		return nil
+	}
+	value := string(storageClass)
+	return &value
+}
+
 // parseExpires parses the stored raw Expires header value into a time.Time for
 // the AWS SDK, which only accepts a parsed timestamp on requests. Unparseable
 // values are dropped.
@@ -435,6 +448,9 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		input.Expires = parseExpires(opts.Metadata.Expires)
 		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		input.Metadata = opts.Metadata.UserMetadata
+	}
+	if opts != nil && opts.StorageClass != nil {
+		input.StorageClass = types.StorageClass(*opts.StorageClass)
 	}
 	putObjectResult, err := rs.s3Client.PutObject(ctx, input)
 	var notFoundError *types.NotFound
@@ -535,6 +551,9 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 		if opts.Metadata != nil {
 			input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		}
+		if opts.StorageClass != nil {
+			input.StorageClass = types.StorageClass(*opts.StorageClass)
+		}
 		input.CopySourceIfMatch = opts.CopySourceConditions.IfMatch
 		input.CopySourceIfNoneMatch = opts.CopySourceConditions.IfNoneMatch
 		input.CopySourceIfModifiedSince = opts.CopySourceConditions.IfModifiedSince
@@ -561,6 +580,28 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 
 func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, _ io.Reader, _ *storage.ChecksumInput, _ *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
 	return nil, storage.ErrNotImplemented
+}
+
+func (rs *s3ClientStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.TransitionObjectStorageClass")
+	defer span.End()
+
+	// A remote S3 backend changes an object's storage class via an in-place
+	// self copy that keeps the existing metadata.
+	input := &s3.CopyObjectInput{
+		Bucket:            aws.String(bucketName.String()),
+		Key:               aws.String(key.String()),
+		CopySource:        aws.String(copySourceValue(bucketName, key)),
+		MetadataDirective: types.MetadataDirectiveCopy,
+		StorageClass:      types.StorageClass(targetStorageClass),
+	}
+	if opts != nil && opts.IfMatchETag != nil {
+		input.CopySourceIfMatch = opts.IfMatchETag
+	}
+	if _, err := rs.s3Client.CopyObject(ctx, input); err != nil {
+		return translateS3CopyError(err)
+	}
+	return nil
 }
 
 func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
@@ -672,6 +713,9 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		input.Expires = parseExpires(opts.Metadata.Expires)
 		input.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
 		input.Metadata = opts.Metadata.UserMetadata
+	}
+	if opts != nil && opts.StorageClass != nil {
+		input.StorageClass = types.StorageClass(*opts.StorageClass)
 	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound
@@ -864,9 +908,10 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 
 	uploads := sliceutils.Map(func(upload types.MultipartUpload) storage.Upload {
 		return storage.Upload{
-			Key:       storage.MustNewObjectKey(*upload.Key),
-			UploadId:  storage.MustNewUploadId(*upload.UploadId),
-			Initiated: *upload.Initiated,
+			Key:          storage.MustNewObjectKey(*upload.Key),
+			UploadId:     storage.MustNewUploadId(*upload.UploadId),
+			Initiated:    *upload.Initiated,
+			StorageClass: storageClassFromAWS(upload.StorageClass),
 		}
 	}, listMultipartUploadsResult.Uploads)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -926,6 +971,7 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 				Size:              *part.Size,
 			}
 		}, listPartsResult.Parts),
+		StorageClass: storageClassFromAWS(listPartsResult.StorageClass),
 	}, nil
 }
 
@@ -1177,11 +1223,44 @@ func convertLifecycleTagToSdk(tag *storage.LifecycleTag) *types.Tag {
 	}
 }
 
+func convertLifecycleTransitionsFromSdk(transitions []types.Transition) []storage.LifecycleTransition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]storage.LifecycleTransition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, storage.LifecycleTransition{
+			Days:         transition.Days,
+			Date:         transition.Date,
+			StorageClass: string(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
+func convertLifecycleTransitionsToSdk(transitions []storage.LifecycleTransition) []types.Transition {
+	if len(transitions) == 0 {
+		return nil
+	}
+
+	converted := make([]types.Transition, 0, len(transitions))
+	for _, transition := range transitions {
+		converted = append(converted, types.Transition{
+			Days:         transition.Days,
+			Date:         transition.Date,
+			StorageClass: types.TransitionStorageClass(transition.StorageClass),
+		})
+	}
+	return converted
+}
+
 func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule {
 	converted := storage.LifecycleRule{
-		ID:     rule.ID,
-		Status: string(rule.Status),
-		Prefix: rule.Prefix,
+		ID:          rule.ID,
+		Status:      string(rule.Status),
+		Prefix:      rule.Prefix,
+		Transitions: convertLifecycleTransitionsFromSdk(rule.Transitions),
 	}
 	if rule.Filter != nil {
 		filter := &storage.LifecycleFilter{
@@ -1220,9 +1299,10 @@ func convertLifecycleRuleFromSdk(rule types.LifecycleRule) storage.LifecycleRule
 
 func convertLifecycleRuleToSdk(rule storage.LifecycleRule) types.LifecycleRule {
 	converted := types.LifecycleRule{
-		ID:     rule.ID,
-		Status: types.ExpirationStatus(rule.Status),
-		Prefix: rule.Prefix,
+		ID:          rule.ID,
+		Status:      types.ExpirationStatus(rule.Status),
+		Prefix:      rule.Prefix,
+		Transitions: convertLifecycleTransitionsToSdk(rule.Transitions),
 	}
 	if rule.Filter != nil {
 		filter := &types.LifecycleRuleFilter{

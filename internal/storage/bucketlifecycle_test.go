@@ -346,3 +346,141 @@ func TestLifecycleAbortDueTime(t *testing.T) {
 	require.NotNil(t, due)
 	assert.Equal(t, time.Date(2014, 1, 23, 0, 0, 0, 0, time.UTC), *due)
 }
+
+func validTransitionRule() LifecycleRule {
+	return LifecycleRule{
+		ID:     ptrutils.ToPtr("transition-rule"),
+		Status: LifecycleRuleStatusEnabled,
+		Filter: &LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")},
+		Transitions: []LifecycleTransition{
+			{Days: ptrutils.ToPtr(int32(30)), StorageClass: "GLACIER"},
+		},
+	}
+}
+
+func TestValidateLifecycleAcceptsTransitionOnlyRule(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	config := &BucketLifecycleConfiguration{Rules: []LifecycleRule{validTransitionRule()}}
+	require.Nil(t, ValidateBucketLifecycleConfiguration(config))
+}
+
+func TestValidateLifecycleAcceptsTransitionWithZeroDays(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Days = ptrutils.ToPtr(int32(0))
+	config := &BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}}
+	require.Nil(t, ValidateBucketLifecycleConfiguration(config))
+}
+
+func TestValidateLifecycleAcceptsTransitionWithMidnightDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Days = nil
+	rule.Transitions[0].Date = ptrutils.ToPtr(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	config := &BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}}
+	require.Nil(t, ValidateBucketLifecycleConfiguration(config))
+}
+
+func TestValidateLifecycleRejectsTransitionWithDaysAndDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Date = ptrutils.ToPtr(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "MalformedXML", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionWithoutDaysOrDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Days = nil
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "MalformedXML", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionWithNegativeDays(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Days = ptrutils.ToPtr(int32(-1))
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionWithNonMidnightDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].Days = nil
+	rule.Transitions[0].Date = ptrutils.ToPtr(time.Date(2030, 1, 1, 10, 30, 0, 0, time.UTC))
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionWithInvalidStorageClass(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].StorageClass = "FROZEN_SOLID"
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionToStandard(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions[0].StorageClass = StorageClassStandard
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestValidateLifecycleRejectsDuplicateTransitionTargets(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Transitions = append(rule.Transitions, LifecycleTransition{Days: ptrutils.ToPtr(int32(60)), StorageClass: "GLACIER"})
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestValidateLifecycleRejectsTransitionDaysNotBeforeExpirationDays(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	rule := validTransitionRule()
+	rule.Expiration = &LifecycleExpiration{Days: ptrutils.ToPtr(int32(30))}
+	err := ValidateBucketLifecycleConfiguration(&BucketLifecycleConfiguration{Rules: []LifecycleRule{rule}})
+	require.NotNil(t, err)
+	assert.Equal(t, "InvalidArgument", err.Code)
+}
+
+func TestLifecycleTransitionDueTimeRoundsToNextMidnightUTC(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	transition := LifecycleTransition{Days: ptrutils.ToPtr(int32(3)), StorageClass: "GLACIER"}
+	created := time.Date(2014, 1, 15, 10, 30, 0, 0, time.UTC)
+	due := LifecycleTransitionDueTime(&transition, created)
+	require.NotNil(t, due)
+	assert.Equal(t, time.Date(2014, 1, 19, 0, 0, 0, 0, time.UTC), *due)
+}
+
+func TestLifecycleTransitionDueTimeUsesDateVerbatim(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	date := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	transition := LifecycleTransition{Date: &date, StorageClass: "GLACIER"}
+	due := LifecycleTransitionDueTime(&transition, time.Now())
+	require.NotNil(t, due)
+	assert.Equal(t, date, *due)
+}

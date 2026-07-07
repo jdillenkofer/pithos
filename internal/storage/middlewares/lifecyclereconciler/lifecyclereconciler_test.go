@@ -27,6 +27,13 @@ type fakeStorage struct {
 	uploads         map[string][]storage.Upload
 	deletedKeys     []string
 	abortedUploads  []string
+	transitions     []transitionCall
+}
+
+type transitionCall struct {
+	key          string
+	storageClass string
+	ifMatchETag  *string
 }
 
 func newFakeStorage() *fakeStorage {
@@ -100,6 +107,22 @@ func (f *fakeStorage) AbortMultipartUpload(_ context.Context, _ storage.BucketNa
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.abortedUploads = append(f.abortedUploads, uploadId.String())
+	return nil
+}
+
+func (f *fakeStorage) TransitionObjectStorageClass(_ context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ifMatchETag *string
+	if opts != nil {
+		ifMatchETag = opts.IfMatchETag
+	}
+	f.transitions = append(f.transitions, transitionCall{key: key.String(), storageClass: targetStorageClass, ifMatchETag: ifMatchETag})
+	for i := range f.objects[bucketName.String()] {
+		if f.objects[bucketName.String()][i].Key.Equals(key) {
+			f.objects[bucketName.String()][i].StorageClass = &targetStorageClass
+		}
+	}
 	return nil
 }
 
@@ -303,4 +326,122 @@ func TestStartAndStopRunTheBackgroundTask(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return f.objectCount(bucket.String()) == 0
 	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func enabledTransitionRule(prefix string, days int32, storageClass string) storage.LifecycleRule {
+	return storage.LifecycleRule{
+		Status: storage.LifecycleRuleStatusEnabled,
+		Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr(prefix)},
+		Transitions: []storage.LifecycleTransition{
+			{Days: ptrutils.ToPtr(days), StorageClass: storageClass},
+		},
+	}
+}
+
+func TestReconcileTransitionsDueObjects(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -10)
+	f.addObject(bucket.String(), "cold/old.bin", 10, old, nil)
+	f.addObject(bucket.String(), "cold/new.bin", 10, now.Add(-time.Hour), nil)
+	f.addObject(bucket.String(), "hot/old.bin", 10, old, nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledTransitionRule("cold/", 3, "GLACIER")},
+	}
+
+	reconcile(f, now)
+
+	require.Len(t, f.transitions, 1)
+	assert.Equal(t, "cold/old.bin", f.transitions[0].key)
+	assert.Equal(t, "GLACIER", f.transitions[0].storageClass)
+	require.NotNil(t, f.transitions[0].ifMatchETag)
+	assert.Equal(t, "etag-cold/old.bin", *f.transitions[0].ifMatchETag)
+}
+
+func TestReconcileSkipsTransitionWhenAlreadyInTargetClass(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.objects[bucket.String()] = append(f.objects[bucket.String()], storage.Object{
+		Key:          storage.MustNewObjectKey("cold/a.bin"),
+		LastModified: now.AddDate(0, 0, -10),
+		ETag:         "etag-cold/a.bin",
+		Size:         10,
+		StorageClass: ptrutils.ToPtr("GLACIER"),
+	})
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledTransitionRule("cold/", 3, "GLACIER")},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.transitions)
+}
+
+func TestReconcileExpirationTakesPrecedenceOverTransition(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "data/a.bin", 10, now.AddDate(0, 0, -10), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{
+			{
+				Status:      storage.LifecycleRuleStatusEnabled,
+				Filter:      &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("data/")},
+				Transitions: []storage.LifecycleTransition{{Days: ptrutils.ToPtr(int32(3)), StorageClass: "GLACIER"}},
+				Expiration:  &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(5))},
+			},
+		},
+	}
+
+	reconcile(f, now)
+
+	// The object is due for both; expiration runs first and deletes it, so the
+	// transition never sees it.
+	assert.Equal(t, []string{"data/a.bin"}, f.deletedKeys)
+	assert.Empty(t, f.transitions)
+}
+
+func TestReconcilePicksMostAdvancedDueTransition(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "cold/a.bin", 10, now.AddDate(0, 0, -100), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{
+			enabledTransitionRule("cold/", 30, "STANDARD_IA"),
+			enabledTransitionRule("cold/", 90, "GLACIER"),
+		},
+	}
+
+	reconcile(f, now)
+
+	// Both transitions are due; the later one (GLACIER) wins.
+	require.Len(t, f.transitions, 1)
+	assert.Equal(t, "GLACIER", f.transitions[0].storageClass)
+}
+
+func TestReconcileDoesNotTransitionNotYetDueObjects(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	f := newFakeStorage()
+	bucket := f.addBucket("test-bucket")
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	f.addObject(bucket.String(), "cold/a.bin", 10, now.Add(-time.Hour), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{
+		Rules: []storage.LifecycleRule{enabledTransitionRule("cold/", 30, "GLACIER")},
+	}
+
+	reconcile(f, now)
+
+	assert.Empty(t, f.transitions)
 }

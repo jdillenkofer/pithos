@@ -28,6 +28,9 @@ type Entity struct {
 	ChecksumSHA256    *string
 	Size              int64
 	SequenceNumber    int
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// PartStoreName is the name of the part store holding this part's data;
+	// nil means the default part store (rows created before named stores).
+	PartStoreName *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

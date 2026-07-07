@@ -404,6 +404,7 @@ func (s *SftpPartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 type SqlPartStoreConfiguration struct {
 	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase          json.RawMessage                     `json:"db"`
+	PartStoreId          internalConfig.StringProvider       `json:"partStoreId,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -565,7 +566,7 @@ func (s *SqlPartStoreConfiguration) Instantiate(diProvider dependencyinjection.D
 	if err != nil {
 		return nil, err
 	}
-	return sqlPartStore.New(db, partContentRepository)
+	return sqlPartStore.New(db, partContentRepository, sqlPartStore.WithPartStoreId(s.PartStoreId.Value()))
 }
 
 func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error) {

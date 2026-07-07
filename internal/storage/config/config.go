@@ -26,6 +26,7 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
 	metadataStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/config"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	partStoreConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
@@ -56,8 +57,19 @@ type MetadataPartStorageConfiguration struct {
 	RawDatabase               json.RawMessage                               `json:"db"`
 	MetadataStoreInstantiator metadataStoreConfig.MetadataStoreInstantiator `json:"-"`
 	RawMetadataStore          json.RawMessage                               `json:"metadataStore"`
-	PartStoreInstantiator     partStoreConfig.PartStoreInstantiator         `json:"-"`
-	RawPartStore              json.RawMessage                               `json:"partStore"`
+	// PartStore is the default part store; it backs every storage class
+	// without an explicit mapping, so configurations without named stores
+	// behave exactly as before.
+	PartStoreInstantiator partStoreConfig.PartStoreInstantiator `json:"-"`
+	RawPartStore          json.RawMessage                       `json:"partStore"`
+	// ExtraPartStores defines additional part stores by name. The name
+	// "default" is reserved for the partStore field.
+	ExtraPartStoreInstantiators map[string]partStoreConfig.PartStoreInstantiator `json:"-"`
+	RawExtraPartStores          map[string]json.RawMessage                       `json:"extraPartStores,omitempty"`
+	// StorageClassToPartStore maps a storage class to the name of the part
+	// store its object data is written to ("default" is a valid target).
+	// Unmapped classes use the default part store.
+	StorageClassToPartStore map[string]string `json:"storageClassToPartStore,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -80,7 +92,107 @@ func (m *MetadataPartStorageConfiguration) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
+	m.ExtraPartStoreInstantiators = map[string]partStoreConfig.PartStoreInstantiator{}
+	for name, rawPartStore := range m.RawExtraPartStores {
+		if name == partstore.DefaultPartStoreName {
+			return fmt.Errorf("extraPartStores must not use the reserved name %q (configure it via the partStore field)", partstore.DefaultPartStoreName)
+		}
+		partStoreInstantiator, err := partStoreConfig.CreatePartStoreInstantiatorFromJson(rawPartStore)
+		if err != nil {
+			return err
+		}
+		m.ExtraPartStoreInstantiators[name] = partStoreInstantiator
+	}
+	for storageClass, name := range m.StorageClassToPartStore {
+		if !storage.IsValidStorageClass(storageClass) {
+			return fmt.Errorf("storageClassToPartStore key %q is not a recognized storage class", storageClass)
+		}
+		if name != partstore.DefaultPartStoreName {
+			if _, ok := m.RawExtraPartStores[name]; !ok {
+				return fmt.Errorf("storageClassToPartStore maps %q to unknown part store %q", storageClass, name)
+			}
+		}
+	}
+	if err := m.validateSqlPartStoreIds(); err != nil {
+		return err
+	}
 	return nil
+}
+
+type sqlPartStoreConfig struct {
+	name        string
+	dbIdentity  string
+	partStoreId string
+}
+
+func (m *MetadataPartStorageConfiguration) validateSqlPartStoreIds() error {
+	sqlStores := collectSqlPartStoreConfigs(partstore.DefaultPartStoreName, m.PartStoreInstantiator)
+	for name, instantiator := range m.ExtraPartStoreInstantiators {
+		sqlStores = append(sqlStores, collectSqlPartStoreConfigs(name, instantiator)...)
+	}
+
+	byDb := map[string][]sqlPartStoreConfig{}
+	for _, sqlStore := range sqlStores {
+		byDb[sqlStore.dbIdentity] = append(byDb[sqlStore.dbIdentity], sqlStore)
+	}
+	for dbIdentity, stores := range byDb {
+		if len(stores) < 2 {
+			continue
+		}
+		seenIds := map[string]string{}
+		for _, store := range stores {
+			if store.partStoreId == "" {
+				return fmt.Errorf("multiple SqlPartStore configurations share database %q; part store %q must set partStoreId", dbIdentity, store.name)
+			}
+			if existingName, ok := seenIds[store.partStoreId]; ok {
+				return fmt.Errorf("multiple SqlPartStore configurations share database %q and partStoreId %q (%q and %q)", dbIdentity, store.partStoreId, existingName, store.name)
+			}
+			seenIds[store.partStoreId] = store.name
+		}
+	}
+	return nil
+}
+
+func collectSqlPartStoreConfigs(name string, instantiator partStoreConfig.PartStoreInstantiator) []sqlPartStoreConfig {
+	switch i := instantiator.(type) {
+	case *partStoreConfig.SqlPartStoreConfiguration:
+		return []sqlPartStoreConfig{{
+			name:        name,
+			dbIdentity:  databaseInstantiatorIdentity(i.DatabaseInstantiator),
+			partStoreId: i.PartStoreId.Value(),
+		}}
+	case *partStoreConfig.CompressionPartStoreMiddlewareConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.TinkEncryptionPartStoreMiddlewareConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.OutboxPartStoreConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.CachePartStoreConfiguration:
+		return collectSqlPartStoreConfigs(name, i.InnerPartStoreInstantiator)
+	case *partStoreConfig.ErasureCodedPartStoreMiddlewareConfiguration:
+		var sqlStores []sqlPartStoreConfig
+		for idx, child := range i.PartStoreInstantiators {
+			sqlStores = append(sqlStores, collectSqlPartStoreConfigs(fmt.Sprintf("%s[%d]", name, idx), child)...)
+		}
+		return sqlStores
+	default:
+		return nil
+	}
+}
+
+func databaseInstantiatorIdentity(instantiator databaseConfig.DatabaseInstantiator) string {
+	switch i := instantiator.(type) {
+	case *databaseConfig.SqliteDatabaseConfiguration:
+		return "sqlite:" + i.DbPath.Value()
+	case *databaseConfig.PostgresDatabaseConfiguration:
+		return "postgres:" + i.DbUrl.Value()
+	case *databaseConfig.DatabaseReferenceConfiguration:
+		return "ref:" + i.RefName.Value()
+	case *databaseConfig.RegisterDatabaseReferenceConfiguration:
+		return "ref:" + i.RefName.Value()
+	default:
+		return fmt.Sprintf("%T", instantiator)
+	}
 }
 
 func (m *MetadataPartStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
@@ -95,6 +207,12 @@ func (m *MetadataPartStorageConfiguration) RegisterReferences(diCollection depen
 	err = m.PartStoreInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
+	}
+	for _, partStoreInstantiator := range m.ExtraPartStoreInstantiators {
+		err = partStoreInstantiator.RegisterReferences(diCollection)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -112,7 +230,15 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 	if err != nil {
 		return nil, err
 	}
-	return metadatapart.NewStorage(db, metadataStore, partStore)
+	extraPartStores := map[string]partstore.PartStore{}
+	for name, partStoreInstantiator := range m.ExtraPartStoreInstantiators {
+		extraPartStore, err := partStoreInstantiator.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+		extraPartStores[name] = extraPartStore
+	}
+	return metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore)
 }
 
 type ConditionalStorageMiddlewareConfiguration struct {

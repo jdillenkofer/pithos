@@ -19,22 +19,38 @@ import (
 type sqlPartStore struct {
 	*lifecycle.ValidatedLifecycle
 	partContentRepository partContent.Repository
+	partStoreId           string
 	tracer                trace.Tracer
 }
 
 // Compile-time check to ensure sqlPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*sqlPartStore)(nil)
 
-func New(db database.Database, partContentRepository partContent.Repository) (partstore.PartStore, error) {
+type Option func(*sqlPartStore)
+
+func WithPartStoreId(partStoreId string) Option {
+	return func(bs *sqlPartStore) {
+		if partStoreId != "" {
+			bs.partStoreId = partStoreId
+		}
+	}
+}
+
+func New(db database.Database, partContentRepository partContent.Repository, opts ...Option) (partstore.PartStore, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("sqlPartStore")
 	if err != nil {
 		return nil, err
 	}
-	return &sqlPartStore{
+	bs := &sqlPartStore{
 		ValidatedLifecycle:    validatedLifecycle,
 		partContentRepository: partContentRepository,
+		partStoreId:           partContent.DefaultPartStoreId,
 		tracer:                otel.Tracer("internal/storage/metadatapart/partstore/sql"),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(bs)
+	}
+	return bs, nil
 }
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
@@ -44,7 +60,7 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	defer span.End()
 
 	// Delete existing content first to avoid stale chunks if overwriting
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), bs.partStoreId, partId)
 	if err != nil {
 		return err
 	}
@@ -58,7 +74,7 @@ func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 				ChunkIndex: chunkIndex,
 				Content:    content,
 			}
-			if saveErr := bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), &partContentEntity); saveErr != nil {
+			if saveErr := bs.partContentRepository.SavePartContent(ctx, tx.SqlTx(), bs.partStoreId, &partContentEntity); saveErr != nil {
 				return saveErr
 			}
 			chunkIndex++
@@ -81,7 +97,7 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	// Fetch the first chunk eagerly to preserve ErrPartNotFound semantics; the
 	// remaining chunks are loaded lazily so we never hold more than one chunk in
 	// memory at a time.
-	firstChunk, err := bs.partContentRepository.FindPartContentChunkByIndex(ctx, tx.SqlTx(), partId, 0)
+	firstChunk, err := bs.partContentRepository.FindPartContentChunkByIndex(ctx, tx.SqlTx(), bs.partStoreId, partId, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -90,12 +106,13 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	}
 
 	return &lazyChunkReadCloser{
-		ctx:       ctx,
-		tx:        tx,
-		repo:      bs.partContentRepository,
-		partId:    partId,
-		nextChunk: 1,
-		current:   bytes.NewReader(firstChunk.Content),
+		ctx:         ctx,
+		tx:          tx,
+		repo:        bs.partContentRepository,
+		partStoreId: bs.partStoreId,
+		partId:      partId,
+		nextChunk:   1,
+		current:     bytes.NewReader(firstChunk.Content),
 	}, nil
 }
 
@@ -105,13 +122,14 @@ func (bs *sqlPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 // part. It relies on the read transaction outliving the reader (GetObject binds
 // the tx lifetime to its returned readers).
 type lazyChunkReadCloser struct {
-	ctx       context.Context
-	tx        database.Tx
-	repo      partContent.Repository
-	partId    partstore.PartId
-	nextChunk int
-	current   *bytes.Reader
-	done      bool
+	ctx         context.Context
+	tx          database.Tx
+	repo        partContent.Repository
+	partStoreId string
+	partId      partstore.PartId
+	nextChunk   int
+	current     *bytes.Reader
+	done        bool
 }
 
 func (l *lazyChunkReadCloser) Read(p []byte) (int, error) {
@@ -130,7 +148,7 @@ func (l *lazyChunkReadCloser) Read(p []byte) (int, error) {
 		if l.done {
 			return 0, io.EOF
 		}
-		chunk, err := l.repo.FindPartContentChunkByIndex(l.ctx, l.tx.SqlTx(), l.partId, l.nextChunk)
+		chunk, err := l.repo.FindPartContentChunkByIndex(l.ctx, l.tx.SqlTx(), l.partStoreId, l.partId, l.nextChunk)
 		if err != nil {
 			return 0, err
 		}
@@ -153,13 +171,13 @@ func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]parts
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.GetPartIds")
 	defer span.End()
 
-	return bs.partContentRepository.FindPartContentIds(ctx, tx.SqlTx())
+	return bs.partContentRepository.FindPartContentIds(ctx, tx.SqlTx(), bs.partStoreId)
 }
 
 func (bs *sqlPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.DeletePart")
 	defer span.End()
 
-	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), partId)
+	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), bs.partStoreId, partId)
 	return err
 }

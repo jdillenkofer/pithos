@@ -910,7 +910,7 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 
 	err = database.WithTx(ctx, st.db, nil, func(ctx context.Context, tx database.Tx) error {
 		for _, p := range parts {
-			if err := st.partStore.PutPart(ctx, tx, p.Id, bytes.NewReader(partData)); err != nil {
+			if err := st.partStores.Default().PutPart(ctx, tx, p.Id, bytes.NewReader(partData)); err != nil {
 				return err
 			}
 		}

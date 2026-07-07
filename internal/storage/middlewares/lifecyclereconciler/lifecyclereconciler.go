@@ -147,6 +147,7 @@ func (m *lifecycleReconcilerStorageMiddleware) ReconcileOnce(ctx context.Context
 func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration, cancelTask *atomic.Bool) {
 	expirationRules := []*storage.LifecycleRule{}
 	abortRules := []*storage.LifecycleRule{}
+	transitionRules := []*storage.LifecycleRule{}
 	for i := range config.Rules {
 		rule := &config.Rules[i]
 		if rule.Status != storage.LifecycleRuleStatusEnabled {
@@ -158,10 +159,18 @@ func (m *lifecycleReconcilerStorageMiddleware) reconcileBucket(ctx context.Conte
 		if rule.AbortIncompleteMultipartUpload != nil {
 			abortRules = append(abortRules, rule)
 		}
+		if len(rule.Transitions) > 0 {
+			transitionRules = append(transitionRules, rule)
+		}
 	}
 
+	// Expiration takes precedence over transitions: an object that is both due
+	// for expiration and transition is deleted, so run expiration first.
 	if len(expirationRules) > 0 {
 		m.expireObjects(ctx, bucketName, expirationRules, cancelTask)
+	}
+	if len(transitionRules) > 0 {
+		m.transitionObjects(ctx, bucketName, transitionRules, cancelTask)
 	}
 	if len(abortRules) > 0 {
 		m.abortIncompleteUploads(ctx, bucketName, abortRules, cancelTask)
@@ -233,6 +242,101 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectIfDue(ctx context.Con
 		slog.Info("lifecycle reconciler expired object", "bucket", bucketName.String(), "key", object.Key.String())
 		return
 	}
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) transitionObjects(ctx context.Context, bucketName storage.BucketName, rules []*storage.LifecycleRule, cancelTask *atomic.Bool) {
+	var startAfter *string
+	for {
+		if isCancelled(cancelTask) {
+			return
+		}
+		listResult, err := m.Next.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
+			StartAfter: startAfter,
+			MaxKeys:    listPageSize,
+		})
+		if err != nil {
+			slog.Warn("lifecycle reconciler failed to list objects", "bucket", bucketName.String(), "err", err)
+			return
+		}
+		for i := range listResult.Objects {
+			if isCancelled(cancelTask) {
+				return
+			}
+			m.transitionObjectIfDue(ctx, bucketName, &listResult.Objects[i], rules)
+		}
+		if !listResult.IsTruncated || len(listResult.Objects) == 0 {
+			return
+		}
+		startAfter = ptrutils.ToPtr(listResult.Objects[len(listResult.Objects)-1].Key.String())
+	}
+}
+
+func (m *lifecycleReconcilerStorageMiddleware) transitionObjectIfDue(ctx context.Context, bucketName storage.BucketName, object *storage.Object, rules []*storage.LifecycleRule) {
+	now := m.now()
+	tags := object.Tags
+	tagsFetched := len(tags) > 0
+
+	// Among all due transitions matching this object, pick the one with the
+	// latest due time (the most advanced tier the object currently qualifies
+	// for). A transition to the object's current class is a no-op and skipped.
+	currentClass := storage.EffectiveStorageClass(object.StorageClass)
+	var chosenTarget string
+	var chosenDue *time.Time
+	for _, rule := range rules {
+		matches := func() bool {
+			if storage.LifecycleRuleNeedsObjectTags(rule) && !tagsFetched {
+				fetchedTags, err := m.Next.GetObjectTagging(ctx, bucketName, object.Key)
+				if err != nil {
+					slog.Warn("lifecycle reconciler failed to fetch object tags", "bucket", bucketName.String(), "key", object.Key.String(), "err", err)
+					return false
+				}
+				tags = fetchedTags
+				tagsFetched = true
+			}
+			return storage.LifecycleRuleMatchesObject(rule, object.Key.String(), object.Size, tags)
+		}
+		var ruleMatches *bool
+		for i := range rule.Transitions {
+			transition := &rule.Transitions[i]
+			dueTime := storage.LifecycleTransitionDueTime(transition, object.LastModified)
+			if dueTime == nil || now.Before(*dueTime) {
+				continue
+			}
+			if transition.StorageClass == currentClass {
+				continue
+			}
+			// Evaluate the filter lazily, at most once per rule, only when a
+			// transition of the rule is otherwise due.
+			if ruleMatches == nil {
+				m := matches()
+				ruleMatches = &m
+			}
+			if !*ruleMatches {
+				break
+			}
+			if chosenDue == nil || dueTime.After(*chosenDue) {
+				chosenDue = dueTime
+				chosenTarget = transition.StorageClass
+			}
+		}
+	}
+	if chosenDue == nil {
+		return
+	}
+
+	// Guard against the object having been replaced between listing and
+	// transition: only transition the exact version that was evaluated.
+	err := m.Next.TransitionObjectStorageClass(ctx, bucketName, object.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
+		IfMatchETag: ptrutils.ToPtr(object.ETag),
+	})
+	if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+		return
+	}
+	if err != nil {
+		slog.Warn("lifecycle reconciler failed to transition object", "bucket", bucketName.String(), "key", object.Key.String(), "err", err)
+		return
+	}
+	slog.Info("lifecycle reconciler transitioned object", "bucket", bucketName.String(), "key", object.Key.String(), "storageClass", chosenTarget)
 }
 
 func (m *lifecycleReconcilerStorageMiddleware) abortIncompleteUploads(ctx context.Context, bucketName storage.BucketName, rules []*storage.LifecycleRule, cancelTask *atomic.Bool) {
