@@ -57,6 +57,31 @@ func TestBuildS3RecordsPayload(t *testing.T) {
 	require.Equal(t, "ObjectCreated:Put", decoded["Records"][0]["eventName"])
 }
 
+func TestKafkaMessageKeyTemplateUsesPayloadValues(t *testing.T) {
+	payload, err := BuildS3RecordsPayload(ObjectEvent{
+		EventName: EventObjectCreatedPut,
+		Bucket:    storage.MustNewBucketName("bucket"),
+		Key:       storage.MustNewObjectKey("images/a.jpg"),
+		EventTime: time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	key := kafkaMessageKey(Destination{KeyTemplate: "{{bucket}}/{{key}}/{{eventName}}"}, &OutboxEntry{
+		EventName:     EventObjectCreatedPut,
+		PayloadFormat: PayloadFormatS3Records,
+		Payload:       payload,
+	})
+
+	require.Equal(t, "bucket/images/a.jpg/s3:ObjectCreated:Put", key)
+}
+
+func TestValidatePayloadFormat(t *testing.T) {
+	require.NoError(t, validatePayloadFormat(""))
+	require.NoError(t, validatePayloadFormat(PayloadFormatS3Records))
+	require.NoError(t, validatePayloadFormat(PayloadFormatEventBridge))
+	require.Error(t, validatePayloadFormat("unknown"))
+}
+
 func TestSQLRepositoryClaimReleaseAndDelete(t *testing.T) {
 	ctx := context.Background()
 	db, err := sqlite.OpenDatabase(":memory:")

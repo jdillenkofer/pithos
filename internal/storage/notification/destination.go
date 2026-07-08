@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -43,6 +44,7 @@ type Destination struct {
 	Queue         string            `json:"queue,omitempty"`
 	Durable       bool              `json:"durable,omitempty"`
 	Exchange      string            `json:"exchange,omitempty"`
+	ExchangeType  string            `json:"exchangeType,omitempty"`
 	RoutingKey    string            `json:"routingKey,omitempty"`
 	Brokers       []string          `json:"brokers,omitempty"`
 	Topic         string            `json:"topic,omitempty"`
@@ -104,12 +106,18 @@ func (p *RegistryPublisher) Publish(ctx context.Context, entry *OutboxEntry) err
 func (p *RegistryPublisher) Validate(ctx context.Context, arn string, destination Destination) error {
 	switch destination.Type {
 	case DestinationTypeWebhook:
+		if err := validatePayloadFormat(destination.PayloadFormat); err != nil {
+			return err
+		}
 		if destination.URL == "" {
 			return errors.New("webhook url is required")
 		}
 		_, err := http.NewRequestWithContext(ctx, webhookMethod(destination), destination.URL, nil)
 		return err
 	case DestinationTypeRabbitMQ:
+		if err := validatePayloadFormat(destination.PayloadFormat); err != nil {
+			return err
+		}
 		if destination.URL == "" {
 			return errors.New("rabbitmq url is required")
 		}
@@ -118,6 +126,9 @@ func (p *RegistryPublisher) Validate(ctx context.Context, arn string, destinatio
 		}
 		return validateRabbitMQ(destination)
 	case DestinationTypeKafka:
+		if err := validatePayloadFormat(destination.PayloadFormat); err != nil {
+			return err
+		}
 		if len(destination.Brokers) == 0 {
 			return errors.New("kafka brokers are required")
 		}
@@ -188,7 +199,7 @@ func validateRabbitMQ(destination Destination) error {
 		_, err = ch.QueueDeclarePassive(destination.Queue, destination.Durable, false, false, false, nil)
 		return err
 	}
-	return ch.ExchangeDeclarePassive(destination.Exchange, "topic", destination.Durable, false, false, false, nil)
+	return ch.ExchangeDeclarePassive(destination.Exchange, rabbitMQExchangeType(destination), destination.Durable, false, false, false, nil)
 }
 
 func dialRabbitMQ(destination Destination) (*amqp.Connection, error) {
@@ -213,6 +224,13 @@ func rabbitMQPublishTarget(destination Destination) (exchange string, routingKey
 	return destination.Exchange, destination.RoutingKey
 }
 
+func rabbitMQExchangeType(destination Destination) string {
+	if destination.ExchangeType == "" {
+		return "topic"
+	}
+	return destination.ExchangeType
+}
+
 func publishKafka(ctx context.Context, destination Destination, entry *OutboxEntry) error {
 	transport, err := kafkaTransport(destination)
 	if err != nil {
@@ -227,10 +245,70 @@ func publishKafka(ctx context.Context, destination Destination, entry *OutboxEnt
 	}
 	defer writer.Close()
 	return writer.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(entry.EventName),
+		Key:   []byte(kafkaMessageKey(destination, entry)),
 		Value: entry.Payload,
 		Time:  time.Now().UTC(),
 	})
+}
+
+func kafkaMessageKey(destination Destination, entry *OutboxEntry) string {
+	if destination.KeyTemplate == "" {
+		return entry.EventName
+	}
+	values := notificationTemplateValues(entry)
+	key := destination.KeyTemplate
+	for name, value := range values {
+		key = strings.ReplaceAll(key, "{{"+name+"}}", value)
+	}
+	return key
+}
+
+func notificationTemplateValues(entry *OutboxEntry) map[string]string {
+	values := map[string]string{"eventName": entry.EventName}
+	switch entry.PayloadFormat {
+	case PayloadFormatEventBridge:
+		var envelope struct {
+			Detail struct {
+				Bucket struct {
+					Name string `json:"name"`
+				} `json:"bucket"`
+				Object struct {
+					Key string `json:"key"`
+				} `json:"object"`
+			} `json:"detail"`
+		}
+		if json.Unmarshal(entry.Payload, &envelope) == nil {
+			values["bucket"] = envelope.Detail.Bucket.Name
+			values["key"] = envelope.Detail.Object.Key
+		}
+	default:
+		var envelope struct {
+			Records []struct {
+				S3 struct {
+					Bucket struct {
+						Name string `json:"name"`
+					} `json:"bucket"`
+					Object struct {
+						Key string `json:"key"`
+					} `json:"object"`
+				} `json:"s3"`
+			} `json:"Records"`
+		}
+		if json.Unmarshal(entry.Payload, &envelope) == nil && len(envelope.Records) > 0 {
+			values["bucket"] = envelope.Records[0].S3.Bucket.Name
+			values["key"] = envelope.Records[0].S3.Object.Key
+		}
+	}
+	return values
+}
+
+func validatePayloadFormat(payloadFormat PayloadFormat) error {
+	switch payloadFormat {
+	case "", PayloadFormatS3Records, PayloadFormatEventBridge:
+		return nil
+	default:
+		return fmt.Errorf("unsupported notification payload format %q", payloadFormat)
+	}
 }
 
 func publishAWS(ctx context.Context, entry *OutboxEntry) error {
