@@ -262,7 +262,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectDeleteMarkerIfDue(ctx
 		if !storage.LifecycleRuleMatchesObject(rule, deleteMarker.Key.String(), deleteMarker.Size, nil) {
 			continue
 		}
-		_, err := m.Next.DeleteObject(ctx, bucketName, deleteMarker.Key, &storage.DeleteObjectOptions{VersionID: &deleteMarker.VersionID})
+		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, deleteMarker.Key, &storage.DeleteObjectOptions{VersionID: &deleteMarker.VersionID})
 		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 			return
 		}
@@ -436,7 +436,7 @@ func (m *lifecycleReconcilerStorageMiddleware) transitionNoncurrentObjectVersion
 		return
 	}
 
-	err := m.Next.TransitionObjectStorageClass(ctx, bucketName, version.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
+	err := m.Next.TransitionObjectStorageClass(storage.WithNotificationEventOverride(ctx, "s3:LifecycleTransition"), bucketName, version.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
 		VersionID:   &version.VersionID,
 		IfMatchETag: version.ETag,
 	})
@@ -478,7 +478,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDu
 		if !storage.LifecycleRuleMatchesObject(rule, version.Key.String(), version.Size, tags) {
 			continue
 		}
-		_, err := m.Next.DeleteObject(ctx, bucketName, version.Key, &storage.DeleteObjectOptions{VersionID: &version.VersionID})
+		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, version.Key, &storage.DeleteObjectOptions{VersionID: &version.VersionID})
 		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 			return
 		}
@@ -543,7 +543,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectIfDue(ctx context.Con
 		}
 		// Guard against the object having been replaced between listing and
 		// deletion: only delete the exact version that was evaluated.
-		_, err := m.Next.DeleteObject(ctx, bucketName, object.Key, &storage.DeleteObjectOptions{
+		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, object.Key, &storage.DeleteObjectOptions{
 			IfMatchETag: ptrutils.ToPtr(object.ETag),
 		})
 		if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
@@ -640,7 +640,7 @@ func (m *lifecycleReconcilerStorageMiddleware) transitionObjectIfDue(ctx context
 
 	// Guard against the object having been replaced between listing and
 	// transition: only transition the exact version that was evaluated.
-	err := m.Next.TransitionObjectStorageClass(ctx, bucketName, object.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
+	err := m.Next.TransitionObjectStorageClass(storage.WithNotificationEventOverride(ctx, "s3:LifecycleTransition"), bucketName, object.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
 		IfMatchETag: ptrutils.ToPtr(object.ETag),
 	})
 	if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {

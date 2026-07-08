@@ -15,6 +15,7 @@ import (
 )
 
 type skipNotificationDestinationValidationContextKey struct{}
+type notificationEventOverrideContextKey struct{}
 
 func WithSkipNotificationDestinationValidation(ctx context.Context) context.Context {
 	return context.WithValue(ctx, skipNotificationDestinationValidationContextKey{}, true)
@@ -23,6 +24,15 @@ func WithSkipNotificationDestinationValidation(ctx context.Context) context.Cont
 func SkipNotificationDestinationValidation(ctx context.Context) bool {
 	skip, _ := ctx.Value(skipNotificationDestinationValidationContextKey{}).(bool)
 	return skip
+}
+
+func WithNotificationEventOverride(ctx context.Context, eventName string) context.Context {
+	return context.WithValue(ctx, notificationEventOverrideContextKey{}, eventName)
+}
+
+func NotificationEventOverride(ctx context.Context) (string, bool) {
+	eventName, ok := ctx.Value(notificationEventOverrideContextKey{}).(string)
+	return eventName, ok && eventName != ""
 }
 
 type Bucket struct {

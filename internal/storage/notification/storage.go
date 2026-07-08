@@ -150,6 +150,12 @@ func (m *StorageMiddleware) DeleteObject(ctx context.Context, bucket storage.Buc
 	if result != nil && result.IsDeleteMarker {
 		eventName = EventObjectRemovedDeleteMarkerCreated
 	}
+	if overrideEventName, ok := storage.NotificationEventOverride(ctx); ok {
+		eventName = overrideEventName
+		if overrideEventName == EventLifecycleExpirationDelete && result != nil && result.IsDeleteMarker {
+			eventName = EventLifecycleExpirationDeleteMarker
+		}
+	}
 	event := ObjectEvent{EventName: eventName, Bucket: bucket, Key: key, EventTime: time.Now().UTC()}
 	if result != nil {
 		event.VersionID = result.VersionID
@@ -217,7 +223,11 @@ func (m *StorageMiddleware) TransitionObjectStorageClass(ctx context.Context, bu
 	if err := m.Next.TransitionObjectStorageClass(ctx, bucket, key, targetStorageClass, opts); err != nil {
 		return err
 	}
-	event := ObjectEvent{EventName: EventLifecycleTransition, Bucket: bucket, Key: key, EventTime: time.Now().UTC()}
+	eventName, ok := storage.NotificationEventOverride(ctx)
+	if !ok {
+		return nil
+	}
+	event := ObjectEvent{EventName: eventName, Bucket: bucket, Key: key, EventTime: time.Now().UTC()}
 	if opts != nil {
 		event.VersionID = opts.VersionID
 	}
