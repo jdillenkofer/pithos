@@ -77,3 +77,48 @@ func TestNotificationDestinationValidationMatchesConfigurationType(t *testing.T)
 	require.NotNil(t, validationErr)
 	require.Equal(t, "InvalidArgument", validationErr.Code)
 }
+
+func TestNotificationConfigurationRejectsOverlappingRulesForSameDestination(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := `<NotificationConfiguration>
+		<QueueConfiguration>
+			<Id>all-images</Id>
+			<Queue>arn:aws:sqs:eu-central-1:000000000000:image-jobs</Queue>
+			<Event>s3:ObjectCreated:*</Event>
+			<Filter><S3Key><FilterRule><Name>prefix</Name><Value>images/</Value></FilterRule></S3Key></Filter>
+		</QueueConfiguration>
+		<QueueConfiguration>
+			<Id>jpg-images</Id>
+			<Queue>arn:aws:sqs:eu-central-1:000000000000:image-jobs</Queue>
+			<Event>s3:ObjectCreated:Put</Event>
+			<Filter><S3Key><FilterRule><Name>prefix</Name><Value>images/raw/</Value></FilterRule><FilterRule><Name>suffix</Name><Value>.jpg</Value></FilterRule></S3Key></Filter>
+		</QueueConfiguration>
+	</NotificationConfiguration>`
+
+	var request NotificationConfiguration
+	require.NoError(t, xml.Unmarshal([]byte(body), &request))
+	_, validationErr := convertNotificationConfigurationFromXML(&request)
+	require.NotNil(t, validationErr)
+	require.Equal(t, "InvalidArgument", validationErr.Code)
+}
+
+func TestNotificationConfigurationAllowsSameFilterForDifferentDestinations(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := `<NotificationConfiguration>
+		<QueueConfiguration>
+			<Queue>arn:aws:sqs:eu-central-1:000000000000:image-jobs-a</Queue>
+			<Event>s3:ObjectCreated:Put</Event>
+		</QueueConfiguration>
+		<QueueConfiguration>
+			<Queue>arn:aws:sqs:eu-central-1:000000000000:image-jobs-b</Queue>
+			<Event>s3:ObjectCreated:Put</Event>
+		</QueueConfiguration>
+	</NotificationConfiguration>`
+
+	var request NotificationConfiguration
+	require.NoError(t, xml.Unmarshal([]byte(body), &request))
+	_, validationErr := convertNotificationConfigurationFromXML(&request)
+	require.Nil(t, validationErr)
+}

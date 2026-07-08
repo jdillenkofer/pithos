@@ -15,6 +15,8 @@ import (
 
 const maxPutBucketNotificationBodySize int64 = 1024 * 1024
 const skipDestinationValidationHeader = "x-amz-skip-destination-validation"
+const maxNotificationConfigurations = 1000
+const maxNotificationIDLength = 255
 
 type NotificationConfiguration struct {
 	XMLName                     xml.Name                          `xml:"NotificationConfiguration"`
@@ -121,6 +123,9 @@ func writeNotificationValidationError(w http.ResponseWriter, r *http.Request, va
 }
 
 func convertNotificationConfigurationFromXML(request *NotificationConfiguration) (*storage.BucketNotificationConfiguration, *notificationValidationError) {
+	if len(request.TopicConfigurations)+len(request.QueueConfigurations)+len(request.CloudFunctionConfigurations) > maxNotificationConfigurations {
+		return nil, invalidNotificationArgument("Notification configuration count exceeds maximum")
+	}
 	config := &storage.BucketNotificationConfiguration{
 		TopicConfigurations:         make([]storage.NotificationConfigurationRule, 0, len(request.TopicConfigurations)),
 		QueueConfigurations:         make([]storage.NotificationConfigurationRule, 0, len(request.QueueConfigurations)),
@@ -150,12 +155,18 @@ func convertNotificationConfigurationFromXML(request *NotificationConfiguration)
 		}
 		config.CloudFunctionConfigurations = append(config.CloudFunctionConfigurations, *converted)
 	}
+	if err := validateNotificationRuleOverlaps(config); err != nil {
+		return nil, err
+	}
 
 	return config, nil
 }
 
 func convertNotificationRule(id *string, destinationType storage.NotificationDestinationType, arn string, events []string, filter *NotificationConfigurationFilter, seenIDs map[string]struct{}) (*storage.NotificationConfigurationRule, *notificationValidationError) {
 	if id != nil && *id != "" {
+		if len(*id) > maxNotificationIDLength {
+			return nil, invalidNotificationArgument("Notification configuration ID exceeds maximum length")
+		}
 		if _, ok := seenIDs[*id]; ok {
 			return nil, invalidNotificationArgument("Notification configuration IDs must be unique")
 		}
@@ -183,6 +194,71 @@ func convertNotificationRule(id *string, destinationType storage.NotificationDes
 		Events:          events,
 		FilterRules:     filterRules,
 	}, nil
+}
+
+func validateNotificationRuleOverlaps(config *storage.BucketNotificationConfiguration) *notificationValidationError {
+	rules := []storage.NotificationConfigurationRule{}
+	rules = append(rules, config.TopicConfigurations...)
+	rules = append(rules, config.QueueConfigurations...)
+	rules = append(rules, config.CloudFunctionConfigurations...)
+	for i := 0; i < len(rules); i++ {
+		for j := i + 1; j < len(rules); j++ {
+			if rules[i].DestinationARN != rules[j].DestinationARN {
+				continue
+			}
+			if notificationEventsOverlap(rules[i].Events, rules[j].Events) && notificationFiltersOverlap(rules[i].FilterRules, rules[j].FilterRules) {
+				return invalidNotificationArgument("Notification configurations for the same destination must not have overlapping events and filters")
+			}
+		}
+	}
+	return nil
+}
+
+func notificationEventsOverlap(a []string, b []string) bool {
+	for _, left := range a {
+		for _, right := range b {
+			if notificationEventOverlaps(left, right) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func notificationEventOverlaps(a string, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.HasSuffix(a, ":*") && strings.HasPrefix(b, strings.TrimSuffix(a, "*")) {
+		return true
+	}
+	if strings.HasSuffix(b, ":*") && strings.HasPrefix(a, strings.TrimSuffix(b, "*")) {
+		return true
+	}
+	return false
+}
+
+func notificationFiltersOverlap(a []storage.NotificationFilterRule, b []storage.NotificationFilterRule) bool {
+	leftPrefix, leftHasPrefix := notificationFilterValue(a, "prefix")
+	rightPrefix, rightHasPrefix := notificationFilterValue(b, "prefix")
+	if leftHasPrefix && rightHasPrefix && !strings.HasPrefix(leftPrefix, rightPrefix) && !strings.HasPrefix(rightPrefix, leftPrefix) {
+		return false
+	}
+	leftSuffix, leftHasSuffix := notificationFilterValue(a, "suffix")
+	rightSuffix, rightHasSuffix := notificationFilterValue(b, "suffix")
+	if leftHasSuffix && rightHasSuffix && !strings.HasSuffix(leftSuffix, rightSuffix) && !strings.HasSuffix(rightSuffix, leftSuffix) {
+		return false
+	}
+	return true
+}
+
+func notificationFilterValue(rules []storage.NotificationFilterRule, name string) (string, bool) {
+	for _, rule := range rules {
+		if rule.Name == name {
+			return rule.Value, true
+		}
+	}
+	return "", false
 }
 
 func convertNotificationFilter(filter *NotificationConfigurationFilter) ([]storage.NotificationFilterRule, *notificationValidationError) {
