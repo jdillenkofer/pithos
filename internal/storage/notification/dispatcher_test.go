@@ -52,7 +52,7 @@ func dispatcherStack(t *testing.T, publisher Publisher, dispatcher DispatcherCon
 	t.Helper()
 	db := openTestDB(t)
 	inner := newSharedDBMetadataStorage(t, db)
-	mw, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisher, "default", time.Minute, dispatcher)
+	mw, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisher, "default", time.Minute, dispatcher, nil)
 	require.NoError(t, err)
 	return mw
 }
@@ -177,9 +177,9 @@ func TestDispatcherIsolatesByOutboxID(t *testing.T) {
 	inner := newSharedDBMetadataStorage(t, db)
 	publisherA := &controllablePublisher{}
 	publisherB := &controllablePublisher{}
-	mwA, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisherA, "outbox-a", time.Minute, DispatcherConfig{BatchSize: 10})
+	mwA, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisherA, "outbox-a", time.Minute, DispatcherConfig{BatchSize: 10}, nil)
 	require.NoError(t, err)
-	mwB, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisherB, "outbox-b", time.Minute, DispatcherConfig{BatchSize: 10})
+	mwB, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisherB, "outbox-b", time.Minute, DispatcherConfig{BatchSize: 10}, nil)
 	require.NoError(t, err)
 
 	seedEntry(t, mwA, "arn:aws:sqs:eu-central-1:000000000000:a")

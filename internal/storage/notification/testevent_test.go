@@ -42,7 +42,7 @@ func notifyingStackWithPublisher(t *testing.T, publisher Publisher) *StorageMidd
 	t.Helper()
 	db := openTestDB(t)
 	inner := newSharedDBMetadataStorage(t, db)
-	mw, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisher, "default", time.Minute, DispatcherConfig{})
+	mw, err := NewStorageMiddleware(inner, db, NewSQLRepository(), publisher, "default", time.Minute, DispatcherConfig{}, nil)
 	require.NoError(t, err)
 	return mw
 }

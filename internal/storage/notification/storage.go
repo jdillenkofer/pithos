@@ -18,6 +18,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -32,6 +33,7 @@ type StorageMiddleware struct {
 	claimOwner         string
 	claimLeaseDuration time.Duration
 	dispatcher         DispatcherConfig
+	metrics            *notificationMetrics
 	trigger            chan struct{}
 	taskHandle         *task.TaskHandle
 	tracer             trace.Tracer
@@ -83,7 +85,7 @@ type databaseWrapper interface {
 	UnwrapDatabase() database.Database
 }
 
-func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration, dispatcher DispatcherConfig) (*StorageMiddleware, error) {
+func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration, dispatcher DispatcherConfig, registerer prometheus.Registerer) (*StorageMiddleware, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("NotificationStorageMiddleware")
 	if err != nil {
 		return nil, err
@@ -110,6 +112,7 @@ func NewStorageMiddleware(inner storage.Storage, db database.Database, repositor
 		claimOwner:         outboxID + ":notification:" + ulid.Make().String(),
 		claimLeaseDuration: claimLeaseDuration,
 		dispatcher:         dispatcher.withDefaults(),
+		metrics:            newNotificationMetrics(registerer),
 		trigger:            make(chan struct{}, 16),
 		tracer:             otel.Tracer("internal/storage/notification"),
 	}, nil
@@ -559,10 +562,11 @@ func (m *StorageMiddleware) dispatchAvailable(ctx context.Context) {
 	for {
 		batch := m.claimBatch(ctx)
 		if len(batch) == 0 {
-			return
+			break
 		}
 		m.dispatchBatch(ctx, batch)
 	}
+	m.refreshGauges(ctx)
 }
 
 func (m *StorageMiddleware) claimBatch(ctx context.Context) []*OutboxEntry {
@@ -576,9 +580,28 @@ func (m *StorageMiddleware) claimBatch(ctx context.Context) []*OutboxEntry {
 		if entry == nil || !claimed {
 			break
 		}
+		m.metrics.recordClaimed(m.outboxID, entry)
 		batch = append(batch, entry)
 	}
 	return batch
+}
+
+func (m *StorageMiddleware) refreshGauges(ctx context.Context) {
+	err := database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		pending, err := m.repository.CountPending(ctx, tx.SqlTx(), m.outboxID)
+		if err != nil {
+			return err
+		}
+		deadLettered, err := m.repository.CountDeadLettered(ctx, tx.SqlTx(), m.outboxID)
+		if err != nil {
+			return err
+		}
+		m.metrics.setPending(m.outboxID, pending, deadLettered)
+		return nil
+	})
+	if err != nil {
+		slog.DebugContext(ctx, "Failed to refresh notification outbox gauges", "outboxID", m.outboxID, "error", err)
+	}
 }
 
 func (m *StorageMiddleware) dispatchBatch(ctx context.Context, batch []*OutboxEntry) {
@@ -603,18 +626,23 @@ func (m *StorageMiddleware) dispatchBatch(ctx context.Context, batch []*OutboxEn
 }
 
 func (m *StorageMiddleware) dispatchEntry(ctx context.Context, entry *OutboxEntry) {
+	start := time.Now()
 	err := m.publisher.Publish(ctx, entry)
+	latency := time.Since(start)
 	if err == nil {
+		m.metrics.recordPublished(m.outboxID, entry, latency)
 		slog.DebugContext(ctx, "Published notification", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts)
 		_ = m.deleteClaimed(ctx, entry)
 		return
 	}
+	m.metrics.recordFailed(m.outboxID, entry, latency)
 	if m.dispatcher.MaxAttempts > 0 && entry.Attempts >= m.dispatcher.MaxAttempts {
 		slog.ErrorContext(ctx, "Dead-lettering notification after exhausting attempts", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts, "error", err)
 		_ = m.deadLetter(ctx, entry, err)
 		return
 	}
 	nextRetry := m.nextAttemptAt(entry)
+	m.metrics.recordRetry(m.outboxID, entry)
 	slog.WarnContext(ctx, "Failed to publish notification, will retry", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts, "nextRetryAt", nextRetry, "error", err)
 	_ = m.release(ctx, entry, nextRetry, err)
 }

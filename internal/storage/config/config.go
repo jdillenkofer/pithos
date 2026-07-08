@@ -588,7 +588,12 @@ func (n *NotificationStorageMiddlewareConfiguration) Instantiate(diProvider depe
 	if err != nil {
 		return nil, err
 	}
-	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration, dispatcher)
+	t := reflect.TypeOf((*prometheus.Registerer)(nil))
+	prometheusRegisterer, err := diProvider.LookupByType(t)
+	if err != nil {
+		return nil, err
+	}
+	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration, dispatcher, prometheusRegisterer.(prometheus.Registerer))
 }
 
 func (n *NotificationStorageMiddlewareConfiguration) dispatcherConfig() (notification.DispatcherConfig, error) {
