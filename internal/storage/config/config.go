@@ -49,7 +49,6 @@ const (
 	replicationStorageType            = "ReplicationStorage"
 	s3ClientStorageType               = "S3ClientStorage"
 	objectCacheStorageMiddlewareType  = "ObjectCacheStorageMiddleware"
-	notificationStorageMiddlewareType = "NotificationStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -81,10 +80,9 @@ type MetadataPartStorageConfiguration struct {
 }
 
 // MetadataPartNotificationConfiguration is the notification settings embedded in
-// a MetadataPartStorage configuration. Unlike the standalone
-// NotificationStorageMiddleware it does not take its own db or innerStorage: it
-// reuses the MetadataPartStorage database and wraps the MetadataPartStorage
-// output, which guarantees atomic enqueue.
+// a MetadataPartStorage configuration. It is the only way to configure bucket
+// event notifications: it reuses the MetadataPartStorage database and wraps the
+// MetadataPartStorage output, which guarantees atomic enqueue.
 type MetadataPartNotificationConfiguration struct {
 	// Enabled defaults to true. Set it to false to store bucket notification
 	// configurations without emitting or delivering any events.
@@ -643,126 +641,6 @@ type OutboxStorageConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
-type NotificationStorageMiddlewareConfiguration struct {
-	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
-	RawDatabase              json.RawMessage                     `json:"db"`
-	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
-	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
-	Destinations             map[string]notification.Destination `json:"notificationDestinations,omitempty"`
-	OutboxID                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
-	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
-	MaxAttempts              *internalConfig.Int64Provider       `json:"maxAttempts,omitempty"`
-	MinBackoffSecs           *internalConfig.Int64Provider       `json:"minBackoffSeconds,omitempty"`
-	MaxBackoffSecs           *internalConfig.Int64Provider       `json:"maxBackoffSeconds,omitempty"`
-	DispatcherConcurrency    *internalConfig.Int64Provider       `json:"dispatcherConcurrency,omitempty"`
-	BatchSize                *internalConfig.Int64Provider       `json:"batchSize,omitempty"`
-	internalConfig.DynamicJsonType
-}
-
-func (n *NotificationStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type notificationStorageMiddlewareConfiguration NotificationStorageMiddlewareConfiguration
-	err := json.Unmarshal(b, (*notificationStorageMiddlewareConfiguration)(n))
-	if err != nil {
-		return err
-	}
-	n.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(n.RawDatabase)
-	if err != nil {
-		return err
-	}
-	n.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(n.RawInnerStorage)
-	if err != nil {
-		return err
-	}
-	if n.Destinations == nil {
-		n.Destinations = map[string]notification.Destination{}
-	}
-	return nil
-}
-
-func (n *NotificationStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	if err := n.DatabaseInstantiator.RegisterReferences(diCollection); err != nil {
-		return err
-	}
-	return n.InnerStorageInstantiator.RegisterReferences(diCollection)
-}
-
-func (n *NotificationStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	db, err := n.DatabaseInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	innerStorage, err := n.InnerStorageInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	claimLeaseDuration := 30 * time.Second
-	if n.ClaimLeaseDurationSecs != nil {
-		secs := n.ClaimLeaseDurationSecs.Value()
-		if secs <= 0 {
-			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
-		}
-		claimLeaseDuration = time.Duration(secs) * time.Second
-	}
-	publisher, err := notification.NewRegistryPublisher(n.Destinations)
-	if err != nil {
-		return nil, err
-	}
-	outboxID := n.OutboxID.Value()
-	if outboxID == "" {
-		outboxID = defaultOutboxId
-	}
-	dispatcher, err := n.dispatcherConfig()
-	if err != nil {
-		return nil, err
-	}
-	t := reflect.TypeOf((*prometheus.Registerer)(nil))
-	prometheusRegisterer, err := diProvider.LookupByType(t)
-	if err != nil {
-		return nil, err
-	}
-	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration, dispatcher, prometheusRegisterer.(prometheus.Registerer))
-}
-
-func (n *NotificationStorageMiddlewareConfiguration) dispatcherConfig() (notification.DispatcherConfig, error) {
-	dispatcher := notification.DispatcherConfig{}
-	if n.MaxAttempts != nil {
-		if value := n.MaxAttempts.Value(); value < 0 {
-			return dispatcher, errors.New("maxAttempts must be >= 0")
-		} else {
-			dispatcher.MaxAttempts = int(value)
-		}
-	}
-	if n.MinBackoffSecs != nil {
-		if value := n.MinBackoffSecs.Value(); value <= 0 {
-			return dispatcher, errors.New("minBackoffSeconds must be > 0")
-		} else {
-			dispatcher.MinBackoff = time.Duration(value) * time.Second
-		}
-	}
-	if n.MaxBackoffSecs != nil {
-		if value := n.MaxBackoffSecs.Value(); value <= 0 {
-			return dispatcher, errors.New("maxBackoffSeconds must be > 0")
-		} else {
-			dispatcher.MaxBackoff = time.Duration(value) * time.Second
-		}
-	}
-	if n.DispatcherConcurrency != nil {
-		if value := n.DispatcherConcurrency.Value(); value <= 0 {
-			return dispatcher, errors.New("dispatcherConcurrency must be > 0")
-		} else {
-			dispatcher.Concurrency = int(value)
-		}
-	}
-	if n.BatchSize != nil {
-		if value := n.BatchSize.Value(); value <= 0 {
-			return dispatcher, errors.New("batchSize must be > 0")
-		} else {
-			dispatcher.BatchSize = int(value)
-		}
-	}
-	return dispatcher, nil
-}
-
 func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 	type outboxStorageConfiguration OutboxStorageConfiguration
 	err := json.Unmarshal(b, (*outboxStorageConfiguration)(o))
@@ -991,8 +869,6 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &S3ClientStorageConfiguration{}
 	case objectCacheStorageMiddlewareType:
 		si = &ObjectCacheStorageMiddlewareConfiguration{}
-	case notificationStorageMiddlewareType:
-		si = &NotificationStorageMiddlewareConfiguration{}
 	default:
 		return nil, errors.New("unknown storage type")
 	}
