@@ -416,22 +416,19 @@ func (m *StorageMiddleware) buildEntriesForEvent(config *storage.BucketNotificat
 		entries = append(entries, OutboxEntry{DestinationARN: rule.DestinationARN, EventName: event.EventName, PayloadFormat: payloadFormat, Payload: payload})
 	}
 	if config != nil && config.EventBridgeEnabled {
-		eventBridgeDestinationARN := "eventbridge:" + event.Bucket.String()
-		if publisherHasDestination(m.publisher, eventBridgeDestinationARN) {
-			payloadFormat := payloadFormatForDestination(m.publisher, eventBridgeDestinationARN, PayloadFormatEventBridge)
-			payload, err := buildPayload(payloadFormat, event)
-			if err != nil {
-				return nil, err
-			}
-			entries = append(entries, OutboxEntry{DestinationARN: eventBridgeDestinationARN, EventName: event.EventName, PayloadFormat: payloadFormat, Payload: payload})
+		// EventBridge-enabled buckets always enqueue an entry. If a registry
+		// destination is configured for "eventbridge:<bucket>" it takes
+		// precedence; otherwise the entry is delivered to the AWS EventBridge
+		// default event bus.
+		eventBridgeDestinationARN := eventBridgeARNPrefix + event.Bucket.String()
+		payloadFormat := payloadFormatForDestination(m.publisher, eventBridgeDestinationARN, PayloadFormatEventBridge)
+		payload, err := buildPayload(payloadFormat, event)
+		if err != nil {
+			return nil, err
 		}
+		entries = append(entries, OutboxEntry{DestinationARN: eventBridgeDestinationARN, EventName: event.EventName, PayloadFormat: payloadFormat, Payload: payload})
 	}
 	return entries, nil
-}
-
-func publisherHasDestination(p Publisher, arn string) bool {
-	_, ok := destinationFor(p, arn)
-	return ok
 }
 
 func payloadFormatForDestination(p Publisher, arn string, defaultFormat PayloadFormat) PayloadFormat {

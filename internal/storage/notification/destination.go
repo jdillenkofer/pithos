@@ -16,6 +16,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	eventbridgetypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -35,6 +38,12 @@ const (
 	DestinationTypeAWS      DestinationType = "aws"
 )
 
+// eventBridgeARNPrefix identifies notification outbox entries that target the
+// AWS EventBridge default event bus for a bucket. These are synthesized when a
+// bucket enables EventBridge notifications and use the form
+// "eventbridge:<bucket>" rather than a real ARN.
+const eventBridgeARNPrefix = "eventbridge:"
+
 type Destination struct {
 	Type          DestinationType   `json:"type"`
 	URL           string            `json:"url,omitempty"`
@@ -51,6 +60,22 @@ type Destination struct {
 	KeyTemplate   string            `json:"keyTemplate,omitempty"`
 	Auth          AuthConfig        `json:"auth,omitempty"`
 	TLS           TLSConfig         `json:"tls,omitempty"`
+	AWS           AWSConfig         `json:"aws,omitempty"`
+}
+
+// AWSConfig carries destination-level overrides for AWS-backed delivery
+// (SNS, SQS, Lambda, EventBridge). Empty fields fall back to the ambient AWS
+// configuration (environment, shared config, instance role) and, for the
+// region, to the region embedded in the destination ARN.
+type AWSConfig struct {
+	Region          string `json:"region,omitempty"`
+	Endpoint        string `json:"endpoint,omitempty"`
+	AccessKeyID     string `json:"accessKeyId,omitempty"`
+	SecretAccessKey string `json:"secretAccessKey,omitempty"`
+	SessionToken    string `json:"sessionToken,omitempty"`
+	// QueueURL, when set, is used directly for SQS delivery instead of
+	// resolving the queue URL from the destination ARN.
+	QueueURL string `json:"queueUrl,omitempty"`
 }
 
 type AuthConfig struct {
@@ -85,9 +110,10 @@ func NewRegistryPublisher(destinations map[string]Destination) (*RegistryPublish
 }
 
 func (p *RegistryPublisher) Publish(ctx context.Context, entry *OutboxEntry) error {
+	// Registry destinations take precedence over AWS fallback delivery.
 	destination, ok := p.Destinations[entry.DestinationARN]
 	if !ok {
-		return publishAWS(ctx, entry)
+		return publishAWSFallback(ctx, entry, nil)
 	}
 	switch destination.Type {
 	case DestinationTypeWebhook:
@@ -97,10 +123,21 @@ func (p *RegistryPublisher) Publish(ctx context.Context, entry *OutboxEntry) err
 	case DestinationTypeKafka:
 		return publishKafka(ctx, destination, entry)
 	case DestinationTypeAWS:
-		return publishAWS(ctx, entry)
+		return publishAWSFallback(ctx, entry, &destination)
 	default:
 		return fmt.Errorf("unsupported notification destination type %q", destination.Type)
 	}
+}
+
+// publishAWSFallback dispatches an entry to the appropriate AWS service.
+// EventBridge-targeted entries (the "eventbridge:<bucket>" convention) are
+// delivered to the AWS EventBridge default event bus; everything else is
+// routed by ARN service (SNS, SQS, Lambda).
+func publishAWSFallback(ctx context.Context, entry *OutboxEntry, destination *Destination) error {
+	if strings.HasPrefix(entry.DestinationARN, eventBridgeARNPrefix) {
+		return publishEventBridge(ctx, entry, destination)
+	}
+	return publishAWS(ctx, entry, destination)
 }
 
 func (p *RegistryPublisher) Validate(ctx context.Context, arn string, destination Destination) error {
@@ -311,44 +348,118 @@ func validatePayloadFormat(payloadFormat PayloadFormat) error {
 	}
 }
 
-func publishAWS(ctx context.Context, entry *OutboxEntry) error {
+func publishAWS(ctx context.Context, entry *OutboxEntry, destination *Destination) error {
 	arn, err := parseARN(entry.DestinationARN)
 	if err != nil {
 		return err
 	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(arn.Region))
+	awsOpts := awsOptionsFor(destination)
+	cfg, err := loadAWSConfig(ctx, awsOpts, arn.Region)
 	if err != nil {
 		return err
 	}
+	endpoint := awsOpts.Endpoint
 	switch arn.Service {
 	case "sns":
-		_, err = sns.NewFromConfig(cfg).Publish(ctx, &sns.PublishInput{
+		client := sns.NewFromConfig(cfg, func(o *sns.Options) { applyBaseEndpoint(&o.BaseEndpoint, endpoint) })
+		_, err = client.Publish(ctx, &sns.PublishInput{
 			TopicArn: aws.String(entry.DestinationARN),
 			Message:  aws.String(string(entry.Payload)),
 		})
 		return err
 	case "sqs":
-		client := sqs.NewFromConfig(cfg)
-		queueURL, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
-			QueueName:              aws.String(arn.ResourceName()),
-			QueueOwnerAWSAccountId: aws.String(arn.AccountID),
-		})
-		if err != nil {
-			return err
+		client := sqs.NewFromConfig(cfg, func(o *sqs.Options) { applyBaseEndpoint(&o.BaseEndpoint, endpoint) })
+		queueURL := awsOpts.QueueURL
+		if queueURL == "" {
+			out, err := client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{
+				QueueName:              aws.String(arn.ResourceName()),
+				QueueOwnerAWSAccountId: aws.String(arn.AccountID),
+			})
+			if err != nil {
+				return err
+			}
+			queueURL = aws.ToString(out.QueueUrl)
 		}
 		_, err = client.SendMessage(ctx, &sqs.SendMessageInput{
-			QueueUrl:    queueURL.QueueUrl,
+			QueueUrl:    aws.String(queueURL),
 			MessageBody: aws.String(string(entry.Payload)),
 		})
 		return err
 	case "lambda":
-		_, err = lambda.NewFromConfig(cfg).Invoke(ctx, &lambda.InvokeInput{
+		client := lambda.NewFromConfig(cfg, func(o *lambda.Options) { applyBaseEndpoint(&o.BaseEndpoint, endpoint) })
+		_, err = client.Invoke(ctx, &lambda.InvokeInput{
 			FunctionName: aws.String(entry.DestinationARN),
 			Payload:      entry.Payload,
 		})
 		return err
 	default:
 		return fmt.Errorf("unsupported AWS notification destination service %q", arn.Service)
+	}
+}
+
+// publishEventBridge delivers an EventBridge-formatted payload to the AWS
+// EventBridge default event bus.
+func publishEventBridge(ctx context.Context, entry *OutboxEntry, destination *Destination) error {
+	var envelope struct {
+		DetailType string          `json:"detail-type"`
+		Source     string          `json:"source"`
+		Resources  []string        `json:"resources"`
+		Detail     json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(entry.Payload, &envelope); err != nil {
+		return fmt.Errorf("invalid EventBridge payload: %w", err)
+	}
+	awsOpts := awsOptionsFor(destination)
+	cfg, err := loadAWSConfig(ctx, awsOpts, "")
+	if err != nil {
+		return err
+	}
+	client := eventbridge.NewFromConfig(cfg, func(o *eventbridge.Options) { applyBaseEndpoint(&o.BaseEndpoint, awsOpts.Endpoint) })
+	detail := "{}"
+	if len(envelope.Detail) > 0 {
+		detail = string(envelope.Detail)
+	}
+	_, err = client.PutEvents(ctx, &eventbridge.PutEventsInput{
+		Entries: []eventbridgetypes.PutEventsRequestEntry{{
+			Source:     aws.String(envelope.Source),
+			DetailType: aws.String(envelope.DetailType),
+			Detail:     aws.String(detail),
+			Resources:  envelope.Resources,
+		}},
+	})
+	return err
+}
+
+func awsOptionsFor(destination *Destination) AWSConfig {
+	if destination == nil {
+		return AWSConfig{}
+	}
+	return destination.AWS
+}
+
+// loadAWSConfig builds an aws.Config honoring destination-level overrides.
+// fallbackRegion is used when the destination does not specify a region (for
+// example the region embedded in the destination ARN).
+func loadAWSConfig(ctx context.Context, opts AWSConfig, fallbackRegion string) (aws.Config, error) {
+	loadOpts := []func(*awsconfig.LoadOptions) error{}
+	region := opts.Region
+	if region == "" {
+		region = fallbackRegion
+	}
+	if region != "" {
+		loadOpts = append(loadOpts, awsconfig.WithRegion(region))
+	}
+	if opts.AccessKeyID != "" || opts.SecretAccessKey != "" {
+		loadOpts = append(loadOpts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(opts.AccessKeyID, opts.SecretAccessKey, opts.SessionToken),
+		))
+	}
+	return awsconfig.LoadDefaultConfig(ctx, loadOpts...)
+}
+
+func applyBaseEndpoint(target **string, endpoint string) {
+	if endpoint != "" {
+		*target = aws.String(endpoint)
 	}
 }
 
