@@ -162,6 +162,137 @@ func (rs *s3ClientStorage) PutBucketVersioningConfiguration(ctx context.Context,
 	return err
 }
 
+func (rs *s3ClientStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	result, err := rs.s3Client.GetBucketNotificationConfiguration(ctx, &s3.GetBucketNotificationConfigurationInput{Bucket: aws.String(bucketName.String())})
+	var notFoundError *types.NotFound
+	var noSuchBucketError *types.NoSuchBucket
+	var apiErr smithy.APIError
+	if err != nil && (errors.As(err, &notFoundError) || errors.As(err, &noSuchBucketError) || (errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchBucket" || apiErr.ErrorCode() == "NotFound"))) {
+		return nil, storage.ErrNoSuchBucket
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	config := &storage.BucketNotificationConfiguration{
+		TopicConfigurations:         make([]storage.NotificationConfigurationRule, 0, len(result.TopicConfigurations)),
+		QueueConfigurations:         make([]storage.NotificationConfigurationRule, 0, len(result.QueueConfigurations)),
+		CloudFunctionConfigurations: make([]storage.NotificationConfigurationRule, 0, len(result.LambdaFunctionConfigurations)),
+		EventBridgeEnabled:          result.EventBridgeConfiguration != nil,
+	}
+	for _, rule := range result.TopicConfigurations {
+		config.TopicConfigurations = append(config.TopicConfigurations, storage.NotificationConfigurationRule{
+			ID:              rule.Id,
+			DestinationType: storage.NotificationDestinationTopic,
+			DestinationARN:  aws.ToString(rule.TopicArn),
+			Events:          s3EventsToStrings(rule.Events),
+			FilterRules:     s3NotificationFilterToStorage(rule.Filter),
+		})
+	}
+	for _, rule := range result.QueueConfigurations {
+		config.QueueConfigurations = append(config.QueueConfigurations, storage.NotificationConfigurationRule{
+			ID:              rule.Id,
+			DestinationType: storage.NotificationDestinationQueue,
+			DestinationARN:  aws.ToString(rule.QueueArn),
+			Events:          s3EventsToStrings(rule.Events),
+			FilterRules:     s3NotificationFilterToStorage(rule.Filter),
+		})
+	}
+	for _, rule := range result.LambdaFunctionConfigurations {
+		config.CloudFunctionConfigurations = append(config.CloudFunctionConfigurations, storage.NotificationConfigurationRule{
+			ID:              rule.Id,
+			DestinationType: storage.NotificationDestinationCloudFunction,
+			DestinationARN:  aws.ToString(rule.LambdaFunctionArn),
+			Events:          s3EventsToStrings(rule.Events),
+			FilterRules:     s3NotificationFilterToStorage(rule.Filter),
+		})
+	}
+	return config, nil
+}
+
+func (rs *s3ClientStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	notificationConfiguration := &types.NotificationConfiguration{}
+	if config != nil {
+		if config.EventBridgeEnabled {
+			notificationConfiguration.EventBridgeConfiguration = &types.EventBridgeConfiguration{}
+		}
+		for _, rule := range config.TopicConfigurations {
+			notificationConfiguration.TopicConfigurations = append(notificationConfiguration.TopicConfigurations, types.TopicConfiguration{
+				Id:       rule.ID,
+				TopicArn: aws.String(rule.DestinationARN),
+				Events:   stringsToS3Events(rule.Events),
+				Filter:   storageNotificationFilterToS3(rule.FilterRules),
+			})
+		}
+		for _, rule := range config.QueueConfigurations {
+			notificationConfiguration.QueueConfigurations = append(notificationConfiguration.QueueConfigurations, types.QueueConfiguration{
+				Id:       rule.ID,
+				QueueArn: aws.String(rule.DestinationARN),
+				Events:   stringsToS3Events(rule.Events),
+				Filter:   storageNotificationFilterToS3(rule.FilterRules),
+			})
+		}
+		for _, rule := range config.CloudFunctionConfigurations {
+			notificationConfiguration.LambdaFunctionConfigurations = append(notificationConfiguration.LambdaFunctionConfigurations, types.LambdaFunctionConfiguration{
+				Id:                rule.ID,
+				LambdaFunctionArn: aws.String(rule.DestinationARN),
+				Events:            stringsToS3Events(rule.Events),
+				Filter:            storageNotificationFilterToS3(rule.FilterRules),
+			})
+		}
+	}
+
+	_, err := rs.s3Client.PutBucketNotificationConfiguration(ctx, &s3.PutBucketNotificationConfigurationInput{
+		Bucket:                    aws.String(bucketName.String()),
+		NotificationConfiguration: notificationConfiguration,
+	})
+	return err
+}
+
+func s3EventsToStrings(events []types.Event) []string {
+	values := make([]string, 0, len(events))
+	for _, event := range events {
+		values = append(values, string(event))
+	}
+	return values
+}
+
+func stringsToS3Events(events []string) []types.Event {
+	values := make([]types.Event, 0, len(events))
+	for _, event := range events {
+		values = append(values, types.Event(event))
+	}
+	return values
+}
+
+func s3NotificationFilterToStorage(filter *types.NotificationConfigurationFilter) []storage.NotificationFilterRule {
+	if filter == nil || filter.Key == nil {
+		return nil
+	}
+	rules := make([]storage.NotificationFilterRule, 0, len(filter.Key.FilterRules))
+	for _, rule := range filter.Key.FilterRules {
+		rules = append(rules, storage.NotificationFilterRule{Name: string(rule.Name), Value: aws.ToString(rule.Value)})
+	}
+	return rules
+}
+
+func storageNotificationFilterToS3(rules []storage.NotificationFilterRule) *types.NotificationConfigurationFilter {
+	if len(rules) == 0 {
+		return nil
+	}
+	filterRules := make([]types.FilterRule, 0, len(rules))
+	for _, rule := range rules {
+		filterRules = append(filterRules, types.FilterRule{Name: types.FilterRuleName(rule.Name), Value: aws.String(rule.Value)})
+	}
+	return &types.NotificationConfigurationFilter{Key: &types.S3KeyFilter{FilterRules: filterRules}}
+}
+
 func (rs *s3ClientStorage) ListObjects(ctx context.Context, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListObjects")
 	defer span.End()

@@ -534,6 +534,22 @@ type BucketLifecycleManager interface {
 	DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
+type NotificationDestinationType = metadatastore.NotificationDestinationType
+type NotificationFilterRule = metadatastore.NotificationFilterRule
+type NotificationConfigurationRule = metadatastore.NotificationConfigurationRule
+type BucketNotificationConfiguration = metadatastore.BucketNotificationConfiguration
+
+const (
+	NotificationDestinationTopic         = metadatastore.NotificationDestinationTopic
+	NotificationDestinationQueue         = metadatastore.NotificationDestinationQueue
+	NotificationDestinationCloudFunction = metadatastore.NotificationDestinationCloudFunction
+)
+
+type BucketNotificationManager interface {
+	GetBucketNotificationConfiguration(ctx context.Context, bucketName BucketName) (*BucketNotificationConfiguration, error)
+	PutBucketNotificationConfiguration(ctx context.Context, bucketName BucketName, config *BucketNotificationConfiguration) error
+}
+
 // TaggingManager manages object tagging operations.
 type TaggingManager interface {
 	// GetObjectTagging returns the tag set of the object at key. Returns
@@ -616,6 +632,7 @@ type Storage interface {
 	BucketWebsiteManager
 	BucketCORSManager
 	BucketLifecycleManager
+	BucketNotificationManager
 	ObjectManager
 	MultipartUploadManager
 	TaggingManager

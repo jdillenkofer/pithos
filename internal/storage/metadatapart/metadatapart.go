@@ -374,6 +374,32 @@ func (mbs *metadataPartStorage) DeleteBucketLifecycleConfiguration(ctx context.C
 	})
 }
 
+func (mbs *metadataPartStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	var config *storage.BucketNotificationConfiguration
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		config, err = mbs.metadataStore.GetBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.PutBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName, config)
+	})
+}
+
 func taggingMetaOptions(opts *storage.ObjectTaggingOptions) *metadatastore.ObjectTaggingOptions {
 	if opts == nil {
 		return nil

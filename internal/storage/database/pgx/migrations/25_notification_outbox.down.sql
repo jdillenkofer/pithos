@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS notification_outbox_entries_claim_until_idx;
+DROP INDEX IF EXISTS notification_outbox_entries_outbox_next_attempt_id_idx;
+DROP TABLE notification_outbox_entries;

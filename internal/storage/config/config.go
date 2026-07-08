@@ -32,6 +32,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
+	"github.com/jdillenkofer/pithos/internal/storage/notification"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
@@ -39,15 +40,16 @@ import (
 )
 
 const (
-	defaultOutboxId                  = "default"
-	metadataPartStorageType          = "MetadataPartStorage"
-	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
-	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
-	auditStorageMiddlewareType       = "AuditStorageMiddleware"
-	outboxStorageType                = "OutboxStorage"
-	replicationStorageType           = "ReplicationStorage"
-	s3ClientStorageType              = "S3ClientStorage"
-	objectCacheStorageMiddlewareType = "ObjectCacheStorageMiddleware"
+	defaultOutboxId                   = "default"
+	metadataPartStorageType           = "MetadataPartStorage"
+	conditionalStorageMiddlewareType  = "ConditionalStorageMiddleware"
+	prometheusStorageMiddlewareType   = "PrometheusStorageMiddleware"
+	auditStorageMiddlewareType        = "AuditStorageMiddleware"
+	outboxStorageType                 = "OutboxStorage"
+	replicationStorageType            = "ReplicationStorage"
+	s3ClientStorageType               = "S3ClientStorage"
+	objectCacheStorageMiddlewareType  = "ObjectCacheStorageMiddleware"
+	notificationStorageMiddlewareType = "NotificationStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -514,6 +516,72 @@ type OutboxStorageConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type NotificationStorageMiddlewareConfiguration struct {
+	DatabaseInstantiator     databaseConfig.DatabaseInstantiator `json:"-"`
+	RawDatabase              json.RawMessage                     `json:"db"`
+	InnerStorageInstantiator StorageInstantiator                 `json:"-"`
+	RawInnerStorage          json.RawMessage                     `json:"innerStorage"`
+	Destinations             map[string]notification.Destination `json:"notificationDestinations,omitempty"`
+	OutboxID                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (n *NotificationStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
+	type notificationStorageMiddlewareConfiguration NotificationStorageMiddlewareConfiguration
+	err := json.Unmarshal(b, (*notificationStorageMiddlewareConfiguration)(n))
+	if err != nil {
+		return err
+	}
+	n.DatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(n.RawDatabase)
+	if err != nil {
+		return err
+	}
+	n.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(n.RawInnerStorage)
+	if err != nil {
+		return err
+	}
+	if n.Destinations == nil {
+		n.Destinations = map[string]notification.Destination{}
+	}
+	return nil
+}
+
+func (n *NotificationStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	if err := n.DatabaseInstantiator.RegisterReferences(diCollection); err != nil {
+		return err
+	}
+	return n.InnerStorageInstantiator.RegisterReferences(diCollection)
+}
+
+func (n *NotificationStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
+	db, err := n.DatabaseInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	innerStorage, err := n.InnerStorageInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	claimLeaseDuration := 30 * time.Second
+	if n.ClaimLeaseDurationSecs != nil {
+		secs := n.ClaimLeaseDurationSecs.Value()
+		if secs <= 0 {
+			return nil, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(secs) * time.Second
+	}
+	publisher, err := notification.NewRegistryPublisher(n.Destinations)
+	if err != nil {
+		return nil, err
+	}
+	outboxID := n.OutboxID.Value()
+	if outboxID == "" {
+		outboxID = defaultOutboxId
+	}
+	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration)
+}
+
 func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {
 	type outboxStorageConfiguration OutboxStorageConfiguration
 	err := json.Unmarshal(b, (*outboxStorageConfiguration)(o))
@@ -742,6 +810,8 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &S3ClientStorageConfiguration{}
 	case objectCacheStorageMiddlewareType:
 		si = &ObjectCacheStorageMiddlewareConfiguration{}
+	case notificationStorageMiddlewareType:
+		si = &NotificationStorageMiddlewareConfiguration{}
 	default:
 		return nil, errors.New("unknown storage type")
 	}
