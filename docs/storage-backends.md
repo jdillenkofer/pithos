@@ -11,6 +11,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   - Configurable part stores (filesystem, SFTP)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
   - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
+  - Emits [bucket event notifications](#bucket-event-notifications) by default, atomically with object mutations
 - **S3ClientStorage**: Use an existing S3-compatible storage as backend
   - Compatible with other S3-compatible services
   - Configurable endpoint, region, and credentials
@@ -171,6 +172,106 @@ Notes:
 - Streaming downloads release their database connection only when **every**
   configured store supports transaction-free reads (everything except
   `SqlPartStore`).
+
+### Bucket Event Notifications
+
+`MetadataPartStorage` supports S3-style bucket event notifications. Per-bucket
+rules (which events, which prefixes/suffixes, and which destination ARNs) are
+set through the standard S3 API — for example
+`aws s3api put-bucket-notification-configuration` — and are stored in the
+metadata database. When an object mutation matches a rule, an entry is written
+to a durable outbox and delivered asynchronously by a background dispatcher with
+at-least-once semantics.
+
+Notifications are **enabled by default**: because the notification layer shares
+the `MetadataPartStorage` database, the outbox insert commits in the same
+transaction as the object mutation, so an event is never lost or emitted for a
+mutation that rolled back. No extra configuration is required to turn them on.
+
+To customize delivery or tune the dispatcher, add an optional `notifications`
+block to the `MetadataPartStorage` configuration:
+
+```json
+{
+  "type": "MetadataPartStorage",
+  "db": {
+    "type": "RegisterDatabaseReference",
+    "refName": "db",
+    "db": { "type": "SqliteDatabase", "dbPath": "./data/pithos.db" }
+  },
+  "metadataStore": {
+    "type": "SqlMetadataStore",
+    "db": { "type": "DatabaseReference", "refName": "db" }
+  },
+  "partStore": {
+    "type": "SqlPartStore",
+    "db": { "type": "DatabaseReference", "refName": "db" }
+  },
+  "notifications": {
+    "notificationDestinations": {
+      "arn:aws:sqs:eu-central-1:000000000000:image-jobs": {
+        "type": "aws",
+        "aws": {
+          "region": "eu-central-1",
+          "queueUrl": "https://sqs.eu-central-1.amazonaws.com/000000000000/image-jobs"
+        }
+      },
+      "arn:aws:sns:eu-central-1:000000000000:events": {
+        "type": "webhook",
+        "url": "https://example.com/hooks/s3",
+        "payloadFormat": "s3-records"
+      }
+    },
+    "maxAttempts": 8,
+    "minBackoffSeconds": 1,
+    "maxBackoffSeconds": 300,
+    "dispatcherConcurrency": 4,
+    "batchSize": 16
+  }
+}
+```
+
+#### `notifications` fields
+
+All fields are optional; omit the whole block to run with defaults.
+
+- `enabled` (default `true`): set to `false` to store bucket notification configurations without emitting or delivering any events.
+- `notificationDestinations`: maps a destination ARN (or `eventbridge:<bucket>` for EventBridge) to a custom delivery target. ARNs that are **not** listed here fall back to real AWS delivery (SNS/SQS/Lambda by ARN service; EventBridge default event bus for EventBridge-enabled buckets).
+- `outboxId` (default `"default"`): scopes outbox rows; set a unique value per instance when multiple dispatchers share one database.
+- `claimLeaseDurationSeconds` (default `30`): how long a claimed entry is leased to a dispatcher before it can be re-claimed.
+- `maxAttempts` (default unlimited): after this many failed delivery attempts an entry is dead-lettered and no longer retried. `0` (or omitted) means retry forever.
+- `minBackoffSeconds` / `maxBackoffSeconds` (defaults `1` / `300`): bounds of the exponential retry backoff.
+- `dispatcherConcurrency` (default `1`): number of entries delivered in parallel per batch.
+- `batchSize` (default `1`): maximum number of entries claimed before dispatching.
+
+#### Destination types
+
+Each entry in `notificationDestinations` has a `type`:
+
+- `aws`: deliver to AWS SNS, SQS, or Lambda (chosen by the ARN service) or to EventBridge. The optional `aws` object overrides ambient AWS configuration with `region`, `endpoint`, `accessKeyId`, `secretAccessKey`, `sessionToken`, and `queueUrl` (used directly for SQS instead of resolving the queue URL from the ARN).
+- `webhook`: HTTP `POST` (or `method`) to `url`, with optional `headers` and `tls`.
+- `rabbitmq`: publish to a `queue` or `exchange` on `url` (with `routingKey`, `exchangeType`, `durable`, `auth`, `tls`).
+- `kafka`: publish to `topic` on `brokers`, with an optional `keyTemplate`, `auth` (`plain`, `sasl-scram-sha-256`, `sasl-scram-sha-512`), and `tls`.
+
+Every destination accepts `payloadFormat`: `s3-records` (default, the AWS S3 event records envelope) or `eventbridge` (the AWS EventBridge envelope).
+
+#### Destination validation and test events
+
+When a bucket notification configuration is applied, Pithos validates the
+configured destinations and publishes one synchronous `s3:TestEvent` to each
+unique destination. If any test delivery fails, the request fails and the
+previous configuration is left unchanged. Send the request with the
+`x-amz-skip-destination-validation: true` header to skip both validation and the
+test events. Test events are delivered synchronously and are never written to the
+durable outbox.
+
+#### Metrics
+
+The dispatcher exposes Prometheus metrics under the `pithos_notification_`
+prefix: `pending_entries` and `dead_lettered_entries` gauges, and
+`claimed_entries_total`, `published_entries_total`, `failed_publishes_total`,
+`retry_attempts_total`, and `publish_latency_seconds`, labeled by `outbox_id`,
+`destination_type`, and `payload_format`.
 
 ### TPM 2.0 Encryption
 
