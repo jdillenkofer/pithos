@@ -524,6 +524,11 @@ type NotificationStorageMiddlewareConfiguration struct {
 	Destinations             map[string]notification.Destination `json:"notificationDestinations,omitempty"`
 	OutboxID                 internalConfig.StringProvider       `json:"outboxId,omitempty"`
 	ClaimLeaseDurationSecs   *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
+	MaxAttempts              *internalConfig.Int64Provider       `json:"maxAttempts,omitempty"`
+	MinBackoffSecs           *internalConfig.Int64Provider       `json:"minBackoffSeconds,omitempty"`
+	MaxBackoffSecs           *internalConfig.Int64Provider       `json:"maxBackoffSeconds,omitempty"`
+	DispatcherConcurrency    *internalConfig.Int64Provider       `json:"dispatcherConcurrency,omitempty"`
+	BatchSize                *internalConfig.Int64Provider       `json:"batchSize,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -579,7 +584,51 @@ func (n *NotificationStorageMiddlewareConfiguration) Instantiate(diProvider depe
 	if outboxID == "" {
 		outboxID = defaultOutboxId
 	}
-	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration)
+	dispatcher, err := n.dispatcherConfig()
+	if err != nil {
+		return nil, err
+	}
+	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, outboxID, claimLeaseDuration, dispatcher)
+}
+
+func (n *NotificationStorageMiddlewareConfiguration) dispatcherConfig() (notification.DispatcherConfig, error) {
+	dispatcher := notification.DispatcherConfig{}
+	if n.MaxAttempts != nil {
+		if value := n.MaxAttempts.Value(); value < 0 {
+			return dispatcher, errors.New("maxAttempts must be >= 0")
+		} else {
+			dispatcher.MaxAttempts = int(value)
+		}
+	}
+	if n.MinBackoffSecs != nil {
+		if value := n.MinBackoffSecs.Value(); value <= 0 {
+			return dispatcher, errors.New("minBackoffSeconds must be > 0")
+		} else {
+			dispatcher.MinBackoff = time.Duration(value) * time.Second
+		}
+	}
+	if n.MaxBackoffSecs != nil {
+		if value := n.MaxBackoffSecs.Value(); value <= 0 {
+			return dispatcher, errors.New("maxBackoffSeconds must be > 0")
+		} else {
+			dispatcher.MaxBackoff = time.Duration(value) * time.Second
+		}
+	}
+	if n.DispatcherConcurrency != nil {
+		if value := n.DispatcherConcurrency.Value(); value <= 0 {
+			return dispatcher, errors.New("dispatcherConcurrency must be > 0")
+		} else {
+			dispatcher.Concurrency = int(value)
+		}
+	}
+	if n.BatchSize != nil {
+		if value := n.BatchSize.Value(); value <= 0 {
+			return dispatcher, errors.New("batchSize must be > 0")
+		} else {
+			dispatcher.BatchSize = int(value)
+		}
+	}
+	return dispatcher, nil
 }
 
 func (o *OutboxStorageConfiguration) UnmarshalJSON(b []byte) error {

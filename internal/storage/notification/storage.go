@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,9 +31,45 @@ type StorageMiddleware struct {
 	outboxID           string
 	claimOwner         string
 	claimLeaseDuration time.Duration
+	dispatcher         DispatcherConfig
 	trigger            chan struct{}
 	taskHandle         *task.TaskHandle
 	tracer             trace.Tracer
+}
+
+// DispatcherConfig tunes the durable delivery loop. Zero values are replaced by
+// conservative defaults that preserve the historical single-worker,
+// unbounded-retry behavior.
+type DispatcherConfig struct {
+	// MaxAttempts is the number of delivery attempts after which an entry is
+	// dead-lettered and no longer retried. A value <= 0 means unlimited retries.
+	MaxAttempts int
+	// MinBackoff and MaxBackoff bound the exponential retry backoff.
+	MinBackoff time.Duration
+	MaxBackoff time.Duration
+	// Concurrency is the number of entries dispatched in parallel per batch.
+	Concurrency int
+	// BatchSize is the maximum number of entries claimed before dispatching.
+	BatchSize int
+}
+
+func (c DispatcherConfig) withDefaults() DispatcherConfig {
+	if c.MinBackoff <= 0 {
+		c.MinBackoff = time.Second
+	}
+	if c.MaxBackoff <= 0 {
+		c.MaxBackoff = 300 * time.Second
+	}
+	if c.MaxBackoff < c.MinBackoff {
+		c.MaxBackoff = c.MinBackoff
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = 1
+	}
+	if c.BatchSize <= 0 {
+		c.BatchSize = 1
+	}
+	return c
 }
 
 var _ storage.Storage = (*StorageMiddleware)(nil)
@@ -45,7 +83,7 @@ type databaseWrapper interface {
 	UnwrapDatabase() database.Database
 }
 
-func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration) (*StorageMiddleware, error) {
+func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration, dispatcher DispatcherConfig) (*StorageMiddleware, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("NotificationStorageMiddleware")
 	if err != nil {
 		return nil, err
@@ -71,6 +109,7 @@ func NewStorageMiddleware(inner storage.Storage, db database.Database, repositor
 		outboxID:           outboxID,
 		claimOwner:         outboxID + ":notification:" + ulid.Make().String(),
 		claimLeaseDuration: claimLeaseDuration,
+		dispatcher:         dispatcher.withDefaults(),
 		trigger:            make(chan struct{}, 16),
 		tracer:             otel.Tracer("internal/storage/notification"),
 	}, nil
@@ -518,22 +557,66 @@ func (m *StorageMiddleware) dispatchLoop() {
 
 func (m *StorageMiddleware) dispatchAvailable(ctx context.Context) {
 	for {
-		entry, claimed, err := m.claim(ctx)
-		if err != nil || entry == nil || !claimed {
-			if err != nil {
-				slog.WarnContext(ctx, "Failed to claim notification entry", "error", err)
-			}
+		batch := m.claimBatch(ctx)
+		if len(batch) == 0 {
 			return
 		}
-		err = m.publisher.Publish(ctx, entry)
-		if err == nil {
-			_ = m.deleteClaimed(ctx, entry)
-			continue
+		m.dispatchBatch(ctx, batch)
+	}
+}
+
+func (m *StorageMiddleware) claimBatch(ctx context.Context) []*OutboxEntry {
+	var batch []*OutboxEntry
+	for len(batch) < m.dispatcher.BatchSize {
+		entry, claimed, err := m.claim(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to claim notification entry", "outboxID", m.outboxID, "error", err)
+			break
 		}
-		slog.WarnContext(ctx, "Failed to publish notification", "destinationARN", entry.DestinationARN, "attempts", entry.Attempts, "error", err)
-		_ = m.release(ctx, entry)
+		if entry == nil || !claimed {
+			break
+		}
+		batch = append(batch, entry)
+	}
+	return batch
+}
+
+func (m *StorageMiddleware) dispatchBatch(ctx context.Context, batch []*OutboxEntry) {
+	if len(batch) == 1 || m.dispatcher.Concurrency == 1 {
+		for _, entry := range batch {
+			m.dispatchEntry(ctx, entry)
+		}
 		return
 	}
+	semaphore := make(chan struct{}, m.dispatcher.Concurrency)
+	var wg sync.WaitGroup
+	for _, entry := range batch {
+		wg.Add(1)
+		semaphore <- struct{}{}
+		go func(entry *OutboxEntry) {
+			defer wg.Done()
+			defer func() { <-semaphore }()
+			m.dispatchEntry(ctx, entry)
+		}(entry)
+	}
+	wg.Wait()
+}
+
+func (m *StorageMiddleware) dispatchEntry(ctx context.Context, entry *OutboxEntry) {
+	err := m.publisher.Publish(ctx, entry)
+	if err == nil {
+		slog.DebugContext(ctx, "Published notification", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts)
+		_ = m.deleteClaimed(ctx, entry)
+		return
+	}
+	if m.dispatcher.MaxAttempts > 0 && entry.Attempts >= m.dispatcher.MaxAttempts {
+		slog.ErrorContext(ctx, "Dead-lettering notification after exhausting attempts", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts, "error", err)
+		_ = m.deadLetter(ctx, entry, err)
+		return
+	}
+	nextRetry := m.nextAttemptAt(entry)
+	slog.WarnContext(ctx, "Failed to publish notification, will retry", "outboxID", m.outboxID, "entryID", entry.ID.String(), "eventName", entry.EventName, "destinationType", destinationTypeLabel(entry.DestinationARN), "attempts", entry.Attempts, "nextRetryAt", nextRetry, "error", err)
+	_ = m.release(ctx, entry, nextRetry, err)
 }
 
 func (m *StorageMiddleware) claim(ctx context.Context) (*OutboxEntry, bool, error) {
@@ -555,11 +638,50 @@ func (m *StorageMiddleware) deleteClaimed(ctx context.Context, entry *OutboxEntr
 	})
 }
 
-func (m *StorageMiddleware) release(ctx context.Context, entry *OutboxEntry) error {
-	delaySeconds := math.Min(300, math.Pow(2, float64(entry.Attempts)))
-	nextAttemptAt := time.Now().UTC().Add(time.Duration(delaySeconds) * time.Second)
+func (m *StorageMiddleware) nextAttemptAt(entry *OutboxEntry) time.Time {
+	// entry.Attempts has already been incremented by the claim, so the first
+	// retry waits minBackoff.
+	exponent := entry.Attempts - 1
+	if exponent < 0 {
+		exponent = 0
+	}
+	delay := float64(m.dispatcher.MinBackoff) * math.Pow(2, float64(exponent))
+	maxBackoff := float64(m.dispatcher.MaxBackoff)
+	if delay > maxBackoff || math.IsInf(delay, 1) {
+		delay = maxBackoff
+	}
+	return time.Now().UTC().Add(time.Duration(delay))
+}
+
+func (m *StorageMiddleware) release(ctx context.Context, entry *OutboxEntry, nextAttemptAt time.Time, cause error) error {
 	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := m.repository.ReleaseClaim(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner, nextAttemptAt, time.Now().UTC())
+		_, err := m.repository.ReleaseClaim(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner, nextAttemptAt, time.Now().UTC(), errorMessage(cause))
 		return err
 	})
+}
+
+func (m *StorageMiddleware) deadLetter(ctx context.Context, entry *OutboxEntry, cause error) error {
+	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		_, err := m.repository.DeadLetter(ctx, tx.SqlTx(), m.outboxID, *entry.ID, m.claimOwner, time.Now().UTC(), errorMessage(cause))
+		return err
+	})
+}
+
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// destinationTypeLabel derives a low-cardinality destination type label from an
+// entry ARN for logs and metrics, avoiding per-destination cardinality.
+func destinationTypeLabel(destinationARN string) string {
+	if strings.HasPrefix(destinationARN, eventBridgeARNPrefix) {
+		return "eventbridge"
+	}
+	if arn, err := parseARN(destinationARN); err == nil {
+		return arn.Service
+	}
+	return "unknown"
 }

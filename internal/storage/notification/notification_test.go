@@ -120,7 +120,7 @@ func TestSQLRepositoryClaimReleaseAndDelete(t *testing.T) {
 	require.Equal(t, 1, claimed.Attempts)
 
 	require.NoError(t, database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		ok, err := repo.ReleaseClaim(ctx, tx.SqlTx(), "one", *claimed.ID, "owner", time.Now().UTC(), time.Now().UTC())
+		ok, err := repo.ReleaseClaim(ctx, tx.SqlTx(), "one", *claimed.ID, "owner", time.Now().UTC(), time.Now().UTC(), "boom")
 		require.True(t, ok)
 		return err
 	}))

@@ -77,7 +77,7 @@ func notifyingStackWithFailToggle(t *testing.T) (*StorageMiddleware, *failingSav
 	repo := &failingSaveRepository{Repository: NewSQLRepository()}
 	// A recording publisher keeps the synchronous test-event delivery during
 	// PutBucketNotificationConfiguration local instead of reaching real AWS.
-	mw, err := NewStorageMiddleware(inner, db, repo, &recordingPublisher{}, "default", time.Minute)
+	mw, err := NewStorageMiddleware(inner, db, repo, &recordingPublisher{}, "default", time.Minute, DispatcherConfig{})
 	require.NoError(t, err)
 	return mw, repo
 }

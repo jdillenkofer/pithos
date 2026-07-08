@@ -1,0 +1,5 @@
+DROP INDEX notification_outbox_entries_dead_lettered_at_idx;
+
+ALTER TABLE notification_outbox_entries DROP COLUMN dead_lettered_at;
+ALTER TABLE notification_outbox_entries DROP COLUMN last_error_at;
+ALTER TABLE notification_outbox_entries DROP COLUMN last_error;
