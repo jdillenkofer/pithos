@@ -16,6 +16,9 @@ const (
 	EventObjectRemovedDeleteMarkerCreated     = "s3:ObjectRemoved:DeleteMarkerCreated"
 	EventObjectTaggingPut                     = "s3:ObjectTagging:Put"
 	EventObjectTaggingDelete                  = "s3:ObjectTagging:Delete"
+	EventLifecycleExpirationDelete            = "s3:LifecycleExpiration:Delete"
+	EventLifecycleExpirationDeleteMarker      = "s3:LifecycleExpiration:DeleteMarkerCreated"
+	EventLifecycleTransition                  = "s3:LifecycleTransition"
 )
 
 type ObjectEvent struct {

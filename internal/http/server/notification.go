@@ -349,11 +349,14 @@ func (s *Server) putBucketNotificationHandler(w http.ResponseWriter, r *http.Req
 		writeNotificationValidationError(w, r, validationErr)
 		return
 	}
-	if !strings.EqualFold(r.Header.Get(skipDestinationValidationHeader), "true") {
+	skipDestinationValidation := strings.EqualFold(r.Header.Get(skipDestinationValidationHeader), "true")
+	if !skipDestinationValidation {
 		if validationErr := validateNotificationDestinations(config); validationErr != nil {
 			writeNotificationValidationError(w, r, validationErr)
 			return
 		}
+	} else {
+		ctx = storage.WithSkipNotificationDestinationValidation(ctx)
 	}
 
 	if err := s.storage.PutBucketNotificationConfiguration(ctx, bucketName, config); err != nil {

@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -87,8 +88,10 @@ func (m *StorageMiddleware) Stop(ctx context.Context) error {
 }
 
 func (m *StorageMiddleware) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
-	if err := m.validateConfiguredDestinations(ctx, config); err != nil {
-		return err
+	if !storage.SkipNotificationDestinationValidation(ctx) {
+		if err := m.validateConfiguredDestinations(ctx, config); err != nil {
+			return err
+		}
 	}
 	return m.Next.PutBucketNotificationConfiguration(ctx, bucketName, config)
 }
@@ -103,6 +106,7 @@ func (m *StorageMiddleware) PutObject(ctx context.Context, bucket storage.Bucket
 		event.VersionID = result.VersionID
 		event.ETag = result.ETag
 	}
+	m.fillObjectDetails(ctx, &event)
 	m.enqueueMatching(ctx, event)
 	return result, nil
 }
@@ -117,6 +121,7 @@ func (m *StorageMiddleware) CopyObject(ctx context.Context, srcBucket storage.Bu
 		event.VersionID = result.VersionID
 		event.ETag = &result.ETag
 	}
+	m.fillObjectDetails(ctx, &event)
 	m.enqueueMatching(ctx, event)
 	return result, nil
 }
@@ -131,6 +136,7 @@ func (m *StorageMiddleware) CompleteMultipartUpload(ctx context.Context, bucket 
 		event.VersionID = result.VersionID
 		event.ETag = &result.ETag
 	}
+	m.fillObjectDetails(ctx, &event)
 	m.enqueueMatching(ctx, event)
 	return result, nil
 }
@@ -152,6 +158,33 @@ func (m *StorageMiddleware) DeleteObject(ctx context.Context, bucket storage.Buc
 	return result, nil
 }
 
+func (m *StorageMiddleware) DeleteObjects(ctx context.Context, bucket storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
+	result, err := m.Next.DeleteObjects(ctx, bucket, entries)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return result, nil
+	}
+	for _, deleted := range result.Entries {
+		if !deleted.Deleted {
+			continue
+		}
+		eventName := EventObjectRemovedDelete
+		if deleted.DeleteMarker != nil && *deleted.DeleteMarker {
+			eventName = EventObjectRemovedDeleteMarkerCreated
+		}
+		event := ObjectEvent{EventName: eventName, Bucket: bucket, Key: deleted.Key, EventTime: time.Now().UTC()}
+		if deleted.DeleteMarkerVersionID != nil {
+			event.VersionID = deleted.DeleteMarkerVersionID
+		} else {
+			event.VersionID = deleted.VersionID
+		}
+		m.enqueueMatching(ctx, event)
+	}
+	return result, nil
+}
+
 func (m *StorageMiddleware) PutObjectTagging(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	err := m.Next.PutObjectTagging(ctx, bucket, key, tags, opts)
 	if err != nil {
@@ -161,6 +194,7 @@ func (m *StorageMiddleware) PutObjectTagging(ctx context.Context, bucket storage
 	if opts != nil {
 		event.VersionID = opts.VersionID
 	}
+	m.fillObjectDetails(ctx, &event)
 	m.enqueueMatching(ctx, event)
 	return nil
 }
@@ -174,8 +208,39 @@ func (m *StorageMiddleware) DeleteObjectTagging(ctx context.Context, bucket stor
 	if opts != nil {
 		event.VersionID = opts.VersionID
 	}
+	m.fillObjectDetails(ctx, &event)
 	m.enqueueMatching(ctx, event)
 	return nil
+}
+
+func (m *StorageMiddleware) TransitionObjectStorageClass(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	if err := m.Next.TransitionObjectStorageClass(ctx, bucket, key, targetStorageClass, opts); err != nil {
+		return err
+	}
+	event := ObjectEvent{EventName: EventLifecycleTransition, Bucket: bucket, Key: key, EventTime: time.Now().UTC()}
+	if opts != nil {
+		event.VersionID = opts.VersionID
+	}
+	m.fillObjectDetails(ctx, &event)
+	m.enqueueMatching(ctx, event)
+	return nil
+}
+
+func (m *StorageMiddleware) fillObjectDetails(ctx context.Context, event *ObjectEvent) {
+	opts := (*storage.HeadObjectOptions)(nil)
+	if event.VersionID != nil {
+		opts = &storage.HeadObjectOptions{VersionID: event.VersionID}
+	}
+	object, err := m.Next.HeadObject(ctx, event.Bucket, event.Key, opts)
+	if err != nil {
+		slog.DebugContext(ctx, "Failed to read object details for notification", "bucket", event.Bucket.String(), "key", event.Key.String(), "error", err)
+		return
+	}
+	event.Size = &object.Size
+	event.ETag = &object.ETag
+	if object.VersionID != nil {
+		event.VersionID = object.VersionID
+	}
 }
 
 func (m *StorageMiddleware) validateConfiguredDestinations(ctx context.Context, config *storage.BucketNotificationConfiguration) error {
@@ -214,18 +279,20 @@ func (m *StorageMiddleware) enqueueMatching(ctx context.Context, event ObjectEve
 		if !RuleMatches(rule, event) {
 			continue
 		}
-		payload, err := BuildS3RecordsPayload(event)
+		payloadFormat := payloadFormatForDestination(m.publisher, rule.DestinationARN, PayloadFormatS3Records)
+		payload, err := buildPayload(payloadFormat, event)
 		if err != nil {
-			slog.WarnContext(ctx, "Failed to build S3 notification payload", "error", err)
+			slog.WarnContext(ctx, "Failed to build notification payload", "payloadFormat", payloadFormat, "error", err)
 			continue
 		}
-		entries = append(entries, OutboxEntry{DestinationARN: rule.DestinationARN, EventName: event.EventName, PayloadFormat: PayloadFormatS3Records, Payload: payload})
+		entries = append(entries, OutboxEntry{DestinationARN: rule.DestinationARN, EventName: event.EventName, PayloadFormat: payloadFormat, Payload: payload})
 	}
 	eventBridgeDestinationARN := "eventbridge:" + event.Bucket.String()
 	if config.EventBridgeEnabled && publisherHasDestination(m.publisher, eventBridgeDestinationARN) {
-		payload, err := BuildEventBridgePayload(event)
+		payloadFormat := payloadFormatForDestination(m.publisher, eventBridgeDestinationARN, PayloadFormatEventBridge)
+		payload, err := buildPayload(payloadFormat, event)
 		if err == nil {
-			entries = append(entries, OutboxEntry{DestinationARN: eventBridgeDestinationARN, EventName: event.EventName, PayloadFormat: PayloadFormatEventBridge, Payload: payload})
+			entries = append(entries, OutboxEntry{DestinationARN: eventBridgeDestinationARN, EventName: event.EventName, PayloadFormat: payloadFormat, Payload: payload})
 		}
 	}
 	if len(entries) == 0 {
@@ -254,6 +321,25 @@ func (m *StorageMiddleware) enqueueMatching(ctx context.Context, event ObjectEve
 func publisherHasDestination(p Publisher, arn string) bool {
 	_, ok := destinationFor(p, arn)
 	return ok
+}
+
+func payloadFormatForDestination(p Publisher, arn string, defaultFormat PayloadFormat) PayloadFormat {
+	destination, ok := destinationFor(p, arn)
+	if !ok || destination.PayloadFormat == "" {
+		return defaultFormat
+	}
+	return destination.PayloadFormat
+}
+
+func buildPayload(payloadFormat PayloadFormat, event ObjectEvent) ([]byte, error) {
+	switch payloadFormat {
+	case "", PayloadFormatS3Records:
+		return BuildS3RecordsPayload(event)
+	case PayloadFormatEventBridge:
+		return BuildEventBridgePayload(event)
+	default:
+		return nil, fmt.Errorf("unsupported notification payload format %q", payloadFormat)
+	}
 }
 
 func allRules(config *storage.BucketNotificationConfiguration) []storage.NotificationConfigurationRule {

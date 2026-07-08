@@ -14,6 +14,17 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
+type skipNotificationDestinationValidationContextKey struct{}
+
+func WithSkipNotificationDestinationValidation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipNotificationDestinationValidationContextKey{}, true)
+}
+
+func SkipNotificationDestinationValidation(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipNotificationDestinationValidationContextKey{}).(bool)
+	return skip
+}
+
 type Bucket struct {
 	Name         BucketName
 	CreationDate time.Time
