@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/notification"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
@@ -145,6 +146,74 @@ func TestCanCreateMetadataPartStorageFromJson(t *testing.T) {
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
+}
+
+func metadataPartStorageJsonWithNotifications(t *testing.T, notificationsFragment string) []byte {
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	storagePath := *tempDir
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	return fmt.Appendf(nil, `{
+			"type": "MetadataPartStorage",
+			"db": {
+				"type": "RegisterDatabaseReference",
+				"refName": "db",
+				"db": {
+					"type": "SqliteDatabase",
+					"dbPath": %s
+				}
+			},
+			"metadataStore": {
+				"type": "SqlMetadataStore",
+				"db": {
+					"type": "DatabaseReference",
+					"refName": "db"
+				}
+			},
+			"partStore": {
+				"type": "FilesystemPartStore",
+				"root": %s
+			}%s
+		}`, strconv.Quote(dbPath), strconv.Quote(storagePath), notificationsFragment)
+}
+
+func TestMetadataPartStorageEnablesNotificationsByDefault(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	store, err := createStorageFromJson(metadataPartStorageJsonWithNotifications(t, ""))
+	assert.Nil(t, err)
+	_, ok := store.(*notification.StorageMiddleware)
+	assert.True(t, ok, "notifications should be enabled by default")
+}
+
+func TestMetadataPartStorageNotificationsCanBeDisabled(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	store, err := createStorageFromJson(metadataPartStorageJsonWithNotifications(t, `,"notifications": {"enabled": false}`))
+	assert.Nil(t, err)
+	_, ok := store.(*notification.StorageMiddleware)
+	assert.False(t, ok, "notifications should be disabled when enabled is false")
+}
+
+func TestMetadataPartStorageNotificationsAcceptCustomConfig(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fragment := `,"notifications": {` +
+		`"notificationDestinations": {"arn:aws:sqs:eu-central-1:000000000000:queue": {"type": "aws"}},` +
+		`"maxAttempts": 5, "minBackoffSeconds": 1, "maxBackoffSeconds": 300, "dispatcherConcurrency": 4, "batchSize": 10}`
+	store, err := createStorageFromJson(metadataPartStorageJsonWithNotifications(t, fragment))
+	assert.Nil(t, err)
+	_, ok := store.(*notification.StorageMiddleware)
+	assert.True(t, ok, "a custom notifications block should still enable notifications")
+}
+
+func TestMetadataPartStorageNotificationsRejectInvalidDispatcherConfig(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	_, err := createStorageFromJson(metadataPartStorageJsonWithNotifications(t, `,"notifications": {"batchSize": 0}`))
+	assert.NotNil(t, err)
 }
 
 func metadataPartStorageJsonWithExtraPartStores(t *testing.T, extraPartStoresAndMapping string) []byte {
