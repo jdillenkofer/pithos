@@ -119,8 +119,49 @@ func (m *StorageMiddleware) PutBucketNotificationConfiguration(ctx context.Conte
 		if err := m.validateConfiguredDestinations(ctx, config); err != nil {
 			return err
 		}
+		// Deliver a synchronous s3:TestEvent to every configured destination
+		// before persisting. A failed test publish fails the request and leaves
+		// the previously stored configuration untouched. Test events are never
+		// written to the durable outbox.
+		if err := m.publishTestEvents(ctx, bucketName, config); err != nil {
+			return err
+		}
 	}
 	return m.Next.PutBucketNotificationConfiguration(ctx, bucketName, config)
+}
+
+func (m *StorageMiddleware) publishTestEvents(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	if config == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	publish := func(arn string, defaultFormat PayloadFormat) error {
+		if _, ok := seen[arn]; ok {
+			return nil
+		}
+		seen[arn] = struct{}{}
+		payloadFormat := payloadFormatForDestination(m.publisher, arn, defaultFormat)
+		payload, err := BuildTestEventPayload(payloadFormat, bucketName)
+		if err != nil {
+			return err
+		}
+		entry := &OutboxEntry{DestinationARN: arn, EventName: EventTestEvent, PayloadFormat: payloadFormat, Payload: payload}
+		if err := m.publisher.Publish(ctx, entry); err != nil {
+			return fmt.Errorf("test event delivery to destination %q failed: %w", arn, err)
+		}
+		return nil
+	}
+	for _, rule := range allRules(config) {
+		if err := publish(rule.DestinationARN, PayloadFormatS3Records); err != nil {
+			return err
+		}
+	}
+	if config.EventBridgeEnabled {
+		if err := publish(eventBridgeARNPrefix+bucketName.String(), PayloadFormatEventBridge); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *StorageMiddleware) PutObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, contentType *string, dataReader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {

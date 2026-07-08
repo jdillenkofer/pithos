@@ -59,6 +59,24 @@ func TestNotificationConfigurationRejectsInvalidValues(t *testing.T) {
 	require.Equal(t, "InvalidArgument", validationErr.Code)
 }
 
+func TestNotificationConfigurationRejectsTestEventInRules(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	// s3:TestEvent is only ever emitted synchronously during PUT ?notification
+	// validation; it must never be accepted as a configurable rule event.
+	for _, destination := range []string{
+		`<QueueConfiguration><Queue>arn:aws:sqs:eu-central-1:000000000000:q</Queue><Event>s3:TestEvent</Event></QueueConfiguration>`,
+		`<TopicConfiguration><Topic>arn:aws:sns:eu-central-1:000000000000:t</Topic><Event>s3:TestEvent</Event></TopicConfiguration>`,
+		`<CloudFunctionConfiguration><CloudFunction>arn:aws:lambda:eu-central-1:000000000000:function:f</CloudFunction><Event>s3:TestEvent</Event></CloudFunctionConfiguration>`,
+	} {
+		var request NotificationConfiguration
+		require.NoError(t, xml.Unmarshal([]byte("<NotificationConfiguration>"+destination+"</NotificationConfiguration>"), &request))
+		_, validationErr := convertNotificationConfigurationFromXML(&request)
+		require.NotNil(t, validationErr)
+		require.Equal(t, "InvalidArgument", validationErr.Code)
+	}
+}
+
 func TestNotificationDestinationValidationMatchesConfigurationType(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

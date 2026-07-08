@@ -2,10 +2,12 @@ package notification
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/oklog/ulid/v2"
 )
 
 const (
@@ -19,6 +21,7 @@ const (
 	EventLifecycleExpirationDelete            = "s3:LifecycleExpiration:Delete"
 	EventLifecycleExpirationDeleteMarker      = "s3:LifecycleExpiration:DeleteMarkerCreated"
 	EventLifecycleTransition                  = "s3:LifecycleTransition"
+	EventTestEvent                            = "s3:TestEvent"
 )
 
 type ObjectEvent struct {
@@ -101,6 +104,39 @@ func BuildEventBridgePayload(event ObjectEvent) ([]byte, error) {
 			"object": objectPayload(event),
 		},
 	})
+}
+
+// BuildTestEventPayload builds an s3:TestEvent payload used to validate that a
+// notification destination is reachable when a bucket notification
+// configuration is applied. AWS S3 emits this message once, synchronously, and
+// never persists it to the durable event stream.
+func BuildTestEventPayload(payloadFormat PayloadFormat, bucket storage.BucketName) ([]byte, error) {
+	now := time.Now().UTC()
+	switch payloadFormat {
+	case "", PayloadFormatS3Records:
+		return json.Marshal(map[string]any{
+			"Service":   "Amazon S3",
+			"Event":     EventTestEvent,
+			"Time":      now.Format(time.RFC3339Nano),
+			"Bucket":    bucket.String(),
+			"RequestId": ulid.Make().String(),
+			"HostId":    ulid.Make().String(),
+		})
+	case PayloadFormatEventBridge:
+		return json.Marshal(map[string]any{
+			"version":     "0",
+			"id":          "",
+			"detail-type": EventTestEvent,
+			"source":      "aws.s3",
+			"time":        now.Format(time.RFC3339Nano),
+			"resources":   []string{"arn:aws:s3:::" + bucket.String()},
+			"detail": map[string]any{
+				"bucket": map[string]any{"name": bucket.String()},
+			},
+		})
+	default:
+		return nil, fmt.Errorf("unsupported notification payload format %q", payloadFormat)
+	}
 }
 
 func objectPayload(event ObjectEvent) map[string]any {

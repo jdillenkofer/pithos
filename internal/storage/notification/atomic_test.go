@@ -60,19 +60,24 @@ func newSharedDBMetadataStorage(t *testing.T, db database.Database) storage.Stor
 // notifyingStackWithFailToggle builds a notification middleware over a metadata
 // storage that shares the same database, so enqueue and mutation are atomic. The
 // returned toggle switches the outbox insert into failure mode.
-func notifyingStackWithFailToggle(t *testing.T) (*StorageMiddleware, *failingSaveRepository) {
+func openTestDB(t *testing.T) database.Database {
 	t.Helper()
 	testutils.SkipIfIntegration(t)
 	dbPath := filepath.Join(t.TempDir(), "pithos.db")
 	db, err := sqlite.OpenDatabase(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
+	return db
+}
 
+func notifyingStackWithFailToggle(t *testing.T) (*StorageMiddleware, *failingSaveRepository) {
+	t.Helper()
+	db := openTestDB(t)
 	inner := newSharedDBMetadataStorage(t, db)
 	repo := &failingSaveRepository{Repository: NewSQLRepository()}
-	publisher, err := NewRegistryPublisher(map[string]Destination{})
-	require.NoError(t, err)
-	mw, err := NewStorageMiddleware(inner, db, repo, publisher, "default", time.Minute)
+	// A recording publisher keeps the synchronous test-event delivery during
+	// PutBucketNotificationConfiguration local instead of reaching real AWS.
+	mw, err := NewStorageMiddleware(inner, db, repo, &recordingPublisher{}, "default", time.Minute)
 	require.NoError(t, err)
 	return mw, repo
 }
