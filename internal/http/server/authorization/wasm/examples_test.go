@@ -11,15 +11,18 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRustExampleAuthorizer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	wasmBytes := buildRustExample(t)
 	assertExamplePolicy(t, wasmBytes)
 }
 
 func TestGoExampleAuthorizer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	wasmBytes := buildGoExample(t)
 	assertExamplePolicy(t, wasmBytes)
 }

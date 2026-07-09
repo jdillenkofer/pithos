@@ -11,10 +11,12 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWasmAuthorizerAllowsRequest(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
@@ -27,6 +29,7 @@ func TestWasmAuthorizerAllowsRequest(t *testing.T) {
 }
 
 func TestWasmAuthorizerResourceHooksUseEvaluate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
@@ -42,6 +45,7 @@ func TestWasmAuthorizerResourceHooksUseEvaluate(t *testing.T) {
 }
 
 func TestWasmAuthorizerHandlesConcurrentRequests(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
@@ -63,6 +67,7 @@ func TestWasmAuthorizerHandlesConcurrentRequests(t *testing.T) {
 }
 
 func TestWasmAuthorizerCanDisableInstancePool(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizerWithOptions(testAuthorizerWasm(`{"allow":true}`), Options{
 		InstancePoolSize: -1,
 	})
@@ -77,6 +82,7 @@ func TestWasmAuthorizerCanDisableInstancePool(t *testing.T) {
 }
 
 func TestWasmAuthorizerDoesNotResolveObjectTagsUnlessGuestRequestsThem(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
@@ -95,6 +101,7 @@ func TestWasmAuthorizerDoesNotResolveObjectTagsUnlessGuestRequestsThem(t *testin
 }
 
 func TestWasmAuthorizerDeniesOnHostImportedTagResolverError(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer, err := NewWasmAuthorizer(tagImportAuthorizerWasm(t))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
@@ -131,11 +138,13 @@ func BenchmarkWasmAuthorizerAuthorizeRequest(b *testing.B) {
 }
 
 func TestWasmAuthorizerDeniesOnMalformedDecision(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	_, err := NewWasmAuthorizer(testAuthorizerWasm(`not-json`))
 	require.Error(t, err)
 }
 
 func TestWasmAuthorizerDeniesOnOversizedDecision(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	_, err := NewWasmAuthorizerWithOptions(testAuthorizerWasm(`{"allow":true,"reason":"too large"}`), Options{
 		MaxDecisionBytes: 8,
 	})
@@ -143,6 +152,7 @@ func TestWasmAuthorizerDeniesOnOversizedDecision(t *testing.T) {
 }
 
 func TestWasmAuthorizerRoundTripsRequestInputThroughGuestMemory(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer := newRoundTripAuthorizer(t, []string{
 		`"abiVersion":1`,
 		`"hook":"request"`,
@@ -206,6 +216,7 @@ func TestWasmAuthorizerRoundTripsRequestInputThroughGuestMemory(t *testing.T) {
 }
 
 func TestWasmAuthorizerRoundTripsResourceHookInputThroughGuestMemory(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer := newRoundTripAuthorizer(t, []string{
 		`"hook":"list-multipart-upload"`,
 		`"operation":"ListMultipartUploads"`,
@@ -223,6 +234,7 @@ func TestWasmAuthorizerRoundTripsResourceHookInputThroughGuestMemory(t *testing.
 }
 
 func TestWasmAuthorizerRoundTripGuestCanDenyWhenInputDoesNotMatch(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	authorizer := newRoundTripAuthorizer(t, []string{
 		`"operation":"PutObject"`,
 	})
