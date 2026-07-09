@@ -19,7 +19,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	wasmauthorizer "github.com/jdillenkofer/pithos/internal/http/server/authorization/wasm"
 	"github.com/jdillenkofer/pithos/internal/logging"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -182,9 +184,9 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}()
 
 	hasCredentials := len(settings.Credentials()) > 0
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerType(), settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
+		slog.Error(fmt.Sprintf("Could not create request authorizer: %s", err))
 		os.Exit(1)
 	}
 
@@ -228,22 +230,35 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}
 }
 
-func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
-	authorizerCode, err := os.ReadFile(authorizerPath)
+func loadRequestAuthorizer(authorizerType string, authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (authorization.RequestAuthorizer, error) {
+	authorizerBytes, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
+		if authorizerType == "wasm" {
+			return nil, err
+		}
 		if hasCredentials {
 			slog.Warn("No authorizer.lua found but credentials are configured — using default authorizer (anonymous requests will be denied)")
-			authorizerCode = []byte(defaultAuthorizationCodeWithCredentials)
+			authorizerBytes = []byte(defaultAuthorizationCodeWithCredentials)
 		} else {
 			slog.Warn("No authorizer.lua found and no credentials configured — using permissive default authorizer (all requests will be allowed)")
-			authorizerCode = []byte(defaultAuthorizationCode)
+			authorizerBytes = []byte(defaultAuthorizationCode)
 		}
 	}
-	return lua.NewLuaAuthorizerWithOptions(string(authorizerCode), lua.Options{
-		TrustForwardedHeaders: trustForwardedHeaders,
-		TrustedProxyCIDRs:     trustedProxyCIDRs,
-	})
+	switch authorizerType {
+	case "lua":
+		return lua.NewLuaAuthorizerWithOptions(string(authorizerBytes), lua.Options{
+			TrustForwardedHeaders: trustForwardedHeaders,
+			TrustedProxyCIDRs:     trustedProxyCIDRs,
+		})
+	case "wasm":
+		return wasmauthorizer.NewWasmAuthorizerWithOptions(authorizerBytes, wasmauthorizer.Options{
+			TrustForwardedHeaders: trustForwardedHeaders,
+			TrustedProxyCIDRs:     trustedProxyCIDRs,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported authorizer type %q", authorizerType)
+	}
 }
 
 func loadStorageConfiguration(storageJsonPath string, prometheusRegisterer prometheus.Registerer) (*config.DbContainer, storage.Storage) {

@@ -19,7 +19,8 @@
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
-| `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
+| `PITHOS_AUTHORIZER_PATH` | Path to the authorization policy (`.lua` or `.wasm`) | `./authorizer.lua` |
+| `PITHOS_AUTHORIZER_TYPE` | Authorizer runtime: `lua` or `wasm` | `lua` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 
@@ -56,6 +57,10 @@ export PITHOS_CREDENTIALS_2_SECRET_ACCESS_KEY="my-bucket-admin-secret-access-key
 export PITHOS_CREDENTIALS_3_ACCESS_KEY_ID="my-bucket-readonly-access-key-id"
 export PITHOS_CREDENTIALS_3_SECRET_ACCESS_KEY="my-bucket-readonly-secret-access-key"
 ```
+
+## Authorizer Runtime
+
+Pithos supports the built-in Lua authorizer and an experimental Wasm authorizer. Lua remains the default for compatibility. To load a Wasm policy, set `PITHOS_AUTHORIZER_TYPE=wasm` and point `PITHOS_AUTHORIZER_PATH` at a `.wasm` module.
 
 ## Lua Authorizer Script
 
@@ -162,6 +167,59 @@ end
 ```
 
 If a hook is not defined, items are allowed by default for backward compatibility.
+
+## Wasm Authorizer Module
+
+The Wasm authorizer uses the same request model as Lua, but the executable v1 ABI is a small core-Wasm interface so modules can be produced by languages such as Rust, TinyGo, Zig, or AssemblyScript.
+
+The normative type model lives in [`authorizer.wit`](authorizer.wit). The current wazero adapter passes the WIT-shaped input as UTF-8 JSON:
+
+```json
+{
+  "hook": "request",
+  "request": {
+    "operation": "GetObject",
+    "authorization": { "accessKeyId": "my-access-key-id" },
+    "bucket": "my-bucket",
+    "key": "photos/cat.jpg",
+    "httpRequest": {
+      "method": "GET",
+      "path": "/photos/cat.jpg",
+      "query": "",
+      "queryParams": [],
+      "headers": [],
+      "host": "localhost:9000",
+      "proto": "HTTP/1.1",
+      "remoteAddr": "127.0.0.1:12345",
+      "remoteIP": "127.0.0.1",
+      "clientIP": "127.0.0.1",
+      "scheme": "http"
+    },
+    "isReadOnly": true
+  }
+}
+```
+
+The guest module must export:
+
+| Export | Signature | Description |
+|--------|-----------|-------------|
+| `memory` | WebAssembly memory | Linear memory used for input and output buffers |
+| `pithos_alloc` | `(size: i32) -> i32` | Allocates guest memory for a buffer |
+| `pithos_free` | `(ptr: i32, len: i32) -> nil` | Frees a guest buffer allocated by `pithos_alloc` |
+| `pithos_evaluate` | `(ptr: i32, len: i32) -> i64` | Reads an input JSON buffer and returns a packed output pointer/length |
+
+`pithos_evaluate` returns `(ptr << 32) | len`, where `ptr` and `len` identify a UTF-8 JSON decision buffer:
+
+```json
+{ "allow": true, "reason": null }
+```
+
+The `hook` field is one of `request`, `list-bucket`, `list-object`, `delete-object-entry`, `list-multipart-upload`, or `list-part`. Resource hook calls include a `resource` object containing the bucket name, key, upload ID, or part number relevant to the hook.
+
+Traps, malformed JSON results, missing exports, allocation failures, timeouts, and tag resolver errors fail closed and deny the request.
+
+See [Wasm Authorizer Examples](wasm-authorizer-examples.md) for Rust and Go policies that implement this ABI.
 
 ### Examples
 

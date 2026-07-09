@@ -67,7 +67,8 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
-	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
+	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer policy")
+	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "the authorizer runtime to use (lua or wasm)")
 	trustForwardedHeadersAccessor := registerBoolFlag(serveCommand, "trustForwardedHeaders", defaultTrustForwardedHeaders, "trust client forwarding headers (X-Forwarded-For, X-Forwarded-Proto, CF-Connecting-IP)")
 	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; empty means all proxies when trustForwardedHeaders is enabled")
 	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
@@ -105,6 +106,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabledAccessor(),
 		storageJsonPath:       storageJsonPathAccessor(),
 		authorizerPath:        authorizerPathAccessor(),
+		authorizerType:        authorizerTypeAccessor(),
 		trustForwardedHeaders: trustForwardedHeadersAccessor(),
 		trustedProxyCIDRs:     trustedProxyCIDRs,
 		logLevel:              logLevelAccessor(),

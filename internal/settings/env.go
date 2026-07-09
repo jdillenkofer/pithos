@@ -18,6 +18,7 @@ const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
+const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
 const trustForwardedHeadersEnvKey = envKeyPrefix + "_TRUST_FORWARDED_HEADERS"
 const trustedProxyCIDRsEnvKey = envKeyPrefix + "_TRUSTED_PROXY_CIDRS"
 const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
@@ -107,6 +108,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
+	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
 	trustForwardedHeaders := getBoolFromEnv(trustForwardedHeadersEnvKey)
 	trustedProxyCIDRs := getStringSliceFromEnv(trustedProxyCIDRsEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
@@ -126,6 +128,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPortEnabled: monitoringPortEnabled,
 		storageJsonPath:       storageJsonPath,
 		authorizerPath:        authorizerPath,
+		authorizerType:        authorizerType,
 		trustForwardedHeaders: trustForwardedHeaders,
 		trustedProxyCIDRs:     trustedProxyCIDRs,
 		logLevel:              logLevel,
