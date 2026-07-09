@@ -24,6 +24,8 @@ These cases are covered by `TestRustExampleAuthorizer` and `TestGoExampleAuthori
 
 Source: [`../examples/wasm-authorizer/rust/src/lib.rs`](../examples/wasm-authorizer/rust/src/lib.rs)
 
+The Rust example keeps ABI types, allocation, and decision serialization in [`../examples/wasm-authorizer/rust/src/pithos.rs`](../examples/wasm-authorizer/rust/src/pithos.rs), leaving `lib.rs` focused on policy logic.
+
 Build:
 
 ```sh
@@ -39,6 +41,8 @@ If you set `CARGO_TARGET_DIR`, copy from that target directory instead.
 ## Go
 
 Source: [`../examples/wasm-authorizer/go/main.go`](../examples/wasm-authorizer/go/main.go)
+
+The Go example keeps ABI types and JSON helpers in [`../examples/wasm-authorizer/go/pithos/abi.go`](../examples/wasm-authorizer/go/pithos/abi.go), leaving `main.go` focused on the exported functions and policy logic.
 
 Build:
 

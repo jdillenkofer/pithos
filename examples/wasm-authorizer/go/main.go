@@ -3,35 +3,10 @@
 package main
 
 import (
-	"encoding/json"
 	"unsafe"
+
+	"github.com/jdillenkofer/pithos/examples/wasm-authorizer/go/pithos"
 )
-
-type Input struct {
-	Hook     string   `json:"hook"`
-	Request  Request  `json:"request"`
-	Resource Resource `json:"resource"`
-}
-
-type Request struct {
-	Operation     string        `json:"operation"`
-	Authorization Authorization `json:"authorization"`
-	Bucket        string        `json:"bucket"`
-	Key           string        `json:"key"`
-	IsReadOnly    bool          `json:"isReadOnly"`
-}
-
-type Authorization struct {
-	AccessKeyID string `json:"accessKeyId"`
-}
-
-type Resource struct {
-	Key string `json:"key"`
-}
-
-type Decision struct {
-	Allow bool `json:"allow"`
-}
 
 var allocations = map[uint32][]byte{}
 
@@ -55,14 +30,14 @@ func pithosFree(ptr uint32, len uint32) {
 func pithosEvaluate(ptr uint32, len uint32) uint64 {
 	inputBytes := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), int(len))
 
-	var input Input
-	if err := json.Unmarshal(inputBytes, &input); err != nil {
+	input, ok := pithos.ParseInput(inputBytes)
+	if !ok {
 		return writeDecision(false)
 	}
 	return writeDecision(allow(input))
 }
 
-func allow(input Input) bool {
+func allow(input pithos.Input) bool {
 	switch input.Hook {
 	case "request":
 		return allowRequest(input.Request)
@@ -73,7 +48,7 @@ func allow(input Input) bool {
 	}
 }
 
-func allowRequest(request Request) bool {
+func allowRequest(request pithos.Request) bool {
 	publicRead := request.Operation == "GetObject" &&
 		request.Bucket == "public-assets" &&
 		request.Key == "public/index.html"
@@ -83,7 +58,7 @@ func allowRequest(request Request) bool {
 }
 
 func writeDecision(allow bool) uint64 {
-	output, _ := json.Marshal(Decision{Allow: allow})
+	output := pithos.MarshalDecision(allow)
 	outPtr := pithosAlloc(uint32(len(output)))
 	outBytes := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(outPtr))), len(output))
 	copy(outBytes, output)
