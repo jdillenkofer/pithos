@@ -310,7 +310,10 @@ func (authorizer *WasmAuthorizer) getModule(ctx context.Context) (api.Module, er
 	}
 
 	instanceID := authorizer.instanceCounter.Add(1)
-	mod, err := authorizer.runtime.InstantiateModule(ctx, authorizer.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("pithos-authorizer-%d", instanceID)))
+	moduleConfig := wazero.NewModuleConfig().
+		WithName(fmt.Sprintf("pithos-authorizer-%d", instanceID)).
+		WithStartFunctions()
+	mod, err := authorizer.runtime.InstantiateModule(ctx, authorizer.compiled, moduleConfig)
 	if err != nil {
 		return nil, err
 	}

@@ -235,6 +235,18 @@ The `hook` field is one of `request`, `list-bucket`, `list-object`, `delete-obje
 
 Traps, malformed JSON results, missing exports, allocation failures, timeouts, and tag resolver errors fail closed and deny the request.
 
+### Wasm Host Capabilities
+
+Pithos instantiates authorizer modules as WASI preview1 reactors:
+
+- `_start` is not called automatically.
+- `_initialize` is called when the module exports it.
+- No filesystem is mounted.
+- No process arguments or environment variables are provided.
+- Standard input returns EOF; standard output and standard error are discarded.
+- No host networking is exposed by Pithos.
+- The only Pithos-specific imports are the lazy tag resolver functions from module `pithos`.
+
 See [Wasm Authorizer Examples](wasm-authorizer-examples.md) for Rust and Go policies that implement this ABI.
 
 ### Examples
