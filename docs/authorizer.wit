@@ -1,0 +1,82 @@
+package pithos:authorizer;
+
+interface types {
+  record name-values {
+    name: string,
+    values: list<string>,
+  }
+
+  record authorization {
+    access-key-id: option<string>,
+  }
+
+  record http-request {
+    method: string,
+    path: string,
+    query: string,
+    query-params: list<name-values>,
+    headers: list<name-values>,
+    host: string,
+    proto: string,
+    content-length: option<u32>,
+    remote-addr: string,
+    remote-ip: option<string>,
+    client-ip: option<string>,
+    scheme: string,
+  }
+
+  record tag {
+    key: string,
+    value: string,
+  }
+
+  record request {
+    operation: string,
+    authorization: authorization,
+    bucket: option<string>,
+    key: option<string>,
+    source-bucket: option<string>,
+    source-key: option<string>,
+    http-request: http-request,
+    is-read-only: bool,
+    request-object-tags: list<tag>,
+  }
+
+  variant hook-resource {
+    none,
+    bucket-name(string),
+    key(string),
+    multipart-upload(tuple<string, string>),
+    part-number(s32),
+  }
+
+  enum hook {
+    request,
+    list-bucket,
+    list-object,
+    delete-object-entry,
+    list-multipart-upload,
+    list-part,
+  }
+
+  record authorization-input {
+    abi-version: u32,
+    hook: hook,
+    request: request,
+    resource: hook-resource,
+  }
+
+  record decision {
+    allow: bool,
+    reason: option<string>,
+  }
+}
+
+world authorizer {
+  use types.{authorization-input, decision, tag};
+
+  import object-tags: func() -> result<list<tag>, string>;
+  import source-object-tags: func() -> result<list<tag>, string>;
+
+  export evaluate: func(input: authorization-input) -> result<decision, string>;
+}

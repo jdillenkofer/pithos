@@ -7,6 +7,7 @@ Welcome to the Pithos documentation! Pithos is an S3-compatible object storage s
 - [Getting Started](getting-started.md) – Prerequisites, installation, build instructions, Docker setup
 - [CLI Reference](cli-reference.md) – All available commands and their options
 - [Configuration](configuration.md) – Environment variables, authentication, and authorization
+- [Wasm Authorizer Examples](wasm-authorizer-examples.md) – Rust and Go authorizer policies
 - [S3 API Behavior](s3-api.md) – Object metadata, bucket versioning, delete markers, and SDK-facing semantics
 - [Storage Backends](storage-backends.md) – Storage types, middleware, and configuration examples
 - [Audit Logging](audit-logging.md) – Audit middleware, key management, and verification

@@ -56,3 +56,14 @@ func TestMergeSettingsTwoValues(t *testing.T) {
 	assert.Equal(t, "test2", *b.domain)
 	assert.Equal(t, b.domain, mergedSettings.domain)
 }
+
+func TestAuthorizerRuntimeDefaults(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	settings := Settings{}
+	assert.Equal(t, "lua", settings.AuthorizerType())
+	assert.Equal(t, 100, settings.AuthorizerTimeoutMillis())
+	assert.Equal(t, 64, settings.AuthorizerMemoryLimitPages())
+	assert.Equal(t, 0, settings.AuthorizerInstancePoolSize())
+	assert.Equal(t, 4096, settings.AuthorizerMaxDecisionBytes())
+}
