@@ -17,6 +17,9 @@ const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultAuthorizerType = "lua"
+const defaultAuthorizerTimeoutMillis = 100
+const defaultAuthorizerMemoryLimitPages = 64
+const defaultAuthorizerInstancePoolSize = 0
 const defaultTrustForwardedHeaders = false
 const defaultOtelEnabled = false
 const defaultWebsiteDomain = "s3-website.localhost"
@@ -31,24 +34,27 @@ type Credentials struct {
 }
 
 type Settings struct {
-	authenticationEnabled *bool         `mergable:""`
-	credentials           []Credentials `mergable:""`
-	region                *string       `mergable:""`
-	domain                *string       `mergable:""`
-	websiteDomain         *string       `mergable:""`
-	bindAddress           *string       `mergable:""`
-	port                  *int          `mergable:""`
-	monitoringPort        *int          `mergable:""`
-	monitoringPortEnabled *bool         `mergable:""`
-	storageJsonPath       *string       `mergable:""`
-	authorizerPath        *string       `mergable:""`
-	authorizerType        *string       `mergable:""`
-	trustForwardedHeaders *bool         `mergable:""`
-	trustedProxyCIDRs     []string      `mergable:""`
-	logLevel              *string       `mergable:""`
-	otelEnabled           *bool         `mergable:""`
-	otelExporter          *string       `mergable:""`
-	otelEndpoint          *string       `mergable:""`
+	authenticationEnabled      *bool         `mergable:""`
+	credentials                []Credentials `mergable:""`
+	region                     *string       `mergable:""`
+	domain                     *string       `mergable:""`
+	websiteDomain              *string       `mergable:""`
+	bindAddress                *string       `mergable:""`
+	port                       *int          `mergable:""`
+	monitoringPort             *int          `mergable:""`
+	monitoringPortEnabled      *bool         `mergable:""`
+	storageJsonPath            *string       `mergable:""`
+	authorizerPath             *string       `mergable:""`
+	authorizerType             *string       `mergable:""`
+	authorizerTimeoutMillis    *int          `mergable:""`
+	authorizerMemoryLimitPages *int          `mergable:""`
+	authorizerInstancePoolSize *int          `mergable:""`
+	trustForwardedHeaders      *bool         `mergable:""`
+	trustedProxyCIDRs          []string      `mergable:""`
+	logLevel                   *string       `mergable:""`
+	otelEnabled                *bool         `mergable:""`
+	otelExporter               *string       `mergable:""`
+	otelEndpoint               *string       `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -110,6 +116,18 @@ func (s *Settings) AuthorizerPath() string {
 
 func (s *Settings) AuthorizerType() string {
 	return strings.ToLower(strings.TrimSpace(valueOrDefault(s.authorizerType, defaultAuthorizerType)))
+}
+
+func (s *Settings) AuthorizerTimeoutMillis() int {
+	return valueOrDefault(s.authorizerTimeoutMillis, defaultAuthorizerTimeoutMillis)
+}
+
+func (s *Settings) AuthorizerMemoryLimitPages() int {
+	return valueOrDefault(s.authorizerMemoryLimitPages, defaultAuthorizerMemoryLimitPages)
+}
+
+func (s *Settings) AuthorizerInstancePoolSize() int {
+	return valueOrDefault(s.authorizerInstancePoolSize, defaultAuthorizerInstancePoolSize)
 }
 
 func (s *Settings) TrustForwardedHeaders() bool {

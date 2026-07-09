@@ -19,6 +19,9 @@ const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
+const authorizerTimeoutMillisEnvKey = envKeyPrefix + "_AUTHORIZER_TIMEOUT_MILLIS"
+const authorizerMemoryLimitPagesEnvKey = envKeyPrefix + "_AUTHORIZER_MEMORY_LIMIT_PAGES"
+const authorizerInstancePoolSizeEnvKey = envKeyPrefix + "_AUTHORIZER_INSTANCE_POOL_SIZE"
 const trustForwardedHeadersEnvKey = envKeyPrefix + "_TRUST_FORWARDED_HEADERS"
 const trustedProxyCIDRsEnvKey = envKeyPrefix + "_TRUSTED_PROXY_CIDRS"
 const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
@@ -109,6 +112,9 @@ func loadSettingsFromEnv() (*Settings, error) {
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
+	authorizerTimeoutMillis := getIntFromEnv(authorizerTimeoutMillisEnvKey)
+	authorizerMemoryLimitPages := getIntFromEnv(authorizerMemoryLimitPagesEnvKey)
+	authorizerInstancePoolSize := getIntFromEnv(authorizerInstancePoolSizeEnvKey)
 	trustForwardedHeaders := getBoolFromEnv(trustForwardedHeadersEnvKey)
 	trustedProxyCIDRs := getStringSliceFromEnv(trustedProxyCIDRsEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
@@ -117,23 +123,26 @@ func loadSettingsFromEnv() (*Settings, error) {
 	otelEndpoint := getStringFromEnv(otelEndpointEnvKey)
 
 	return &Settings{
-		authenticationEnabled: authenticationEnabled,
-		credentials:           credentials,
-		region:                region,
-		domain:                domain,
-		websiteDomain:         websiteDomain,
-		bindAddress:           bindAddress,
-		port:                  port,
-		monitoringPort:        monitoringPort,
-		monitoringPortEnabled: monitoringPortEnabled,
-		storageJsonPath:       storageJsonPath,
-		authorizerPath:        authorizerPath,
-		authorizerType:        authorizerType,
-		trustForwardedHeaders: trustForwardedHeaders,
-		trustedProxyCIDRs:     trustedProxyCIDRs,
-		logLevel:              logLevel,
-		otelEnabled:           otelEnabled,
-		otelExporter:          otelExporter,
-		otelEndpoint:          otelEndpoint,
+		authenticationEnabled:      authenticationEnabled,
+		credentials:                credentials,
+		region:                     region,
+		domain:                     domain,
+		websiteDomain:              websiteDomain,
+		bindAddress:                bindAddress,
+		port:                       port,
+		monitoringPort:             monitoringPort,
+		monitoringPortEnabled:      monitoringPortEnabled,
+		storageJsonPath:            storageJsonPath,
+		authorizerPath:             authorizerPath,
+		authorizerType:             authorizerType,
+		authorizerTimeoutMillis:    authorizerTimeoutMillis,
+		authorizerMemoryLimitPages: authorizerMemoryLimitPages,
+		authorizerInstancePoolSize: authorizerInstancePoolSize,
+		trustForwardedHeaders:      trustForwardedHeaders,
+		trustedProxyCIDRs:          trustedProxyCIDRs,
+		logLevel:                   logLevel,
+		otelEnabled:                otelEnabled,
+		otelExporter:               otelExporter,
+		otelEndpoint:               otelEndpoint,
 	}, nil
 }

@@ -69,6 +69,9 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer policy")
 	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "the authorizer runtime to use (lua or wasm)")
+	authorizerTimeoutMillisAccessor := registerIntFlag(serveCommand, "authorizerTimeoutMillis", defaultAuthorizerTimeoutMillis, "the maximum duration of a single authorizer call in milliseconds")
+	authorizerMemoryLimitPagesAccessor := registerIntFlag(serveCommand, "authorizerMemoryLimitPages", defaultAuthorizerMemoryLimitPages, "the maximum wasm memory pages allowed per authorizer instance")
+	authorizerInstancePoolSizeAccessor := registerIntFlag(serveCommand, "authorizerInstancePoolSize", defaultAuthorizerInstancePoolSize, "the number of wasm authorizer instances to keep pooled; 0 uses GOMAXPROCS and negative disables pooling")
 	trustForwardedHeadersAccessor := registerBoolFlag(serveCommand, "trustForwardedHeaders", defaultTrustForwardedHeaders, "trust client forwarding headers (X-Forwarded-For, X-Forwarded-Proto, CF-Connecting-IP)")
 	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; empty means all proxies when trustForwardedHeaders is enabled")
 	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
@@ -95,23 +98,26 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	}
 
 	return &Settings{
-		authenticationEnabled: authenticationEnabledAccessor(),
-		credentials:           nil, // Credentials are not set via command line args
-		region:                regionAccessor(),
-		domain:                domainAccessor(),
-		websiteDomain:         websiteDomainAccessor(),
-		bindAddress:           bindAddressAccessor(),
-		port:                  portAccessor(),
-		monitoringPort:        monitoringPortAccessor(),
-		monitoringPortEnabled: monitoringPortEnabledAccessor(),
-		storageJsonPath:       storageJsonPathAccessor(),
-		authorizerPath:        authorizerPathAccessor(),
-		authorizerType:        authorizerTypeAccessor(),
-		trustForwardedHeaders: trustForwardedHeadersAccessor(),
-		trustedProxyCIDRs:     trustedProxyCIDRs,
-		logLevel:              logLevelAccessor(),
-		otelEnabled:           otelEnabledAccessor(),
-		otelExporter:          otelExporterAccessor(),
-		otelEndpoint:          otelEndpointAccessor(),
+		authenticationEnabled:      authenticationEnabledAccessor(),
+		credentials:                nil, // Credentials are not set via command line args
+		region:                     regionAccessor(),
+		domain:                     domainAccessor(),
+		websiteDomain:              websiteDomainAccessor(),
+		bindAddress:                bindAddressAccessor(),
+		port:                       portAccessor(),
+		monitoringPort:             monitoringPortAccessor(),
+		monitoringPortEnabled:      monitoringPortEnabledAccessor(),
+		storageJsonPath:            storageJsonPathAccessor(),
+		authorizerPath:             authorizerPathAccessor(),
+		authorizerType:             authorizerTypeAccessor(),
+		authorizerTimeoutMillis:    authorizerTimeoutMillisAccessor(),
+		authorizerMemoryLimitPages: authorizerMemoryLimitPagesAccessor(),
+		authorizerInstancePoolSize: authorizerInstancePoolSizeAccessor(),
+		trustForwardedHeaders:      trustForwardedHeadersAccessor(),
+		trustedProxyCIDRs:          trustedProxyCIDRs,
+		logLevel:                   logLevelAccessor(),
+		otelEnabled:                otelEnabledAccessor(),
+		otelExporter:               otelExporterAccessor(),
+		otelEndpoint:               otelEndpointAccessor(),
 	}, nil
 }

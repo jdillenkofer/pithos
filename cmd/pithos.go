@@ -184,7 +184,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}()
 
 	hasCredentials := len(settings.Credentials()) > 0
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerType(), settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerType(), settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs(), settings.AuthorizerTimeoutMillis(), settings.AuthorizerMemoryLimitPages(), settings.AuthorizerInstancePoolSize())
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create request authorizer: %s", err))
 		os.Exit(1)
@@ -230,7 +230,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	}
 }
 
-func loadRequestAuthorizer(authorizerType string, authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (authorization.RequestAuthorizer, error) {
+func loadRequestAuthorizer(authorizerType string, authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string, authorizerTimeoutMillis int, authorizerMemoryLimitPages int, authorizerInstancePoolSize int) (authorization.RequestAuthorizer, error) {
 	authorizerBytes, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
@@ -252,7 +252,13 @@ func loadRequestAuthorizer(authorizerType string, authorizerPath string, hasCred
 			TrustedProxyCIDRs:     trustedProxyCIDRs,
 		})
 	case "wasm":
+		if authorizerMemoryLimitPages < 0 {
+			return nil, fmt.Errorf("authorizer memory limit pages must be non-negative")
+		}
 		return wasmauthorizer.NewWasmAuthorizerWithOptions(authorizerBytes, wasmauthorizer.Options{
+			Timeout:               time.Duration(authorizerTimeoutMillis) * time.Millisecond,
+			MemoryLimitPages:      uint32(authorizerMemoryLimitPages),
+			InstancePoolSize:      authorizerInstancePoolSize,
 			TrustForwardedHeaders: trustForwardedHeaders,
 			TrustedProxyCIDRs:     trustedProxyCIDRs,
 		})
