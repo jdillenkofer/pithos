@@ -76,8 +76,26 @@ func TestWasmAuthorizerCanDisableInstancePool(t *testing.T) {
 	require.True(t, allowed)
 }
 
-func TestWasmAuthorizerDeniesOnResolverError(t *testing.T) {
+func TestWasmAuthorizerDoesNotResolveObjectTagsUnlessGuestRequestsThem(t *testing.T) {
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
+	require.NoError(t, err)
+	defer authorizer.Close(context.Background())
+
+	callCount := 0
+	allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
+		Operation: authorization.OperationGetObject,
+		ResolveExistingObjectTags: func(ctx context.Context) (map[string]string, error) {
+			callCount++
+			return map[string]string{"env": "prod"}, nil
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, allowed)
+	require.Equal(t, 0, callCount)
+}
+
+func TestWasmAuthorizerDeniesOnHostImportedTagResolverError(t *testing.T) {
+	authorizer, err := NewWasmAuthorizer(tagImportAuthorizerWasm(t))
 	require.NoError(t, err)
 	defer authorizer.Close(context.Background())
 
@@ -149,8 +167,6 @@ func TestWasmAuthorizerRoundTripsRequestInputThroughGuestMemory(t *testing.T) {
 		`"scheme":"https"`,
 		`"isReadOnly":true`,
 		`"requestObjectTags":{"team":"storage"}`,
-		`"objectTags":{"env":"prod"}`,
-		`"sourceObjectTags":{"source":"true"}`,
 	})
 	defer authorizer.Close(context.Background())
 
@@ -228,6 +244,22 @@ func newRoundTripAuthorizer(t *testing.T, needles []string) *WasmAuthorizer {
 	})
 	require.NoError(t, err)
 	return authorizer
+}
+
+func tagImportAuthorizerWasm(t *testing.T) []byte {
+	t.Helper()
+
+	return compileWAT(t, `(module
+  (import "pithos" "object_tags_len" (func $object_tags_len (result i32)))
+  (memory (export "memory") 1)
+  (func (export "pithos_alloc") (param $size i32) (result i32)
+    i32.const 1024)
+  (func (export "pithos_free") (param $ptr i32) (param $len i32))
+  (func (export "pithos_evaluate") (param $ptr i32) (param $len i32) (result i64)
+    call $object_tags_len
+    drop
+    i64.const 8796093022222)
+  (data (i32.const 2048) "{\"allow\":true}"))`)
 }
 
 func compileWAT(t *testing.T, wat string) []byte {

@@ -40,8 +40,6 @@ interface types {
     http-request: http-request,
     is-read-only: bool,
     request-object-tags: list<tag>,
-    object-tags: list<tag>,
-    source-object-tags: list<tag>,
   }
 
   variant hook-resource {
@@ -74,7 +72,10 @@ interface types {
 }
 
 world authorizer {
-  use types.{authorization-input, decision};
+  use types.{authorization-input, decision, tag};
+
+  import object-tags: func() -> result<list<tag>, string>;
+  import source-object-tags: func() -> result<list<tag>, string>;
 
   export evaluate: func(input: authorization-input) -> result<decision, string>;
 }

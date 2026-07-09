@@ -65,4 +65,4 @@ PITHOS_AUTHORIZER_PATH=./authorizer.wasm \
 - The host owns the call boundary, but allocation happens in guest memory. That is why the guest exports `pithos_alloc` and `pithos_free`.
 - A trap, invalid output JSON, timeout, or missing export denies the request.
 - Lua allows missing resource hooks by default; Wasm policies should explicitly decide each `hook` they want to allow.
-- `objectTags`, `sourceObjectTags`, and `requestObjectTags` are JSON objects in the current adapter.
+- `requestObjectTags` is included in the input JSON. Existing object/source tags are available through the lazy `pithos.object_tags_*` and `pithos.source_object_tags_*` host imports.

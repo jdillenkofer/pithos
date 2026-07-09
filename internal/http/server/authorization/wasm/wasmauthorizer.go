@@ -22,7 +22,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+type tagContextKey struct{}
+
 const (
+	hostModulePithos = "pithos"
+
 	exportAlloc      = "pithos_alloc"
 	exportFree       = "pithos_free"
 	exportEvaluate   = "pithos_evaluate"
@@ -93,8 +97,6 @@ type request struct {
 	HTTPRequest       httpRequest       `json:"httpRequest"`
 	IsReadOnly        bool              `json:"isReadOnly"`
 	RequestObjectTags map[string]string `json:"requestObjectTags,omitempty"`
-	ObjectTags        map[string]string `json:"objectTags,omitempty"`
-	SourceObjectTags  map[string]string `json:"sourceObjectTags,omitempty"`
 }
 
 type auth struct {
@@ -124,6 +126,18 @@ type nameValues struct {
 type decision struct {
 	Allow  bool    `json:"allow"`
 	Reason *string `json:"reason,omitempty"`
+}
+
+type tagContext struct {
+	object *lazyTagJSON
+	source *lazyTagJSON
+}
+
+type lazyTagJSON struct {
+	resolver func(context.Context) (map[string]string, error)
+	loaded   bool
+	bytes    []byte
+	err      error
 }
 
 func NewWasmAuthorizer(wasmBytes []byte) (*WasmAuthorizer, error) {
@@ -161,6 +175,10 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 		_ = runtime.Close(ctx)
 		return nil, err
 	}
+	if err := instantiatePithosHostModule(ctx, runtime); err != nil {
+		_ = runtime.Close(ctx)
+		return nil, err
+	}
 	compiled, err := runtime.CompileModule(ctx, wasmBytes)
 	if err != nil {
 		_ = runtime.Close(ctx)
@@ -193,6 +211,93 @@ func (authorizer *WasmAuthorizer) Close(ctx context.Context) error {
 			return authorizer.runtime.Close(ctx)
 		}
 	}
+}
+
+func instantiatePithosHostModule(ctx context.Context, runtime wazero.Runtime) error {
+	_, err := runtime.NewHostModuleBuilder(hostModulePithos).
+		NewFunctionBuilder().
+		WithGoModuleFunction(tagLenHostFunc(func(tags *tagContext) *lazyTagJSON {
+			return tags.object
+		}), []api.ValueType{}, []api.ValueType{api.ValueTypeI32}).
+		Export("object_tags_len").
+		NewFunctionBuilder().
+		WithGoModuleFunction(tagWriteHostFunc(func(tags *tagContext) *lazyTagJSON {
+			return tags.object
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("object_tags_write").
+		NewFunctionBuilder().
+		WithGoModuleFunction(tagLenHostFunc(func(tags *tagContext) *lazyTagJSON {
+			return tags.source
+		}), []api.ValueType{}, []api.ValueType{api.ValueTypeI32}).
+		Export("source_object_tags_len").
+		NewFunctionBuilder().
+		WithGoModuleFunction(tagWriteHostFunc(func(tags *tagContext) *lazyTagJSON {
+			return tags.source
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("source_object_tags_write").
+		Instantiate(ctx)
+	return err
+}
+
+func tagLenHostFunc(selectTags func(*tagContext) *lazyTagJSON) api.GoModuleFunction {
+	return api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+		tags := tagContextFromContext(ctx)
+		tagBytes := selectTags(tags).mustBytes(ctx)
+		stack[0] = api.EncodeI32(int32(len(tagBytes)))
+	})
+}
+
+func tagWriteHostFunc(selectTags func(*tagContext) *lazyTagJSON) api.GoModuleFunction {
+	return api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+		ptr := api.DecodeU32(stack[0])
+		byteCount := api.DecodeU32(stack[1])
+		tags := tagContextFromContext(ctx)
+		tagBytes := selectTags(tags).mustBytes(ctx)
+		stack[0] = api.EncodeI32(int32(len(tagBytes)))
+		if uint32(len(tagBytes)) > byteCount {
+			return
+		}
+		if !mod.Memory().Write(ptr, tagBytes) {
+			panic(fmt.Sprintf("failed to write tag JSON at ptr=%d len=%d", ptr, len(tagBytes)))
+		}
+	})
+}
+
+func tagContextFromContext(ctx context.Context) *tagContext {
+	tags, ok := ctx.Value(tagContextKey{}).(*tagContext)
+	if !ok || tags == nil {
+		return &tagContext{
+			object: newLazyTagJSON(nil),
+			source: newLazyTagJSON(nil),
+		}
+	}
+	return tags
+}
+
+func newLazyTagJSON(resolver func(context.Context) (map[string]string, error)) *lazyTagJSON {
+	return &lazyTagJSON{resolver: resolver}
+}
+
+func (tags *lazyTagJSON) mustBytes(ctx context.Context) []byte {
+	if !tags.loaded {
+		tags.loaded = true
+		tagMap := map[string]string{}
+		if tags.resolver != nil {
+			resolved, err := tags.resolver(ctx)
+			if err != nil {
+				tags.err = err
+			} else if resolved != nil {
+				tagMap = resolved
+			}
+		}
+		if tags.err == nil {
+			tags.bytes, tags.err = json.Marshal(tagMap)
+		}
+	}
+	if tags.err != nil {
+		panic(tags.err)
+	}
+	return tags.bytes
 }
 
 func (authorizer *WasmAuthorizer) getModule(ctx context.Context) (api.Module, error) {
@@ -268,8 +373,12 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 
 	callCtx, cancel := context.WithTimeout(ctx, authorizer.timeout)
 	defer cancel()
+	callCtx = context.WithValue(callCtx, tagContextKey{}, &tagContext{
+		object: newLazyTagJSON(authorizationRequest.ResolveExistingObjectTags),
+		source: newLazyTagJSON(authorizationRequest.ResolveExistingSourceObjectTags),
+	})
 
-	inputBytes, err := authorizer.marshalInput(callCtx, hook, authorizationRequest, res)
+	inputBytes, err := authorizer.marshalInput(hook, authorizationRequest, res)
 	if err != nil {
 		return false, err
 	}
@@ -337,16 +446,7 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 	return dec.Allow, nil
 }
 
-func (authorizer *WasmAuthorizer) marshalInput(ctx context.Context, hook string, authorizationRequest *authorization.Request, res *resource) ([]byte, error) {
-	objectTags, err := resolveTags(ctx, authorizationRequest.ResolveExistingObjectTags)
-	if err != nil {
-		return nil, err
-	}
-	sourceObjectTags, err := resolveTags(ctx, authorizationRequest.ResolveExistingSourceObjectTags)
-	if err != nil {
-		return nil, err
-	}
-
+func (authorizer *WasmAuthorizer) marshalInput(hook string, authorizationRequest *authorization.Request, res *resource) ([]byte, error) {
 	clientIP, scheme := authorizer.resolveClientIPAndScheme(authorizationRequest.HttpRequest)
 	req := input{
 		Hook: hook,
@@ -362,8 +462,6 @@ func (authorizer *WasmAuthorizer) marshalInput(ctx context.Context, hook string,
 			HTTPRequest:       projectHTTPRequest(authorizationRequest.HttpRequest, clientIP, scheme),
 			IsReadOnly:        isReadOnly(authorizationRequest.Operation),
 			RequestObjectTags: copyStringMap(authorizationRequest.RequestObjectTags),
-			ObjectTags:        objectTags,
-			SourceObjectTags:  sourceObjectTags,
 		},
 		Resource: res,
 	}
@@ -411,17 +509,6 @@ func callFree(ctx context.Context, free wazeroFunction, ptr uint32, size uint32)
 
 func unpackPtrLen(v uint64) (uint32, uint32) {
 	return uint32(v >> 32), uint32(v)
-}
-
-func resolveTags(ctx context.Context, resolver func(context.Context) (map[string]string, error)) (map[string]string, error) {
-	if resolver == nil {
-		return nil, nil
-	}
-	tags, err := resolver(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return copyStringMap(tags), nil
 }
 
 func copyStringMap(values map[string]string) map[string]string {

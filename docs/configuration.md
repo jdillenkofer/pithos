@@ -213,6 +213,17 @@ The guest module must export:
 | `pithos_free` | `(ptr: i32, len: i32) -> nil` | Frees a guest buffer allocated by `pithos_alloc` |
 | `pithos_evaluate` | `(ptr: i32, len: i32) -> i64` | Reads an input JSON buffer and returns a packed output pointer/length |
 
+The guest module may import lazy tag resolvers from module `pithos`:
+
+| Import | Signature | Description |
+|--------|-----------|-------------|
+| `object_tags_len` | `() -> i32` | Returns the byte length of the target object's tag JSON |
+| `object_tags_write` | `(ptr: i32, len: i32) -> i32` | Writes target object tag JSON into guest memory when `len` is large enough; always returns the required byte length |
+| `source_object_tags_len` | `() -> i32` | Returns the byte length of the copy source object's tag JSON |
+| `source_object_tags_write` | `(ptr: i32, len: i32) -> i32` | Writes copy source tag JSON into guest memory when `len` is large enough; always returns the required byte length |
+
+The tag imports return JSON objects such as `{"team":"storage"}`. Resolver failures trap the guest call and deny the request.
+
 `pithos_evaluate` returns `(ptr << 32) | len`, where `ptr` and `len` identify a UTF-8 JSON decision buffer:
 
 ```json
