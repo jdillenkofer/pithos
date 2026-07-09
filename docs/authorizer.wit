@@ -60,6 +60,7 @@ interface types {
   }
 
   record authorization-input {
+    abi-version: u32,
     hook: hook,
     request: request,
     resource: hook-resource,

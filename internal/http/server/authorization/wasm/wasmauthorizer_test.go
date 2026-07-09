@@ -144,6 +144,7 @@ func TestWasmAuthorizerDeniesOnOversizedDecision(t *testing.T) {
 
 func TestWasmAuthorizerRoundTripsRequestInputThroughGuestMemory(t *testing.T) {
 	authorizer := newRoundTripAuthorizer(t, []string{
+		`"abiVersion":1`,
 		`"hook":"request"`,
 		`"operation":"GetObject"`,
 		`"accessKeyId":"AKIAIOSFODNN7EXAMPLE"`,

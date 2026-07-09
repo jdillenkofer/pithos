@@ -26,6 +26,7 @@ type tagContextKey struct{}
 
 const (
 	hostModulePithos = "pithos"
+	abiVersion       = 1
 
 	exportAlloc      = "pithos_alloc"
 	exportFree       = "pithos_free"
@@ -75,9 +76,10 @@ type Options struct {
 }
 
 type input struct {
-	Hook     string    `json:"hook"`
-	Request  request   `json:"request"`
-	Resource *resource `json:"resource,omitempty"`
+	ABIVersion int       `json:"abiVersion"`
+	Hook       string    `json:"hook"`
+	Request    request   `json:"request"`
+	Resource   *resource `json:"resource,omitempty"`
 }
 
 type resource struct {
@@ -449,7 +451,8 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 func (authorizer *WasmAuthorizer) marshalInput(hook string, authorizationRequest *authorization.Request, res *resource) ([]byte, error) {
 	clientIP, scheme := authorizer.resolveClientIPAndScheme(authorizationRequest.HttpRequest)
 	req := input{
-		Hook: hook,
+		ABIVersion: abiVersion,
+		Hook:       hook,
 		Request: request{
 			Operation: authorizationRequest.Operation,
 			Authorization: auth{

@@ -180,6 +180,7 @@ The normative type model lives in [`authorizer.wit`](authorizer.wit). The curren
 
 ```json
 {
+  "abiVersion": 1,
   "hook": "request",
   "request": {
     "operation": "GetObject",
