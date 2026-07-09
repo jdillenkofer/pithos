@@ -189,6 +189,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 		slog.Error(fmt.Sprintf("Could not create request authorizer: %s", err))
 		os.Exit(1)
 	}
+	defer closeRequestAuthorizer(ctx, requestAuthorizer)
 
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
@@ -227,6 +228,18 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	if err != nil {
 		slog.Error(fmt.Sprintf("Error while starting http server: %s", err))
 		os.Exit(1)
+	}
+}
+
+func closeRequestAuthorizer(ctx context.Context, requestAuthorizer authorization.RequestAuthorizer) {
+	closer, ok := requestAuthorizer.(interface {
+		Close(context.Context) error
+	})
+	if !ok {
+		return
+	}
+	if err := closer.Close(ctx); err != nil {
+		slog.Error(fmt.Sprint("Couldn't close request authorizer: ", err))
 	}
 }
 

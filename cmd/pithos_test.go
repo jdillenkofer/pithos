@@ -83,6 +83,27 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+type closableAuthorizer struct {
+	closed bool
+}
+
+func (authorizer *closableAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
+	return true, nil
+}
+
+func (authorizer *closableAuthorizer) Close(ctx context.Context) error {
+	authorizer.closed = true
+	return nil
+}
+
+func TestCloseRequestAuthorizerClosesClosableAuthorizer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	authorizer := &closableAuthorizer{}
+	closeRequestAuthorizer(context.Background(), authorizer)
+	require.True(t, authorizer.closed)
+}
+
 func customDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	// The AWS SDK sends requests to hostnames like "test.s3.localhost:PORT" (virtual host)
 	// or "s3.localhost:PORT" (path style). The test server listens on 127.0.0.1:PORT.
