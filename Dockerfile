@@ -10,6 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY cmd/ cmd/
+COPY examples/ examples/
 COPY internal/ internal/
 
 RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
