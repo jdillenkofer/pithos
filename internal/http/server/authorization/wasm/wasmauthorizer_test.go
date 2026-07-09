@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -38,6 +39,27 @@ func TestWasmAuthorizerResourceHooksUseEvaluate(t *testing.T) {
 	allowed, err = authorizer.AuthorizeListPart(context.Background(), request, 1)
 	require.NoError(t, err)
 	require.True(t, allowed)
+}
+
+func TestWasmAuthorizerHandlesConcurrentRequests(t *testing.T) {
+	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
+	require.NoError(t, err)
+	defer authorizer.Close(context.Background())
+
+	const callCount = 32
+	var wg sync.WaitGroup
+	for i := 0; i < callCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
+				Operation: authorization.OperationGetObject,
+			})
+			require.NoError(t, err)
+			require.True(t, allowed)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestWasmAuthorizerDeniesOnResolverError(t *testing.T) {

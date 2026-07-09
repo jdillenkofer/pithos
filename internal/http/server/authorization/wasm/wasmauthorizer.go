@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -47,6 +48,7 @@ var (
 type WasmAuthorizer struct {
 	runtime               wazero.Runtime
 	compiled              wazero.CompiledModule
+	instanceCounter       atomic.Uint64
 	timeout               time.Duration
 	trustForwardedHeaders bool
 	trustedProxyCIDRs     []*net.IPNet
@@ -211,7 +213,8 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 		return false, err
 	}
 
-	mod, err := authorizer.runtime.InstantiateModule(callCtx, authorizer.compiled, wazero.NewModuleConfig())
+	instanceID := authorizer.instanceCounter.Add(1)
+	mod, err := authorizer.runtime.InstantiateModule(callCtx, authorizer.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("pithos-authorizer-%d", instanceID)))
 	if err != nil {
 		return false, err
 	}
