@@ -149,6 +149,7 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
+	db = gc.NewProtectedDatabase(db, partGC)
 	return &metadataPartStorage{
 		ValidatedLifecycle: lifecycle,
 		db:                 db,
@@ -164,6 +165,10 @@ func (mbs *metadataPartStorage) WithTransaction(ctx context.Context, opts *sql.T
 	return database.WithTx(ctx, mbs.db, opts, func(ctx context.Context, tx database.Tx) error {
 		return fn(ctx, mbs)
 	})
+}
+
+func (mbs *metadataPartStorage) Database() database.Database {
+	return mbs.db
 }
 
 func (mbs *metadataPartStorage) Start(ctx context.Context) error {
@@ -208,9 +213,6 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateBucket")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName)
 	})
@@ -219,9 +221,6 @@ func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName sto
 func (mbs *metadataPartStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucket")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
 	})
@@ -371,6 +370,32 @@ func (mbs *metadataPartStorage) DeleteBucketLifecycleConfiguration(ctx context.C
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		return mbs.metadataStore.DeleteBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
+	})
+}
+
+func (mbs *metadataPartStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	var config *storage.BucketNotificationConfiguration
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		config, err = mbs.metadataStore.GetBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func (mbs *metadataPartStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return mbs.metadataStore.PutBucketNotificationConfiguration(ctx, tx.SqlTx(), bucketName, config)
 	})
 }
 
@@ -874,9 +899,6 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObject")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 	var object metadatastore.Object
@@ -995,9 +1017,6 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CopyObject")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 
 	var result storage.CopyObjectResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -1192,9 +1211,6 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AppendObject")
 	defer span.End()
 
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
-
 	var combinedChecksums checksumutils.ChecksumValues
 	var totalSize int64
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -1379,9 +1395,6 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObject")
 	defer span.End()
 
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
-
 	var result *storage.DeleteObjectResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
@@ -1474,8 +1487,6 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 	// swap (crash-safe: the delete is deferred to commit and rolled back on
 	// abort, so a crash mid-transition leaves the source intact). GC remains a
 	// safety net for target parts orphaned by a crash between copy and commit.
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 
 	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
 
@@ -1569,9 +1580,6 @@ func partStoreNamesEqual(a, b *string) bool {
 func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteObjects")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 
 	result := &storage.DeleteObjectsResult{
 		Entries: make([]storage.DeleteObjectsEntry, 0, len(entries)),
@@ -1690,9 +1698,6 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 	if opts != nil {
 		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
 	}
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType, metadataOpts)
@@ -1711,9 +1716,6 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.UploadPart")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 
 	var calculatedChecksums *checksumutils.ChecksumValues
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -1772,9 +1774,6 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.UploadPartCopy")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 
 	var result storage.UploadPartCopyResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -1880,9 +1879,6 @@ func convertCompleteMultipartUploadResult(result metadatastore.CompleteMultipart
 func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CompleteMultipartUpload")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	var completeMultipartUploadResult storage.CompleteMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId, checksumInput, opts)
@@ -1911,9 +1907,6 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AbortMultipartUpload")
 	defer span.End()
-
-	unblockGC := mbs.partGC.PreventGCFromRunning(ctx)
-	defer unblockGC()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
 		if err != nil {

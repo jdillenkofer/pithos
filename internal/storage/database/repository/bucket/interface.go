@@ -18,16 +18,17 @@ type Repository interface {
 }
 
 type Entity struct {
-	Id                         *ulid.ULID
-	Name                       storage.BucketName
-	VersioningStatus           *string
-	WebsiteIndexDocumentSuffix *string
-	WebsiteErrorDocumentKey    *string
-	WebsiteRedirectAllHostName *string
-	WebsiteRedirectAllProtocol *string
-	WebsiteRoutingRulesJSON    *string
-	CORSConfigurationJSON      *string
-	LifecycleConfigurationJSON *string
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	Id                            *ulid.ULID
+	Name                          storage.BucketName
+	VersioningStatus              *string
+	WebsiteIndexDocumentSuffix    *string
+	WebsiteErrorDocumentKey       *string
+	WebsiteRedirectAllHostName    *string
+	WebsiteRedirectAllProtocol    *string
+	WebsiteRoutingRulesJSON       *string
+	CORSConfigurationJSON         *string
+	LifecycleConfigurationJSON    *string
+	NotificationConfigurationJSON *string
+	CreatedAt                     time.Time
+	UpdatedAt                     time.Time
 }

@@ -173,6 +173,7 @@ const continuationTokenQuery = "continuation-token"
 const websiteQuery = "website"
 const corsQuery = "cors"
 const lifecycleQuery = "lifecycle"
+const notificationQuery = "notification"
 const appendQuery = "append"
 const versioningQuery = "versioning"
 const versionsQuery = "versions"
@@ -1297,6 +1298,10 @@ func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 		s.getBucketLifecycleHandler(w, r)
 		return
 	}
+	if query.Has(notificationQuery) {
+		s.getBucketNotificationHandler(w, r)
+		return
+	}
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
 		return
@@ -1711,6 +1716,10 @@ func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if query.Has(lifecycleQuery) {
 		s.putBucketLifecycleHandler(w, r)
+		return
+	}
+	if query.Has(notificationQuery) {
+		s.putBucketNotificationHandler(w, r)
 		return
 	}
 	if query.Has(websiteQuery) {

@@ -519,3 +519,19 @@ func (csm *conditionalStorageMiddleware) DeleteBucketLifecycleConfiguration(ctx 
 	storage := csm.lookupStorage(bucketName)
 	return storage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }
+
+func (csm *conditionalStorageMiddleware) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.GetBucketNotificationConfiguration(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	storage := csm.lookupStorage(bucketName)
+	return storage.PutBucketNotificationConfiguration(ctx, bucketName, config)
+}

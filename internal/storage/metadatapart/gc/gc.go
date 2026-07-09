@@ -42,8 +42,7 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 }
 
 func (partGC *partGC) PreventGCFromRunning(ctx context.Context) (unblockGC func()) {
-	_, span := partGC.tracer.Start(ctx, "PartGarbageCollector.PreventGCFromRunning")
-	defer span.End()
+	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.PreventGCFromRunning")
 	partGC.writeOperations.Add(1)
 	span.AddEvent("Acquiring lock")
 	partGC.collectionMutex.RLock()
@@ -51,8 +50,73 @@ func (partGC *partGC) PreventGCFromRunning(ctx context.Context) (unblockGC func(
 	unblockGC = func() {
 		partGC.collectionMutex.RUnlock()
 		span.AddEvent("Released lock")
+		span.End()
 	}
 	return
+}
+
+type protectedDatabase struct {
+	inner  database.Database
+	partGC PartGarbageCollector
+}
+
+var _ database.Database = (*protectedDatabase)(nil)
+
+func NewProtectedDatabase(inner database.Database, partGC PartGarbageCollector) database.Database {
+	return &protectedDatabase{inner: inner, partGC: partGC}
+}
+
+func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
+	readOnly := opts != nil && opts.ReadOnly
+	if tx, ok := database.TxControllerFromContext(ctx); ok {
+		if tx.DBHandle() == db || tx.DBHandle() == db.inner {
+			if !readOnly && tx.ReadOnly() {
+				return nil, database.ErrWriteInReadOnlyTransaction
+			}
+			return tx.Child(), nil
+		}
+	}
+
+	var unblockGC func()
+	if !readOnly {
+		unblockGC = db.partGC.PreventGCFromRunning(ctx)
+	}
+
+	tx, err := db.inner.BeginTx(ctx, opts)
+	if err != nil {
+		if unblockGC != nil {
+			unblockGC()
+		}
+		return nil, err
+	}
+
+	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly)
+	if unblockGC != nil {
+		var releaseOnce sync.Once
+		release := func(context.Context) error {
+			releaseOnce.Do(unblockGC)
+			return nil
+		}
+		protectedTx.OnAfterCommit(release)
+		protectedTx.OnRollback(release)
+	}
+	return protectedTx, nil
+}
+
+func (db *protectedDatabase) PingContext(ctx context.Context) error {
+	return db.inner.PingContext(ctx)
+}
+
+func (db *protectedDatabase) Close() error {
+	return db.inner.Close()
+}
+
+func (db *protectedDatabase) GetDatabaseType() database.DatabaseType {
+	return db.inner.GetDatabaseType()
+}
+
+func (db *protectedDatabase) UnwrapDatabase() database.Database {
+	return db.inner
 }
 
 func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {

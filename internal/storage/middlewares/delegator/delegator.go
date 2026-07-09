@@ -93,6 +93,14 @@ func (d *DelegatingStorage) DeleteBucketLifecycleConfiguration(ctx context.Conte
 	return d.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }
 
+func (d *DelegatingStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	return d.Next.GetBucketNotificationConfiguration(ctx, bucketName)
+}
+
+func (d *DelegatingStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	return d.Next.PutBucketNotificationConfiguration(ctx, bucketName, config)
+}
+
 func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	return d.Next.GetObjectTagging(ctx, bucketName, key, opts)
 }

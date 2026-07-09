@@ -62,6 +62,8 @@ const (
 	OperationGetBucketLifecycle         = "GetBucketLifecycle"
 	OperationPutBucketLifecycle         = "PutBucketLifecycle"
 	OperationDeleteBucketLifecycle      = "DeleteBucketLifecycle"
+	OperationGetBucketNotification      = "GetBucketNotification"
+	OperationPutBucketNotification      = "PutBucketNotification"
 )
 
 type Request struct {

@@ -295,6 +295,48 @@ func enableVersioning(t *testing.T, st *metadataPartStorage, bucket storage.Buck
 	require.NoError(t, st.PutBucketVersioningConfiguration(context.Background(), bucket, &storage.BucketVersioningConfiguration{Status: &status}))
 }
 
+func TestBucketNotificationConfigurationRoundTrips(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+
+	emptyConfig, err := st.GetBucketNotificationConfiguration(ctx, bucket)
+	require.NoError(t, err)
+	require.Empty(t, emptyConfig.QueueConfigurations)
+	require.False(t, emptyConfig.EventBridgeEnabled)
+
+	config := &storage.BucketNotificationConfiguration{
+		QueueConfigurations: []storage.NotificationConfigurationRule{{
+			ID:              ptrutils.ToPtr("all-events"),
+			DestinationType: storage.NotificationDestinationQueue,
+			DestinationARN:  "arn:aws:sqs:eu-central-1:000000000000:pithos-events",
+			Events:          []string{"s3:ObjectCreated:*", "s3:ObjectRemoved:*"},
+			FilterRules:     []storage.NotificationFilterRule{{Name: "prefix", Value: "images/"}},
+		}},
+		EventBridgeEnabled: true,
+	}
+
+	require.NoError(t, st.PutBucketNotificationConfiguration(ctx, bucket, config))
+	loaded, err := st.GetBucketNotificationConfiguration(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, loaded.EventBridgeEnabled)
+	require.Len(t, loaded.QueueConfigurations, 1)
+	require.Equal(t, "all-events", *loaded.QueueConfigurations[0].ID)
+	require.Equal(t, []string{"s3:ObjectCreated:*", "s3:ObjectRemoved:*"}, loaded.QueueConfigurations[0].Events)
+	require.Equal(t, []storage.NotificationFilterRule{{Name: "prefix", Value: "images/"}}, loaded.QueueConfigurations[0].FilterRules)
+
+	require.NoError(t, st.PutBucketNotificationConfiguration(ctx, bucket, &storage.BucketNotificationConfiguration{}))
+	loaded, err = st.GetBucketNotificationConfiguration(ctx, bucket)
+	require.NoError(t, err)
+	require.Empty(t, loaded.QueueConfigurations)
+	require.False(t, loaded.EventBridgeEnabled)
+}
+
 func TestCopyObjectCopiesExplicitSourceVersion(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()

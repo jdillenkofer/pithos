@@ -14,6 +14,27 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
+type skipNotificationDestinationValidationContextKey struct{}
+type notificationEventOverrideContextKey struct{}
+
+func WithSkipNotificationDestinationValidation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipNotificationDestinationValidationContextKey{}, true)
+}
+
+func SkipNotificationDestinationValidation(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipNotificationDestinationValidationContextKey{}).(bool)
+	return skip
+}
+
+func WithNotificationEventOverride(ctx context.Context, eventName string) context.Context {
+	return context.WithValue(ctx, notificationEventOverrideContextKey{}, eventName)
+}
+
+func NotificationEventOverride(ctx context.Context) (string, bool) {
+	eventName, ok := ctx.Value(notificationEventOverrideContextKey{}).(string)
+	return eventName, ok && eventName != ""
+}
+
 type Bucket struct {
 	Name         BucketName
 	CreationDate time.Time
@@ -534,6 +555,22 @@ type BucketLifecycleManager interface {
 	DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName BucketName) error
 }
 
+type NotificationDestinationType = metadatastore.NotificationDestinationType
+type NotificationFilterRule = metadatastore.NotificationFilterRule
+type NotificationConfigurationRule = metadatastore.NotificationConfigurationRule
+type BucketNotificationConfiguration = metadatastore.BucketNotificationConfiguration
+
+const (
+	NotificationDestinationTopic         = metadatastore.NotificationDestinationTopic
+	NotificationDestinationQueue         = metadatastore.NotificationDestinationQueue
+	NotificationDestinationCloudFunction = metadatastore.NotificationDestinationCloudFunction
+)
+
+type BucketNotificationManager interface {
+	GetBucketNotificationConfiguration(ctx context.Context, bucketName BucketName) (*BucketNotificationConfiguration, error)
+	PutBucketNotificationConfiguration(ctx context.Context, bucketName BucketName, config *BucketNotificationConfiguration) error
+}
+
 // TaggingManager manages object tagging operations.
 type TaggingManager interface {
 	// GetObjectTagging returns the tag set of the object at key. Returns
@@ -616,6 +653,7 @@ type Storage interface {
 	BucketWebsiteManager
 	BucketCORSManager
 	BucketLifecycleManager
+	BucketNotificationManager
 	ObjectManager
 	MultipartUploadManager
 	TaggingManager

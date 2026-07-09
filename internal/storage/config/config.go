@@ -32,6 +32,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
+	"github.com/jdillenkofer/pithos/internal/storage/notification"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
@@ -39,15 +40,15 @@ import (
 )
 
 const (
-	defaultOutboxId                  = "default"
-	metadataPartStorageType          = "MetadataPartStorage"
-	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
-	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
-	auditStorageMiddlewareType       = "AuditStorageMiddleware"
-	outboxStorageType                = "OutboxStorage"
-	replicationStorageType           = "ReplicationStorage"
-	s3ClientStorageType              = "S3ClientStorage"
-	objectCacheStorageMiddlewareType = "ObjectCacheStorageMiddleware"
+	defaultOutboxId                   = "default"
+	metadataPartStorageType           = "MetadataPartStorage"
+	conditionalStorageMiddlewareType  = "ConditionalStorageMiddleware"
+	prometheusStorageMiddlewareType   = "PrometheusStorageMiddleware"
+	auditStorageMiddlewareType        = "AuditStorageMiddleware"
+	outboxStorageType                 = "OutboxStorage"
+	replicationStorageType            = "ReplicationStorage"
+	s3ClientStorageType               = "S3ClientStorage"
+	objectCacheStorageMiddlewareType  = "ObjectCacheStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -70,7 +71,107 @@ type MetadataPartStorageConfiguration struct {
 	// store its object data is written to ("default" is a valid target).
 	// Unmapped classes use the default part store.
 	StorageClassToPartStore map[string]string `json:"storageClassToPartStore,omitempty"`
+	// Notifications configures bucket event notifications. Notifications are
+	// enabled by default (sharing this storage's database so enqueue is atomic
+	// with the object mutation); the optional block customizes destinations and
+	// dispatcher behavior or disables notifications entirely.
+	Notifications *MetadataPartNotificationConfiguration `json:"notifications,omitempty"`
 	internalConfig.DynamicJsonType
+}
+
+// MetadataPartNotificationConfiguration is the notification settings embedded in
+// a MetadataPartStorage configuration. It is the only way to configure bucket
+// event notifications: it reuses the MetadataPartStorage database and wraps the
+// MetadataPartStorage output, which guarantees atomic enqueue.
+type MetadataPartNotificationConfiguration struct {
+	// Enabled defaults to true. Set it to false to store bucket notification
+	// configurations without emitting or delivering any events.
+	Enabled                *bool                               `json:"enabled,omitempty"`
+	Destinations           map[string]notification.Destination `json:"notificationDestinations,omitempty"`
+	OutboxID               internalConfig.StringProvider       `json:"outboxId,omitempty"`
+	ClaimLeaseDurationSecs *internalConfig.Int64Provider       `json:"claimLeaseDurationSeconds,omitempty"`
+	MaxAttempts            *internalConfig.Int64Provider       `json:"maxAttempts,omitempty"`
+	MinBackoffSecs         *internalConfig.Int64Provider       `json:"minBackoffSeconds,omitempty"`
+	MaxBackoffSecs         *internalConfig.Int64Provider       `json:"maxBackoffSeconds,omitempty"`
+	DispatcherConcurrency  *internalConfig.Int64Provider       `json:"dispatcherConcurrency,omitempty"`
+	BatchSize              *internalConfig.Int64Provider       `json:"batchSize,omitempty"`
+}
+
+func (n *MetadataPartNotificationConfiguration) isEnabled() bool {
+	return n == nil || n.Enabled == nil || *n.Enabled
+}
+
+func (n *MetadataPartNotificationConfiguration) destinations() map[string]notification.Destination {
+	if n == nil || n.Destinations == nil {
+		return map[string]notification.Destination{}
+	}
+	return n.Destinations
+}
+
+func (n *MetadataPartNotificationConfiguration) outboxID() string {
+	if n == nil {
+		return defaultOutboxId
+	}
+	outboxID := n.OutboxID.Value()
+	if outboxID == "" {
+		return defaultOutboxId
+	}
+	return outboxID
+}
+
+func (n *MetadataPartNotificationConfiguration) claimLeaseDuration() (time.Duration, error) {
+	claimLeaseDuration := 30 * time.Second
+	if n != nil && n.ClaimLeaseDurationSecs != nil {
+		secs := n.ClaimLeaseDurationSecs.Value()
+		if secs <= 0 {
+			return 0, errors.New("claimLeaseDurationSeconds must be > 0")
+		}
+		claimLeaseDuration = time.Duration(secs) * time.Second
+	}
+	return claimLeaseDuration, nil
+}
+
+func (n *MetadataPartNotificationConfiguration) dispatcherConfig() (notification.DispatcherConfig, error) {
+	dispatcher := notification.DispatcherConfig{}
+	if n == nil {
+		return dispatcher, nil
+	}
+	if n.MaxAttempts != nil {
+		if value := n.MaxAttempts.Value(); value < 0 {
+			return dispatcher, errors.New("maxAttempts must be >= 0")
+		} else {
+			dispatcher.MaxAttempts = int(value)
+		}
+	}
+	if n.MinBackoffSecs != nil {
+		if value := n.MinBackoffSecs.Value(); value <= 0 {
+			return dispatcher, errors.New("minBackoffSeconds must be > 0")
+		} else {
+			dispatcher.MinBackoff = time.Duration(value) * time.Second
+		}
+	}
+	if n.MaxBackoffSecs != nil {
+		if value := n.MaxBackoffSecs.Value(); value <= 0 {
+			return dispatcher, errors.New("maxBackoffSeconds must be > 0")
+		} else {
+			dispatcher.MaxBackoff = time.Duration(value) * time.Second
+		}
+	}
+	if n.DispatcherConcurrency != nil {
+		if value := n.DispatcherConcurrency.Value(); value <= 0 {
+			return dispatcher, errors.New("dispatcherConcurrency must be > 0")
+		} else {
+			dispatcher.Concurrency = int(value)
+		}
+	}
+	if n.BatchSize != nil {
+		if value := n.BatchSize.Value(); value <= 0 {
+			return dispatcher, errors.New("batchSize must be > 0")
+		} else {
+			dispatcher.BatchSize = int(value)
+		}
+	}
+	return dispatcher, nil
 }
 
 func (m *MetadataPartStorageConfiguration) UnmarshalJSON(b []byte) error {
@@ -238,7 +339,33 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 		}
 		extraPartStores[name] = extraPartStore
 	}
-	return metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore)
+	innerStorage, err := metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore)
+	if err != nil {
+		return nil, err
+	}
+	if !m.Notifications.isEnabled() {
+		return innerStorage, nil
+	}
+	claimLeaseDuration, err := m.Notifications.claimLeaseDuration()
+	if err != nil {
+		return nil, err
+	}
+	dispatcher, err := m.Notifications.dispatcherConfig()
+	if err != nil {
+		return nil, err
+	}
+	publisher, err := notification.NewRegistryPublisher(m.Notifications.destinations())
+	if err != nil {
+		return nil, err
+	}
+	// The prometheus registerer is optional; entry points that do not register
+	// one (e.g. some tooling and tests) still get a working, unregistered set of
+	// collectors. Sharing db keeps notification enqueue atomic with the mutation.
+	var registerer prometheus.Registerer
+	if value, err := diProvider.LookupByType(reflect.TypeOf((*prometheus.Registerer)(nil))); err == nil {
+		registerer, _ = value.(prometheus.Registerer)
+	}
+	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, m.Notifications.outboxID(), claimLeaseDuration, dispatcher, registerer)
 }
 
 type ConditionalStorageMiddlewareConfiguration struct {

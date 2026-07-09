@@ -528,6 +528,65 @@ func (sms *sqlMetadataStore) DeleteBucketLifecycleConfiguration(ctx context.Cont
 	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
 }
 
+func (sms *sqlMetadataStore) GetBucketNotificationConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.BucketNotificationConfiguration, error) {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucketEntity == nil {
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+	if bucketEntity.NotificationConfigurationJSON == nil {
+		return &metadatastore.BucketNotificationConfiguration{}, nil
+	}
+
+	var config metadatastore.BucketNotificationConfiguration
+	err = json.Unmarshal([]byte(*bucketEntity.NotificationConfigurationJSON), &config)
+	if err != nil {
+		return nil, err
+	}
+	if config.TopicConfigurations == nil {
+		config.TopicConfigurations = []metadatastore.NotificationConfigurationRule{}
+	}
+	if config.QueueConfigurations == nil {
+		config.QueueConfigurations = []metadatastore.NotificationConfigurationRule{}
+	}
+	if config.CloudFunctionConfigurations == nil {
+		config.CloudFunctionConfigurations = []metadatastore.NotificationConfigurationRule{}
+	}
+	return &config, nil
+}
+
+func (sms *sqlMetadataStore) PutBucketNotificationConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketNotificationConfiguration) error {
+	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if bucketEntity == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+
+	if config == nil || (len(config.TopicConfigurations) == 0 && len(config.QueueConfigurations) == 0 && len(config.CloudFunctionConfigurations) == 0 && !config.EventBridgeEnabled) {
+		bucketEntity.NotificationConfigurationJSON = nil
+		return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+	}
+
+	jsonConfig, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	jsonString := string(jsonConfig)
+	bucketEntity.NotificationConfigurationJSON = &jsonString
+
+	return sms.bucketRepository.SaveBucket(ctx, tx, bucketEntity)
+}
+
 func determineCommonPrefix(prefix, key, delimiter string) *string {
 	prefixSegments := strings.Split(prefix, delimiter)
 	keySegments := strings.Split(key, delimiter)

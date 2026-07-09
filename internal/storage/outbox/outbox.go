@@ -1052,6 +1052,30 @@ func (os *outboxStorage) DeleteBucketLifecycleConfiguration(ctx context.Context,
 	return os.innerStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
 }
 
+func (os *outboxStorage) GetBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketNotificationConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	return os.innerStorage.GetBucketNotificationConfiguration(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketNotificationConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketNotificationConfiguration")
+	defer span.End()
+
+	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	return os.innerStorage.PutBucketNotificationConfiguration(ctx, bucketName, config)
+}
+
 func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) (map[string]string, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObjectTagging")
 	defer span.End()

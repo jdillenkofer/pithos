@@ -581,6 +581,11 @@ type BucketLifecycleStore interface {
 	DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 }
 
+type BucketNotificationStore interface {
+	GetBucketNotificationConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketNotificationConfiguration, error)
+	PutBucketNotificationConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName, config *BucketNotificationConfiguration) error
+}
+
 type ObjectStore interface {
 	ListObjects(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectsOptions) (*ListBucketResult, error)
 	ListObjectVersions(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectVersionsOptions) (*ListObjectVersionsResult, error)
@@ -636,6 +641,7 @@ type MetadataStore interface {
 	BucketWebsiteStore
 	BucketCORSStore
 	BucketLifecycleStore
+	BucketNotificationStore
 	ObjectStore
 	MultipartStore
 }
