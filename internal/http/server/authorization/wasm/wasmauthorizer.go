@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/textproto"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -36,6 +38,7 @@ const (
 
 	defaultTimeout          = 100 * time.Millisecond
 	defaultMemoryLimitPages = 64
+	defaultInstancePoolSize = 0
 )
 
 var (
@@ -48,6 +51,7 @@ var (
 type WasmAuthorizer struct {
 	runtime               wazero.Runtime
 	compiled              wazero.CompiledModule
+	instancePool          chan api.Module
 	instanceCounter       atomic.Uint64
 	timeout               time.Duration
 	trustForwardedHeaders bool
@@ -58,6 +62,7 @@ type WasmAuthorizer struct {
 type Options struct {
 	Timeout               time.Duration
 	MemoryLimitPages      uint32
+	InstancePoolSize      int
 	TrustForwardedHeaders bool
 	TrustedProxyCIDRs     []string
 }
@@ -131,6 +136,13 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 	if memoryLimitPages == 0 {
 		memoryLimitPages = defaultMemoryLimitPages
 	}
+	instancePoolSize := options.InstancePoolSize
+	if instancePoolSize == defaultInstancePoolSize {
+		instancePoolSize = runtime.GOMAXPROCS(0)
+	}
+	if instancePoolSize < 0 {
+		instancePoolSize = 0
+	}
 
 	ctx := context.Background()
 	runtimeConfig := wazero.NewRuntimeConfig().
@@ -151,6 +163,7 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 	authorizer := &WasmAuthorizer{
 		runtime:               runtime,
 		compiled:              compiled,
+		instancePool:          make(chan api.Module, instancePoolSize),
 		timeout:               timeout,
 		trustForwardedHeaders: options.TrustForwardedHeaders,
 		trustedProxyCIDRs:     parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
@@ -164,7 +177,47 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 }
 
 func (authorizer *WasmAuthorizer) Close(ctx context.Context) error {
-	return authorizer.runtime.Close(ctx)
+	for {
+		select {
+		case mod := <-authorizer.instancePool:
+			_ = mod.Close(ctx)
+		default:
+			return authorizer.runtime.Close(ctx)
+		}
+	}
+}
+
+func (authorizer *WasmAuthorizer) getModule(ctx context.Context) (api.Module, error) {
+	select {
+	case mod := <-authorizer.instancePool:
+		return mod, nil
+	default:
+	}
+
+	instanceID := authorizer.instanceCounter.Add(1)
+	mod, err := authorizer.runtime.InstantiateModule(ctx, authorizer.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("pithos-authorizer-%d", instanceID)))
+	if err != nil {
+		return nil, err
+	}
+	if initialize := mod.ExportedFunction(exportInitialize); initialize != nil {
+		if _, err := initialize.Call(ctx); err != nil {
+			_ = mod.Close(context.Background())
+			return nil, err
+		}
+	}
+	return mod, nil
+}
+
+func (authorizer *WasmAuthorizer) putModule(mod api.Module, discard bool) {
+	if discard {
+		_ = mod.Close(context.Background())
+		return
+	}
+	select {
+	case authorizer.instancePool <- mod:
+	default:
+		_ = mod.Close(context.Background())
+	}
 }
 
 func (authorizer *WasmAuthorizer) dryRun() error {
@@ -213,18 +266,14 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 		return false, err
 	}
 
-	instanceID := authorizer.instanceCounter.Add(1)
-	mod, err := authorizer.runtime.InstantiateModule(callCtx, authorizer.compiled, wazero.NewModuleConfig().WithName(fmt.Sprintf("pithos-authorizer-%d", instanceID)))
+	mod, err := authorizer.getModule(callCtx)
 	if err != nil {
 		return false, err
 	}
-	defer mod.Close(context.Background())
-
-	if initialize := mod.ExportedFunction(exportInitialize); initialize != nil {
-		if _, err := initialize.Call(callCtx); err != nil {
-			return false, err
-		}
-	}
+	discardModule := false
+	defer func() {
+		authorizer.putModule(mod, discardModule)
+	}()
 
 	alloc := mod.ExportedFunction(exportAlloc)
 	if alloc == nil {
@@ -255,6 +304,7 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 
 	results, err := evaluate.Call(callCtx, uint64(inputPtr), uint64(len(inputBytes)))
 	if err != nil {
+		discardModule = true
 		return false, err
 	}
 	if len(results) != 1 {

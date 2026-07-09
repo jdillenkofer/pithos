@@ -62,6 +62,20 @@ func TestWasmAuthorizerHandlesConcurrentRequests(t *testing.T) {
 	wg.Wait()
 }
 
+func TestWasmAuthorizerCanDisableInstancePool(t *testing.T) {
+	authorizer, err := NewWasmAuthorizerWithOptions(testAuthorizerWasm(`{"allow":true}`), Options{
+		InstancePoolSize: -1,
+	})
+	require.NoError(t, err)
+	defer authorizer.Close(context.Background())
+
+	allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
+		Operation: authorization.OperationGetObject,
+	})
+	require.NoError(t, err)
+	require.True(t, allowed)
+}
+
 func TestWasmAuthorizerDeniesOnResolverError(t *testing.T) {
 	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
 	require.NoError(t, err)
@@ -75,6 +89,27 @@ func TestWasmAuthorizerDeniesOnResolverError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.False(t, allowed)
+}
+
+func BenchmarkWasmAuthorizerAuthorizeRequest(b *testing.B) {
+	authorizer, err := NewWasmAuthorizer(testAuthorizerWasm(`{"allow":true}`))
+	require.NoError(b, err)
+	defer authorizer.Close(context.Background())
+
+	request := &authorization.Request{
+		Operation: authorization.OperationGetObject,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		allowed, err := authorizer.AuthorizeRequest(context.Background(), request)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !allowed {
+			b.Fatal("request denied")
+		}
+	}
 }
 
 func TestWasmAuthorizerDeniesOnMalformedDecision(t *testing.T) {
