@@ -72,6 +72,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	authorizerTimeoutMillisAccessor := registerIntFlag(serveCommand, "authorizerTimeoutMillis", defaultAuthorizerTimeoutMillis, "the maximum duration of a single authorizer call in milliseconds")
 	authorizerMemoryLimitPagesAccessor := registerIntFlag(serveCommand, "authorizerMemoryLimitPages", defaultAuthorizerMemoryLimitPages, "the maximum wasm memory pages allowed per authorizer instance")
 	authorizerInstancePoolSizeAccessor := registerIntFlag(serveCommand, "authorizerInstancePoolSize", defaultAuthorizerInstancePoolSize, "the number of wasm authorizer instances to keep pooled; 0 uses GOMAXPROCS and negative disables pooling")
+	authorizerMaxDecisionBytesAccessor := registerIntFlag(serveCommand, "authorizerMaxDecisionBytes", defaultAuthorizerMaxDecisionBytes, "the maximum wasm authorizer decision JSON size in bytes")
 	trustForwardedHeadersAccessor := registerBoolFlag(serveCommand, "trustForwardedHeaders", defaultTrustForwardedHeaders, "trust client forwarding headers (X-Forwarded-For, X-Forwarded-Proto, CF-Connecting-IP)")
 	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; empty means all proxies when trustForwardedHeaders is enabled")
 	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
@@ -113,6 +114,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		authorizerTimeoutMillis:    authorizerTimeoutMillisAccessor(),
 		authorizerMemoryLimitPages: authorizerMemoryLimitPagesAccessor(),
 		authorizerInstancePoolSize: authorizerInstancePoolSizeAccessor(),
+		authorizerMaxDecisionBytes: authorizerMaxDecisionBytesAccessor(),
 		trustForwardedHeaders:      trustForwardedHeadersAccessor(),
 		trustedProxyCIDRs:          trustedProxyCIDRs,
 		logLevel:                   logLevelAccessor(),

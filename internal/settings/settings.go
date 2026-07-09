@@ -20,6 +20,7 @@ const defaultAuthorizerType = "lua"
 const defaultAuthorizerTimeoutMillis = 100
 const defaultAuthorizerMemoryLimitPages = 64
 const defaultAuthorizerInstancePoolSize = 0
+const defaultAuthorizerMaxDecisionBytes = 4096
 const defaultTrustForwardedHeaders = false
 const defaultOtelEnabled = false
 const defaultWebsiteDomain = "s3-website.localhost"
@@ -49,6 +50,7 @@ type Settings struct {
 	authorizerTimeoutMillis    *int          `mergable:""`
 	authorizerMemoryLimitPages *int          `mergable:""`
 	authorizerInstancePoolSize *int          `mergable:""`
+	authorizerMaxDecisionBytes *int          `mergable:""`
 	trustForwardedHeaders      *bool         `mergable:""`
 	trustedProxyCIDRs          []string      `mergable:""`
 	logLevel                   *string       `mergable:""`
@@ -128,6 +130,10 @@ func (s *Settings) AuthorizerMemoryLimitPages() int {
 
 func (s *Settings) AuthorizerInstancePoolSize() int {
 	return valueOrDefault(s.authorizerInstancePoolSize, defaultAuthorizerInstancePoolSize)
+}
+
+func (s *Settings) AuthorizerMaxDecisionBytes() int {
+	return valueOrDefault(s.authorizerMaxDecisionBytes, defaultAuthorizerMaxDecisionBytes)
 }
 
 func (s *Settings) TrustForwardedHeaders() bool {

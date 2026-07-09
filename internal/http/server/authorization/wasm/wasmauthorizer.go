@@ -39,6 +39,7 @@ const (
 	defaultTimeout          = 100 * time.Millisecond
 	defaultMemoryLimitPages = 64
 	defaultInstancePoolSize = 0
+	defaultMaxDecisionBytes = 4096
 )
 
 var (
@@ -54,6 +55,7 @@ type WasmAuthorizer struct {
 	instancePool          chan api.Module
 	instanceCounter       atomic.Uint64
 	timeout               time.Duration
+	maxDecisionBytes      uint32
 	trustForwardedHeaders bool
 	trustedProxyCIDRs     []*net.IPNet
 	tracer                trace.Tracer
@@ -63,6 +65,7 @@ type Options struct {
 	Timeout               time.Duration
 	MemoryLimitPages      uint32
 	InstancePoolSize      int
+	MaxDecisionBytes      uint32
 	TrustForwardedHeaders bool
 	TrustedProxyCIDRs     []string
 }
@@ -143,6 +146,10 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 	if instancePoolSize < 0 {
 		instancePoolSize = 0
 	}
+	maxDecisionBytes := options.MaxDecisionBytes
+	if maxDecisionBytes == 0 {
+		maxDecisionBytes = defaultMaxDecisionBytes
+	}
 
 	ctx := context.Background()
 	runtimeConfig := wazero.NewRuntimeConfig().
@@ -165,6 +172,7 @@ func NewWasmAuthorizerWithOptions(wasmBytes []byte, options Options) (*WasmAutho
 		compiled:              compiled,
 		instancePool:          make(chan api.Module, instancePoolSize),
 		timeout:               timeout,
+		maxDecisionBytes:      maxDecisionBytes,
 		trustForwardedHeaders: options.TrustForwardedHeaders,
 		trustedProxyCIDRs:     parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
 		tracer:                otel.Tracer("internal/http/server/authorization/wasm"),
@@ -313,6 +321,9 @@ func (authorizer *WasmAuthorizer) evaluate(ctx context.Context, hook string, aut
 
 	outputPtr, outputLen := unpackPtrLen(results[0])
 	defer callFree(context.Background(), free, outputPtr, outputLen)
+	if outputLen > authorizer.maxDecisionBytes {
+		return false, fmt.Errorf("wasm authorizer decision is %d bytes, exceeding limit %d", outputLen, authorizer.maxDecisionBytes)
+	}
 
 	outputBytes, ok := memory.Read(outputPtr, outputLen)
 	if !ok {

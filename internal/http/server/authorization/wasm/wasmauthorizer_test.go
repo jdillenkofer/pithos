@@ -117,6 +117,13 @@ func TestWasmAuthorizerDeniesOnMalformedDecision(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWasmAuthorizerDeniesOnOversizedDecision(t *testing.T) {
+	_, err := NewWasmAuthorizerWithOptions(testAuthorizerWasm(`{"allow":true,"reason":"too large"}`), Options{
+		MaxDecisionBytes: 8,
+	})
+	require.Error(t, err)
+}
+
 func TestWasmAuthorizerRoundTripsRequestInputThroughGuestMemory(t *testing.T) {
 	authorizer := newRoundTripAuthorizer(t, []string{
 		`"hook":"request"`,

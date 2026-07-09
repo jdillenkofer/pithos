@@ -24,6 +24,7 @@
 | `PITHOS_AUTHORIZER_TIMEOUT_MILLIS` | Maximum duration of a single Wasm authorizer call in milliseconds | `100` |
 | `PITHOS_AUTHORIZER_MEMORY_LIMIT_PAGES` | Maximum Wasm memory pages per authorizer instance (`64 KiB` per page) | `64` |
 | `PITHOS_AUTHORIZER_INSTANCE_POOL_SIZE` | Number of Wasm authorizer instances to keep pooled; `0` uses `GOMAXPROCS`, negative disables pooling | `0` |
+| `PITHOS_AUTHORIZER_MAX_DECISION_BYTES` | Maximum Wasm authorizer decision JSON size in bytes | `4096` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 

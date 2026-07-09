@@ -65,4 +65,5 @@ func TestAuthorizerRuntimeDefaults(t *testing.T) {
 	assert.Equal(t, 100, settings.AuthorizerTimeoutMillis())
 	assert.Equal(t, 64, settings.AuthorizerMemoryLimitPages())
 	assert.Equal(t, 0, settings.AuthorizerInstancePoolSize())
+	assert.Equal(t, 4096, settings.AuthorizerMaxDecisionBytes())
 }
