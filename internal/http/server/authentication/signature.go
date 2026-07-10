@@ -365,7 +365,6 @@ func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
 
 func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
 	now := time.Now().UTC()
-	expectedDate := now.Format("20060102")
 
 	var credential string
 	var timestamp string
@@ -461,10 +460,6 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	}
 	expectedCredentials := validCredentials[foundIndex]
 	date := accessKeyIdAndScope[1]
-	if date != expectedDate {
-		slog.DebugContext(r.Context(), "Date in credential does not match expected date")
-		return nil, false
-	}
 	region := accessKeyIdAndScope[2]
 	if region != expectedRegion {
 		slog.DebugContext(r.Context(), "Region in credential does not match expected region")
@@ -483,13 +478,17 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		return nil, false
 	}
 
-	scope := createScope(expectedDate, region, service, request)
-
 	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
 		return nil, false
 	}
+	if date != parsedTimestamp.Format("20060102") {
+		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
+		return nil, false
+	}
+	scope := createScope(date, region, service, request)
+
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
@@ -522,7 +521,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
 		return nil, false
 	}
-	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, expectedDate, region, expectedService, expectedRequest)
+	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, date, region, expectedService, expectedRequest)
 	calculatedSignature := createSignature(signingKey, *stringToSign)
 	isSignatureValid := subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
 	if !isSignatureValid {
