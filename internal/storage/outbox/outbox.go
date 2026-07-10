@@ -457,11 +457,17 @@ func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.Bu
 	})
 }
 
-func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bucketName storage.BucketName) error {
+type storageOutboxEntryFinder func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error)
+
+// waitUntilOutboxEntriesDrained waits until every entry matched by the finder
+// pair that existed when the call started has been processed: findLast
+// snapshots the newest matching entry, then the loop polls findFirst until
+// the oldest matching entry is newer than that snapshot (or none is left).
+func (os *outboxStorage) waitUntilOutboxEntriesDrained(ctx context.Context, findLast storageOutboxEntryFinder, findFirst storageOutboxEntryFinder) error {
 	var lastStorageOutboxEntry *storageOutboxEntry.Entity
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
-		lastStorageOutboxEntry, err = os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(ctx, tx.SqlTx(), os.outboxId, bucketName)
+		lastStorageOutboxEntry, err = findLast(ctx, tx.SqlTx())
 		return err
 	})
 	if err != nil {
@@ -477,7 +483,7 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 		var entry *storageOutboxEntry.Entity
 		err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 			var err error
-			entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(ctx, tx.SqlTx(), os.outboxId, bucketName)
+			entry, err = findFirst(ctx, tx.SqlTx())
 			return err
 		})
 		if err != nil {
@@ -491,85 +497,61 @@ func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bu
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func (os *outboxStorage) waitForAllOutboxEntriesOfBucket(ctx context.Context, bucketName storage.BucketName) error {
+	return os.waitUntilOutboxEntriesDrained(ctx,
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
+		},
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
+		})
 }
 
 func (os *outboxStorage) waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey) error {
-	var lastStorageOutboxEntry *storageOutboxEntry.Entity
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		lastStorageOutboxEntry, err = os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx.SqlTx(), os.outboxId, bucketName, key.String())
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	if lastStorageOutboxEntry == nil {
-		return nil
-	}
-
-	lastId := lastStorageOutboxEntry.Id
-
-	for {
-		var entry *storageOutboxEntry.Entity
-		err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-			var err error
-			entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx.SqlTx(), os.outboxId, bucketName, key.String())
-			return err
+	return os.waitUntilOutboxEntriesDrained(ctx,
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, os.outboxId, bucketName, key.String())
+		},
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx, tx, os.outboxId, bucketName, key.String())
 		})
-		if err != nil {
-			return err
-		}
-		if entry == nil {
-			return nil
-		}
-		if (*entry.Id).Compare(*lastId) > 0 {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
 }
 
-func (os *outboxStorage) waitForAllOutboxEntries(ctx context.Context) error {
-	var lastStorageOutboxEntry *storageOutboxEntry.Entity
-	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		lastStorageOutboxEntry, err = os.storageOutboxEntryRepository.FindLastStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	if lastStorageOutboxEntry == nil {
-		return nil
-	}
-
-	lastId := lastStorageOutboxEntry.Id
-
-	for {
-		var entry *storageOutboxEntry.Entity
-		err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-			var err error
-			entry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
-			return err
+// waitForGlobalOutboxEntriesOfBucket waits only for the bucket's pending
+// bucket-lifecycle entries (CreateBucket/DeleteBucket, stored with an empty
+// key). Operations that depend only on the bucket's existence or
+// configuration use this so they don't stall behind queued object writes.
+func (os *outboxStorage) waitForGlobalOutboxEntriesOfBucket(ctx context.Context, bucketName storage.BucketName) error {
+	return os.waitUntilOutboxEntriesDrained(ctx,
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindLastGlobalStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
+		},
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindFirstGlobalStorageOutboxEntryForBucket(ctx, tx, os.outboxId, bucketName)
 		})
-		if err != nil {
-			return err
-		}
-		if entry == nil {
-			return nil
-		}
-		if (*entry.Id).Compare(*lastId) > 0 {
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+}
+
+// waitForGlobalOutboxEntries waits only for pending bucket-lifecycle entries
+// (CreateBucket/DeleteBucket) across all buckets.
+func (os *outboxStorage) waitForGlobalOutboxEntries(ctx context.Context) error {
+	return os.waitUntilOutboxEntriesDrained(ctx,
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindLastGlobalStorageOutboxEntry(ctx, tx, os.outboxId)
+		},
+		func(ctx context.Context, tx *sql.Tx) (*storageOutboxEntry.Entity, error) {
+			return os.storageOutboxEntryRepository.FindFirstGlobalStorageOutboxEntry(ctx, tx, os.outboxId)
+		})
 }
 
 func (os *outboxStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListBuckets")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntries(ctx)
+	// Only pending bucket-lifecycle entries can change the bucket list; queued
+	// object writes are irrelevant here.
+	err := os.waitForGlobalOutboxEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +563,9 @@ func (os *outboxStorage) HeadBucket(ctx context.Context, bucketName storage.Buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.HeadBucket")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// HeadBucket reports bucket existence and metadata only, so queued object
+	// writes don't need to be flushed.
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -605,7 +589,8 @@ func (os *outboxStorage) GetBucketVersioningConfiguration(ctx context.Context, b
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketVersioningConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Queued object writes cannot change the versioning configuration.
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -617,6 +602,9 @@ func (os *outboxStorage) PutBucketVersioningConfiguration(ctx context.Context, b
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketVersioningConfiguration")
 	defer span.End()
 
+	// This deliberately drains the whole bucket: whether a put or delete may be
+	// outboxed depends on the versioning status, so every queued entry must
+	// replay under the configuration that was active when it was accepted.
 	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
@@ -956,7 +944,9 @@ func (os *outboxStorage) ListMultipartUploads(ctx context.Context, bucketName st
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.ListMultipartUploads")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Multipart uploads are never outboxed, so only pending bucket-lifecycle
+	// entries matter here.
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -980,7 +970,7 @@ func (os *outboxStorage) GetBucketWebsiteConfiguration(ctx context.Context, buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketWebsiteConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -992,7 +982,7 @@ func (os *outboxStorage) PutBucketWebsiteConfiguration(ctx context.Context, buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketWebsiteConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1004,7 +994,7 @@ func (os *outboxStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, b
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketWebsiteConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1016,7 +1006,7 @@ func (os *outboxStorage) GetBucketCORSConfiguration(ctx context.Context, bucketN
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketCORSConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -1028,7 +1018,7 @@ func (os *outboxStorage) PutBucketCORSConfiguration(ctx context.Context, bucketN
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketCORSConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1040,7 +1030,7 @@ func (os *outboxStorage) DeleteBucketCORSConfiguration(ctx context.Context, buck
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketCORSConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1052,7 +1042,7 @@ func (os *outboxStorage) GetBucketLifecycleConfiguration(ctx context.Context, bu
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketLifecycleConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1054,7 @@ func (os *outboxStorage) PutBucketLifecycleConfiguration(ctx context.Context, bu
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketLifecycleConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1076,7 +1066,7 @@ func (os *outboxStorage) DeleteBucketLifecycleConfiguration(ctx context.Context,
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucketLifecycleConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -1088,7 +1078,7 @@ func (os *outboxStorage) GetBucketNotificationConfiguration(ctx context.Context,
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetBucketNotificationConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -1100,7 +1090,7 @@ func (os *outboxStorage) PutBucketNotificationConfiguration(ctx context.Context,
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutBucketNotificationConfiguration")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName)
 	if err != nil {
 		return err
 	}

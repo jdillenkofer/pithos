@@ -17,6 +17,14 @@ type Repository interface {
 	FindLastStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*Entity, error)
 	FindFirstStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*Entity, error)
 	FindLastStorageOutboxEntryForBucketAndKeyIncludingGlobal(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName, key string) (*Entity, error)
+	// The Global variants match only bucket-lifecycle entries (CreateBucket/
+	// DeleteBucket, stored with an empty key), letting callers that depend only
+	// on bucket existence or configuration avoid waiting on queued object
+	// writes.
+	FindFirstGlobalStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
+	FindLastGlobalStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
+	FindFirstGlobalStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*Entity, error)
+	FindLastGlobalStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*Entity, error)
 	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
 	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, storageOutboxEntry *Entity) error
 	SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
