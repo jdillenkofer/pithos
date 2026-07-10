@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,8 +11,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"reflect"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -86,6 +89,7 @@ const readTimeout = 30 * time.Second
 const writeTimeout = 0
 const idleTimeout = 2 * time.Minute
 const maxHeaderBytes = 1 << 20
+const gracefulShutdownTimeout = 30 * time.Second
 
 func main() {
 	ctx := context.Background()
@@ -99,7 +103,10 @@ func main() {
 	subcommand := os.Args[1]
 	switch subcommand {
 	case subcommandServe:
-		serve(ctx, logLevelVar)
+		if err := serve(ctx, logLevelVar); err != nil {
+			slog.Error("Server stopped with an error", "err", err)
+			os.Exit(1)
+		}
 	case subcommandMigrateStorage:
 		migrateStorage(ctx)
 	case subcommandBenchmarkStorage:
@@ -127,23 +134,22 @@ func setupLogging() *slog.LevelVar {
 	return logLevelVar
 }
 
-func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
+func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	settings, err := settings.LoadSettings(os.Args[2:])
 	if err != nil {
-		slog.Error(fmt.Sprint("Error while loading settings: ", err))
-		os.Exit(1)
+		return fmt.Errorf("load settings: %w", err)
 	}
 
 	// Set up OpenTelemetry.
 	if settings.OtelEnabled() {
 		otelShutdown, err := telemetry.SetupOTelSDK(ctx, settings)
 		if err != nil {
-			slog.Error(fmt.Sprint("Error setting up OpenTelemetry: ", err))
-			os.Exit(1)
+			return fmt.Errorf("set up OpenTelemetry: %w", err)
 		}
-		// Handle shutdown properly so nothing leaks.
 		defer func() {
-			if err := otelShutdown(context.Background()); err != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+			defer cancel()
+			if err := otelShutdown(shutdownCtx); err != nil {
 				slog.Error(fmt.Sprint("Error shutting down OpenTelemetry: ", err))
 			}
 		}()
@@ -162,21 +168,20 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 
 	err = store.Start(ctx)
 	if err != nil {
-		slog.Error(fmt.Sprint("Couldn't start storage: ", err))
-		os.Exit(1)
+		return fmt.Errorf("start storage: %w", err)
 	}
 
 	defer func() {
-		err := store.Stop(ctx)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+		defer cancel()
+		err := store.Stop(shutdownCtx)
 		if err != nil {
 			slog.Error(fmt.Sprint("Couldn't stop storage: ", err))
-			os.Exit(1)
 		}
 		for _, db := range dbs {
 			err = db.Close()
 			if err != nil {
 				slog.Error(fmt.Sprint("Couldn't close database: ", err))
-				os.Exit(1)
 			}
 		}
 	}()
@@ -184,8 +189,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 	hasCredentials := len(settings.Credentials()) > 0
 	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
-		slog.Error(fmt.Sprintf("Could not create LuaAuthorizer: %s", err))
-		os.Exit(1)
+		return fmt.Errorf("create Lua authorizer: %w", err)
 	}
 
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
@@ -201,10 +205,11 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
+	var httpMonitoringServer *http.Server
 	if settings.MonitoringPortEnabled() {
 		monitoringHandler := server.SetupMonitoringServer(dbs)
 		monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
-		httpMonitoringServer := &http.Server{
+		httpMonitoringServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			Addr:              monitoringAddr,
 			Handler:           monitoringHandler,
@@ -214,18 +219,49 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) {
 			IdleTimeout:       idleTimeout,
 			MaxHeaderBytes:    maxHeaderBytes,
 		}
-		go (func() {
-			slog.Info(fmt.Sprintf("Listening with monitoring api on http://%v", monitoringAddr))
-			httpMonitoringServer.ListenAndServe()
-		})()
 	}
 
-	slog.Info(fmt.Sprintf("Listening with s3 api on http://%v", addr))
-	err = httpServer.ListenAndServe()
-	if err != nil {
-		slog.Error(fmt.Sprintf("Error while starting http server: %s", err))
-		os.Exit(1)
+	serverErrors := make(chan error, 2)
+	startServer := func(name string, httpServer *http.Server) {
+		go func() {
+			slog.Info("Listening", "server", name, "address", "http://"+httpServer.Addr)
+			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErrors <- fmt.Errorf("%s server: %w", name, err)
+			}
+		}()
 	}
+
+	startServer("s3 api", httpServer)
+	servers := []*http.Server{httpServer}
+	if httpMonitoringServer != nil {
+		startServer("monitoring api", httpMonitoringServer)
+		servers = append(servers, httpMonitoringServer)
+	}
+
+	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	var serveErr error
+	select {
+	case <-signalCtx.Done():
+		slog.Info("Shutdown signal received")
+	case serveErr = <-serverErrors:
+		slog.Error("HTTP server failed", "err", serveErr)
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+	defer cancelShutdown()
+	var shutdownErrors []error
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("shut down %s: %w", srv.Addr, err))
+			if closeErr := srv.Close(); closeErr != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("close %s: %w", srv.Addr, closeErr))
+			}
+		}
+	}
+
+	return errors.Join(append([]error{serveErr}, shutdownErrors...)...)
 }
 
 func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
