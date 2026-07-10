@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
@@ -321,6 +322,43 @@ func TestCreateSignatureFromPresignedRequest(t *testing.T) {
 
 	signature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, "aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404", signature)
+}
+
+func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	const accessKeyID = "test-access-key"
+	const secretAccessKey = "test-secret-key"
+	const region = "eu-central-1"
+	signingTime := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	date := signingTime.Format("20060102")
+	timestamp := signingTime.Format("20060102T150405Z")
+	scope := createScope(date, region, expectedService, expectedRequest)
+
+	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/test.txt", nil)
+	assert.NoError(t, err)
+	query := r.URL.Query()
+	query.Set("X-Amz-Algorithm", signatureAlgorithm)
+	query.Set("X-Amz-Credential", accessKeyID+"/"+scope)
+	query.Set("X-Amz-Date", timestamp)
+	query.Set("X-Amz-Expires", "604800")
+	query.Set("X-Amz-SignedHeaders", "host")
+	r.URL.RawQuery = query.Encode()
+
+	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"host"}, true)
+	assert.NoError(t, err)
+	signingKey := createSigningKey(secretAccessKey, date, region, expectedService, expectedRequest)
+	query.Set("X-Amz-Signature", createSignature(signingKey, *stringToSign))
+	r.URL.RawQuery = query.Encode()
+
+	usedAccessKeyID, authenticated := checkAuthentication([]Credentials{{
+		AccessKeyId:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+	}}, region, r)
+	assert.True(t, authenticated)
+	if assert.NotNil(t, usedAccessKeyID) {
+		assert.Equal(t, accessKeyID, *usedAccessKeyID)
+	}
 }
 
 func TestGenerateCanonicalHeadersIncludesOnlySignedHeaders(t *testing.T) {
