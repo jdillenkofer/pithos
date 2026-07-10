@@ -1,0 +1,208 @@
+package metadatapart
+
+import (
+	"context"
+	"database/sql"
+	"io"
+	"time"
+
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+)
+
+func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CopyObject")
+	defer span.End()
+
+	var result storage.CopyObjectResult
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var srcObject *metadatastore.Object
+		var err error
+		if opts != nil && opts.SourceVersionID != nil {
+			srcObject, err = mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), srcBucket, srcKey, *opts.SourceVersionID)
+		} else {
+			srcObject, err = mbs.metadataStore.HeadObject(ctx, tx.SqlTx(), srcBucket, srcKey)
+		}
+		if err != nil {
+			return err
+		}
+		if srcObject.IsDeleteMarker {
+			versionID := ""
+			if srcObject.VersionID != nil {
+				versionID = *srcObject.VersionID
+			}
+			if opts != nil && opts.SourceVersionID != nil {
+				return &storage.VersionDeleteMarkerMethodNotAllowedError{VersionID: versionID, LastModified: srcObject.LastModified}
+			}
+			return &storage.CurrentDeleteMarkerError{VersionID: versionID}
+		}
+
+		if opts != nil {
+			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
+				return err
+			}
+		}
+
+		lastModified := time.Now()
+		dstObject := metadatastore.Object{
+			Key:          dstKey,
+			LastModified: lastModified,
+		}
+		if opts != nil {
+			// The destination class comes from the copy request only; the
+			// source's class is never carried over (matching AWS).
+			dstObject.StorageClass = opts.StorageClass
+		}
+		dstStoreName, dstStore := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(dstObject.StorageClass))
+
+		if opts != nil && opts.Range != nil {
+			// Ranged copy: produce a single-part destination object containing the
+			// requested byte range, with a freshly computed ETag.
+			normalizedRanges, err := normalizeAndValidateRanges([]storage.ByteRange{*opts.Range}, srcObject.Size)
+			if err != nil {
+				return err
+			}
+			rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+			if err != nil {
+				return err
+			}
+			defer rangeReader.Close()
+
+			newPartId, err := partstore.NewRandomPartId()
+			if err != nil {
+				return err
+			}
+			size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+				return dstStore.PutPart(ctx, tx, *newPartId, r)
+			})
+			if err != nil {
+				return err
+			}
+			dstObject.ETag = *checksums.ETag
+			dstObject.ChecksumCRC32 = checksums.ChecksumCRC32
+			dstObject.ChecksumCRC32C = checksums.ChecksumCRC32C
+			dstObject.ChecksumCRC64NVME = checksums.ChecksumCRC64NVME
+			dstObject.ChecksumSHA1 = checksums.ChecksumSHA1
+			dstObject.ChecksumSHA256 = checksums.ChecksumSHA256
+			dstObject.ChecksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject)
+			dstObject.Size = *size
+			dstObject.Parts = []metadatastore.Part{
+				{
+					Id:                *newPartId,
+					ETag:              *checksums.ETag,
+					ChecksumCRC32:     checksums.ChecksumCRC32,
+					ChecksumCRC32C:    checksums.ChecksumCRC32C,
+					ChecksumCRC64NVME: checksums.ChecksumCRC64NVME,
+					ChecksumSHA1:      checksums.ChecksumSHA1,
+					ChecksumSHA256:    checksums.ChecksumSHA256,
+					Size:              *size,
+					StoreName:         dstStoreName,
+				},
+			}
+		} else {
+			// Full copy: duplicate every source part to a fresh part id, preserving
+			// the part structure and therefore the exact source ETag and checksums.
+			newParts := make([]metadatastore.Part, len(srcObject.Parts))
+			for i, srcPart := range srcObject.Parts {
+				newPartId, err := partstore.NewRandomPartId()
+				if err != nil {
+					return err
+				}
+				srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
+				if err != nil {
+					return err
+				}
+				srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
+				if err != nil {
+					return err
+				}
+				err = dstStore.PutPart(ctx, tx, *newPartId, srcReader)
+				srcReader.Close()
+				if err != nil {
+					return err
+				}
+				newParts[i] = srcPart
+				newParts[i].Id = *newPartId
+				newParts[i].StoreName = dstStoreName
+			}
+			dstObject.ETag = srcObject.ETag
+			dstObject.ChecksumCRC32 = srcObject.ChecksumCRC32
+			dstObject.ChecksumCRC32C = srcObject.ChecksumCRC32C
+			dstObject.ChecksumCRC64NVME = srcObject.ChecksumCRC64NVME
+			dstObject.ChecksumSHA1 = srcObject.ChecksumSHA1
+			dstObject.ChecksumSHA256 = srcObject.ChecksumSHA256
+			dstObject.ChecksumType = srcObject.ChecksumType
+			dstObject.Size = srcObject.Size
+			dstObject.Parts = newParts
+		}
+
+		// Content type and metadata follow the metadata directive.
+		if opts != nil && opts.ReplaceMetadata {
+			dstObject.ContentType = opts.ContentType
+			if opts.Metadata != nil {
+				dstObject.Metadata = *opts.Metadata
+			}
+		} else {
+			dstObject.ContentType = srcObject.ContentType
+			dstObject.Metadata = srcObject.Metadata
+			// S3 never carries x-amz-website-redirect-location over from the
+			// source; it applies only when supplied on the copy request itself.
+			dstObject.Metadata.WebsiteRedirectLocation = nil
+			if opts != nil && opts.Metadata != nil {
+				dstObject.Metadata.WebsiteRedirectLocation = opts.Metadata.WebsiteRedirectLocation
+			}
+		}
+
+		// Tags follow the tagging directive: REPLACE uses the supplied tag set,
+		// COPY (the default) carries over the source object's tags.
+		if opts != nil && opts.ReplaceTags {
+			dstObject.Tags = opts.Tags
+		} else {
+			dstObject.Tags = srcObject.Tags
+		}
+
+		// Remove the previous destination object's part content (if any) before
+		// overwriting. When the destination equals the source, the previous parts
+		// are the original part ids; the freshly copied parts use new ids and remain.
+		// On a versioning-enabled destination the previous version is retained, so
+		// its part content must stay; only the overwritten null version loses its
+		// parts (mirroring PutObject).
+		dstVersioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), dstBucket)
+		if err != nil {
+			return err
+		}
+		dstVersioningEnabled := dstVersioningConfig.Status != nil && *dstVersioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
+		if !dstVersioningEnabled {
+			previousDst, err := mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), dstBucket, dstKey, "null")
+			if err != nil && err != storage.ErrNoSuchKey {
+				return err
+			}
+			if previousDst != nil {
+				for _, part := range previousDst.Parts {
+					store, err := mbs.partStores.ByName(part.StoreName)
+					if err != nil {
+						return err
+					}
+					if err := store.DeletePart(ctx, tx, part.Id); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		if err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil); err != nil {
+			return err
+		}
+
+		result = storage.CopyObjectResult{ETag: dstObject.ETag, LastModified: lastModified, SourceVersionID: srcObject.VersionID, VersionID: dstObject.VersionID}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
