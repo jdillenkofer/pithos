@@ -1112,7 +1112,9 @@ func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storag
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.GetObjectTagging")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Tagging operates on a single object, so only pending entries for this key
+	// (plus global bucket operations) need to be flushed.
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return nil, err
 	}
@@ -1124,7 +1126,9 @@ func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storag
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObjectTagging")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Tagging operates on a single object, so only pending entries for this key
+	// (plus global bucket operations) need to be flushed.
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return err
 	}
@@ -1136,7 +1140,9 @@ func (os *outboxStorage) DeleteObjectTagging(ctx context.Context, bucketName sto
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteObjectTagging")
 	defer span.End()
 
-	err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName)
+	// Tagging operates on a single object, so only pending entries for this key
+	// (plus global bucket operations) need to be flushed.
+	err := os.waitForAllOutboxEntriesOfBucketAndKeyIncludingGlobal(ctx, bucketName, key)
 	if err != nil {
 		return err
 	}
