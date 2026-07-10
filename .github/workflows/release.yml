@@ -19,7 +19,6 @@ on:
 
 jobs:
   validate-version:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate version format and check if greater than latest
-        if: github.event.inputs.dryrun != 'true'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
         run: |
           # Function to compare two semver versions
           # Returns: 1 if version1 > version2, 0 if equal, -1 if version1 < version2
@@ -85,12 +84,12 @@ jobs:
             exit 1
           fi
       - name: Configure Git
-        if: github.event.inputs.dryrun != 'true'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
       - name: Create Tag
-        if: github.event.inputs.dryrun != 'true'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
         run: |
           git tag "v${{ github.event.inputs.version }}"
           git push origin "v${{ github.event.inputs.version }}"
@@ -108,7 +107,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -134,7 +132,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -165,7 +162,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: macos-latest
     strategy:
       matrix:
@@ -198,7 +194,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -224,7 +219,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: ubuntu-24.04-arm  # Use Linux ARM64 runner
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -256,7 +250,6 @@ jobs:
     needs:
       - validate-version
       - run-tests
-    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
