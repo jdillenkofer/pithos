@@ -446,6 +446,10 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 				current:   bytes.NewReader(firstChunk.Content),
 			}, nil
 		}
+		// PutPart deliberately stores no content chunks for an empty part. The
+		// pending outbox entry is still authoritative and must hide any older
+		// content in the inner store.
+		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 	return obs.innerPartStore.GetPart(ctx, tx, partId)
 }
@@ -485,7 +489,10 @@ func (obs *outboxPartStore) getPartTxFree(ctx context.Context, partId partstore.
 	}
 	if firstChunk == nil {
 		releaseTx()
-		return obs.innerPartStore.GetPart(ctx, nil, partId)
+		// An empty PutPart has no content chunks. Since the outbox entry is the
+		// latest state, return an empty part instead of exposing stale inner-store
+		// content.
+		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
 
 	reader := &lazyOutboxChunkReadCloser{
