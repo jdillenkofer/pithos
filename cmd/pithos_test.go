@@ -430,6 +430,9 @@ type testDatabases struct {
 
 type cleanupRegistrar func(func())
 
+const tempDirCleanupAttempts = 50
+const tempDirCleanupRetryDelay = 100 * time.Millisecond
+
 func addDatabaseCleanup(add cleanupRegistrar, db database.Database, dbCleanup func(), closeErrMessage string) {
 	add(func() {
 		err := db.Close()
@@ -444,7 +447,16 @@ func mustTempDir(add cleanupRegistrar, pattern string) string {
 	path, err := os.MkdirTemp("", pattern)
 	mustNoErr(err, "Could not create temp directory")
 	add(func() {
-		err := os.RemoveAll(path)
+		var err error
+		for attempt := 0; attempt < tempDirCleanupAttempts; attempt++ {
+			err = os.RemoveAll(path)
+			if err == nil {
+				break
+			}
+			if attempt+1 < tempDirCleanupAttempts {
+				time.Sleep(tempDirCleanupRetryDelay)
+			}
+		}
 		mustNoErr(err, fmt.Sprintf("Could not remove storagePath %s", path))
 	})
 	return path
