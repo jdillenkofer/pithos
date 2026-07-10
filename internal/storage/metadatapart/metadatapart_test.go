@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	pgxdatabase "github.com/jdillenkofer/pithos/internal/storage/database/pgx"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -26,6 +28,8 @@ import (
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 func TestEvaluateCopySourceConditionsMatchesS3IfMatchAndUnmodifiedSincePrecedence(t *testing.T) {
@@ -251,6 +255,46 @@ func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	return mps, cleanup
 }
 
+func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
+	t.Helper()
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+	ctx := t.Context()
+	container, err := postgres.Run(ctx, "postgres:18.4-alpine3.24@sha256:1b1689b20d16a014a3d195653381cf2caa75a41a92d93b255a9d6ea29fd353aa",
+		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	require.NoError(t, err)
+	dbURL, err := container.ConnectionString(ctx)
+	require.NoError(t, err)
+	db, err := pgxdatabase.OpenDatabase(dbURL, nil)
+	require.NoError(t, err)
+
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
+	require.NoError(t, err)
+	partStore, err := sqlPartStore.New(db, partContentRepository)
+	require.NoError(t, err)
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
+	require.NoError(t, err)
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
+	require.NoError(t, err)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
+	require.NoError(t, err)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	require.NoError(t, err)
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	require.NoError(t, err)
+	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
+	require.NoError(t, err)
+	st, err := NewStorage(db, metaStore, partStore)
+	require.NoError(t, err)
+	mps := st.(*metadataPartStorage)
+	require.NoError(t, mps.Start(ctx))
+	cleanup := func() {
+		require.NoError(t, mps.Stop(ctx))
+		require.NoError(t, db.Close())
+		require.NoError(t, container.Terminate(ctx))
+	}
+	return mps, cleanup
+}
+
 func readObjectContent(t *testing.T, st *metadataPartStorage, bucket storage.BucketName, key storage.ObjectKey, versionID *string) string {
 	t.Helper()
 
@@ -267,6 +311,18 @@ func readObjectContent(t *testing.T, st *metadataPartStorage, bucket storage.Buc
 	content, err := io.ReadAll(readers[0])
 	require.NoError(t, err)
 	return string(content)
+}
+
+func physicalPartIDs(t *testing.T, st *metadataPartStorage) []partstore.PartId {
+	t.Helper()
+	ctx := context.Background()
+	var ids []partstore.PartId
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		var err error
+		ids, err = st.partStores.Default().GetPartIds(ctx, tx)
+		return err
+	}))
+	return ids
 }
 
 func versionIDsForKey(t *testing.T, st *metadataPartStorage, bucket storage.BucketName, key storage.ObjectKey) (latestVersionID string, olderVersionIDs []string) {
@@ -394,6 +450,161 @@ func TestUploadPartCopyCopiesExplicitSourceVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "old", readObjectContent(t, st, bucket, dstKey, nil))
+}
+
+func TestCopyObjectSharesPartsInSameStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("shared")), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
+
+	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
+
+	_, err = st.DeleteObject(ctx, bucket, srcKey, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "shared", readObjectContent(t, st, bucket, dstKey, nil))
+	require.Len(t, physicalPartIDs(t, st), 1)
+	_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
+	require.NoError(t, err)
+	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestCopyObjectSelfCopyKeepsSharedPartLive(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("object")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("self")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.CopyObject(ctx, bucket, key, bucket, key, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "self", readObjectContent(t, st, bucket, key, nil))
+	require.Len(t, physicalPartIDs(t, st), 1)
+}
+
+func TestPostgresConcurrentDeleteAndCopyNeverDeletesLiveDestination(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
+	ctx := t.Context()
+	st, cleanup := newPostgresTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	content := []byte("concurrent shared content")
+	for i := range 100 {
+		srcKey := storage.MustNewObjectKey(fmt.Sprintf("src-%d", i))
+		dstKey := storage.MustNewObjectKey(fmt.Sprintf("dst-%d", i))
+		_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader(content), nil, nil)
+		require.NoError(t, err)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		var copyErr, deleteErr error
+		go func() {
+			defer wg.Done()
+			<-start
+			_, copyErr = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, deleteErr = st.DeleteObject(ctx, bucket, srcKey, nil)
+		}()
+		close(start)
+		wg.Wait()
+		require.NoError(t, deleteErr)
+		if copyErr == nil {
+			assert.Equal(t, string(content), readObjectContent(t, st, bucket, dstKey, nil))
+			_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
+			require.NoError(t, err)
+		} else {
+			assert.ErrorIs(t, copyErr, storage.ErrNoSuchKey)
+		}
+	}
+	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestUploadPartCopySharesWholeSourcePart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("whole-part")), nil, nil)
+	require.NoError(t, err)
+	upload, err := st.CreateMultipartUpload(ctx, bucket, dstKey, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, upload.UploadId, 1, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
+	_, err = st.CompleteMultipartUpload(ctx, bucket, dstKey, upload.UploadId, nil, nil)
+	require.NoError(t, err)
+	_, err = st.DeleteObject(ctx, bucket, srcKey, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "whole-part", readObjectContent(t, st, bucket, dstKey, nil))
+}
+
+func TestUploadPartCopyRangeCreatesNewPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("abcdef")), nil, nil)
+	require.NoError(t, err)
+	upload, err := st.CreateMultipartUpload(ctx, bucket, dstKey, nil, nil, nil)
+	require.NoError(t, err)
+	start, end := int64(1), int64(4)
+	_, err = st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, upload.UploadId, 1, &storage.UploadPartCopyOptions{Range: &storage.ByteRange{Start: &start, End: &end}})
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 2)
+}
+
+func TestUploadPartCopyMultiPartSourceCreatesNewPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.AppendObject(ctx, bucket, srcKey, bytes.NewReader([]byte("first")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.AppendObject(ctx, bucket, srcKey, bytes.NewReader([]byte("second")), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 2)
+	upload, err := st.CreateMultipartUpload(ctx, bucket, dstKey, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = st.UploadPartCopy(ctx, bucket, srcKey, bucket, dstKey, upload.UploadId, 1, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 3)
 }
 
 func TestUploadPartReplacesExistingPartNumber(t *testing.T) {
@@ -972,10 +1183,12 @@ func TestAppendObject_CreatesNewVersionWhenVersioningEnabled(t *testing.T) {
 
 	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
 	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
 
 	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(11), result.Size)
+	require.Len(t, physicalPartIDs(t, st), 2)
 
 	latestVersionID, olderVersionIDs := versionIDsForKey(t, st, bucket, key)
 	require.Len(t, olderVersionIDs, 1)

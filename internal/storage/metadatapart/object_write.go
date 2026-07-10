@@ -198,33 +198,23 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 
 		if existingObject != nil {
 			if versioningEnabled {
-				// Versioned append creates a new object version, so existing parts need
-				// fresh IDs instead of being reused in the new version metadata.
+				// The new version shares the unchanged prefix. Pre-acquiring registry
+				// references prevents a concurrent delete from condemning those parts.
 				allParts = make([]metadatastore.Part, 0, len(existingObject.Parts)+1)
+				partIDs := make([]partstore.PartId, len(existingObject.Parts))
+				for i, existingPart := range existingObject.Parts {
+					partIDs[i] = existingPart.Id
+				}
+				added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), partIDs)
+				if err != nil {
+					return err
+				}
+				if !added {
+					return storage.ErrNoSuchKey
+				}
 				for _, existingPart := range existingObject.Parts {
-					existingPartStore, partErr := mbs.partStores.ByName(existingPart.StoreName)
-					if partErr != nil {
-						return partErr
-					}
-					existingPartReader, partErr := existingPartStore.GetPart(ctx, tx, existingPart.Id)
-					if partErr != nil {
-						return partErr
-					}
-
-					newExistingPartID, partErr := partstore.NewRandomPartId()
-					if partErr != nil {
-						existingPartReader.Close()
-						return partErr
-					}
-
-					partErr = existingPartStore.PutPart(ctx, tx, *newExistingPartID, existingPartReader)
-					existingPartReader.Close()
-					if partErr != nil {
-						return partErr
-					}
-
 					clonedPart := existingPart
-					clonedPart.Id = *newExistingPartID
+					clonedPart.RefPreAcquired = true
 					allParts = append(allParts, clonedPart)
 				}
 			} else {

@@ -105,6 +105,26 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 	}, nil
 }
 
+func findWhollyCoveredPart(parts []metadatastore.Part, byteRange storage.ByteRange, objectSize int64) *metadatastore.Part {
+	start := int64(0)
+	if byteRange.Start != nil {
+		start = *byteRange.Start
+	}
+	end := objectSize
+	if byteRange.End != nil {
+		end = *byteRange.End
+	}
+	offset := int64(0)
+	for i := range parts {
+		partEnd := offset + parts[i].Size
+		if start == offset && end == partEnd {
+			return &parts[i]
+		}
+		offset = partEnd
+	}
+	return nil
+}
+
 func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.UploadPartCopy")
 	defer span.End()
@@ -147,12 +167,6 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		if err != nil {
 			return err
 		}
-		rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
-		if err != nil {
-			return err
-		}
-		defer rangeReader.Close()
-
 		// The copied part routes to the store of the class chosen at
 		// CreateMultipartUpload for the destination upload.
 		upload, err := mbs.metadataStore.GetMultipartUpload(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId)
@@ -160,6 +174,33 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(upload.StorageClass))
+		coveredPart := findWhollyCoveredPart(srcObject.Parts, normalizedRanges[0], srcObject.Size)
+		if coveredPart != nil && coveredPart.ChecksumSHA256 != nil && partStoreNamesEqual(coveredPart.StoreName, storeName) {
+			added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), []partstore.PartId{coveredPart.Id})
+			if err != nil {
+				return err
+			}
+			if !added {
+				return storage.ErrNoSuchKey
+			}
+			sharedPart := *coveredPart
+			sharedPart.RefPreAcquired = true
+			metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, sharedPart)
+			if err != nil {
+				return err
+			}
+			if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
+				return err
+			}
+			result = storage.UploadPartCopyResult{ETag: coveredPart.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
+			return nil
+		}
+
+		rangeReader, err := mbs.createRangeReader(ctx, tx, srcObject, normalizedRanges[0])
+		if err != nil {
+			return err
+		}
+		defer rangeReader.Close()
 
 		newPartId, err := partstore.NewRandomPartId()
 		if err != nil {

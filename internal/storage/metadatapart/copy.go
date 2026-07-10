@@ -104,10 +104,17 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				},
 			}
 		} else {
-			// Full copy: duplicate every source part to a fresh part id, preserving
-			// the part structure and therefore the exact source ETag and checksums.
+			// Full copies within one physical store share source parts. Cross-store
+			// parts are copied because a part id belongs to exactly one store.
 			newParts := make([]metadatastore.Part, len(srcObject.Parts))
+			sharedPartIDs := make([]partstore.PartId, 0, len(srcObject.Parts))
 			for i, srcPart := range srcObject.Parts {
+				if partStoreNamesEqual(srcPart.StoreName, dstStoreName) {
+					newParts[i] = srcPart
+					newParts[i].RefPreAcquired = true
+					sharedPartIDs = append(sharedPartIDs, srcPart.Id)
+					continue
+				}
 				newPartId, err := partstore.NewRandomPartId()
 				if err != nil {
 					return err
@@ -128,6 +135,15 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				newParts[i] = srcPart
 				newParts[i].Id = *newPartId
 				newParts[i].StoreName = dstStoreName
+			}
+			if len(sharedPartIDs) > 0 {
+				added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), sharedPartIDs)
+				if err != nil {
+					return err
+				}
+				if !added {
+					return storage.ErrNoSuchKey
+				}
 			}
 			dstObject.ETag = srcObject.ETag
 			dstObject.ChecksumCRC32 = srcObject.ChecksumCRC32
