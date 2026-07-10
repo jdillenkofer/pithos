@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -153,7 +154,11 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores)
+	partRegistryRepository, err := repositoryfactory.NewPartRegistryRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository)
 	if err != nil {
 		return nil, err
 	}

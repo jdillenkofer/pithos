@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"go.opentelemetry.io/otel"
@@ -22,22 +23,24 @@ type PartGarbageCollector interface {
 }
 
 type partGC struct {
-	db              database.Database
-	collectionMutex sync.RWMutex
-	metadataStore   metadatastore.MetadataStore
-	partStores      *partstore.NamedPartStores
-	writeOperations atomic.Int64
-	tracer          trace.Tracer
+	db                     database.Database
+	collectionMutex        sync.RWMutex
+	metadataStore          metadatastore.MetadataStore
+	partRegistryRepository partregistry.Repository
+	partStores             *partstore.NamedPartStores
+	writeOperations        atomic.Int64
+	tracer                 trace.Tracer
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository) (PartGarbageCollector, error) {
 	return &partGC{
-		db:              db,
-		collectionMutex: sync.RWMutex{},
-		writeOperations: atomic.Int64{},
-		metadataStore:   metadataStore,
-		partStores:      partStores,
-		tracer:          otel.Tracer("internal/storage/metadatapart/gc"),
+		db:                     db,
+		collectionMutex:        sync.RWMutex{},
+		writeOperations:        atomic.Int64{},
+		metadataStore:          metadataStore,
+		partRegistryRepository: partRegistryRepository,
+		partStores:             partStores,
+		tracer:                 otel.Tracer("internal/storage/metadatapart/gc"),
 	}, nil
 }
 
@@ -157,17 +160,47 @@ func (partGC *partGC) runGC() error {
 
 	numDeletedParts := 0
 	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		// Part ids are ULIDs and therefore globally unique across stores, so
-		// each store can be swept against the single global in-use set.
-		inUsePartIdMap := make(map[partstore.PartId]struct{})
-		inUsePartIds, err := partGC.metadataStore.GetInUsePartIds(ctx, tx.SqlTx())
+		// The parts table is the sole liveness source. Reconcile the registry
+		// before sweeping so drift can never cause live bytes to be deleted.
+		counts, err := partGC.metadataStore.GetInUsePartIdCounts(ctx, tx.SqlTx())
 		if err != nil {
 			return err
 		}
-		for _, inUsePartId := range inUsePartIds {
-			inUsePartIdMap[inUsePartId] = struct{}{}
+		registryEntities, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		seen := make(map[partstore.PartId]struct{}, len(registryEntities))
+		for _, entity := range registryEntities {
+			count, ok := counts[entity.PartId]
+			if !ok {
+				slog.Warn("Removing orphaned part registry row", "part_id", entity.PartId.String(), "ref_count", entity.RefCount)
+				if err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), entity.PartId); err != nil {
+					return err
+				}
+				continue
+			}
+			seen[entity.PartId] = struct{}{}
+			if entity.RefCount != count {
+				slog.Warn("Correcting part registry refcount", "part_id", entity.PartId.String(), "old_ref_count", entity.RefCount, "new_ref_count", count)
+				if err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), entity.PartId, count); err != nil {
+					return err
+				}
+			}
+		}
+		missingRefs := make([]partregistry.Ref, 0)
+		for id, count := range counts {
+			if _, ok := seen[id]; !ok {
+				slog.Warn("Restoring missing part registry row", "part_id", id.String(), "ref_count", count)
+				missingRefs = append(missingRefs, partregistry.Ref{PartId: id, Delta: count})
+			}
+		}
+		if err := partGC.partRegistryRepository.RegisterParts(ctx, tx.SqlTx(), missingRefs); err != nil {
+			return err
 		}
 
+		// Part ids are ULIDs and therefore globally unique across stores, so
+		// each store can be swept against the single global in-use set.
 		for _, partStore := range partGC.partStores.All() {
 			existingPartIds, err := partStore.GetPartIds(ctx, tx)
 			if err != nil {
@@ -175,7 +208,7 @@ func (partGC *partGC) runGC() error {
 			}
 
 			for _, existingPartId := range existingPartIds {
-				if _, hasKey := inUsePartIdMap[existingPartId]; !hasKey {
+				if _, hasKey := counts[existingPartId]; !hasKey {
 					err = partStore.DeletePart(ctx, tx, existingPartId)
 					if err != nil {
 						return err
