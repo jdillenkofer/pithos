@@ -136,6 +136,18 @@ type PartMutationResult struct {
 	UnreferencedParts []Part
 }
 
+type PartDedupEntry struct {
+	PartStoreName     string
+	ChecksumSHA256    string
+	Size              int64
+	ETag              string
+	ChecksumCRC32     string
+	ChecksumCRC32C    string
+	ChecksumCRC64NVME string
+	ChecksumSHA1      string
+	PartId            partstore.PartId
+}
+
 type InitiateMultipartUploadResult struct {
 	UploadId UploadId
 }
@@ -415,6 +427,9 @@ type MaintenanceStore interface {
 	GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 	GetInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error)
 	TryAddPartReferences(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (bool, error)
+	LookupDedupPart(ctx context.Context, tx *sql.Tx, partStoreName, checksumSHA256 string, size int64) (*PartDedupEntry, error)
+	TryIndexDedupPart(ctx context.Context, tx *sql.Tx, entry PartDedupEntry) (bool, error)
+	DeletePartDedupEntries(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) error
 }
 
 type BucketStore interface {

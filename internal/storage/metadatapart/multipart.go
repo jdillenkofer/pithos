@@ -75,9 +75,13 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		if err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		if err != nil {
+			return err
+		}
 
 		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
-			Id:                *partId,
+			Id:                dedupedPartID,
 			ETag:              *calculatedChecksums.ETag,
 			ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
 			ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
@@ -86,6 +90,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 			Size:              *originalSize,
 			StoreName:         storeName,
+			RefPreAcquired:    refPreAcquired,
 		})
 		if err != nil {
 			return err
@@ -151,6 +156,9 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			}
 			return &storage.CurrentDeleteMarkerError{VersionID: versionID}
 		}
+		if !objectPartManifestComplete(srcObject) {
+			return storage.ErrNoSuchKey
+		}
 
 		if opts != nil {
 			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
@@ -212,9 +220,13 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		if err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, checksums, *size)
+		if err != nil {
+			return err
+		}
 
 		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
-			Id:                *newPartId,
+			Id:                dedupedPartID,
 			ETag:              *checksums.ETag,
 			ChecksumCRC32:     checksums.ChecksumCRC32,
 			ChecksumCRC32C:    checksums.ChecksumCRC32C,
@@ -223,6 +235,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			ChecksumSHA256:    checksums.ChecksumSHA256,
 			Size:              *size,
 			StoreName:         storeName,
+			RefPreAcquired:    refPreAcquired,
 		})
 		if err != nil {
 			return err

@@ -128,6 +128,14 @@ func (mbs *metadataPartStorage) deleteUnreferencedParts(ctx context.Context, tx 
 	return nil
 }
 
+func objectPartManifestComplete(object *metadatastore.Object) bool {
+	var size int64
+	for _, part := range object.Parts {
+		size += part.Size
+	}
+	return size == object.Size && (object.Size == 0 || len(object.Parts) > 0)
+}
+
 // Compile-time check to ensure metadataPartStorage implements storage.Storage
 var _ storage.Storage = (*metadataPartStorage)(nil)
 var _ storage.TransactionalStorage = (*metadataPartStorage)(nil)
@@ -158,7 +166,11 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository)
+	partDedupIndexRepository, err := repositoryfactory.NewPartDedupIndexRepository(db)
+	if err != nil {
+		return nil, err
+	}
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository)
 	if err != nil {
 		return nil, err
 	}

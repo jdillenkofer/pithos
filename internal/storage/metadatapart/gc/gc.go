@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -23,24 +24,26 @@ type PartGarbageCollector interface {
 }
 
 type partGC struct {
-	db                     database.Database
-	collectionMutex        sync.RWMutex
-	metadataStore          metadatastore.MetadataStore
-	partRegistryRepository partregistry.Repository
-	partStores             *partstore.NamedPartStores
-	writeOperations        atomic.Int64
-	tracer                 trace.Tracer
+	db                       database.Database
+	collectionMutex          sync.RWMutex
+	metadataStore            metadatastore.MetadataStore
+	partRegistryRepository   partregistry.Repository
+	partDedupIndexRepository partdedupindex.Repository
+	partStores               *partstore.NamedPartStores
+	writeOperations          atomic.Int64
+	tracer                   trace.Tracer
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository) (PartGarbageCollector, error) {
 	return &partGC{
-		db:                     db,
-		collectionMutex:        sync.RWMutex{},
-		writeOperations:        atomic.Int64{},
-		metadataStore:          metadataStore,
-		partRegistryRepository: partRegistryRepository,
-		partStores:             partStores,
-		tracer:                 otel.Tracer("internal/storage/metadatapart/gc"),
+		db:                       db,
+		collectionMutex:          sync.RWMutex{},
+		writeOperations:          atomic.Int64{},
+		metadataStore:            metadataStore,
+		partRegistryRepository:   partRegistryRepository,
+		partDedupIndexRepository: partDedupIndexRepository,
+		partStores:               partStores,
+		tracer:                   otel.Tracer("internal/storage/metadatapart/gc"),
 	}, nil
 }
 
@@ -196,6 +199,19 @@ func (partGC *partGC) runGC() error {
 			}
 		}
 		if err := partGC.partRegistryRepository.RegisterParts(ctx, tx.SqlTx(), missingRefs); err != nil {
+			return err
+		}
+		indexedIDs, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		deadIndexIDs := make([]partstore.PartId, 0)
+		for _, id := range indexedIDs {
+			if _, live := counts[id]; !live {
+				deadIndexIDs = append(deadIndexIDs, id)
+			}
+		}
+		if err := partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), deadIndexIDs); err != nil {
 			return err
 		}
 

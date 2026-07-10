@@ -32,6 +32,9 @@ func (sms *sqlMetadataStore) removePartEntities(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return nil, err
 	}
+	if err := sms.partDedupIndexRepository.DeleteByPartIds(ctx, tx, zeroIds); err != nil {
+		return nil, err
+	}
 	byId := map[partstore.PartId]metadatastore.Part{}
 	for _, entity := range entities {
 		byId[entity.PartId] = partFromEntity(entity)

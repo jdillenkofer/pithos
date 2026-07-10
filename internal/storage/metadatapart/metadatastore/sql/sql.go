@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/usermetadata"
@@ -41,13 +42,14 @@ func isUniqueConstraintViolation(err error) bool {
 
 type sqlMetadataStore struct {
 	*lifecycle.ValidatedLifecycle
-	bucketRepository       bucket.Repository
-	objectRepository       object.Repository
-	partRepository         part.Repository
-	partRegistryRepository partregistry.Repository
-	tagRepository          tag.Repository
-	userMetadataRepository usermetadata.Repository
-	tracer                 trace.Tracer
+	bucketRepository         bucket.Repository
+	objectRepository         object.Repository
+	partRepository           part.Repository
+	partDedupIndexRepository partdedupindex.Repository
+	partRegistryRepository   partregistry.Repository
+	tagRepository            tag.Repository
+	userMetadataRepository   usermetadata.Repository
+	tracer                   trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
@@ -62,15 +64,20 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 	if err != nil {
 		return nil, err
 	}
+	partDedupIndexRepository, err := repositoryfactory.NewPartDedupIndexRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &sqlMetadataStore{
-		ValidatedLifecycle:     lifecycle,
-		bucketRepository:       bucketRepository,
-		objectRepository:       objectRepository,
-		partRepository:         partRepository,
-		partRegistryRepository: partRegistryRepository,
-		tagRepository:          tagRepository,
-		userMetadataRepository: userMetadataRepository,
-		tracer:                 otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
+		ValidatedLifecycle:       lifecycle,
+		bucketRepository:         bucketRepository,
+		objectRepository:         objectRepository,
+		partRepository:           partRepository,
+		partDedupIndexRepository: partDedupIndexRepository,
+		partRegistryRepository:   partRegistryRepository,
+		tagRepository:            tagRepository,
+		userMetadataRepository:   userMetadataRepository,
+		tracer:                   otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
 	}, nil
 }
 
@@ -189,4 +196,20 @@ func (sms *sqlMetadataStore) TryAddPartReferences(ctx context.Context, tx *sql.T
 		refs = append(refs, partregistry.Ref{PartId: id, Delta: count})
 	}
 	return sms.partRegistryRepository.TryAddReferences(ctx, tx, refs)
+}
+
+func (sms *sqlMetadataStore) LookupDedupPart(ctx context.Context, tx *sql.Tx, store, sha256 string, size int64) (*metadatastore.PartDedupEntry, error) {
+	entity, err := sms.partDedupIndexRepository.FindEntry(ctx, tx, store, sha256, size)
+	if err != nil || entity == nil {
+		return nil, err
+	}
+	return &metadatastore.PartDedupEntry{PartStoreName: entity.PartStoreName, ChecksumSHA256: entity.ChecksumSHA256, Size: entity.Size, ETag: entity.ETag, ChecksumCRC32: entity.ChecksumCRC32, ChecksumCRC32C: entity.ChecksumCRC32C, ChecksumCRC64NVME: entity.ChecksumCRC64NVME, ChecksumSHA1: entity.ChecksumSHA1, PartId: entity.PartId}, nil
+}
+
+func (sms *sqlMetadataStore) TryIndexDedupPart(ctx context.Context, tx *sql.Tx, entry metadatastore.PartDedupEntry) (bool, error) {
+	return sms.partDedupIndexRepository.TryInsert(ctx, tx, &partdedupindex.Entity{PartStoreName: entry.PartStoreName, ChecksumSHA256: entry.ChecksumSHA256, Size: entry.Size, ETag: entry.ETag, ChecksumCRC32: entry.ChecksumCRC32, ChecksumCRC32C: entry.ChecksumCRC32C, ChecksumCRC64NVME: entry.ChecksumCRC64NVME, ChecksumSHA1: entry.ChecksumSHA1, PartId: entry.PartId})
+}
+
+func (sms *sqlMetadataStore) DeletePartDedupEntries(ctx context.Context, tx *sql.Tx, ids []partstore.PartId) error {
+	return sms.partDedupIndexRepository.DeleteByPartIds(ctx, tx, ids)
 }

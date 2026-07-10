@@ -44,6 +44,10 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		if err != nil {
+			return err
+		}
 
 		object = metadatastore.Object{
 			Key:               key,
@@ -59,7 +63,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			Size:              *originalSize,
 			Parts: []metadatastore.Part{
 				{
-					Id:                *partId,
+					Id:                dedupedPartID,
 					ETag:              *calculatedChecksums.ETag,
 					ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
 					ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
@@ -68,6 +72,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 					ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 					Size:              *originalSize,
 					StoreName:         storeName,
+					RefPreAcquired:    refPreAcquired,
 				},
 			},
 		}
@@ -126,6 +131,9 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		if currentDeleteMarkerErr != nil {
 			existingObject = nil
 		}
+		if existingObject != nil && !objectPartManifestComplete(existingObject) {
+			return storage.ErrNoSuchKey
+		}
 
 		// Validate WriteOffset condition.
 		if opts != nil && opts.WriteOffset != nil {
@@ -166,9 +174,13 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		if err = metadatastore.ValidateChecksums(checksumInput, *newPartChecksums); err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, newPartChecksums, *newPartSize)
+		if err != nil {
+			return err
+		}
 
 		newPart := metadatastore.Part{
-			Id:                *newPartId,
+			Id:                dedupedPartID,
 			ETag:              *newPartChecksums.ETag,
 			ChecksumCRC32:     newPartChecksums.ChecksumCRC32,
 			ChecksumCRC32C:    newPartChecksums.ChecksumCRC32C,
@@ -177,6 +189,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			ChecksumSHA256:    newPartChecksums.ChecksumSHA256,
 			Size:              *newPartSize,
 			StoreName:         storeName,
+			RefPreAcquired:    refPreAcquired,
 		}
 
 		// Build the combined part list (existing parts first, then new part).

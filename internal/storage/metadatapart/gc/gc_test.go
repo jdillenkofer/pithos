@@ -34,6 +34,8 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 	require.NoError(t, err)
 	registryRepo, err := repositoryfactory.NewPartRegistryRepository(db)
 	require.NoError(t, err)
+	dedupRepo, err := repositoryfactory.NewPartDedupIndexRepository(db)
+	require.NoError(t, err)
 	tagRepo, err := repositoryfactory.NewTagRepository(db)
 	require.NoError(t, err)
 	userMetadataRepo, err := repositoryfactory.NewUserMetadataRepository(db)
@@ -46,7 +48,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 	require.NoError(t, err)
 	stores, err := partstore.NewNamedPartStores(physicalStore, nil, nil)
 	require.NoError(t, err)
-	collector, err := New(db, metadataStore, stores, registryRepo)
+	collector, err := New(db, metadataStore, stores, registryRepo, dedupRepo)
 	require.NoError(t, err)
 
 	bucket := metadatastore.MustNewBucketName("bucket")
@@ -87,6 +89,10 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 			return err
 		}
 		_, err := tx.SqlTx().ExecContext(ctx, "INSERT INTO part_registry (part_id, ref_count, created_at, updated_at) VALUES ($1, 7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", orphanID.String())
+		if err != nil {
+			return err
+		}
+		_, err = tx.SqlTx().ExecContext(ctx, "INSERT INTO part_dedup_index (part_store_name, checksum_sha256, size, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, part_id, created_at, updated_at) VALUES ('default', 'sha256', 1, 'etag', 'crc32', 'crc32c', 'crc64', 'sha1', $1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", orphanID.String())
 		return err
 	}))
 
@@ -107,6 +113,11 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 			return err
 		}
 		assert.ElementsMatch(t, liveIDs, ids)
+		indexedIDs, err := dedupRepo.FindAllPartIds(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		assert.Empty(t, indexedIDs)
 		return nil
 	}))
 }

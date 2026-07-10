@@ -40,6 +40,9 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			}
 			return &storage.CurrentDeleteMarkerError{VersionID: versionID}
 		}
+		if !objectPartManifestComplete(srcObject) {
+			return storage.ErrNoSuchKey
+		}
 
 		if opts != nil {
 			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
@@ -82,6 +85,10 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			if err != nil {
 				return err
 			}
+			dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, dstStoreName, dstStore, *newPartId, checksums, *size)
+			if err != nil {
+				return err
+			}
 			dstObject.ETag = *checksums.ETag
 			dstObject.ChecksumCRC32 = checksums.ChecksumCRC32
 			dstObject.ChecksumCRC32C = checksums.ChecksumCRC32C
@@ -92,7 +99,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Size = *size
 			dstObject.Parts = []metadatastore.Part{
 				{
-					Id:                *newPartId,
+					Id:                dedupedPartID,
 					ETag:              *checksums.ETag,
 					ChecksumCRC32:     checksums.ChecksumCRC32,
 					ChecksumCRC32C:    checksums.ChecksumCRC32C,
@@ -101,6 +108,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 					ChecksumSHA256:    checksums.ChecksumSHA256,
 					Size:              *size,
 					StoreName:         dstStoreName,
+					RefPreAcquired:    refPreAcquired,
 				},
 			}
 		} else {

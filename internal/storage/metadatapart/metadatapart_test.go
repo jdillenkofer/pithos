@@ -479,6 +479,52 @@ func TestCopyObjectSharesPartsInSameStore(t *testing.T) {
 	assert.Empty(t, physicalPartIDs(t, st))
 }
 
+func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	firstKey := storage.MustNewObjectKey("first")
+	secondKey := storage.MustNewObjectKey("second")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	content := []byte("identical content")
+	_, err := st.PutObject(ctx, bucket, firstKey, nil, bytes.NewReader(content), nil, nil)
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, secondKey, nil, bytes.NewReader(content), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
+
+	_, err = st.DeleteObject(ctx, bucket, firstKey, nil)
+	require.NoError(t, err)
+	assert.Equal(t, string(content), readObjectContent(t, st, bucket, secondKey, nil))
+	require.Len(t, physicalPartIDs(t, st), 1)
+	_, err = st.DeleteObject(ctx, bucket, secondKey, nil)
+	require.NoError(t, err)
+	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestDedupIndexChecksumMismatchDoesNotShare(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	content := []byte("collision guard")
+	_, err := st.PutObject(ctx, bucket, storage.MustNewObjectKey("first"), nil, bytes.NewReader(content), nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_dedup_index SET checksum_crc32 = 'mismatch'")
+		return err
+	}))
+	_, err = st.PutObject(ctx, bucket, storage.MustNewObjectKey("second"), nil, bytes.NewReader(content), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 2)
+}
+
 func TestCopyObjectSelfCopyKeepsSharedPartLive(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -531,7 +577,7 @@ func TestPostgresConcurrentDeleteAndCopyNeverDeletesLiveDestination(t *testing.T
 		wg.Wait()
 		require.NoError(t, deleteErr)
 		if copyErr == nil {
-			assert.Equal(t, string(content), readObjectContent(t, st, bucket, dstKey, nil))
+			require.Equal(t, string(content), readObjectContent(t, st, bucket, dstKey, nil), "destination content at iteration %d", i)
 			_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
 			require.NoError(t, err)
 		} else {
@@ -539,6 +585,42 @@ func TestPostgresConcurrentDeleteAndCopyNeverDeletesLiveDestination(t *testing.T
 		}
 	}
 	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestPostgresConcurrentIdenticalUploadsRemainReadable(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
+	ctx := t.Context()
+	st, cleanup := newPostgresTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	content := []byte("concurrent identical content")
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = st.PutObject(ctx, bucket, storage.MustNewObjectKey(fmt.Sprintf("object-%d", i)), nil, bytes.NewReader(content), nil, nil)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	for i := range 2 {
+		assert.Equal(t, string(content), readObjectContent(t, st, bucket, storage.MustNewObjectKey(fmt.Sprintf("object-%d", i)), nil))
+	}
+	var indexCount int
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		return tx.SqlTx().QueryRowContext(ctx, "SELECT COUNT(*) FROM part_dedup_index").Scan(&indexCount)
+	}))
+	assert.Equal(t, 1, indexCount)
 }
 
 func TestUploadPartCopySharesWholeSourcePart(t *testing.T) {
