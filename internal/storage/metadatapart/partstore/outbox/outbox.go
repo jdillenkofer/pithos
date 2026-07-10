@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -83,9 +85,11 @@ func newPartOutboxMetrics(registerer prometheus.Registerer) *partOutboxMetrics {
 }
 
 type outboxPartStore struct {
+	*lifecycle.ValidatedLifecycle
 	db                         database.Database
 	triggerChannel             chan struct{}
-	triggerChannelClosed       bool
+	shutdownChannel            chan struct{}
+	lifecycleMu                sync.Mutex
 	outboxId                   string
 	claimOwner                 string
 	claimLeaseDuration         time.Duration
@@ -102,14 +106,19 @@ var _ partstore.PartStore = (*outboxPartStore)(nil)
 const defaultClaimLeaseDuration = 30 * time.Second
 
 func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
+	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("outboxPartStore")
+	if err != nil {
+		return nil, err
+	}
 	leaseDuration := defaultClaimLeaseDuration
 	if claimLeaseDuration > 0 {
 		leaseDuration = claimLeaseDuration
 	}
 	obs := &outboxPartStore{
+		ValidatedLifecycle:        validatedLifecycle,
 		db:                        db,
 		triggerChannel:            make(chan struct{}, 16),
-		triggerChannelClosed:      false,
+		shutdownChannel:           make(chan struct{}),
 		outboxId:                  outboxId,
 		claimOwner:                outboxId + ":" + ulid.Make().String(),
 		claimLeaseDuration:        leaseDuration,
@@ -310,11 +319,10 @@ func (obs *outboxPartStore) processOutboxLoop() {
 out:
 	for {
 		select {
-		case _, ok := <-obs.triggerChannel:
-			if !ok {
-				slog.Debug("Stopping OutboxPartStore processing")
-				break out
-			}
+		case <-obs.shutdownChannel:
+			slog.Debug("Stopping OutboxPartStore processing")
+			break out
+		case <-obs.triggerChannel:
 		case <-time.After(1 * time.Second):
 		}
 		obs.maybeProcessOutboxEntries(ctx)
@@ -322,6 +330,11 @@ out:
 }
 
 func (obs *outboxPartStore) Start(ctx context.Context) error {
+	obs.lifecycleMu.Lock()
+	defer obs.lifecycleMu.Unlock()
+	if err := obs.ValidatedLifecycle.Start(ctx); err != nil {
+		return err
+	}
 	obs.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
 		obs.processOutboxLoop()
 	})
@@ -329,17 +342,19 @@ func (obs *outboxPartStore) Start(ctx context.Context) error {
 }
 
 func (obs *outboxPartStore) Stop(ctx context.Context) error {
-	if !obs.triggerChannelClosed {
-		close(obs.triggerChannel)
-		if obs.outboxProcessingTaskHandle != nil {
-			joinedWithTimeout := obs.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
-			if joinedWithTimeout {
-				slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined with timeout of 30s")
-			} else {
-				slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined without timeout")
-			}
+	obs.lifecycleMu.Lock()
+	defer obs.lifecycleMu.Unlock()
+	if err := obs.ValidatedLifecycle.Stop(ctx); err != nil {
+		return err
+	}
+	close(obs.shutdownChannel)
+	if obs.outboxProcessingTaskHandle != nil {
+		joinedWithTimeout := obs.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
+		if joinedWithTimeout {
+			slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined with timeout of 30s")
+		} else {
+			slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined without timeout")
 		}
-		obs.triggerChannelClosed = true
 	}
 	return obs.innerPartStore.Stop(ctx)
 }
@@ -357,8 +372,12 @@ func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx databas
 	}
 
 	tx.OnAfterCommit(func(context.Context) error {
-		// Put struct{} in the channel unless it is full.
+		// Notify the worker unless it is stopping or already has enough queued
+		// notifications. triggerChannel is intentionally never closed, so a commit
+		// racing with Stop cannot panic while sending.
 		select {
+		case <-obs.shutdownChannel:
+			return nil
 		case obs.triggerChannel <- struct{}{}:
 		default:
 		}

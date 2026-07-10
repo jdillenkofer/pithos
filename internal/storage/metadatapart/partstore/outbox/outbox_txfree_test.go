@@ -113,3 +113,31 @@ func TestOutboxGetPartTxFree(t *testing.T) {
 	_, err = outboxStore.GetPart(ctx, nil, *missingId)
 	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
 }
+
+func TestOutboxCommitAfterStopDoesNotPanic(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+
+	storagePath := t.TempDir()
+	db, err := sqlite.OpenDatabase(filepath.Join(storagePath, "pithos.db"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	inner, err := filesystemPartStore.New(storagePath)
+	require.NoError(t, err)
+	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
+	require.NoError(t, err)
+	outboxStore, err := New(db, "default", inner, repo, prometheus.NewRegistry(), 30*time.Second)
+	require.NoError(t, err)
+
+	require.NoError(t, outboxStore.Start(ctx))
+	require.Error(t, outboxStore.Start(ctx))
+	require.NoError(t, outboxStore.Stop(ctx))
+	require.Error(t, outboxStore.Stop(ctx))
+
+	partId, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return outboxStore.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("committed after stop")))
+	}))
+}
