@@ -21,6 +21,10 @@ const (
 	findLastStorageOutboxEntryForBucketStmt                       = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 ORDER BY id DESC LIMIT 1"
 	findFirstStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id ASC LIMIT 1"
 	findLastStorageOutboxEntryForBucketAndKeyIncludingGlobalStmt  = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND (key = '' OR key = $3) ORDER BY id DESC LIMIT 1"
+	findFirstGlobalStorageOutboxEntryStmt                         = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND key = '' ORDER BY id ASC LIMIT 1"
+	findLastGlobalStorageOutboxEntryStmt                          = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND key = '' ORDER BY id DESC LIMIT 1"
+	findFirstGlobalStorageOutboxEntryForBucketStmt                = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND key = '' ORDER BY id ASC LIMIT 1"
+	findLastGlobalStorageOutboxEntryForBucketStmt                 = "SELECT id, operation, bucket, key, version_id, content_type, created_at, updated_at, claim_owner, claim_until, version FROM storage_outbox_entries WHERE outbox_id = $1 AND bucket = $2 AND key = '' ORDER BY id DESC LIMIT 1"
 	findStorageOutboxEntryChunksByIdStmt                          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM storage_outbox_contents c INNER JOIN storage_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
 	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, version_id, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)"
 	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, version_id = $4, content_type = $5, updated_at = $6 WHERE id = $7 AND outbox_id = $8"
@@ -131,6 +135,26 @@ func (sor *sqliteRepository) FindLastStorageOutboxEntryForBucketAndKeyIncludingG
 		return nil, err
 	}
 	return storageOutboxEntryEntity, nil
+}
+
+func (sor *sqliteRepository) FindFirstGlobalStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstGlobalStorageOutboxEntryStmt, outboxId)
+	return convertRowToStorageOutboxEntryEntity(row)
+}
+
+func (sor *sqliteRepository) FindLastGlobalStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastGlobalStorageOutboxEntryStmt, outboxId)
+	return convertRowToStorageOutboxEntryEntity(row)
+}
+
+func (sor *sqliteRepository) FindFirstGlobalStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findFirstGlobalStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
+	return convertRowToStorageOutboxEntryEntity(row)
+}
+
+func (sor *sqliteRepository) FindLastGlobalStorageOutboxEntryForBucket(ctx context.Context, tx *sql.Tx, outboxId string, bucketName storage.BucketName) (*storageoutboxentry.Entity, error) {
+	row := tx.QueryRowContext(ctx, findLastGlobalStorageOutboxEntryForBucketStmt, outboxId, bucketName.String())
+	return convertRowToStorageOutboxEntryEntity(row)
 }
 
 func (sor *sqliteRepository) FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*storageoutboxentry.ContentChunk, error) {
