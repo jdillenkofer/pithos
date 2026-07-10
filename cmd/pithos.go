@@ -85,7 +85,7 @@ const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
 
 const readHeaderTimeout = 10 * time.Second
-const readTimeout = 30 * time.Second
+const monitoringReadTimeout = 30 * time.Second
 const writeTimeout = 0
 const idleTimeout = 2 * time.Minute
 const maxHeaderBytes = 1 << 20
@@ -194,12 +194,14 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
+	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
+	// storage.MaxEntitySize, and a global timeout would impose that deadline on
+	// the entire request body and abort otherwise healthy large or slow uploads.
 	httpServer := &http.Server{
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
@@ -214,7 +216,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 			Addr:              monitoringAddr,
 			Handler:           monitoringHandler,
 			ReadHeaderTimeout: readHeaderTimeout,
-			ReadTimeout:       readTimeout,
+			ReadTimeout:       monitoringReadTimeout,
 			WriteTimeout:      writeTimeout,
 			IdleTimeout:       idleTimeout,
 			MaxHeaderBytes:    maxHeaderBytes,
