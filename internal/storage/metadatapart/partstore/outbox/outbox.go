@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -105,6 +106,8 @@ var _ partstore.PartStore = (*outboxPartStore)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
+var errPartOutboxClaimLost = errors.New("part outbox claim lost before commit")
+
 func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("outboxPartStore")
 	if err != nil {
@@ -163,19 +166,6 @@ func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *pa
 		readers[i] = bytes.NewReader(chunk.Content)
 	}
 	return io.MultiReader(readers...), nil
-}
-
-func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
-	var deleted bool
-	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		deleted, err = obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
-		return err
-	})
-	if err != nil {
-		return false, err
-	}
-	return deleted, nil
 }
 
 func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
@@ -277,34 +267,41 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
 		err = database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			var operationErr error
 			switch entry.Operation {
 			case partOutboxEntry.PutPartOperation:
-				return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
+				operationErr = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
 			case partOutboxEntry.DeletePartOperation:
-				return obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
+				operationErr = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
 			default:
 				slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-				return fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
+				operationErr = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
 			}
+			if operationErr != nil {
+				return operationErr
+			}
+
+			// Finalize in the same transaction as the inner-store mutation. All
+			// production part stores defer externally visible changes to transaction
+			// hooks, so a worker whose lease was taken over cannot publish stale data.
+			deleted, err := obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
+			if err != nil {
+				return err
+			}
+			if !deleted {
+				return errPartOutboxClaimLost
+			}
+			return nil
 		})
+		stopHeartbeat()
 		if err != nil {
-			stopHeartbeat()
 			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
+			if errors.Is(err, errPartOutboxClaimLost) {
+				slog.Warn("Part outbox mutation rolled back because the claim was lost", "entryId", entry.Id.String())
+				return
+			}
 			time.Sleep(5 * time.Second)
-			return
-		}
-		stopHeartbeat()
-
-		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
-		if err != nil {
-			obs.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
-			return
-		}
-		if !deleted {
-			obs.metrics.errorsCounter.Inc()
-			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}
 		processedOutboxEntryCount += 1
