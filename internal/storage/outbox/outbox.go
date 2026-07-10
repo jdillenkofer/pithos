@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
@@ -18,7 +18,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
-	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
@@ -89,11 +88,13 @@ type outboxStorage struct {
 	*lifecycle.ValidatedLifecycle
 	db                           database.Database
 	triggerChannel               chan struct{}
-	triggerChannelClosed         bool
+	shutdownChannel              chan struct{}
+	lifecycleMu                  sync.Mutex
 	outboxId                     string
 	claimOwner                   string
 	claimLeaseDuration           time.Duration
-	outboxProcessingTaskHandle   *task.TaskHandle
+	workerCancel                 context.CancelFunc
+	workerDone                   chan struct{}
 	innerStorage                 storage.Storage
 	storageOutboxEntryRepository storageOutboxEntry.Repository
 	tracer                       trace.Tracer
@@ -123,7 +124,7 @@ func NewStorage(db database.Database, outboxId string, innerStorage storage.Stor
 		ValidatedLifecycle:           lifecycle,
 		db:                           db,
 		triggerChannel:               make(chan struct{}, 16),
-		triggerChannelClosed:         false,
+		shutdownChannel:              make(chan struct{}),
 		outboxId:                     outboxId,
 		claimOwner:                   outboxId + ":" + ulid.Make().String(),
 		claimLeaseDuration:           leaseDuration,
@@ -215,6 +216,8 @@ func (os *outboxStorage) startStorageOutboxHeartbeat(ctx context.Context, entry 
 		defer ticker.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-ticker.C:
 				now := time.Now().UTC()
 				var extended bool
@@ -237,7 +240,19 @@ func (os *outboxStorage) startStorageOutboxHeartbeat(ctx context.Context, entry 
 	}()
 	return func() {
 		close(stop)
-		<-done
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func waitForStorageOutboxRetry(ctx context.Context) {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
 	}
 }
 
@@ -268,7 +283,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
+			waitForStorageOutboxRetry(ctx)
 			return
 		}
 		if entry == nil || !claimed {
@@ -279,7 +294,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
 			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
-			time.Sleep(5 * time.Second)
+			waitForStorageOutboxRetry(ctx)
 			return
 		}
 
@@ -313,14 +328,14 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		if err != nil {
 			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
 			os.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
+			waitForStorageOutboxRetry(ctx)
 			return
 		}
 
 		deleted, err := os.finalizeStorageOutboxEntry(ctx, entry)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
+			waitForStorageOutboxRetry(ctx)
 			return
 		}
 		if !deleted {
@@ -335,16 +350,16 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	}
 }
 
-func (os *outboxStorage) processOutboxLoop() {
-	ctx := context.Background()
+func (os *outboxStorage) processOutboxLoop(ctx context.Context) {
 out:
 	for {
 		select {
-		case _, ok := <-os.triggerChannel:
-			if !ok {
-				slog.Debug("Stopping outboxStorage processing")
-				break out
-			}
+		case <-ctx.Done():
+			break out
+		case <-os.shutdownChannel:
+			slog.Debug("Stopping outboxStorage processing")
+			break out
+		case <-os.triggerChannel:
 		case <-time.After(1 * time.Second):
 		}
 		os.maybeProcessOutboxEntries(ctx)
@@ -355,27 +370,40 @@ func (os *outboxStorage) Start(ctx context.Context) error {
 	if err := os.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	os.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
-		os.processOutboxLoop()
-	})
-	return os.innerStorage.Start(ctx)
+	// Pending entries must never be dispatched to an inner storage that has not
+	// completed startup yet.
+	if err := os.innerStorage.Start(ctx); err != nil {
+		return err
+	}
+	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	os.workerCancel = cancel
+	os.workerDone = make(chan struct{})
+	go func() {
+		defer close(os.workerDone)
+		os.processOutboxLoop(workerCtx)
+	}()
+	return nil
 }
 
 func (os *outboxStorage) Stop(ctx context.Context) error {
+	os.lifecycleMu.Lock()
+	defer os.lifecycleMu.Unlock()
 	if err := os.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
-	if !os.triggerChannelClosed {
-		close(os.triggerChannel)
-		if os.outboxProcessingTaskHandle != nil {
-			joinedWithTimeout := os.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
-			if joinedWithTimeout {
-				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined with timeout of 30s")
-			} else {
-				slog.Debug("OutboxStorage.outboxProcessingTaskHandle joined without timeout")
-			}
+	close(os.shutdownChannel)
+	if os.workerCancel != nil {
+		os.workerCancel()
+	}
+	if os.workerDone != nil {
+		select {
+		case <-os.workerDone:
+			slog.Debug("OutboxStorage worker stopped")
+		case <-ctx.Done():
+			// Keep the inner storage running if the worker did not stop: it may
+			// still be unwinding an in-flight operation against that storage.
+			return fmt.Errorf("stop OutboxStorage worker: %w", ctx.Err())
 		}
-		os.triggerChannelClosed = true
 	}
 	return os.innerStorage.Stop(ctx)
 }
@@ -394,8 +422,12 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx databas
 	}
 
 	tx.OnAfterCommit(func(context.Context) error {
-		// Put struct{} in the channel unless it is full.
+		// Notify the worker unless it is stopping or already has enough queued
+		// notifications. triggerChannel is intentionally never closed, so a commit
+		// racing with Stop cannot panic while sending.
 		select {
+		case <-os.shutdownChannel:
+			return nil
 		case os.triggerChannel <- struct{}{}:
 		default:
 		}

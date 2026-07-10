@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -20,7 +19,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
-	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -87,18 +85,19 @@ func newPartOutboxMetrics(registerer prometheus.Registerer) *partOutboxMetrics {
 
 type outboxPartStore struct {
 	*lifecycle.ValidatedLifecycle
-	db                         database.Database
-	triggerChannel             chan struct{}
-	shutdownChannel            chan struct{}
-	lifecycleMu                sync.Mutex
-	outboxId                   string
-	claimOwner                 string
-	claimLeaseDuration         time.Duration
-	outboxProcessingTaskHandle *task.TaskHandle
-	innerPartStore             partstore.PartStore
-	partOutboxEntryRepository  partOutboxEntry.Repository
-	tracer                     trace.Tracer
-	metrics                    *partOutboxMetrics
+	db                        database.Database
+	triggerChannel            chan struct{}
+	shutdownChannel           chan struct{}
+	lifecycleMu               sync.Mutex
+	outboxId                  string
+	claimOwner                string
+	claimLeaseDuration        time.Duration
+	workerCancel              context.CancelFunc
+	workerDone                chan struct{}
+	innerPartStore            partstore.PartStore
+	partOutboxEntryRepository partOutboxEntry.Repository
+	tracer                    trace.Tracer
+	metrics                   *partOutboxMetrics
 }
 
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
@@ -181,6 +180,8 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 		defer ticker.Stop()
 		for {
 			select {
+			case <-ctx.Done():
+				return
 			case <-ticker.C:
 				now := time.Now().UTC()
 				var extended bool
@@ -203,7 +204,19 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 	}()
 	return func() {
 		close(stop)
-		<-done
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func waitForPartOutboxRetry(ctx context.Context) {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
 	}
 }
 
@@ -236,7 +249,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
-			time.Sleep(5 * time.Second)
+			waitForPartOutboxRetry(ctx)
 			return
 		}
 		if entry == nil || !claimed {
@@ -290,7 +303,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 				slog.Warn("Part outbox mutation rolled back because the claim was lost", "entryId", entry.Id.String())
 				return
 			}
-			time.Sleep(5 * time.Second)
+			waitForPartOutboxRetry(ctx)
 			return
 		}
 		processedOutboxEntryCount += 1
@@ -300,11 +313,12 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	}
 }
 
-func (obs *outboxPartStore) processOutboxLoop() {
-	ctx := context.Background()
+func (obs *outboxPartStore) processOutboxLoop(ctx context.Context) {
 out:
 	for {
 		select {
+		case <-ctx.Done():
+			break out
 		case <-obs.shutdownChannel:
 			slog.Debug("Stopping OutboxPartStore processing")
 			break out
@@ -321,10 +335,19 @@ func (obs *outboxPartStore) Start(ctx context.Context) error {
 	if err := obs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	obs.outboxProcessingTaskHandle = task.Start(func(_ *atomic.Bool) {
-		obs.processOutboxLoop()
-	})
-	return obs.innerPartStore.Start(ctx)
+	// Pending entries must never be dispatched to an inner store that has not
+	// completed startup yet.
+	if err := obs.innerPartStore.Start(ctx); err != nil {
+		return err
+	}
+	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	obs.workerCancel = cancel
+	obs.workerDone = make(chan struct{})
+	go func() {
+		defer close(obs.workerDone)
+		obs.processOutboxLoop(workerCtx)
+	}()
+	return nil
 }
 
 func (obs *outboxPartStore) Stop(ctx context.Context) error {
@@ -334,12 +357,17 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 		return err
 	}
 	close(obs.shutdownChannel)
-	if obs.outboxProcessingTaskHandle != nil {
-		joinedWithTimeout := obs.outboxProcessingTaskHandle.JoinWithTimeout(30 * time.Second)
-		if joinedWithTimeout {
-			slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined with timeout of 30s")
-		} else {
-			slog.Debug("OutboxPartStore.outboxProcessingTaskHandle joined without timeout")
+	if obs.workerCancel != nil {
+		obs.workerCancel()
+	}
+	if obs.workerDone != nil {
+		select {
+		case <-obs.workerDone:
+			slog.Debug("OutboxPartStore worker stopped")
+		case <-ctx.Done():
+			// Keep the inner store running if the worker did not stop: it may still
+			// be unwinding an in-flight operation against that store.
+			return fmt.Errorf("stop OutboxPartStore worker: %w", ctx.Err())
 		}
 	}
 	return obs.innerPartStore.Stop(ctx)
