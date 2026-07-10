@@ -29,6 +29,12 @@ const (
 	insertStorageOutboxEntryStmt                                  = "INSERT INTO storage_outbox_entries (id, outbox_id, operation, bucket, key, version_id, content_type, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)"
 	updateStorageOutboxEntryByIdStmt                              = "UPDATE storage_outbox_entries SET operation = $1, bucket = $2, key = $3, version_id = $4, content_type = $5, updated_at = $6 WHERE id = $7 AND outbox_id = $8"
 	upsertStorageOutboxContentChunkStmt                           = "INSERT OR REPLACE INTO storage_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
+	updateStorageOutboxEntryPutOptionsStmt                        = "UPDATE storage_outbox_entries SET storage_class = $1, cache_control = $2, content_disposition = $3, content_encoding = $4, content_language = $5, expires = $6, website_redirect_location = $7 WHERE id = $8 AND outbox_id = $9"
+	findStorageOutboxEntryPutOptionsStmt                          = "SELECT storage_class, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2"
+	upsertStorageOutboxEntryTagStmt                               = "INSERT OR REPLACE INTO storage_outbox_entry_tags (outbox_entry_id, key, value) VALUES($1, $2, $3)"
+	findStorageOutboxEntryTagsStmt                                = "SELECT t.key, t.value FROM storage_outbox_entry_tags t INNER JOIN storage_outbox_entries e ON e.id = t.outbox_entry_id WHERE t.outbox_entry_id = $1 AND e.outbox_id = $2"
+	upsertStorageOutboxEntryUserMetadataStmt                      = "INSERT OR REPLACE INTO storage_outbox_entry_user_metadata (outbox_entry_id, key, value) VALUES($1, $2, $3)"
+	findStorageOutboxEntryUserMetadataStmt                        = "SELECT m.key, m.value FROM storage_outbox_entry_user_metadata m INNER JOIN storage_outbox_entries e ON e.id = m.outbox_entry_id WHERE m.outbox_entry_id = $1 AND e.outbox_id = $2"
 	claimStorageOutboxEntryStmt                                   = "UPDATE storage_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
 	deleteStorageOutboxEntryByClaimOwnerStmt                      = "DELETE FROM storage_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
 	releaseStorageOutboxEntryClaimStmt                            = "UPDATE storage_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
@@ -200,6 +206,87 @@ func (sor *sqliteRepository) SaveStorageOutboxEntry(ctx context.Context, tx *sql
 func (sor *sqliteRepository) SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *storageoutboxentry.ContentChunk) error {
 	_, err := tx.ExecContext(ctx, upsertStorageOutboxContentChunkStmt, chunk.OutboxEntryId.String(), chunk.ChunkIndex, chunk.Content)
 	return err
+}
+
+func (sor *sqliteRepository) SaveStorageOutboxEntryPutOptions(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, putOptions *storageoutboxentry.PutOptions) error {
+	var cacheControl, contentDisposition, contentEncoding, contentLanguage, expires, websiteRedirectLocation *string
+	var userMetadata map[string]string
+	if putOptions.Metadata != nil {
+		cacheControl = putOptions.Metadata.CacheControl
+		contentDisposition = putOptions.Metadata.ContentDisposition
+		contentEncoding = putOptions.Metadata.ContentEncoding
+		contentLanguage = putOptions.Metadata.ContentLanguage
+		expires = putOptions.Metadata.Expires
+		websiteRedirectLocation = putOptions.Metadata.WebsiteRedirectLocation
+		userMetadata = putOptions.Metadata.UserMetadata
+	}
+	_, err := tx.ExecContext(ctx, updateStorageOutboxEntryPutOptionsStmt, putOptions.StorageClass, cacheControl, contentDisposition, contentEncoding, contentLanguage, expires, websiteRedirectLocation, id.String(), outboxId)
+	if err != nil {
+		return err
+	}
+	for key, value := range putOptions.Tags {
+		if _, err := tx.ExecContext(ctx, upsertStorageOutboxEntryTagStmt, id.String(), key, value); err != nil {
+			return err
+		}
+	}
+	for key, value := range userMetadata {
+		if _, err := tx.ExecContext(ctx, upsertStorageOutboxEntryUserMetadataStmt, id.String(), key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queryStorageOutboxEntryKeyValues(ctx context.Context, tx *sql.Tx, stmt string, id ulid.ULID, outboxId string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, stmt, id.String(), outboxId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		result[key] = value
+	}
+	return result, rows.Err()
+}
+
+func (sor *sqliteRepository) FindStorageOutboxEntryPutOptionsById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) (*storageoutboxentry.PutOptions, error) {
+	row := tx.QueryRowContext(ctx, findStorageOutboxEntryPutOptionsStmt, id.String(), outboxId)
+	var storageClass, cacheControl, contentDisposition, contentEncoding, contentLanguage, expires, websiteRedirectLocation *string
+	if err := row.Scan(&storageClass, &cacheControl, &contentDisposition, &contentEncoding, &contentLanguage, &expires, &websiteRedirectLocation); err != nil {
+		if err == sql.ErrNoRows {
+			return &storageoutboxentry.PutOptions{}, nil
+		}
+		return nil, err
+	}
+	tags, err := queryStorageOutboxEntryKeyValues(ctx, tx, findStorageOutboxEntryTagsStmt, id, outboxId)
+	if err != nil {
+		return nil, err
+	}
+	userMetadata, err := queryStorageOutboxEntryKeyValues(ctx, tx, findStorageOutboxEntryUserMetadataStmt, id, outboxId)
+	if err != nil {
+		return nil, err
+	}
+	putOptions := &storageoutboxentry.PutOptions{
+		StorageClass: storageClass,
+		Tags:         tags,
+	}
+	if cacheControl != nil || contentDisposition != nil || contentEncoding != nil || contentLanguage != nil || expires != nil || websiteRedirectLocation != nil || len(userMetadata) > 0 {
+		putOptions.Metadata = &storage.ObjectMetadata{
+			CacheControl:            cacheControl,
+			ContentDisposition:      contentDisposition,
+			ContentEncoding:         contentEncoding,
+			ContentLanguage:         contentLanguage,
+			Expires:                 expires,
+			WebsiteRedirectLocation: websiteRedirectLocation,
+			UserMetadata:            userMetadata,
+		}
+	}
+	return putOptions, nil
 }
 
 func (sor *sqliteRepository) ClaimFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*storageoutboxentry.Entity, bool, error) {

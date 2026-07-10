@@ -177,6 +177,28 @@ func (os *outboxStorage) readStorageOutboxChunks(ctx context.Context, entry *sto
 	return readers, nil
 }
 
+// readStorageOutboxPutOptions loads the persisted PutObject options of a
+// PutObject entry for replay; it returns nil for other operations.
+func (os *outboxStorage) readStorageOutboxPutOptions(ctx context.Context, entry *storageOutboxEntry.Entity) (*storage.PutObjectOptions, error) {
+	if entry.Operation != storageOutboxEntry.PutObjectStorageOperation {
+		return nil, nil
+	}
+	var putOptions *storageOutboxEntry.PutOptions
+	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		putOptions, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryPutOptionsById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &storage.PutObjectOptions{
+		Tags:         putOptions.Tags,
+		Metadata:     putOptions.Metadata,
+		StorageClass: putOptions.StorageClass,
+	}, nil
+}
+
 func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
 	var deleted bool
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -279,6 +301,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	for {
 		var entry *storageOutboxEntry.Entity
 		var putObjectReaders []io.Reader
+		var putObjectOpts *storage.PutObjectOptions
 
 		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
@@ -298,6 +321,14 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 
+		putObjectOpts, err = os.readStorageOutboxPutOptions(ctx, entry)
+		if err != nil {
+			os.metrics.errorsCounter.Inc()
+			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
+			time.Sleep(5 * time.Second)
+			return
+		}
+
 		stopHeartbeat := os.startStorageOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
 		case storageOutboxEntry.CreateBucketStorageOperation:
@@ -311,7 +342,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			var body io.ReadSeekCloser
 			body, err = ioutils.NewSmartCachedReadSeekCloser(io.MultiReader(putObjectReaders...), maxReplayMemoryCacheSize)
 			if err == nil {
-				_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, body, nil, nil)
+				_, err = os.innerStorage.PutObject(ctx, entry.Bucket, storage.MustNewObjectKey(entry.Key), entry.ContentType, body, nil, putObjectOpts)
 				_ = body.Close()
 			}
 		case storageOutboxEntry.DeleteObjectStorageOperation:
@@ -655,11 +686,11 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.PutObject")
 	defer span.End()
 
-	// Options that an outbox entry cannot represent must bypass the outbox:
-	// conditional-write preconditions have to be evaluated now, and tag sets and
-	// object metadata are not persisted with the entry (replay would drop them).
-	// Drain the outbox and write through to the inner storage instead.
-	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || len(opts.Tags) > 0 || opts.Metadata != nil)
+	// Conditional-write preconditions must be evaluated against the current
+	// object, so such puts bypass the outbox: drain the key's pending entries
+	// and write through to the inner storage instead. Tags, metadata and
+	// storage class are persisted with the entry and applied on replay.
+	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil)
 	if !putMustBeSynchronous {
 		// Versioning-enabled buckets must write through: an outboxed put cannot
 		// return the new version id and replay would collapse version ordering.
@@ -685,6 +716,17 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 			entryId, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutObjectStorageOperation, bucketName, key.String(), contentType, nil)
 			if err != nil {
 				return err
+			}
+
+			if opts != nil && (opts.StorageClass != nil || len(opts.Tags) > 0 || opts.Metadata != nil) {
+				err = os.storageOutboxEntryRepository.SaveStorageOutboxEntryPutOptions(ctx, tx.SqlTx(), os.outboxId, *entryId, &storageOutboxEntry.PutOptions{
+					StorageClass: opts.StorageClass,
+					Tags:         opts.Tags,
+					Metadata:     opts.Metadata,
+				})
+				if err != nil {
+					return err
+				}
 			}
 
 			buffer := make([]byte, chunkSize)

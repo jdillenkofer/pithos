@@ -28,6 +28,14 @@ type Repository interface {
 	FindStorageOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)
 	SaveStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, storageOutboxEntry *Entity) error
 	SaveStorageOutboxContentChunk(ctx context.Context, tx *sql.Tx, chunk *ContentChunk) error
+	// SaveStorageOutboxEntryPutOptions persists the PutObject options for an
+	// already saved entry so a replay can apply them. It must run in the same
+	// transaction as SaveStorageOutboxEntry.
+	SaveStorageOutboxEntryPutOptions(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, putOptions *PutOptions) error
+	// FindStorageOutboxEntryPutOptionsById loads the persisted PutObject
+	// options for an entry. Options that were never set come back as their
+	// zero values, which replay treats the same as absent.
+	FindStorageOutboxEntryPutOptionsById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) (*PutOptions, error)
 	ClaimFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*Entity, bool, error)
 	DeleteStorageOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error)
 	ReleaseStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error)
@@ -52,6 +60,15 @@ type ContentChunk struct {
 	OutboxEntryId ulid.ULID
 	ChunkIndex    int
 	Content       []byte
+}
+
+// PutOptions holds the PutObject options persisted with a PutObject entry so
+// the outbox replay can apply them. A full put replaces tags and metadata
+// with exactly the supplied set, so nil and empty are equivalent here.
+type PutOptions struct {
+	StorageClass *string
+	Tags         map[string]string
+	Metadata     *storage.ObjectMetadata
 }
 
 const (
