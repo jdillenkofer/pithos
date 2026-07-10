@@ -9,9 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/usermetadata"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -42,6 +44,7 @@ type sqlMetadataStore struct {
 	bucketRepository       bucket.Repository
 	objectRepository       object.Repository
 	partRepository         part.Repository
+	partRegistryRepository partregistry.Repository
 	tagRepository          tag.Repository
 	userMetadataRepository usermetadata.Repository
 	tracer                 trace.Tracer
@@ -55,11 +58,16 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 	if err != nil {
 		return nil, err
 	}
+	partRegistryRepository, err := repositoryfactory.NewPartRegistryRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &sqlMetadataStore{
 		ValidatedLifecycle:     lifecycle,
 		bucketRepository:       bucketRepository,
 		objectRepository:       objectRepository,
 		partRepository:         partRepository,
+		partRegistryRepository: partRegistryRepository,
 		tagRepository:          tagRepository,
 		userMetadataRepository: userMetadataRepository,
 		tracer:                 otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
@@ -165,4 +173,20 @@ func (sms *sqlMetadataStore) GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([
 	defer span.End()
 
 	return sms.partRepository.FindInUsePartIds(ctx, tx)
+}
+
+func (sms *sqlMetadataStore) GetInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error) {
+	return sms.partRepository.FindInUsePartIdCounts(ctx, tx)
+}
+
+func (sms *sqlMetadataStore) TryAddPartReferences(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (bool, error) {
+	counts := map[partstore.PartId]int64{}
+	for _, id := range partIds {
+		counts[id]++
+	}
+	refs := make([]partregistry.Ref, 0, len(counts))
+	for id, count := range counts {
+		refs = append(refs, partregistry.Ref{PartId: id, Delta: count})
+	}
+	return sms.partRegistryRepository.TryAddReferences(ctx, tx, refs)
 }

@@ -3,6 +3,7 @@ package metadatapart
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -395,6 +396,40 @@ func TestUploadPartCopyCopiesExplicitSourceVersion(t *testing.T) {
 	assert.Equal(t, "old", readObjectContent(t, st, bucket, dstKey, nil))
 }
 
+func TestUploadPartReplacesExistingPartNumber(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("multipart")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	upload, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, nil)
+	require.NoError(t, err)
+
+	_, err = st.UploadPart(ctx, bucket, key, upload.UploadId, 1, bytes.NewReader([]byte("old")), nil)
+	require.NoError(t, err)
+	_, err = st.UploadPart(ctx, bucket, key, upload.UploadId, 1, bytes.NewReader([]byte("new")), nil)
+	require.NoError(t, err)
+
+	var partIds []partstore.PartId
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		partIds, err = st.partStores.Default().GetPartIds(ctx, tx)
+		return err
+	}))
+	require.Len(t, partIds, 1)
+	var refCount int64
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		return tx.SqlTx().QueryRowContext(ctx, "SELECT ref_count FROM part_registry WHERE part_id = $1", partIds[0].String()).Scan(&refCount)
+	}))
+	assert.Equal(t, int64(1), refCount)
+
+	_, err = st.CompleteMultipartUpload(ctx, bucket, key, upload.UploadId, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "new", readObjectContent(t, st, bucket, key, nil))
+}
+
 func TestObjectTaggingTargetsExplicitVersion(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -618,6 +653,37 @@ func TestDeleteObjects_KeyOnlyDeleteReturnsDeleteMarkerVersionID(t *testing.T) {
 	assert.Equal(t, *entry.DeleteMarkerVersionID, currentDeleteMarkerErr.VersionID)
 }
 
+func TestDeleteObjectSuspendedRemovesNullVersionParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("obj")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("data")), nil, nil)
+	require.NoError(t, err)
+	status := storage.BucketVersioningStatusSuspended
+	require.NoError(t, st.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+
+	_, err = st.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+
+	var partRowCount int
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		return tx.SqlTx().QueryRowContext(ctx, "SELECT COUNT(*) FROM parts").Scan(&partRowCount)
+	}))
+	assert.Zero(t, partRowCount)
+
+	var partIds []partstore.PartId
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		partIds, err = st.partStores.Default().GetPartIds(ctx, tx)
+		return err
+	}))
+	assert.Empty(t, partIds)
+}
+
 func TestListObjectVersions_CommonPrefixWithMultipleKeysNotRepeatedAcrossPages(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -766,10 +832,24 @@ func TestAppendObject_AppendsToExisting(t *testing.T) {
 
 	_, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte("hello")), nil, nil)
 	require.NoError(t, err)
+	var before *metadatastore.Object
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		before, err = st.metadataStore.HeadObject(ctx, tx.SqlTx(), bucket, key)
+		return err
+	}))
+	require.Len(t, before.Parts, 1)
+	firstPartID := before.Parts[0].Id
 
 	result, err := st.AppendObject(ctx, bucket, key, bytes.NewReader([]byte(" world")), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(11), result.Size)
+	var after *metadatastore.Object
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		after, err = st.metadataStore.HeadObject(ctx, tx.SqlTx(), bucket, key)
+		return err
+	}))
+	require.Len(t, after.Parts, 2)
+	assert.Equal(t, firstPartID, after.Parts[0].Id)
 
 	// Read back and verify the concatenated content.
 	_, readers, err := st.GetObject(ctx, bucket, key, nil, nil)
@@ -1081,12 +1161,13 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 				return err
 			}
 		}
-		return st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+		_, err := st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 			Key:   key,
 			ETag:  *objectChecksums.ETag,
 			Size:  int64(maxParts) * int64(len(partData)),
 			Parts: parts,
 		}, nil)
+		return err
 	})
 	require.NoError(t, err)
 

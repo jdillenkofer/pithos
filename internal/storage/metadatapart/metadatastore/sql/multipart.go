@@ -8,7 +8,6 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
-	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -102,45 +101,33 @@ func (sms *sqlMetadataStore) GetMultipartUpload(ctx context.Context, tx *sql.Tx,
 	}, nil
 }
 
-func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) error {
+func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.UploadPart")
 	defer span.End()
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !*exists {
-		return metadatastore.ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if objectEntity == nil {
-		return metadatastore.ErrNoSuchKey
+		return nil, metadatastore.ErrNoSuchKey
 	}
-
-	partEntity := part.Entity{
-		PartId:            blb.Id,
-		ObjectId:          *objectEntity.Id,
-		ETag:              blb.ETag,
-		ChecksumCRC32:     blb.ChecksumCRC32,
-		ChecksumCRC32C:    blb.ChecksumCRC32C,
-		ChecksumCRC64NVME: blb.ChecksumCRC64NVME,
-		ChecksumSHA1:      blb.ChecksumSHA1,
-		ChecksumSHA256:    blb.ChecksumSHA256,
-		Size:              blb.Size,
-		SequenceNumber:    int(partNumber),
-		PartStoreName:     blb.StoreName,
-	}
-	err = sms.partRepository.SavePart(ctx, tx, &partEntity)
+	unreferencedParts, err := sms.removePartRowsByObjectIdAndSequenceNumber(ctx, tx, *objectEntity.Id, int(partNumber))
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	return nil
+	if err := sms.savePartRows(ctx, tx, *objectEntity.Id, []metadatastore.Part{blb}, int(partNumber)); err != nil {
+		return nil, err
+	}
+	return &metadatastore.PartMutationResult{UnreferencedParts: unreferencedParts}, nil
 }
 
 func trimETagQuotes(etag string) string {
@@ -331,12 +318,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, metadatastore.ErrPreconditionFailed
 		}
 		if nullVersionEntity != nil {
-			oldPartEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *nullVersionEntity.Id)
-			if err != nil {
-				return nil, err
-			}
-
-			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *nullVersionEntity.Id)
+			unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
 			if err != nil {
 				return nil, err
 			}
@@ -351,9 +333,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 				return nil, err
 			}
 
-			deletedParts = append(deletedParts, sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
-				return metadatastore.Part{Id: partEntity.PartId, ETag: partEntity.ETag, ChecksumCRC32: partEntity.ChecksumCRC32, ChecksumCRC32C: partEntity.ChecksumCRC32C, ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME, ChecksumSHA1: partEntity.ChecksumSHA1, ChecksumSHA256: partEntity.ChecksumSHA256, Size: partEntity.Size, StoreName: partEntity.PartStoreName}
-			}, oldPartEntities)...)
+			deletedParts = append(deletedParts, unreferencedParts...)
 
 			if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil && latestObjectEntity.Id != nil && nullVersionEntity.Id != nil && *latestObjectEntity.Id == *nullVersionEntity.Id {
 				deleted, deleteErr := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *nullVersionEntity.Id, latestObjectEntity.OptimisticLockVersion)
@@ -405,7 +385,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}
 
 	return &metadatastore.CompleteMultipartUploadResult{
-		DeletedParts:      deletedParts,
+		UnreferencedParts: deletedParts,
 		ETag:              objectEntity.ETag,
 		VersionID:         objectEntity.VersionID,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,
@@ -437,12 +417,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, metadatastore.ErrNoSuchKey
 	}
 
-	partEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+	parts, err := sms.removePartRowsByObjectId(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -457,27 +432,13 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
-	parts := sliceutils.Map(func(partEntity part.Entity) metadatastore.Part {
-		return metadatastore.Part{
-			Id:                partEntity.PartId,
-			ETag:              partEntity.ETag,
-			ChecksumCRC32:     partEntity.ChecksumCRC32,
-			ChecksumCRC32C:    partEntity.ChecksumCRC32C,
-			ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME,
-			ChecksumSHA1:      partEntity.ChecksumSHA1,
-			ChecksumSHA256:    partEntity.ChecksumSHA256,
-			Size:              partEntity.Size,
-			StoreName:         partEntity.PartStoreName,
-		}
-	}, partEntities)
-
 	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
 
 	return &metadatastore.AbortMultipartResult{
-		DeletedParts: parts,
+		UnreferencedParts: parts,
 	}, nil
 }
 

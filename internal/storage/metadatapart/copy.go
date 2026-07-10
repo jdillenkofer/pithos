@@ -165,36 +165,11 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Tags = srcObject.Tags
 		}
 
-		// Remove the previous destination object's part content (if any) before
-		// overwriting. When the destination equals the source, the previous parts
-		// are the original part ids; the freshly copied parts use new ids and remain.
-		// On a versioning-enabled destination the previous version is retained, so
-		// its part content must stay; only the overwritten null version loses its
-		// parts (mirroring PutObject).
-		dstVersioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), dstBucket)
+		metadataResult, err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil)
 		if err != nil {
 			return err
 		}
-		dstVersioningEnabled := dstVersioningConfig.Status != nil && *dstVersioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
-		if !dstVersioningEnabled {
-			previousDst, err := mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), dstBucket, dstKey, "null")
-			if err != nil && err != storage.ErrNoSuchKey {
-				return err
-			}
-			if previousDst != nil {
-				for _, part := range previousDst.Parts {
-					store, err := mbs.partStores.ByName(part.StoreName)
-					if err != nil {
-						return err
-					}
-					if err := store.DeletePart(ctx, tx, part.Id); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		if err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil); err != nil {
+		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 			return err
 		}
 

@@ -127,6 +127,13 @@ type Part struct {
 	// StoreName is the name of the part store holding this part's data; nil
 	// means the default part store (parts written before named stores).
 	StoreName *string
+	// RefPreAcquired is set when the caller incremented the registry before
+	// inserting this metadata row. The SQL store must not register it again.
+	RefPreAcquired bool
+}
+
+type PartMutationResult struct {
+	UnreferencedParts []Part
 }
 
 type InitiateMultipartUploadResult struct {
@@ -134,7 +141,7 @@ type InitiateMultipartUploadResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
-	DeletedParts      []Part
+	UnreferencedParts []Part
 	Location          string
 	VersionID         *string
 	ETag              string
@@ -147,7 +154,7 @@ type CompleteMultipartUploadResult struct {
 }
 
 type AbortMultipartResult struct {
-	DeletedParts []Part
+	UnreferencedParts []Part
 }
 
 type Upload struct {
@@ -352,8 +359,9 @@ type DeleteObjectOptions struct {
 }
 
 type DeleteObjectResult struct {
-	VersionID      *string
-	IsDeleteMarker bool
+	VersionID         *string
+	IsDeleteMarker    bool
+	UnreferencedParts []Part
 }
 
 type ObjectVersion struct {
@@ -405,6 +413,8 @@ type CompleteMultipartUploadOptions struct {
 
 type MaintenanceStore interface {
 	GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
+	GetInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error)
+	TryAddPartReferences(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (bool, error)
 }
 
 type BucketStore interface {
@@ -591,13 +601,13 @@ type ObjectStore interface {
 	ListObjectVersions(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectVersionsOptions) (*ListObjectVersionsResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	HeadObjectVersion(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID string) (*Object, error)
-	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
+	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) (*PartMutationResult, error)
 	// AppendObject appends a new part to an existing object's part list. The caller
 	// must supply the updated object metadata (including new ETag, size, and the
 	// full ordered part list). If no object exists at the key yet, a new object is
 	// created. If WriteOffset is set in opts and does not match the current object
 	// size, ErrInvalidWriteOffset is returned.
-	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
+	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) (*PartMutationResult, error)
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
@@ -614,7 +624,7 @@ type ObjectStore interface {
 	// must match the selected object's ETag; a concurrent replacement/update
 	// surfaces as ErrPreconditionFailed. Returns ErrNoSuchKey when no selected
 	// non-delete-marker object exists.
-	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID *string, expectedETag string, storageClass string, parts []Part) error
+	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID *string, expectedETag string, storageClass string, parts []Part) (*PartMutationResult, error)
 }
 
 type ObjectTaggingOptions struct {
@@ -627,7 +637,7 @@ type MultipartStore interface {
 	// Returns ErrNoSuchKey when no such pending upload exists (mirroring
 	// UploadPart's behaviour for unknown uploads).
 	GetMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*Upload, error)
-	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
+	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) (*PartMutationResult, error)
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
 	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
@@ -703,13 +713,14 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.PutObject(ctx, tx, bucketName, &Object{
+		_, err := metadataStore.PutObject(ctx, tx, bucketName, &Object{
 			Key:          key,
 			LastModified: time.Now(),
 			ETag:         "",
 			Size:         0,
 			Parts:        []Part{},
 		}, nil)
+		return err
 	})
 	if err != nil {
 		return err
@@ -773,11 +784,12 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return err
 	}
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+		_, err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 			Id:   *partId,
 			Size: 0,
 			ETag: "",
 		})
+		return err
 	})
 	if err != nil {
 		return err
@@ -813,11 +825,12 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return err
 	}
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+		_, err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 			Id:   *partId,
 			Size: 0,
 			ETag: "",
 		})
+		return err
 	})
 	if err != nil {
 		return err

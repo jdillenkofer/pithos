@@ -18,38 +18,9 @@ import (
 func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObject")
 	defer span.End()
-	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
-
 	var object metadatastore.Object
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if !ifNoneMatchStar {
-			versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
-			if err != nil {
-				return err
-			}
-			versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
-
-			if !versioningEnabled {
-				// In unversioned/suspended mode, writes overwrite the null version.
-				// Remove its part content before metadata replacement.
-				previousObject, err := mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, "null")
-				if err != nil && err != storage.ErrNoSuchKey {
-					return err
-				}
-				if previousObject != nil {
-					for _, part := range previousObject.Parts {
-						store, err := mbs.partStores.ByName(part.StoreName)
-						if err != nil {
-							return err
-						}
-						err = store.DeletePart(ctx, tx, part.Id)
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
+		ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 		partId, err := partstore.NewRandomPartId()
 		if err != nil {
@@ -112,11 +83,11 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if opts != nil {
 			metadataPutObjectOptions.IfMatchETag = opts.IfMatchETag
 		}
-		err = mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
+		metadataResult, err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
 		if err != nil {
 			return err
 		}
-		return nil
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
 		return nil, err
@@ -294,7 +265,8 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 
 		metaOpts := &metadatastore.AppendObjectOptions{}
-		if err = mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts); err != nil {
+		metadataResult, err := mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts)
+		if err != nil {
 			// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a
 			// concurrent write that changed the object between our HeadObject read
 			// and this update. It surfaces that as ErrCASFailure. From the caller's
@@ -305,7 +277,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			}
 			return err
 		}
-		return nil
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
 		return nil, err
@@ -388,20 +360,17 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 				if err != nil {
 					return err
 				}
-				// Free the source bytes now that a copy exists in the target
-				// store. DeletePart defers the physical removal to commit, so the
-				// source survives an aborted transition and in-flight readers
-				// holding an open handle keep working.
-				if err := srcStore.DeletePart(ctx, tx, srcPart.Id); err != nil {
-					return err
-				}
 				newParts[i] = srcPart
 				newParts[i].Id = *newPartId
 				newParts[i].StoreName = targetStoreName
 			}
 		}
 
-		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
+		metadataResult, err := mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
+		if err != nil {
+			return err
+		}
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 }
 

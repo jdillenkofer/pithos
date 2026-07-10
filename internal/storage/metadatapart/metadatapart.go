@@ -114,6 +114,19 @@ type metadataPartStorage struct {
 	tracer        trace.Tracer
 }
 
+func (mbs *metadataPartStorage) deleteUnreferencedParts(ctx context.Context, tx database.Tx, parts []metadatastore.Part) error {
+	for _, part := range parts {
+		store, err := mbs.partStores.ByName(part.StoreName)
+		if err != nil {
+			return err
+		}
+		if err := store.DeletePart(ctx, tx, part.Id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Compile-time check to ensure metadataPartStorage implements storage.Storage
 var _ storage.Storage = (*metadataPartStorage)(nil)
 var _ storage.TransactionalStorage = (*metadataPartStorage)(nil)

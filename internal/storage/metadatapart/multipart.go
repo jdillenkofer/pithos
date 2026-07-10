@@ -76,7 +76,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			return err
 		}
 
-		return mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
+		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), bucketName, key, uploadId, partNumber, metadatastore.Part{
 			Id:                *partId,
 			ETag:              *calculatedChecksums.ETag,
 			ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
@@ -87,6 +87,10 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			Size:              *originalSize,
 			StoreName:         storeName,
 		})
+		if err != nil {
+			return err
+		}
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
 		return nil, err
@@ -168,7 +172,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 
-		err = mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
+		metadataResult, err := mbs.metadataStore.UploadPart(ctx, tx.SqlTx(), dstBucket, dstKey, uploadId, partNumber, metadatastore.Part{
 			Id:                *newPartId,
 			ETag:              *checksums.ETag,
 			ChecksumCRC32:     checksums.ChecksumCRC32,
@@ -180,6 +184,9 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			StoreName:         storeName,
 		})
 		if err != nil {
+			return err
+		}
+		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 			return err
 		}
 
@@ -215,15 +222,8 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 		if err != nil {
 			return err
 		}
-		for _, deletedPart := range result.DeletedParts {
-			store, err := mbs.partStores.ByName(deletedPart.StoreName)
-			if err != nil {
-				return err
-			}
-			err = store.DeletePart(ctx, tx, deletedPart.Id)
-			if err != nil {
-				return err
-			}
+		if err := mbs.deleteUnreferencedParts(ctx, tx, result.UnreferencedParts); err != nil {
+			return err
 		}
 		completeMultipartUploadResult = convertCompleteMultipartUploadResult(*result)
 		return nil
@@ -242,17 +242,7 @@ func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucket
 		if err != nil {
 			return err
 		}
-		for _, deletedPart := range abortMultipartUploadResult.DeletedParts {
-			store, err := mbs.partStores.ByName(deletedPart.StoreName)
-			if err != nil {
-				return err
-			}
-			err = store.DeletePart(ctx, tx, deletedPart.Id)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
+		return mbs.deleteUnreferencedParts(ctx, tx, abortMultipartUploadResult.UnreferencedParts)
 	})
 }
 
