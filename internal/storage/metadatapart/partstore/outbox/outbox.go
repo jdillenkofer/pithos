@@ -107,6 +107,13 @@ var _ partstore.PartStore = (*outboxPartStore)(nil)
 const defaultClaimLeaseDuration = 30 * time.Second
 
 var errPartOutboxClaimLost = errors.New("part outbox claim lost before commit")
+var errPartOutboxEntryVanished = errors.New("part outbox entry deleted while it was being read")
+
+// maxGetPartRaceRetries bounds how often GetPart re-evaluates when an outbox
+// entry is flushed between its two lookups. Each retry requires another
+// writer+flush cycle for the same part in between, so hitting the bound means
+// something is wrong; failing is better than livelocking the request.
+const maxGetPartRaceRetries = 8
 
 func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("outboxPartStore")
@@ -146,26 +153,6 @@ func (obs *outboxPartStore) claimNextOutboxEntry(ctx context.Context) (*partOutb
 		return nil, false, err
 	}
 	return entry, claimed, nil
-}
-
-func (obs *outboxPartStore) readPartOutboxContent(ctx context.Context, entry *partOutboxEntry.Entity) (io.Reader, error) {
-	if entry.Operation != partOutboxEntry.PutPartOperation {
-		return nil, nil
-	}
-	var chunks []*partOutboxEntry.ContentChunk
-	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		var err error
-		chunks, err = obs.partOutboxEntryRepository.FindPartOutboxEntryChunksById(ctx, tx.SqlTx(), obs.outboxId, *entry.Id)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	readers := make([]io.Reader, len(chunks))
-	for i, chunk := range chunks {
-		readers[i] = bytes.NewReader(chunk.Content)
-	}
-	return io.MultiReader(readers...), nil
 }
 
 func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
@@ -245,7 +232,6 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 	for {
 		var entry *partOutboxEntry.Entity
-		var putPartReader io.Reader
 
 		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
@@ -257,19 +243,22 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			break
 		}
 
-		putPartReader, err = obs.readPartOutboxContent(ctx, entry)
-		if err != nil {
-			obs.metrics.errorsCounter.Inc()
-			_, _ = obs.releasePartOutboxEntry(ctx, entry)
-			time.Sleep(5 * time.Second)
-			return
-		}
-
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
 		err = database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			var operationErr error
 			switch entry.Operation {
 			case partOutboxEntry.PutPartOperation:
+				// Stream content from the outbox through the transaction that also
+				// applies and finalizes the mutation. Only one chunk is retained at a
+				// time, and an empty entry naturally reads as an empty part.
+				putPartReader := &lazyOutboxChunkReadCloser{
+					ctx:       ctx,
+					tx:        tx,
+					repo:      obs.partOutboxEntryRepository,
+					outboxId:  obs.outboxId,
+					entryId:   *entry.Id,
+					nextChunk: 0,
+				}
 				operationErr = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
 			case partOutboxEntry.DeletePartOperation:
 				operationErr = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
@@ -356,7 +345,7 @@ func (obs *outboxPartStore) Stop(ctx context.Context) error {
 	return obs.innerPartStore.Stop(ctx)
 }
 
-const chunkSize = 256 * 1000 * 1000 // 256MB
+const chunkSize = 8 * 1024 * 1024 // 8MiB
 
 func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx database.Tx, operation string, partId partstore.PartId) (*ulid.ULID, error) {
 	entry := partOutboxEntry.Entity{
@@ -435,11 +424,14 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 		return obs.getPartTxFree(ctx, partId)
 	}
 
-	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx.SqlTx(), obs.outboxId, partId)
-	if err != nil {
-		return nil, err
-	}
-	if lastEntry != nil {
+	for range maxGetPartRaceRetries {
+		lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, tx.SqlTx(), obs.outboxId, partId)
+		if err != nil {
+			return nil, err
+		}
+		if lastEntry == nil {
+			return obs.innerPartStore.GetPart(ctx, tx, partId)
+		}
 		if lastEntry.Operation == partOutboxEntry.DeletePartOperation {
 			return nil, partstore.ErrPartNotFound
 		}
@@ -447,9 +439,16 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 		// Fetch the first chunk eagerly so we know whether the outbox entry holds
 		// any content; the remaining chunks are loaded lazily so we never hold
 		// more than one chunk in memory at a time.
-		firstChunk, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndex(ctx, tx.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
+		firstChunk, entryExists, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndexWithEntryPresence(ctx, tx.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
 		if err != nil {
 			return nil, err
+		}
+		if !entryExists {
+			// The worker flushed and deleted the entry between the two queries
+			// (visible under statement-level isolation such as Postgres READ
+			// COMMITTED). Re-evaluate: the part now lives in the inner store,
+			// unless an even newer entry is pending.
+			continue
 		}
 		if firstChunk != nil {
 			return &lazyOutboxChunkReadCloser{
@@ -460,6 +459,9 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 				entryId:   *lastEntry.Id,
 				nextChunk: 1,
 				current:   bytes.NewReader(firstChunk.Content),
+				inner:     obs.innerPartStore,
+				innerTx:   tx,
+				partId:    partId,
 			}, nil
 		}
 		// PutPart deliberately stores no content chunks for an empty part. The
@@ -467,7 +469,7 @@ func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId 
 		// content in the inner store.
 		return io.NopCloser(bytes.NewReader(nil)), nil
 	}
-	return obs.innerPartStore.GetPart(ctx, tx, partId)
+	return nil, fmt.Errorf("get part %s: %w", partId.String(), errPartOutboxEntryVanished)
 }
 
 // getPartTxFree performs the outbox lookup in its own short read transaction.
@@ -484,45 +486,58 @@ func (obs *outboxPartStore) getPartTxFree(ctx context.Context, partId partstore.
 		_ = txController.Rollback(ctx)
 	}
 
-	lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, txController.SqlTx(), obs.outboxId, partId)
-	if err != nil {
-		releaseTx()
-		return nil, err
-	}
-	if lastEntry == nil {
-		releaseTx()
-		return obs.innerPartStore.GetPart(ctx, nil, partId)
-	}
-	if lastEntry.Operation == partOutboxEntry.DeletePartOperation {
-		releaseTx()
-		return nil, partstore.ErrPartNotFound
-	}
+	for range maxGetPartRaceRetries {
+		lastEntry, err := obs.partOutboxEntryRepository.FindLastPartOutboxEntryByPartId(ctx, txController.SqlTx(), obs.outboxId, partId)
+		if err != nil {
+			releaseTx()
+			return nil, err
+		}
+		if lastEntry == nil {
+			releaseTx()
+			return obs.innerPartStore.GetPart(ctx, nil, partId)
+		}
+		if lastEntry.Operation == partOutboxEntry.DeletePartOperation {
+			releaseTx()
+			return nil, partstore.ErrPartNotFound
+		}
 
-	firstChunk, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndex(ctx, txController.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
-	if err != nil {
-		releaseTx()
-		return nil, err
-	}
-	if firstChunk == nil {
-		releaseTx()
-		// An empty PutPart has no content chunks. Since the outbox entry is the
-		// latest state, return an empty part instead of exposing stale inner-store
-		// content.
-		return io.NopCloser(bytes.NewReader(nil)), nil
-	}
+		firstChunk, entryExists, err := obs.partOutboxEntryRepository.FindPartOutboxEntryChunkByIndexWithEntryPresence(ctx, txController.SqlTx(), obs.outboxId, *lastEntry.Id, 0)
+		if err != nil {
+			releaseTx()
+			return nil, err
+		}
+		if !entryExists {
+			// The worker flushed and deleted the entry between the two queries
+			// (visible under statement-level isolation such as Postgres READ
+			// COMMITTED). Re-evaluate: the part now lives in the inner store,
+			// unless an even newer entry is pending.
+			continue
+		}
+		if firstChunk == nil {
+			releaseTx()
+			// An empty PutPart has no content chunks. Since the outbox entry is the
+			// latest state, return an empty part instead of exposing stale inner-store
+			// content.
+			return io.NopCloser(bytes.NewReader(nil)), nil
+		}
 
-	reader := &lazyOutboxChunkReadCloser{
-		ctx:       ctx,
-		tx:        txController,
-		repo:      obs.partOutboxEntryRepository,
-		outboxId:  obs.outboxId,
-		entryId:   *lastEntry.Id,
-		nextChunk: 1,
-		current:   bytes.NewReader(firstChunk.Content),
+		reader := &lazyOutboxChunkReadCloser{
+			ctx:       ctx,
+			tx:        txController,
+			repo:      obs.partOutboxEntryRepository,
+			outboxId:  obs.outboxId,
+			entryId:   *lastEntry.Id,
+			nextChunk: 1,
+			current:   bytes.NewReader(firstChunk.Content),
+			inner:     obs.innerPartStore,
+			partId:    partId,
+		}
+		return ioutils.NewReadCloserWithCloseHook(reader, func() error {
+			return txController.Rollback(ctx)
+		}), nil
 	}
-	return ioutils.NewReadCloserWithCloseHook(reader, func() error {
-		return txController.Rollback(ctx)
-	}), nil
+	releaseTx()
+	return nil, fmt.Errorf("get part %s: %w", partId.String(), errPartOutboxEntryVanished)
 }
 
 // lazyOutboxChunkReadCloser streams an outbox entry's chunks one at a time,
@@ -530,21 +545,37 @@ func (obs *outboxPartStore) getPartTxFree(ctx context.Context, partId partstore.
 // exhausted. This keeps the read path's memory proportional to a single chunk
 // rather than the whole part. It relies on the read transaction outliving the
 // reader (GetObject binds the tx lifetime to its returned readers).
+//
+// Under statement-level isolation (e.g. Postgres READ COMMITTED) the outbox
+// worker can flush and delete the entry while it is being streamed. When
+// inner is set, the reader then transparently continues from the inner store
+// (which at that point holds exactly the flushed content), skipping the bytes
+// already emitted. When inner is nil (the replay worker's own reader), a
+// vanished entry means the claim was lost and reading fails instead.
 type lazyOutboxChunkReadCloser struct {
-	ctx       context.Context
-	tx        database.Tx
-	repo      partOutboxEntry.Repository
-	outboxId  string
-	entryId   ulid.ULID
-	nextChunk int
-	current   *bytes.Reader
-	done      bool
+	ctx          context.Context
+	tx           database.Tx
+	repo         partOutboxEntry.Repository
+	outboxId     string
+	entryId      ulid.ULID
+	nextChunk    int
+	current      *bytes.Reader
+	done         bool
+	inner        partstore.PartStore
+	innerTx      database.Tx
+	partId       partstore.PartId
+	bytesEmitted int64
+	fallback     io.ReadCloser
 }
 
 func (l *lazyOutboxChunkReadCloser) Read(p []byte) (int, error) {
 	for {
+		if l.fallback != nil {
+			return l.fallback.Read(p)
+		}
 		if l.current != nil {
 			n, err := l.current.Read(p)
+			l.bytesEmitted += int64(n)
 			if err == io.EOF {
 				l.current = nil
 				if n > 0 {
@@ -557,9 +588,20 @@ func (l *lazyOutboxChunkReadCloser) Read(p []byte) (int, error) {
 		if l.done {
 			return 0, io.EOF
 		}
-		chunk, err := l.repo.FindPartOutboxEntryChunkByIndex(l.ctx, l.tx.SqlTx(), l.outboxId, l.entryId, l.nextChunk)
+		chunk, entryExists, err := l.repo.FindPartOutboxEntryChunkByIndexWithEntryPresence(l.ctx, l.tx.SqlTx(), l.outboxId, l.entryId, l.nextChunk)
 		if err != nil {
 			return 0, err
+		}
+		if !entryExists {
+			if l.inner == nil {
+				return 0, errPartOutboxEntryVanished
+			}
+			fallback, err := l.openInnerFallback()
+			if err != nil {
+				return 0, err
+			}
+			l.fallback = fallback
+			continue
 		}
 		if chunk == nil {
 			l.done = true
@@ -570,9 +612,31 @@ func (l *lazyOutboxChunkReadCloser) Read(p []byte) (int, error) {
 	}
 }
 
+// openInnerFallback opens the part in the inner store and discards the prefix
+// that was already emitted from outbox chunks. Chunk contents are immutable
+// and the worker deletes the entry in the same transaction that writes the
+// part to the inner store, so the inner part is byte-identical to the entry
+// that vanished.
+func (l *lazyOutboxChunkReadCloser) openInnerFallback() (io.ReadCloser, error) {
+	reader, err := l.inner.GetPart(l.ctx, l.innerTx, l.partId)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.CopyN(io.Discard, reader, l.bytesEmitted); err != nil {
+		_ = reader.Close()
+		return nil, fmt.Errorf("skip already emitted part prefix: %w", err)
+	}
+	return reader, nil
+}
+
 func (l *lazyOutboxChunkReadCloser) Close() error {
 	l.done = true
 	l.current = nil
+	if l.fallback != nil {
+		fallback := l.fallback
+		l.fallback = nil
+		return fallback.Close()
+	}
 	return nil
 }
 

@@ -19,7 +19,9 @@ const (
 	findLastPartOutboxEntryGroupedByPartIdStmt = "SELECT e.id, e.operation, e.part_id, e.created_at, e.updated_at, e.claim_owner, e.claim_until, e.version FROM part_outbox_entries e INNER JOIN ( SELECT part_id, MAX(id) as max_id FROM part_outbox_entries WHERE outbox_id = $1 GROUP BY part_id) m ON e.part_id = m.part_id AND e.id = m.max_id WHERE e.outbox_id = $1"
 	findFirstPartOutboxEntryStmt               = "SELECT id, operation, part_id, created_at, updated_at, claim_owner, claim_until, version FROM part_outbox_entries WHERE outbox_id = $1 ORDER BY id ASC LIMIT 1"
 	findPartOutboxEntryChunksByIdStmt          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
-	findPartOutboxEntryChunkByIndexStmt        = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 AND c.chunk_index = $3"
+	// Parameters are numbered in text order: sqlite assigns $N parameter
+	// indexes by first occurrence, not by the number itself.
+	findPartOutboxEntryChunkByIndexStmt        = "SELECT c.chunk_index, c.content FROM part_outbox_entries e LEFT JOIN part_outbox_contents c ON c.outbox_entry_id = e.id AND c.chunk_index = $1 WHERE e.id = $2 AND e.outbox_id = $3"
 	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
 	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
 	upsertPartOutboxContentChunkStmt           = "INSERT OR REPLACE INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
@@ -155,23 +157,25 @@ func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, 
 	return chunks, nil
 }
 
-func (bor *sqliteRepository) FindPartOutboxEntryChunkByIndex(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, chunkIndex int) (*partoutboxentry.ContentChunk, error) {
-	row := tx.QueryRowContext(ctx, findPartOutboxEntryChunkByIndexStmt, id.String(), outboxId, chunkIndex)
-	var entryIdStr string
-	var idx int
+func (bor *sqliteRepository) FindPartOutboxEntryChunkByIndexWithEntryPresence(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, chunkIndex int) (*partoutboxentry.ContentChunk, bool, error) {
+	row := tx.QueryRowContext(ctx, findPartOutboxEntryChunkByIndexStmt, chunkIndex, id.String(), outboxId)
+	var idx sql.NullInt64
 	var content []byte
-	err := row.Scan(&entryIdStr, &idx, &content)
+	err := row.Scan(&idx, &content)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
+	}
+	if !idx.Valid {
+		return nil, true, nil
 	}
 	return &partoutboxentry.ContentChunk{
-		OutboxEntryId: ulid.MustParse(entryIdStr),
-		ChunkIndex:    idx,
+		OutboxEntryId: id,
+		ChunkIndex:    int(idx.Int64),
 		Content:       content,
-	}, nil
+	}, true, nil
 }
 
 func (bor *sqliteRepository) SavePartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, partOutboxEntry *partoutboxentry.Entity) error {
