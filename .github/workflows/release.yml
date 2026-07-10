@@ -21,7 +21,7 @@ jobs:
   validate-version:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -83,19 +83,6 @@ jobs:
             echo "Error: New version ($new_version) must be greater than latest version ($latest_version)"
             exit 1
           fi
-      - name: Configure Git
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
-        run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-      - name: Create Tag
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
-        run: |
-          git tag "v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   run-tests:
     name: Run All Tests
     uses: ./.github/workflows/test.yml
@@ -356,6 +343,13 @@ jobs:
             --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             checksums.txt
+      - name: Create Tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
       - name: Create Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         env:
