@@ -3,14 +3,12 @@ package server
 import (
 	"encoding/xml"
 	"fmt"
-	"html"
 	"net/http"
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/oklog/ulid/v2"
 )
 
 const maxPutBucketNotificationBodySize int64 = 1024 * 1024
@@ -106,20 +104,7 @@ func (e *notificationValidationError) Error() string {
 }
 
 func writeNotificationValidationError(w http.ResponseWriter, r *http.Request, validationErr *notificationValidationError) {
-	errResponse := ErrorResponse{
-		Code:      validationErr.Code,
-		Message:   validationErr.Message,
-		Resource:  html.EscapeString(r.RequestURI),
-		RequestId: ulid.Make().String(),
-	}
-	xmlErrorResponse, err := xmlMarshalWithDocType(errResponse)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	w.Header().Set(contentTypeHeader, applicationXmlContentType)
-	w.WriteHeader(http.StatusBadRequest)
-	w.Write(xmlErrorResponse)
+	writeS3ErrorResponse(w, r, http.StatusBadRequest, validationErr.Code, validationErr.Message, r.URL.Path)
 }
 
 func convertNotificationConfigurationFromXML(request *NotificationConfiguration) (*storage.BucketNotificationConfiguration, *notificationValidationError) {
@@ -388,10 +373,7 @@ func (s *Server) getBucketNotificationHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	response := convertNotificationConfigurationToXML(config)
-	w.Header().Set(contentTypeHeader, applicationXmlContentType)
-	w.WriteHeader(http.StatusOK)
-	out, _ := xmlMarshalWithDocType(response)
-	w.Write(out)
+	writeXMLResponse(w, r, http.StatusOK, response)
 }
 
 func (s *Server) putBucketNotificationHandler(w http.ResponseWriter, r *http.Request) {
