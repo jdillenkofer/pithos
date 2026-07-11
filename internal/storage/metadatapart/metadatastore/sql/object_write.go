@@ -289,9 +289,10 @@ func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, b
 		return nil, metadatastore.ErrPreconditionFailed
 	}
 
-	// Replace the part rows with the relocated parts (new ids in the target
-	// store). The old rows' part data becomes unreferenced and is collected by
-	// the per-store GC.
+	// Replace the part rows with the transitioned parts. Relocated parts carry
+	// new ids in the target store; parts that stayed in place keep their ids
+	// and arrive with a pre-acquired registry reference, so the removal below
+	// cannot condemn them.
 	unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err

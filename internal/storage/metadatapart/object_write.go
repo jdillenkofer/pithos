@@ -331,41 +331,50 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			}
 		}
 
-		// When every part already lives in the target store (e.g. the class was
-		// only remapped in config, or the classes share a store), just relabel
-		// the object without moving any data.
-		needsMove := false
-		for _, part := range object.Parts {
-			if !partStoreNamesEqual(part.StoreName, targetStoreName) {
-				needsMove = true
-				break
-			}
-		}
-
-		newParts := object.Parts
-		if needsMove {
-			newParts = make([]metadatastore.Part, len(object.Parts))
-			for i, srcPart := range object.Parts {
-				srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
-				if err != nil {
-					return err
-				}
-				newPartId, err := partstore.NewRandomPartId()
-				if err != nil {
-					return err
-				}
-				srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
-				if err != nil {
-					return err
-				}
-				err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
-				srcReader.Close()
-				if err != nil {
-					return err
-				}
+		// Parts already in the target store (e.g. the class was only remapped
+		// in config, or the classes share a store) keep their ids and are
+		// shared: TransitionObject below replaces this object's part rows, so
+		// a registry reference must be pre-acquired for every retained id or
+		// the removal would condemn the part and delete live content. Only
+		// cross-store parts are copied, because a part id belongs to exactly
+		// one store.
+		newParts := make([]metadatastore.Part, len(object.Parts))
+		sharedPartIDs := make([]partstore.PartId, 0, len(object.Parts))
+		for i, srcPart := range object.Parts {
+			if partStoreNamesEqual(srcPart.StoreName, targetStoreName) {
 				newParts[i] = srcPart
-				newParts[i].Id = *newPartId
-				newParts[i].StoreName = targetStoreName
+				newParts[i].RefPreAcquired = true
+				sharedPartIDs = append(sharedPartIDs, srcPart.Id)
+				continue
+			}
+			srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
+			if err != nil {
+				return err
+			}
+			newPartId, err := partstore.NewRandomPartId()
+			if err != nil {
+				return err
+			}
+			srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
+			if err != nil {
+				return err
+			}
+			err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
+			srcReader.Close()
+			if err != nil {
+				return err
+			}
+			newParts[i] = srcPart
+			newParts[i].Id = *newPartId
+			newParts[i].StoreName = targetStoreName
+		}
+		if len(sharedPartIDs) > 0 {
+			added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), sharedPartIDs)
+			if err != nil {
+				return err
+			}
+			if !added {
+				return storage.ErrNoSuchKey
 			}
 		}
 

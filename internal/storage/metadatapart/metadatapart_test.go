@@ -505,6 +505,59 @@ func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
 	assert.Empty(t, physicalPartIDs(t, st))
 }
 
+func TestTransitionWithinSameStoreKeepsContent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("object")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("relabeled")), nil, nil)
+	require.NoError(t, err)
+
+	// A single-store setup maps every class to the default store, so the
+	// transition only relabels the object and must share the existing parts.
+	require.NoError(t, st.TransitionObjectStorageClass(ctx, bucket, key, "GLACIER", nil))
+
+	assert.Equal(t, "relabeled", readObjectContent(t, st, bucket, key, nil))
+	require.Len(t, physicalPartIDs(t, st), 1)
+	_, err = st.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestTransitionWithinSameStoreKeepsSharedPartLive(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey := storage.MustNewObjectKey("dst")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("shared")), nil, nil)
+	require.NoError(t, err)
+	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey, nil)
+	require.NoError(t, err)
+	require.Len(t, physicalPartIDs(t, st), 1)
+
+	// The transitioned object shares its part with the copy; relabeling must
+	// bump the shared reference instead of re-registering the part.
+	require.NoError(t, st.TransitionObjectStorageClass(ctx, bucket, srcKey, "GLACIER", nil))
+
+	assert.Equal(t, "shared", readObjectContent(t, st, bucket, srcKey, nil))
+	_, err = st.DeleteObject(ctx, bucket, srcKey, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "shared", readObjectContent(t, st, bucket, dstKey, nil))
+	require.Len(t, physicalPartIDs(t, st), 1)
+	_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
+	require.NoError(t, err)
+	assert.Empty(t, physicalPartIDs(t, st))
+}
+
 func TestDedupIndexChecksumMismatchDoesNotShare(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
