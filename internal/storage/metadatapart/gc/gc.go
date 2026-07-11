@@ -32,9 +32,17 @@ type partGC struct {
 	partStores               *partstore.NamedPartStores
 	writeOperations          atomic.Int64
 	tracer                   trace.Tracer
+	graceWindow              time.Duration
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, graceWindows ...time.Duration) (PartGarbageCollector, error) {
+	graceWindow := 30 * time.Minute
+	if len(graceWindows) > 0 {
+		graceWindow = graceWindows[0]
+	}
+	if graceWindow <= 0 {
+		return nil, fmt.Errorf("GC grace window must be positive")
+	}
 	return &partGC{
 		db:                       db,
 		collectionMutex:          sync.RWMutex{},
@@ -44,6 +52,7 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 		partDedupIndexRepository: partDedupIndexRepository,
 		partStores:               partStores,
 		tracer:                   otel.Tracer("internal/storage/metadatapart/gc"),
+		graceWindow:              graceWindow,
 	}, nil
 }
 
@@ -162,6 +171,7 @@ func (partGC *partGC) runGC() error {
 	}()
 
 	numDeletedParts := 0
+	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
 	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		// The parts table is the sole liveness source. Reconcile the registry
 		// before sweeping so drift can never cause live bytes to be deleted.
@@ -235,6 +245,9 @@ func (partGC *partGC) runGC() error {
 			}
 
 			for _, existingPartId := range existingPartIds {
+				if !existingPartId.CreatedAt().Before(cutoff) {
+					continue
+				}
 				if _, hasKey := counts[existingPartId]; !hasKey {
 					err = partStore.DeletePart(ctx, tx, existingPartId)
 					if err != nil {

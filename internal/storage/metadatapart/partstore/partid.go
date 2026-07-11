@@ -3,12 +3,18 @@ package partstore
 import (
 	"crypto/rand"
 	"errors"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 )
 
 type PartId struct {
 	value ulid.ULID
+}
+
+// CreatedAt returns the timestamp encoded in the part's ULID.
+func (b PartId) CreatedAt() time.Time {
+	return time.UnixMilli(int64(b.value.Time())).UTC()
 }
 
 func NewRandomPartId() (*PartId, error) {
