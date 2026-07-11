@@ -612,3 +612,12 @@ func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx database.Tx,
 	}
 	return nil
 }
+
+func (e *erasureCodingPartStore) SupportsTxFreeDeletePart() bool {
+	for _, store := range e.partStores {
+		if !partstore.SupportsTxFreeDeletePart(store) {
+			return false
+		}
+	}
+	return true
+}

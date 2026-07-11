@@ -205,6 +205,10 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 	return nil
 }
 
+func (ps *cachePartStore) SupportsTxFreeDeletePart() bool {
+	return partstore.SupportsTxFreeDeletePart(ps.innerPartStore)
+}
+
 func (ps *cachePartStore) hasOversizedHint(cacheKey string) bool {
 	_, ok := ps.oversizedHints.Load(cacheKey)
 	return ok

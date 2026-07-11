@@ -1,0 +1,1 @@
+ALTER TABLE part_registry ADD COLUMN version BIGINT NOT NULL DEFAULT 1;

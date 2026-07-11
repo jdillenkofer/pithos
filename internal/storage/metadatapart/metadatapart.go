@@ -115,6 +115,38 @@ type metadataPartStorage struct {
 	tracer        trace.Tracer
 }
 
+const defaultGCGraceWindow = 30 * time.Minute
+const defaultGCInterval = 30 * time.Minute
+
+type StorageOption func(*storageOptions) error
+
+type storageOptions struct {
+	gcGraceWindow time.Duration
+	gcInterval    time.Duration
+}
+
+// WithGCGraceWindow excludes parts this young from garbage collection.
+func WithGCGraceWindow(window time.Duration) StorageOption {
+	return func(options *storageOptions) error {
+		if window <= 0 {
+			return fmt.Errorf("GC grace window must be positive")
+		}
+		options.gcGraceWindow = window
+		return nil
+	}
+}
+
+// WithGCInterval schedules garbage collection even when no new writes occur.
+func WithGCInterval(interval time.Duration) StorageOption {
+	return func(options *storageOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("GC interval must be positive")
+		}
+		options.gcInterval = interval
+		return nil
+	}
+}
+
 func (mbs *metadataPartStorage) deleteUnreferencedParts(ctx context.Context, tx database.Tx, parts []metadatastore.Part) error {
 	for _, part := range parts {
 		store, err := mbs.partStores.ByName(part.StoreName)
@@ -140,15 +172,21 @@ func objectPartManifestComplete(object *metadatastore.Object) bool {
 var _ storage.Storage = (*metadataPartStorage)(nil)
 var _ storage.TransactionalStorage = (*metadataPartStorage)(nil)
 
-func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, partStore partstore.PartStore) (storage.Storage, error) {
-	return NewStorageWithNamedPartStores(db, metadataStore, partStore, nil, nil)
+func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore, partStore partstore.PartStore, options ...StorageOption) (storage.Storage, error) {
+	return NewStorageWithNamedPartStores(db, metadataStore, partStore, nil, nil, options...)
 }
 
 // NewStorageWithNamedPartStores builds a storage whose part data is spread
 // over named part stores: writes route to the store mapped from the object's
 // storage class (falling back to defaultPartStore), reads resolve the store
 // recorded per part.
-func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatastore.MetadataStore, defaultPartStore partstore.PartStore, extraPartStores map[string]partstore.PartStore, storageClassToPartStore map[string]string) (storage.Storage, error) {
+func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatastore.MetadataStore, defaultPartStore partstore.PartStore, extraPartStores map[string]partstore.PartStore, storageClassToPartStore map[string]string, optionFns ...StorageOption) (storage.Storage, error) {
+	options := storageOptions{gcGraceWindow: defaultGCGraceWindow, gcInterval: defaultGCInterval}
+	for _, option := range optionFns {
+		if err := option(&options); err != nil {
+			return nil, err
+		}
+	}
 	for storageClass := range storageClassToPartStore {
 		if !metadatastore.IsValidStorageClass(storageClass) {
 			return nil, fmt.Errorf("storage class %q in part store mapping is not a recognized storage class", storageClass)
@@ -170,7 +208,7 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository)
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow, options.gcInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +259,7 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 		mbs.gcTaskHandle.Cancel()
 		joinedWithTimeout := mbs.gcTaskHandle.JoinWithTimeout(30 * time.Second)
 		if joinedWithTimeout {
-			slog.Debug("GCLoop joined with timeout of 30s")
+			return fmt.Errorf("timed out waiting for garbage collector to stop")
 		} else {
 			slog.Debug("GCLoop joined without timeout")
 		}

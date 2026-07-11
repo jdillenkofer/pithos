@@ -40,15 +40,15 @@ import (
 )
 
 const (
-	defaultOutboxId                   = "default"
-	metadataPartStorageType           = "MetadataPartStorage"
-	conditionalStorageMiddlewareType  = "ConditionalStorageMiddleware"
-	prometheusStorageMiddlewareType   = "PrometheusStorageMiddleware"
-	auditStorageMiddlewareType        = "AuditStorageMiddleware"
-	outboxStorageType                 = "OutboxStorage"
-	replicationStorageType            = "ReplicationStorage"
-	s3ClientStorageType               = "S3ClientStorage"
-	objectCacheStorageMiddlewareType  = "ObjectCacheStorageMiddleware"
+	defaultOutboxId                  = "default"
+	metadataPartStorageType          = "MetadataPartStorage"
+	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
+	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
+	auditStorageMiddlewareType       = "AuditStorageMiddleware"
+	outboxStorageType                = "OutboxStorage"
+	replicationStorageType           = "ReplicationStorage"
+	s3ClientStorageType              = "S3ClientStorage"
+	objectCacheStorageMiddlewareType = "ObjectCacheStorageMiddleware"
 )
 
 type StorageInstantiator = internalConfig.DynamicJsonInstantiator[storage.Storage]
@@ -75,7 +75,9 @@ type MetadataPartStorageConfiguration struct {
 	// enabled by default (sharing this storage's database so enqueue is atomic
 	// with the object mutation); the optional block customizes destinations and
 	// dispatcher behavior or disables notifications entirely.
-	Notifications *MetadataPartNotificationConfiguration `json:"notifications,omitempty"`
+	Notifications     *MetadataPartNotificationConfiguration `json:"notifications,omitempty"`
+	GCGraceWindowSecs *internalConfig.Int64Provider          `json:"gcGraceWindowSeconds,omitempty"`
+	GCIntervalSecs    *internalConfig.Int64Provider          `json:"gcIntervalSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -339,7 +341,22 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 		}
 		extraPartStores[name] = extraPartStore
 	}
-	innerStorage, err := metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore)
+	options := []metadatapart.StorageOption{}
+	if m.GCGraceWindowSecs != nil {
+		seconds := m.GCGraceWindowSecs.Value()
+		if seconds <= 0 {
+			return nil, fmt.Errorf("gcGraceWindowSeconds must be positive")
+		}
+		options = append(options, metadatapart.WithGCGraceWindow(time.Duration(seconds)*time.Second))
+	}
+	if m.GCIntervalSecs != nil {
+		seconds := m.GCIntervalSecs.Value()
+		if seconds <= 0 {
+			return nil, fmt.Errorf("gcIntervalSeconds must be positive")
+		}
+		options = append(options, metadatapart.WithGCInterval(time.Duration(seconds)*time.Second))
+	}
+	innerStorage, err := metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore, options...)
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -24,6 +26,46 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
+
+type contextBlockingDatabase struct {
+	beginStarted chan struct{}
+}
+
+type countingFailDatabase struct {
+	begins atomic.Int64
+	notify chan struct{}
+}
+
+func (db *countingFailDatabase) BeginTx(context.Context, *sql.TxOptions) (*database.TxController, error) {
+	db.begins.Add(1)
+	select {
+	case db.notify <- struct{}{}:
+	default:
+	}
+	return nil, assert.AnError
+}
+
+func (*countingFailDatabase) PingContext(context.Context) error { return nil }
+func (*countingFailDatabase) Close() error                      { return nil }
+func (*countingFailDatabase) GetDatabaseType() database.DatabaseType {
+	return database.DB_TYPE_SQLITE
+}
+
+func (db *contextBlockingDatabase) BeginTx(ctx context.Context, _ *sql.TxOptions) (*database.TxController, error) {
+	select {
+	case <-db.beginStarted:
+	default:
+		close(db.beginStarted)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*contextBlockingDatabase) PingContext(context.Context) error { return nil }
+func (*contextBlockingDatabase) Close() error                      { return nil }
+func (*contextBlockingDatabase) GetDatabaseType() database.DatabaseType {
+	return database.DB_TYPE_SQLITE
+}
 
 type gcTestEnv struct {
 	db            database.Database
@@ -92,6 +134,64 @@ func newPostgresGCTestEnv(t *testing.T) *gcTestEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	return newGCTestEnv(t, db)
+}
+
+func TestRunGCLoopCancellationInterruptsActiveCollection(t *testing.T) {
+	db := &contextBlockingDatabase{beginStarted: make(chan struct{})}
+	collector, err := New(db, nil, nil, nil, nil)
+	require.NoError(t, err)
+	partCollector := collector.(*partGC)
+	partCollector.writeOperations.Add(1)
+
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		collector.RunGCLoop(&stop)
+		close(done)
+	}()
+
+	select {
+	case <-db.beginStarted:
+	case <-time.After(time.Second):
+		t.Fatal("garbage collection did not start")
+	}
+	stop.Store(true)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("garbage collection did not stop after cancellation")
+	}
+}
+
+func TestRunGCLoopRunsAtIntervalWithoutWrites(t *testing.T) {
+	db := &countingFailDatabase{notify: make(chan struct{}, 2)}
+	collector, err := New(db, nil, nil, nil, nil, time.Hour, 25*time.Millisecond)
+	require.NoError(t, err)
+
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		collector.RunGCLoop(&stop)
+		close(done)
+	}()
+
+	for range 2 {
+		select {
+		case <-db.notify:
+		case <-time.After(time.Second):
+			stop.Store(true)
+			<-done
+			t.Fatal("garbage collection did not run at the configured interval")
+		}
+	}
+	stop.Store(true)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("garbage collection loop did not stop")
+	}
+	assert.GreaterOrEqual(t, db.begins.Load(), int64(2))
 }
 
 func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {

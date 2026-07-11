@@ -31,12 +31,12 @@ type Repository interface {
 	// part leaks until GC instead of risking deletion of live data. Refs are
 	// processed in ascending part-id order.
 	RemoveReferences(ctx context.Context, tx *sql.Tx, refs []Ref) ([]partstore.PartId, error)
-	// FindAllEntities returns every registry row for GC reconciliation.
 	FindAllEntities(ctx context.Context, tx *sql.Tx) ([]Entity, error)
-	// UpdateRefCount overwrites a row's ref_count (GC self-heal).
-	UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount int64) error
-	// DeleteByPartId removes a registry row (GC self-heal).
-	DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId) error
+	FindReconciliation(ctx context.Context, tx *sql.Tx) ([]Reconciliation, error)
+	UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error)
+	DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error)
+	RestoreMissing(ctx context.Context, tx *sql.Tx, ref Ref) (bool, error)
+	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
 }
 
 // Ref is a reference-count change for one part id.
@@ -50,6 +50,14 @@ type Entity struct {
 	RefCount  int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Version   int64
+}
+
+type Reconciliation struct {
+	PartId      partstore.PartId
+	ActualCount int64
+	RefCount    *int64
+	Version     *int64
 }
 
 // RefsFromPartIds aggregates part ids (with repetitions) into one Ref per id

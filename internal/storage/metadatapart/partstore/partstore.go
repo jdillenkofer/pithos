@@ -39,6 +39,13 @@ type TxFreeGetPartSupporter interface {
 	SupportsTxFreeGetPart() bool
 }
 
+type TxFreeDeletePartSupporter interface{ SupportsTxFreeDeletePart() bool }
+
+func SupportsTxFreeDeletePart(ps PartStore) bool {
+	s, ok := ps.(TxFreeDeletePartSupporter)
+	return ok && s.SupportsTxFreeDeletePart()
+}
+
 // SupportsTxFreeGetPart reports whether ps allows GetPart with a nil
 // transaction. Stores that don't implement TxFreeGetPartSupporter are assumed
 // to require one.

@@ -281,6 +281,10 @@ func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx database.Tx, p
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
 }
 
+func (mw *PartStoreMiddleware) SupportsTxFreeDeletePart() bool {
+	return partstore.SupportsTxFreeDeletePart(mw.innerPartStore)
+}
+
 func algorithmToId(algorithm Algorithm) byte {
 	switch algorithm {
 	case AlgorithmNone:

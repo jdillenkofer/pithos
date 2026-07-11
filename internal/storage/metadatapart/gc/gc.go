@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,57 +18,58 @@ import (
 )
 
 type PartGarbageCollector interface {
-	PreventGCFromRunning(ctx context.Context) (unblockGC func())
 	RunGCLoop(stopRunning *atomic.Bool)
 }
 
 type partGC struct {
 	db                       database.Database
-	collectionMutex          sync.RWMutex
 	metadataStore            metadatastore.MetadataStore
 	partRegistryRepository   partregistry.Repository
 	partDedupIndexRepository partdedupindex.Repository
 	partStores               *partstore.NamedPartStores
 	writeOperations          atomic.Int64
 	tracer                   trace.Tracer
+	graceWindow              time.Duration
+	collectionInterval       time.Duration
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, durations ...time.Duration) (PartGarbageCollector, error) {
+	graceWindow := 30 * time.Minute
+	if len(durations) > 0 {
+		graceWindow = durations[0]
+	}
+	if graceWindow <= 0 {
+		return nil, fmt.Errorf("GC grace window must be positive")
+	}
+	collectionInterval := 30 * time.Minute
+	if len(durations) > 1 {
+		collectionInterval = durations[1]
+	}
+	if collectionInterval <= 0 {
+		return nil, fmt.Errorf("GC interval must be positive")
+	}
 	return &partGC{
 		db:                       db,
-		collectionMutex:          sync.RWMutex{},
 		writeOperations:          atomic.Int64{},
 		metadataStore:            metadataStore,
 		partRegistryRepository:   partRegistryRepository,
 		partDedupIndexRepository: partDedupIndexRepository,
 		partStores:               partStores,
 		tracer:                   otel.Tracer("internal/storage/metadatapart/gc"),
+		graceWindow:              graceWindow,
+		collectionInterval:       collectionInterval,
 	}, nil
-}
-
-func (partGC *partGC) PreventGCFromRunning(ctx context.Context) (unblockGC func()) {
-	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.PreventGCFromRunning")
-	partGC.writeOperations.Add(1)
-	span.AddEvent("Acquiring lock")
-	partGC.collectionMutex.RLock()
-	span.AddEvent("Acquired lock")
-	unblockGC = func() {
-		partGC.collectionMutex.RUnlock()
-		span.AddEvent("Released lock")
-		span.End()
-	}
-	return
 }
 
 type protectedDatabase struct {
 	inner  database.Database
-	partGC PartGarbageCollector
+	partGC *partGC
 }
 
 var _ database.Database = (*protectedDatabase)(nil)
 
-func NewProtectedDatabase(inner database.Database, partGC PartGarbageCollector) database.Database {
-	return &protectedDatabase{inner: inner, partGC: partGC}
+func NewProtectedDatabase(inner database.Database, collector PartGarbageCollector) database.Database {
+	return &protectedDatabase{inner: inner, partGC: collector.(*partGC)}
 }
 
 func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
@@ -83,29 +83,16 @@ func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 		}
 	}
 
-	var unblockGC func()
 	if !readOnly {
-		unblockGC = db.partGC.PreventGCFromRunning(ctx)
+		db.partGC.writeOperations.Add(1)
 	}
 
 	tx, err := db.inner.BeginTx(ctx, opts)
 	if err != nil {
-		if unblockGC != nil {
-			unblockGC()
-		}
 		return nil, err
 	}
 
 	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly)
-	if unblockGC != nil {
-		var releaseOnce sync.Once
-		release := func(context.Context) error {
-			releaseOnce.Do(unblockGC)
-			return nil
-		}
-		protectedTx.OnAfterCommit(release)
-		protectedTx.OnRollback(release)
-	}
 	return protectedTx, nil
 }
 
@@ -126,12 +113,38 @@ func (db *protectedDatabase) UnwrapDatabase() database.Database {
 }
 
 func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stopWatcherDone := make(chan struct{})
+	go func() {
+		defer close(stopWatcherDone)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if stopRunning.Load() {
+				cancel()
+				return
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-stopWatcherDone
+	}()
+
 	var lastWriteOperationCount int64 = 0
+	lastCollection := time.Now()
 	for !stopRunning.Load() {
 		newWriteOperationCount := partGC.writeOperations.Load()
-		if newWriteOperationCount > lastWriteOperationCount {
+		collectionDue := !time.Now().Before(lastCollection.Add(partGC.collectionInterval))
+		if newWriteOperationCount > lastWriteOperationCount || collectionDue {
 			slog.Debug("Running part garbage collector")
-			err := partGC.runGC()
+			err := partGC.runGCWithContext(ctx)
+			lastCollection = time.Now()
 			if err != nil {
 				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s", err))
 			} else {
@@ -139,116 +152,140 @@ func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
 			}
 		}
 		lastWriteOperationCount = newWriteOperationCount
-		for range 30 * 4 {
-			time.Sleep(250 * time.Millisecond)
-			if stopRunning.Load() {
-				return
-			}
+
+		wait := 30 * time.Second
+		untilNextCollection := time.Until(lastCollection.Add(partGC.collectionInterval))
+		if untilNextCollection < wait {
+			wait = untilNextCollection
+		}
+		if wait <= 0 {
+			continue
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
 		}
 	}
 }
 
 func (partGC *partGC) runGC() error {
-	ctx := context.Background()
+	return partGC.runGCWithContext(context.Background())
+}
+
+func (partGC *partGC) runGCWithContext(ctx context.Context) error {
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runGC")
 	defer span.End()
-
-	span.AddEvent("Acquiring lock")
-	partGC.collectionMutex.Lock()
-	span.AddEvent("Acquired lock")
-	defer func() {
-		partGC.collectionMutex.Unlock()
-		span.AddEvent("Released lock")
-	}()
-
-	numDeletedParts := 0
-	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		// The parts table is the sole liveness source. Reconcile the registry
-		// before sweeping so drift can never cause live bytes to be deleted.
-		counts, err := partGC.metadataStore.GetInUsePartIdCounts(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		registryEntities, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		seen := make(map[partstore.PartId]struct{}, len(registryEntities))
-		for _, entity := range registryEntities {
-			count, ok := counts[entity.PartId]
-			if !ok {
-				slog.Warn("Removing orphaned part registry row", "part_id", entity.PartId.String(), "ref_count", entity.RefCount)
-				if err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), entity.PartId); err != nil {
-					return err
-				}
-				continue
-			}
-			seen[entity.PartId] = struct{}{}
-			if entity.RefCount != count {
-				slog.Warn("Correcting part registry refcount", "part_id", entity.PartId.String(), "old_ref_count", entity.RefCount, "new_ref_count", count)
-				if err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), entity.PartId, count); err != nil {
-					return err
-				}
-			}
-		}
-		missingRefs := make([]partregistry.Ref, 0)
-		for id, count := range counts {
-			if _, ok := seen[id]; !ok {
-				slog.Warn("Restoring missing part registry row", "part_id", id.String(), "ref_count", count)
-				missingRefs = append(missingRefs, partregistry.Ref{PartId: id, Delta: count})
-			}
-		}
-		if err := partGC.partRegistryRepository.RegisterParts(ctx, tx.SqlTx(), missingRefs); err != nil {
-			return err
-		}
-		indexedIDs, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		deadIndexIDs := make([]partstore.PartId, 0)
-		for _, id := range indexedIDs {
-			if _, live := counts[id]; !live {
-				deadIndexIDs = append(deadIndexIDs, id)
-			}
-		}
-		if err := partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), deadIndexIDs); err != nil {
-			return err
-		}
-		// Re-derive missing index entries from live parts so content written
-		// before the dedup index existed (or whose entry was pruned when an
-		// identical part died) becomes shareable again. Runs after the prune
-		// so a dead entry cannot block a live part's checksum tuple.
-		backfilled, err := partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		if backfilled > 0 {
-			slog.Info("Backfilled part dedup index entries", "count", backfilled)
-		}
-
-		// Part ids are ULIDs and therefore globally unique across stores, so
-		// each store can be swept against the single global in-use set.
-		for _, partStore := range partGC.partStores.All() {
-			existingPartIds, err := partStore.GetPartIds(ctx, tx)
-			if err != nil {
-				return err
-			}
-
-			for _, existingPartId := range existingPartIds {
-				if _, hasKey := counts[existingPartId]; !hasKey {
-					err = partStore.DeletePart(ctx, tx, existingPartId)
+	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
+	var observations []partregistry.Reconciliation
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		observations, err = partGC.partRegistryRepository.FindReconciliation(ctx, tx.SqlTx())
+		return err
+	}); err != nil {
+		return err
+	}
+	for start := 0; start < len(observations); start += 256 {
+		end := min(start+256, len(observations))
+		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			for _, o := range observations[start:end] {
+				if o.Version == nil {
+					_, err := partGC.partRegistryRepository.RestoreMissing(ctx, tx.SqlTx(), partregistry.Ref{PartId: o.PartId, Delta: o.ActualCount})
 					if err != nil {
 						return err
 					}
-
-					numDeletedParts += 1
+				} else if o.ActualCount == 0 {
+					_, err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), o.PartId, *o.Version)
+					if err != nil {
+						return err
+					}
+				} else if o.RefCount == nil || *o.RefCount != o.ActualCount {
+					_, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	// Pruning and backfill are idempotent and deliberately isolated from scans.
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		indexed, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		live, err := partGC.metadataStore.GetInUsePartIdCounts(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		var dead []partstore.PartId
+		for _, id := range indexed {
+			if _, ok := live[id]; !ok {
+				dead = append(dead, id)
+			}
+		}
+		if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), dead); err != nil {
+			return err
+		}
+		_, err = partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
+		return err
+	}); err != nil {
+		return err
+	}
+	numDeletedParts := 0
+	for _, store := range partGC.partStores.All() {
+		var candidates []partstore.PartId
+		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			ids, err := store.GetPartIds(ctx, tx)
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				if id.CreatedAt().Before(cutoff) {
+					candidates = append(candidates, id)
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for start := 0; start < len(candidates); start += 256 {
+			end := min(start+256, len(candidates))
+			var external []partstore.PartId
+			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+				for _, id := range candidates[start:end] {
+					condemned, err := partGC.partRegistryRepository.Condemn(ctx, tx.SqlTx(), id)
+					if err != nil {
+						return err
+					}
+					if !condemned {
+						continue
+					}
+					if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{id}); err != nil {
+						return err
+					}
+					if partstore.SupportsTxFreeDeletePart(store) {
+						external = append(external, id)
+					} else if err = store.DeletePart(ctx, tx, id); err != nil {
+						return err
+					}
+					numDeletedParts++
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			for _, id := range external {
+				if err := store.DeletePart(ctx, nil, id); err != nil {
+					slog.Warn("post-commit part deletion failed; leaving orphan for next GC", "part_id", id.String(), "error", err)
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
 	return nil
