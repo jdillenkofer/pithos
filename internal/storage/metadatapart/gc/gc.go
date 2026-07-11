@@ -30,15 +30,23 @@ type partGC struct {
 	writeOperations          atomic.Int64
 	tracer                   trace.Tracer
 	graceWindow              time.Duration
+	collectionInterval       time.Duration
 }
 
-func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, graceWindows ...time.Duration) (PartGarbageCollector, error) {
+func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, durations ...time.Duration) (PartGarbageCollector, error) {
 	graceWindow := 30 * time.Minute
-	if len(graceWindows) > 0 {
-		graceWindow = graceWindows[0]
+	if len(durations) > 0 {
+		graceWindow = durations[0]
 	}
 	if graceWindow <= 0 {
 		return nil, fmt.Errorf("GC grace window must be positive")
+	}
+	collectionInterval := 30 * time.Minute
+	if len(durations) > 1 {
+		collectionInterval = durations[1]
+	}
+	if collectionInterval <= 0 {
+		return nil, fmt.Errorf("GC interval must be positive")
 	}
 	return &partGC{
 		db:                       db,
@@ -49,6 +57,7 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 		partStores:               partStores,
 		tracer:                   otel.Tracer("internal/storage/metadatapart/gc"),
 		graceWindow:              graceWindow,
+		collectionInterval:       collectionInterval,
 	}, nil
 }
 
@@ -128,11 +137,14 @@ func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
 	}()
 
 	var lastWriteOperationCount int64 = 0
+	lastCollection := time.Now()
 	for !stopRunning.Load() {
 		newWriteOperationCount := partGC.writeOperations.Load()
-		if newWriteOperationCount > lastWriteOperationCount {
+		collectionDue := !time.Now().Before(lastCollection.Add(partGC.collectionInterval))
+		if newWriteOperationCount > lastWriteOperationCount || collectionDue {
 			slog.Debug("Running part garbage collector")
 			err := partGC.runGCWithContext(ctx)
+			lastCollection = time.Now()
 			if err != nil {
 				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s", err))
 			} else {
@@ -140,11 +152,21 @@ func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
 			}
 		}
 		lastWriteOperationCount = newWriteOperationCount
-		for range 30 * 4 {
-			time.Sleep(250 * time.Millisecond)
-			if stopRunning.Load() {
-				return
-			}
+
+		wait := 30 * time.Second
+		untilNextCollection := time.Until(lastCollection.Add(partGC.collectionInterval))
+		if untilNextCollection < wait {
+			wait = untilNextCollection
+		}
+		if wait <= 0 {
+			continue
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
 		}
 	}
 }

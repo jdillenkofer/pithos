@@ -77,6 +77,7 @@ type MetadataPartStorageConfiguration struct {
 	// dispatcher behavior or disables notifications entirely.
 	Notifications     *MetadataPartNotificationConfiguration `json:"notifications,omitempty"`
 	GCGraceWindowSecs *internalConfig.Int64Provider          `json:"gcGraceWindowSeconds,omitempty"`
+	GCIntervalSecs    *internalConfig.Int64Provider          `json:"gcIntervalSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -347,6 +348,13 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 			return nil, fmt.Errorf("gcGraceWindowSeconds must be positive")
 		}
 		options = append(options, metadatapart.WithGCGraceWindow(time.Duration(seconds)*time.Second))
+	}
+	if m.GCIntervalSecs != nil {
+		seconds := m.GCIntervalSecs.Value()
+		if seconds <= 0 {
+			return nil, fmt.Errorf("gcIntervalSeconds must be positive")
+		}
+		options = append(options, metadatapart.WithGCInterval(time.Duration(seconds)*time.Second))
 	}
 	innerStorage, err := metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore, options...)
 	if err != nil {

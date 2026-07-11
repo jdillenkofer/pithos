@@ -116,10 +116,14 @@ type metadataPartStorage struct {
 }
 
 const defaultGCGraceWindow = 30 * time.Minute
+const defaultGCInterval = 30 * time.Minute
 
 type StorageOption func(*storageOptions) error
 
-type storageOptions struct{ gcGraceWindow time.Duration }
+type storageOptions struct {
+	gcGraceWindow time.Duration
+	gcInterval    time.Duration
+}
 
 // WithGCGraceWindow excludes parts this young from garbage collection.
 func WithGCGraceWindow(window time.Duration) StorageOption {
@@ -128,6 +132,17 @@ func WithGCGraceWindow(window time.Duration) StorageOption {
 			return fmt.Errorf("GC grace window must be positive")
 		}
 		options.gcGraceWindow = window
+		return nil
+	}
+}
+
+// WithGCInterval schedules garbage collection even when no new writes occur.
+func WithGCInterval(interval time.Duration) StorageOption {
+	return func(options *storageOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("GC interval must be positive")
+		}
+		options.gcInterval = interval
 		return nil
 	}
 }
@@ -166,7 +181,7 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 // storage class (falling back to defaultPartStore), reads resolve the store
 // recorded per part.
 func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatastore.MetadataStore, defaultPartStore partstore.PartStore, extraPartStores map[string]partstore.PartStore, storageClassToPartStore map[string]string, optionFns ...StorageOption) (storage.Storage, error) {
-	options := storageOptions{gcGraceWindow: defaultGCGraceWindow}
+	options := storageOptions{gcGraceWindow: defaultGCGraceWindow, gcInterval: defaultGCInterval}
 	for _, option := range optionFns {
 		if err := option(&options); err != nil {
 			return nil, err
@@ -193,7 +208,7 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow)
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow, options.gcInterval)
 	if err != nil {
 		return nil, err
 	}
