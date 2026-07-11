@@ -169,16 +169,18 @@ func TestUpdateRefCountAndDeleteByPartId(t *testing.T) {
 		err := repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 3}})
 		require.NoError(t, err)
 
-		err = repo.UpdateRefCount(ctx, tx, partId, 1)
+		changed, err := repo.UpdateRefCount(ctx, tx, partId, 1, 1)
 		require.NoError(t, err)
+		require.True(t, changed)
 
 		entities, err := repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
 		require.Len(t, entities, 1)
 		assert.Equal(t, int64(1), entities[0].RefCount)
 
-		err = repo.DeleteByPartId(ctx, tx, partId)
+		changed, err = repo.DeleteByPartId(ctx, tx, partId, 2)
 		require.NoError(t, err)
+		require.True(t, changed)
 
 		entities, err = repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
