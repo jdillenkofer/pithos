@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -25,6 +26,7 @@ type prometheusStorageMiddleware struct {
 	registerer                   prometheus.Registerer
 	failedApiOpsCounter          *prometheus.CounterVec
 	successfulApiOpsCounter      *prometheus.CounterVec
+	apiOpsCounter                *prometheus.CounterVec
 	totalSizeByBucket            *prometheus.GaugeVec
 	totalBytesUploadedByBucket   *prometheus.CounterVec
 	totalBytesDownloadedByBucket *prometheus.CounterVec
@@ -37,12 +39,35 @@ func (psm *prometheusStorageMiddleware) run(ctx context.Context, spanName string
 	defer span.End()
 
 	err := fn(ctx)
-	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": opType}).Inc()
-		return err
+	psm.observeOperation(opType, err)
+	return err
+}
+
+func operationOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, storage.ErrNoSuchBucket),
+		errors.Is(err, storage.ErrNoSuchKey),
+		errors.Is(err, storage.ErrNoSuchWebsiteConfiguration),
+		errors.Is(err, storage.ErrNoSuchCORSConfiguration),
+		errors.Is(err, storage.ErrNoSuchLifecycleConfiguration):
+		return "not_found"
+	case errors.Is(err, storage.ErrPreconditionFailed), errors.Is(err, storage.ErrNotModified):
+		return "rejected"
+	default:
+		return "error"
 	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": opType}).Inc()
-	return nil
+}
+
+func (psm *prometheusStorageMiddleware) observeOperation(opType string, err error) {
+	outcome := operationOutcome(err)
+	psm.apiOpsCounter.WithLabelValues(opType, outcome).Inc()
+	if outcome == "success" {
+		psm.successfulApiOpsCounter.WithLabelValues(opType).Inc()
+	} else if outcome == "error" {
+		psm.failedApiOpsCounter.WithLabelValues(opType).Inc()
+	}
 }
 
 // Compile-time check to ensure prometheusStorageMiddleware implements storage.Storage
@@ -72,6 +97,15 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 			Help:      "No of successful api operations handled by Pithos partitioned by type",
 		},
 		[]string{"type"},
+	)
+	apiOpsCounter := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "pithos",
+			Subsystem: "storage",
+			Name:      "api_ops_total",
+			Help:      "Number of storage API operations partitioned by type and outcome",
+		},
+		[]string{"type", "outcome"},
 	)
 
 	totalSizeByBucket := prometheus.NewGaugeVec(
@@ -115,6 +149,7 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 		registerer:                   registerer,
 		failedApiOpsCounter:          failedApiOpsCounter,
 		successfulApiOpsCounter:      successfulApiOpsCounter,
+		apiOpsCounter:                apiOpsCounter,
 		totalSizeByBucket:            totalSizeByBucket,
 		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
 		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
@@ -187,6 +222,11 @@ func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
 			slog.Error("Failed to register successfulApiOpsCounter metric", "error", err)
 		}
 	}
+	if err := psm.registerer.Register(psm.apiOpsCounter); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			slog.Error("Failed to register apiOpsCounter metric", "error", err)
+		}
+	}
 	if err := psm.registerer.Register(psm.totalSizeByBucket); err != nil {
 		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
 			slog.Error("Failed to register totalSizeByBucket metric", "error", err)
@@ -219,6 +259,7 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 	psm.registerer.Unregister(psm.totalBytesUploadedByBucket)
 	psm.registerer.Unregister(psm.totalSizeByBucket)
 	psm.registerer.Unregister(psm.successfulApiOpsCounter)
+	psm.registerer.Unregister(psm.apiOpsCounter)
 	psm.registerer.Unregister(psm.failedApiOpsCounter)
 
 	if psm.metricsMeasuringTaskHandle != nil && !psm.metricsMeasuringTaskHandle.IsCancelled() {
@@ -383,8 +424,8 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 	defer span.End()
 
 	object, readers, err := psm.Next.GetObject(ctx, bucketName, key, ranges, opts)
+	psm.observeOperation("GetObject", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 		return nil, nil, err
 	}
 
@@ -394,8 +435,6 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 			psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 		})
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "GetObject"}).Inc()
 
 	return object, readers, nil
 }
@@ -409,12 +448,10 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 	})
 
 	putObjectResult, err := psm.Next.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
+	psm.observeOperation("PutObject", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 		return nil, err
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "PutObject"}).Inc()
 
 	return putObjectResult, nil
 }
@@ -428,12 +465,10 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 	})
 
 	appendObjectResult, err := psm.Next.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
+	psm.observeOperation("AppendObject", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "AppendObject"}).Inc()
 		return nil, err
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "AppendObject"}).Inc()
 
 	return appendObjectResult, nil
 }
@@ -473,11 +508,10 @@ func (psm *prometheusStorageMiddleware) CopyObject(ctx context.Context, srcBucke
 	defer span.End()
 
 	result, err := psm.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	psm.observeOperation("CopyObject", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
 		return nil, err
 	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "CopyObject"}).Inc()
 	return result, nil
 }
 
@@ -486,11 +520,10 @@ func (psm *prometheusStorageMiddleware) UploadPartCopy(ctx context.Context, srcB
 	defer span.End()
 
 	result, err := psm.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
+	psm.observeOperation("UploadPartCopy", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
 		return nil, err
 	}
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPartCopy"}).Inc()
 	return result, nil
 }
 
@@ -504,12 +537,10 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 	})
 
 	uploadPartResult, err := psm.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
+	psm.observeOperation("UploadPart", err)
 	if err != nil {
-		psm.failedApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
 		return nil, err
 	}
-
-	psm.successfulApiOpsCounter.With(prometheus.Labels{"type": "UploadPart"}).Inc()
 	psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(bytesUploaded))
 
 	return uploadPartResult, nil
