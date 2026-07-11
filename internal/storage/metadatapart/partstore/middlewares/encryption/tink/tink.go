@@ -676,3 +676,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx 
 
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
 }
+
+func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreeDeletePart() bool {
+	return partstore.SupportsTxFreeDeletePart(mw.innerPartStore)
+}
