@@ -255,6 +255,50 @@ func newTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	return mps, cleanup
 }
 
+// newTestStorageWithColdStore builds a storage with a second ("cold")
+// filesystem part store that the GLACIER class routes to.
+func newTestStorageWithColdStore(t *testing.T) (*metadataPartStorage, func()) {
+	t.Helper()
+	storagePath, err := os.MkdirTemp("", "pithos-test-data-")
+	require.NoError(t, err)
+
+	dbPath := filepath.Join(storagePath, "pithos.db")
+	db, err := sqlite.OpenDatabase(dbPath)
+	require.NoError(t, err)
+
+	partContentRepository, err := repositoryFactory.NewPartContentRepository(db)
+	require.NoError(t, err)
+	partStore, err := sqlPartStore.New(db, partContentRepository)
+	require.NoError(t, err)
+	coldStore, err := filesystemPartStore.New(filepath.Join(storagePath, "cold"))
+	require.NoError(t, err)
+	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
+	require.NoError(t, err)
+	objectRepository, err := repositoryFactory.NewObjectRepository(db)
+	require.NoError(t, err)
+	partRepository, err := repositoryFactory.NewPartRepository(db)
+	require.NoError(t, err)
+	tagRepository, err := repositoryFactory.NewTagRepository(db)
+	require.NoError(t, err)
+	userMetadataRepository, err := repositoryFactory.NewUserMetadataRepository(db)
+	require.NoError(t, err)
+	metaStore, err := sqlMetadataStore.New(db, bucketRepository, objectRepository, partRepository, tagRepository, userMetadataRepository)
+	require.NoError(t, err)
+	st, err := NewStorageWithNamedPartStores(db, metaStore, partStore, map[string]partstore.PartStore{"cold": coldStore}, map[string]string{"GLACIER": "cold"})
+	require.NoError(t, err)
+	mps := st.(*metadataPartStorage)
+
+	ctx := context.Background()
+	require.NoError(t, mps.Start(ctx))
+
+	cleanup := func() {
+		mps.Stop(ctx)
+		db.Close()
+		os.RemoveAll(storagePath)
+	}
+	return mps, cleanup
+}
+
 func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	t.Helper()
 	testcontainers.SkipIfProviderIsNotHealthy(t)
@@ -320,6 +364,21 @@ func physicalPartIDs(t *testing.T, st *metadataPartStorage) []partstore.PartId {
 	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
 		var err error
 		ids, err = st.partStores.Default().GetPartIds(ctx, tx)
+		return err
+	}))
+	return ids
+}
+
+func partIDsInStore(t *testing.T, st *metadataPartStorage, name *string) []partstore.PartId {
+	t.Helper()
+	ctx := context.Background()
+	var ids []partstore.PartId
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
+		store, err := st.partStores.ByName(name)
+		if err != nil {
+			return err
+		}
+		ids, err = store.GetPartIds(ctx, tx)
 		return err
 	}))
 	return ids
@@ -503,6 +562,41 @@ func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
 	_, err = st.DeleteObject(ctx, bucket, secondKey, nil)
 	require.NoError(t, err)
 	assert.Empty(t, physicalPartIDs(t, st))
+}
+
+func TestCopyObjectAcrossStoresDeduplicatesContent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorageWithColdStore(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	srcKey := storage.MustNewObjectKey("src")
+	dstKey1 := storage.MustNewObjectKey("dst1")
+	dstKey2 := storage.MustNewObjectKey("dst2")
+	require.NoError(t, st.CreateBucket(ctx, bucket))
+	_, err := st.PutObject(ctx, bucket, srcKey, nil, bytes.NewReader([]byte("cold content")), nil, nil)
+	require.NoError(t, err)
+
+	coldClass := "GLACIER"
+	coldName := "cold"
+	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey1, &storage.CopyObjectOptions{StorageClass: &coldClass})
+	require.NoError(t, err)
+	require.Len(t, partIDsInStore(t, st, &coldName), 1)
+
+	// The second cross-store copy carries the same checksums, so it must
+	// share dst1's part instead of writing the bytes again.
+	_, err = st.CopyObject(ctx, bucket, srcKey, bucket, dstKey2, &storage.CopyObjectOptions{StorageClass: &coldClass})
+	require.NoError(t, err)
+	require.Len(t, partIDsInStore(t, st, &coldName), 1)
+
+	_, err = st.DeleteObject(ctx, bucket, dstKey1, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "cold content", readObjectContent(t, st, bucket, dstKey2, nil))
+	require.Len(t, partIDsInStore(t, st, &coldName), 1)
+	_, err = st.DeleteObject(ctx, bucket, dstKey2, nil)
+	require.NoError(t, err)
+	assert.Empty(t, partIDsInStore(t, st, &coldName))
 }
 
 func TestTransitionWithinSameStoreKeepsContent(t *testing.T) {

@@ -123,6 +123,23 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 					sharedPartIDs = append(sharedPartIDs, srcPart.Id)
 					continue
 				}
+				// The source part's stored checksums can identify identical
+				// content already in the destination store without reading
+				// any bytes.
+				dedupEntry, canDedup := dedupEntryForPartMetadata(dstStoreName, srcPart)
+				if canDedup {
+					sharedID, err := mbs.tryShareDedupPart(ctx, tx, dedupEntry)
+					if err != nil {
+						return err
+					}
+					if sharedID != nil {
+						newParts[i] = srcPart
+						newParts[i].Id = *sharedID
+						newParts[i].StoreName = dstStoreName
+						newParts[i].RefPreAcquired = true
+						continue
+					}
+				}
 				newPartId, err := partstore.NewRandomPartId()
 				if err != nil {
 					return err
@@ -143,6 +160,12 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				newParts[i] = srcPart
 				newParts[i].Id = *newPartId
 				newParts[i].StoreName = dstStoreName
+				if canDedup {
+					dedupEntry.PartId = *newPartId
+					if _, err := mbs.metadataStore.TryIndexDedupPart(ctx, tx.SqlTx(), dedupEntry); err != nil {
+						return err
+					}
+				}
 			}
 			if len(sharedPartIDs) > 0 {
 				added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), sharedPartIDs)

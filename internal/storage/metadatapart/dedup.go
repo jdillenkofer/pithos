@@ -24,8 +24,43 @@ func dedupEntryForPart(storeName *string, id partstore.PartId, checksums *checks
 	return metadatastore.PartDedupEntry{PartStoreName: normalizedPartStoreName(storeName), ChecksumSHA256: *checksums.ChecksumSHA256, Size: size, ETag: *checksums.ETag, ChecksumCRC32: *checksums.ChecksumCRC32, ChecksumCRC32C: *checksums.ChecksumCRC32C, ChecksumCRC64NVME: *checksums.ChecksumCRC64NVME, ChecksumSHA1: *checksums.ChecksumSHA1, PartId: id}, true
 }
 
+// dedupEntryForPartMetadata builds a dedup entry from a part's stored
+// metadata, targeting storeName as the store the content would be written to.
+func dedupEntryForPartMetadata(storeName *string, part metadatastore.Part) (metadatastore.PartDedupEntry, bool) {
+	if part.ChecksumCRC32 == nil || part.ChecksumCRC32C == nil || part.ChecksumCRC64NVME == nil || part.ChecksumSHA1 == nil || part.ChecksumSHA256 == nil {
+		return metadatastore.PartDedupEntry{}, false
+	}
+	return metadatastore.PartDedupEntry{PartStoreName: normalizedPartStoreName(storeName), ChecksumSHA256: *part.ChecksumSHA256, Size: part.Size, ETag: part.ETag, ChecksumCRC32: *part.ChecksumCRC32, ChecksumCRC32C: *part.ChecksumCRC32C, ChecksumCRC64NVME: *part.ChecksumCRC64NVME, ChecksumSHA1: *part.ChecksumSHA1, PartId: part.Id}, true
+}
+
 func dedupEntriesMatch(a, b metadatastore.PartDedupEntry) bool {
 	return a.PartStoreName == b.PartStoreName && a.ChecksumSHA256 == b.ChecksumSHA256 && a.Size == b.Size && a.ETag == b.ETag && a.ChecksumCRC32 == b.ChecksumCRC32 && a.ChecksumCRC32C == b.ChecksumCRC32C && a.ChecksumCRC64NVME == b.ChecksumCRC64NVME && a.ChecksumSHA1 == b.ChecksumSHA1
+}
+
+// tryShareDedupPart looks up an indexed part with the same checksums as entry
+// and acquires a registry reference on it. It returns nil when no shareable
+// part exists; a stale index entry pointing at a condemned part is removed so
+// the caller's part can be indexed in its place.
+func (mbs *metadataPartStorage) tryShareDedupPart(ctx context.Context, tx database.Tx, entry metadatastore.PartDedupEntry) (*partstore.PartId, error) {
+	existing, err := mbs.metadataStore.LookupDedupPart(ctx, tx.SqlTx(), entry.PartStoreName, entry.ChecksumSHA256, entry.Size)
+	if err != nil || existing == nil {
+		return nil, err
+	}
+	if !dedupEntriesMatch(*existing, entry) {
+		slog.Warn("Part dedup index checksum mismatch", "part_id", existing.PartId.String(), "checksum_sha256", entry.ChecksumSHA256, "size", entry.Size)
+		return nil, nil
+	}
+	added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), []partstore.PartId{existing.PartId})
+	if err != nil {
+		return nil, err
+	}
+	if added {
+		return &existing.PartId, nil
+	}
+	if err := mbs.metadataStore.DeletePartDedupEntries(ctx, tx.SqlTx(), []partstore.PartId{existing.PartId}); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (mbs *metadataPartStorage) dedupeFreshPart(ctx context.Context, tx database.Tx, storeName *string, store partstore.PartStore, freshID partstore.PartId, checksums *checksumutils.ChecksumValues, size int64) (partstore.PartId, bool, error) {
@@ -33,28 +68,15 @@ func (mbs *metadataPartStorage) dedupeFreshPart(ctx context.Context, tx database
 	if !ok {
 		return freshID, false, nil
 	}
-	existing, err := mbs.metadataStore.LookupDedupPart(ctx, tx.SqlTx(), fresh.PartStoreName, fresh.ChecksumSHA256, fresh.Size)
+	sharedID, err := mbs.tryShareDedupPart(ctx, tx, fresh)
 	if err != nil {
 		return freshID, false, err
 	}
-	if existing != nil {
-		if dedupEntriesMatch(*existing, fresh) {
-			added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), []partstore.PartId{existing.PartId})
-			if err != nil {
-				return freshID, false, err
-			}
-			if added {
-				if err := store.DeletePart(ctx, tx, freshID); err != nil {
-					return freshID, false, err
-				}
-				return existing.PartId, true, nil
-			}
-			if err := mbs.metadataStore.DeletePartDedupEntries(ctx, tx.SqlTx(), []partstore.PartId{existing.PartId}); err != nil {
-				return freshID, false, err
-			}
-		} else {
-			slog.Warn("Part dedup index checksum mismatch", "part_id", existing.PartId.String(), "checksum_sha256", fresh.ChecksumSHA256, "size", fresh.Size)
+	if sharedID != nil {
+		if err := store.DeletePart(ctx, tx, freshID); err != nil {
+			return freshID, false, err
 		}
+		return *sharedID, true, nil
 	}
 	_, err = mbs.metadataStore.TryIndexDedupPart(ctx, tx.SqlTx(), fresh)
 	return freshID, false, err
