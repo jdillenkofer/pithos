@@ -236,3 +236,5 @@ func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx database.Tx, p
 	}
 	return nil
 }
+
+func (bs *filesystemPartStore) SupportsTxFreeDeletePart() bool { return true }

@@ -161,107 +161,114 @@ func (partGC *partGC) runGC() error {
 	ctx := context.Background()
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runGC")
 	defer span.End()
-
-	span.AddEvent("Acquiring lock")
-	partGC.collectionMutex.Lock()
-	span.AddEvent("Acquired lock")
-	defer func() {
-		partGC.collectionMutex.Unlock()
-		span.AddEvent("Released lock")
-	}()
-
-	numDeletedParts := 0
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
-	err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		// The parts table is the sole liveness source. Reconcile the registry
-		// before sweeping so drift can never cause live bytes to be deleted.
-		counts, err := partGC.metadataStore.GetInUsePartIdCounts(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		registryEntities, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		seen := make(map[partstore.PartId]struct{}, len(registryEntities))
-		for _, entity := range registryEntities {
-			count, ok := counts[entity.PartId]
-			if !ok {
-				slog.Warn("Removing orphaned part registry row", "part_id", entity.PartId.String(), "ref_count", entity.RefCount)
-				if err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), entity.PartId); err != nil {
-					return err
-				}
-				continue
-			}
-			seen[entity.PartId] = struct{}{}
-			if entity.RefCount != count {
-				slog.Warn("Correcting part registry refcount", "part_id", entity.PartId.String(), "old_ref_count", entity.RefCount, "new_ref_count", count)
-				if err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), entity.PartId, count); err != nil {
-					return err
-				}
-			}
-		}
-		missingRefs := make([]partregistry.Ref, 0)
-		for id, count := range counts {
-			if _, ok := seen[id]; !ok {
-				slog.Warn("Restoring missing part registry row", "part_id", id.String(), "ref_count", count)
-				missingRefs = append(missingRefs, partregistry.Ref{PartId: id, Delta: count})
-			}
-		}
-		if err := partGC.partRegistryRepository.RegisterParts(ctx, tx.SqlTx(), missingRefs); err != nil {
-			return err
-		}
-		indexedIDs, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		deadIndexIDs := make([]partstore.PartId, 0)
-		for _, id := range indexedIDs {
-			if _, live := counts[id]; !live {
-				deadIndexIDs = append(deadIndexIDs, id)
-			}
-		}
-		if err := partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), deadIndexIDs); err != nil {
-			return err
-		}
-		// Re-derive missing index entries from live parts so content written
-		// before the dedup index existed (or whose entry was pruned when an
-		// identical part died) becomes shareable again. Runs after the prune
-		// so a dead entry cannot block a live part's checksum tuple.
-		backfilled, err := partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
-		if err != nil {
-			return err
-		}
-		if backfilled > 0 {
-			slog.Info("Backfilled part dedup index entries", "count", backfilled)
-		}
-
-		// Part ids are ULIDs and therefore globally unique across stores, so
-		// each store can be swept against the single global in-use set.
-		for _, partStore := range partGC.partStores.All() {
-			existingPartIds, err := partStore.GetPartIds(ctx, tx)
-			if err != nil {
-				return err
-			}
-
-			for _, existingPartId := range existingPartIds {
-				if !existingPartId.CreatedAt().Before(cutoff) {
-					continue
-				}
-				if _, hasKey := counts[existingPartId]; !hasKey {
-					err = partStore.DeletePart(ctx, tx, existingPartId)
+	var observations []partregistry.Reconciliation
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		observations, err = partGC.partRegistryRepository.FindReconciliation(ctx, tx.SqlTx())
+		return err
+	}); err != nil {
+		return err
+	}
+	for start := 0; start < len(observations); start += 256 {
+		end := min(start+256, len(observations))
+		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			for _, o := range observations[start:end] {
+				if o.Version == nil {
+					_, err := partGC.partRegistryRepository.RestoreMissing(ctx, tx.SqlTx(), partregistry.Ref{PartId: o.PartId, Delta: o.ActualCount})
 					if err != nil {
 						return err
 					}
-
-					numDeletedParts += 1
+				} else if o.ActualCount == 0 {
+					_, err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), o.PartId, *o.Version)
+					if err != nil {
+						return err
+					}
+				} else if o.RefCount == nil || *o.RefCount != o.ActualCount {
+					_, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	// Pruning and backfill are idempotent and deliberately isolated from scans.
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		indexed, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		live, err := partGC.metadataStore.GetInUsePartIdCounts(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		var dead []partstore.PartId
+		for _, id := range indexed {
+			if _, ok := live[id]; !ok {
+				dead = append(dead, id)
+			}
+		}
+		if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), dead); err != nil {
+			return err
+		}
+		_, err = partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
+		return err
+	}); err != nil {
+		return err
+	}
+	numDeletedParts := 0
+	for _, store := range partGC.partStores.All() {
+		var candidates []partstore.PartId
+		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			ids, err := store.GetPartIds(ctx, tx)
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				if id.CreatedAt().Before(cutoff) {
+					candidates = append(candidates, id)
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for start := 0; start < len(candidates); start += 256 {
+			end := min(start+256, len(candidates))
+			var external []partstore.PartId
+			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+				for _, id := range candidates[start:end] {
+					condemned, err := partGC.partRegistryRepository.Condemn(ctx, tx.SqlTx(), id)
+					if err != nil {
+						return err
+					}
+					if !condemned {
+						continue
+					}
+					if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{id}); err != nil {
+						return err
+					}
+					if partstore.SupportsTxFreeDeletePart(store) {
+						external = append(external, id)
+					} else if err = store.DeletePart(ctx, tx, id); err != nil {
+						return err
+					}
+					numDeletedParts++
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			for _, id := range external {
+				if err := store.DeletePart(ctx, nil, id); err != nil {
+					slog.Warn("post-commit part deletion failed; leaving orphan for next GC", "part_id", id.String(), "error", err)
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
 	return nil

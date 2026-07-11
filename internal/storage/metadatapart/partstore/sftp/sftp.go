@@ -377,6 +377,8 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 	return nil
 }
 
+func (s *sftpPartStore) SupportsTxFreeDeletePart() bool { return true }
+
 func isNotFoundError(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
 }
