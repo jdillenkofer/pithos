@@ -16,15 +16,11 @@ func partFromEntity(entity part.Entity) metadatastore.Part {
 }
 
 func refsForEntities(entities []part.Entity) []partregistry.Ref {
-	counts := map[partstore.PartId]int64{}
-	for _, entity := range entities {
-		counts[entity.PartId]++
+	ids := make([]partstore.PartId, len(entities))
+	for i, entity := range entities {
+		ids[i] = entity.PartId
 	}
-	refs := make([]partregistry.Ref, 0, len(counts))
-	for id, count := range counts {
-		refs = append(refs, partregistry.Ref{PartId: id, Delta: count})
-	}
-	return refs
+	return partregistry.RefsFromPartIds(ids)
 }
 
 func (sms *sqlMetadataStore) removePartEntities(ctx context.Context, tx *sql.Tx, entities []part.Entity) ([]metadatastore.Part, error) {
@@ -65,19 +61,15 @@ func (sms *sqlMetadataStore) removePartRowsByObjectIdAndSequenceNumber(ctx conte
 }
 
 func (sms *sqlMetadataStore) savePartRows(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, parts []metadatastore.Part, sequenceOffset int) error {
-	refs := []partregistry.Ref{}
-	counts := map[partstore.PartId]int64{}
+	newIds := []partstore.PartId{}
 	for i, p := range parts {
 		entity := part.Entity{PartId: p.Id, ObjectId: objectId, ETag: p.ETag, ChecksumCRC32: p.ChecksumCRC32, ChecksumCRC32C: p.ChecksumCRC32C, ChecksumCRC64NVME: p.ChecksumCRC64NVME, ChecksumSHA1: p.ChecksumSHA1, ChecksumSHA256: p.ChecksumSHA256, Size: p.Size, SequenceNumber: sequenceOffset + i, PartStoreName: p.StoreName}
 		if err := sms.partRepository.SavePart(ctx, tx, &entity); err != nil {
 			return err
 		}
 		if !p.RefPreAcquired {
-			counts[p.Id]++
+			newIds = append(newIds, p.Id)
 		}
 	}
-	for id, count := range counts {
-		refs = append(refs, partregistry.Ref{PartId: id, Delta: count})
-	}
-	return sms.partRegistryRepository.RegisterParts(ctx, tx, refs)
+	return sms.partRegistryRepository.RegisterParts(ctx, tx, partregistry.RefsFromPartIds(newIds))
 }

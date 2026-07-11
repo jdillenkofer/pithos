@@ -187,15 +187,7 @@ func (sms *sqlMetadataStore) GetInUsePartIdCounts(ctx context.Context, tx *sql.T
 }
 
 func (sms *sqlMetadataStore) TryAddPartReferences(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (bool, error) {
-	counts := map[partstore.PartId]int64{}
-	for _, id := range partIds {
-		counts[id]++
-	}
-	refs := make([]partregistry.Ref, 0, len(counts))
-	for id, count := range counts {
-		refs = append(refs, partregistry.Ref{PartId: id, Delta: count})
-	}
-	return sms.partRegistryRepository.TryAddReferences(ctx, tx, refs)
+	return sms.partRegistryRepository.TryAddReferences(ctx, tx, partregistry.RefsFromPartIds(partIds))
 }
 
 func (sms *sqlMetadataStore) LookupDedupPart(ctx context.Context, tx *sql.Tx, store, sha256 string, size int64) (*metadatastore.PartDedupEntry, error) {

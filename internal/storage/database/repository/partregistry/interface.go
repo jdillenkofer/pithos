@@ -52,6 +52,20 @@ type Entity struct {
 	UpdatedAt time.Time
 }
 
+// RefsFromPartIds aggregates part ids (with repetitions) into one Ref per id
+// whose Delta is the number of occurrences.
+func RefsFromPartIds(partIds []partstore.PartId) []Ref {
+	counts := map[partstore.PartId]int64{}
+	for _, id := range partIds {
+		counts[id]++
+	}
+	refs := make([]Ref, 0, len(counts))
+	for id, count := range counts {
+		refs = append(refs, Ref{PartId: id, Delta: count})
+	}
+	return refs
+}
+
 // SortRefs orders refs ascending by part id so concurrent transactions touch
 // registry rows in the same order (deadlock avoidance on Postgres). It sorts
 // a copy and leaves the input untouched.
