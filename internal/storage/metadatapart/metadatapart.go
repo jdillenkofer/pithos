@@ -244,7 +244,7 @@ func (mbs *metadataPartStorage) Stop(ctx context.Context) error {
 		mbs.gcTaskHandle.Cancel()
 		joinedWithTimeout := mbs.gcTaskHandle.JoinWithTimeout(30 * time.Second)
 		if joinedWithTimeout {
-			slog.Debug("GCLoop joined with timeout of 30s")
+			return fmt.Errorf("timed out waiting for garbage collector to stop")
 		} else {
 			slog.Debug("GCLoop joined without timeout")
 		}

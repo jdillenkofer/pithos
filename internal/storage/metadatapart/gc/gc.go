@@ -104,12 +104,35 @@ func (db *protectedDatabase) UnwrapDatabase() database.Database {
 }
 
 func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stopWatcherDone := make(chan struct{})
+	go func() {
+		defer close(stopWatcherDone)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if stopRunning.Load() {
+				cancel()
+				return
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-stopWatcherDone
+	}()
+
 	var lastWriteOperationCount int64 = 0
 	for !stopRunning.Load() {
 		newWriteOperationCount := partGC.writeOperations.Load()
 		if newWriteOperationCount > lastWriteOperationCount {
 			slog.Debug("Running part garbage collector")
-			err := partGC.runGC()
+			err := partGC.runGCWithContext(ctx)
 			if err != nil {
 				slog.Error(fmt.Sprintf("Failure while running garbage collector: %s", err))
 			} else {
@@ -127,7 +150,10 @@ func (partGC *partGC) RunGCLoop(stopRunning *atomic.Bool) {
 }
 
 func (partGC *partGC) runGC() error {
-	ctx := context.Background()
+	return partGC.runGCWithContext(context.Background())
+}
+
+func (partGC *partGC) runGCWithContext(ctx context.Context) error {
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runGC")
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
