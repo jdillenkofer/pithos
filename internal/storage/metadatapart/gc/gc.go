@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,13 +18,11 @@ import (
 )
 
 type PartGarbageCollector interface {
-	PreventGCFromRunning(ctx context.Context) (unblockGC func())
 	RunGCLoop(stopRunning *atomic.Bool)
 }
 
 type partGC struct {
 	db                       database.Database
-	collectionMutex          sync.RWMutex
 	metadataStore            metadatastore.MetadataStore
 	partRegistryRepository   partregistry.Repository
 	partDedupIndexRepository partdedupindex.Repository
@@ -45,7 +42,6 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 	}
 	return &partGC{
 		db:                       db,
-		collectionMutex:          sync.RWMutex{},
 		writeOperations:          atomic.Int64{},
 		metadataStore:            metadataStore,
 		partRegistryRepository:   partRegistryRepository,
@@ -56,29 +52,15 @@ func New(db database.Database, metadataStore metadatastore.MetadataStore, partSt
 	}, nil
 }
 
-func (partGC *partGC) PreventGCFromRunning(ctx context.Context) (unblockGC func()) {
-	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.PreventGCFromRunning")
-	partGC.writeOperations.Add(1)
-	span.AddEvent("Acquiring lock")
-	partGC.collectionMutex.RLock()
-	span.AddEvent("Acquired lock")
-	unblockGC = func() {
-		partGC.collectionMutex.RUnlock()
-		span.AddEvent("Released lock")
-		span.End()
-	}
-	return
-}
-
 type protectedDatabase struct {
 	inner  database.Database
-	partGC PartGarbageCollector
+	partGC *partGC
 }
 
 var _ database.Database = (*protectedDatabase)(nil)
 
-func NewProtectedDatabase(inner database.Database, partGC PartGarbageCollector) database.Database {
-	return &protectedDatabase{inner: inner, partGC: partGC}
+func NewProtectedDatabase(inner database.Database, collector PartGarbageCollector) database.Database {
+	return &protectedDatabase{inner: inner, partGC: collector.(*partGC)}
 }
 
 func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
@@ -92,29 +74,16 @@ func (db *protectedDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (
 		}
 	}
 
-	var unblockGC func()
 	if !readOnly {
-		unblockGC = db.partGC.PreventGCFromRunning(ctx)
+		db.partGC.writeOperations.Add(1)
 	}
 
 	tx, err := db.inner.BeginTx(ctx, opts)
 	if err != nil {
-		if unblockGC != nil {
-			unblockGC()
-		}
 		return nil, err
 	}
 
 	protectedTx := database.NewTxController(tx.SqlTx(), db, readOnly)
-	if unblockGC != nil {
-		var releaseOnce sync.Once
-		release := func(context.Context) error {
-			releaseOnce.Do(unblockGC)
-			return nil
-		}
-		protectedTx.OnAfterCommit(release)
-		protectedTx.OnRollback(release)
-	}
 	return protectedTx, nil
 }
 
