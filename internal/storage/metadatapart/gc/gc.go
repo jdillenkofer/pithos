@@ -214,6 +214,17 @@ func (partGC *partGC) runGC() error {
 		if err := partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), deadIndexIDs); err != nil {
 			return err
 		}
+		// Re-derive missing index entries from live parts so content written
+		// before the dedup index existed (or whose entry was pruned when an
+		// identical part died) becomes shareable again. Runs after the prune
+		// so a dead entry cannot block a live part's checksum tuple.
+		backfilled, err := partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		if backfilled > 0 {
+			slog.Info("Backfilled part dedup index entries", "count", backfilled)
+		}
 
 		// Part ids are ULIDs and therefore globally unique across stores, so
 		// each store can be swept against the single global in-use set.

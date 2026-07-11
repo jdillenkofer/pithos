@@ -16,6 +16,7 @@ const (
 	insertPartDedupIndexStmt         = "INSERT INTO part_dedup_index (part_store_name, checksum_sha256, size, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, part_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING"
 	deletePartDedupIndexByPartIdStmt = "DELETE FROM part_dedup_index WHERE part_id = $1"
 	findAllPartDedupIndexPartIdsStmt = "SELECT part_id FROM part_dedup_index"
+	backfillPartDedupIndexStmt       = "INSERT INTO part_dedup_index (part_store_name, checksum_sha256, size, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, part_id, created_at, updated_at) SELECT COALESCE(part_store_name, ''), checksum_sha256, size, MIN(etag), MIN(checksum_crc32), MIN(checksum_crc32c), MIN(checksum_crc64nvme), MIN(checksum_sha1), MIN(part_id), $1::timestamp, $2::timestamp FROM parts WHERE checksum_sha256 IS NOT NULL AND checksum_crc32 IS NOT NULL AND checksum_crc32c IS NOT NULL AND checksum_crc64nvme IS NOT NULL AND checksum_sha1 IS NOT NULL GROUP BY COALESCE(part_store_name, ''), checksum_sha256, size ON CONFLICT DO NOTHING"
 )
 
 func NewRepository() (index.Repository, error) { return &repository{}, nil }
@@ -42,6 +43,15 @@ func (r *repository) TryInsert(ctx context.Context, tx *sql.Tx, entity *index.En
 	}
 	rows, err := result.RowsAffected()
 	return rows == 1, err
+}
+
+func (r *repository) BackfillFromParts(ctx context.Context, tx *sql.Tx) (int64, error) {
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, backfillPartDedupIndexStmt, now, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (r *repository) DeleteByPartIds(ctx context.Context, tx *sql.Tx, ids []partstore.PartId) error {
