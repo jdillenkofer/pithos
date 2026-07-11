@@ -14,15 +14,36 @@ type pgxRepository struct {
 }
 
 const (
-	findInUsePartIdsStmt                            = "SELECT part_id FROM parts"
-	findPartsByObjectIdOrderBySequenceNumberAscStmt = "SELECT id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at FROM parts WHERE object_id = $1 ORDER BY sequence_number ASC"
-	insertPartStmt                                  = "INSERT INTO parts (id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"
-	updatePartByIdStmt                              = "UPDATE parts SET part_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, part_store_name = $11, updated_at = $12 WHERE id = $13"
-	deletePartByObjectIdStmt                        = "DELETE FROM parts WHERE object_id = $1"
+	findInUsePartIdsStmt                                = "SELECT part_id FROM parts"
+	findInUsePartIdCountsStmt                           = "SELECT part_id, COUNT(*) FROM parts GROUP BY part_id"
+	findPartsByObjectIdOrderBySequenceNumberAscStmt     = "SELECT id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at FROM parts WHERE object_id = $1 ORDER BY sequence_number ASC"
+	insertPartStmt                                      = "INSERT INTO parts (id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"
+	updatePartByIdStmt                                  = "UPDATE parts SET part_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, part_store_name = $11, updated_at = $12 WHERE id = $13"
+	deletePartByObjectIdStmt                            = "DELETE FROM parts WHERE object_id = $1"
+	deletePartsByObjectIdReturningStmt                  = "DELETE FROM parts WHERE object_id = $1 RETURNING id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at"
+	deletePartsByObjectIdAndSequenceNumberReturningStmt = "DELETE FROM parts WHERE object_id = $1 AND sequence_number = $2 RETURNING id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at"
 )
 
 func NewRepository() (part.Repository, error) {
 	return &pgxRepository{}, nil
+}
+
+func (br *pgxRepository) FindInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error) {
+	rows, err := tx.QueryContext(ctx, findInUsePartIdCountsStmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[partstore.PartId]int64{}
+	for rows.Next() {
+		var id string
+		var count int64
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, err
+		}
+		counts[*partstore.MustNewPartIdFromString(id)] = count
+	}
+	return counts, rows.Err()
 }
 
 func convertRowToPartEntity(partRows *sql.Rows) (*part.Entity, error) {
@@ -119,4 +140,33 @@ func (br *pgxRepository) SavePart(ctx context.Context, tx *sql.Tx, part *part.En
 func (br *pgxRepository) DeletePartsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
 	_, err := tx.ExecContext(ctx, deletePartByObjectIdStmt, objectId.String())
 	return err
+}
+
+func collectDeletedParts(rows *sql.Rows) ([]part.Entity, error) {
+	defer rows.Close()
+	parts := []part.Entity{}
+	for rows.Next() {
+		entity, err := convertRowToPartEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, *entity)
+	}
+	return parts, rows.Err()
+}
+
+func (br *pgxRepository) DeletePartsByObjectIdReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]part.Entity, error) {
+	rows, err := tx.QueryContext(ctx, deletePartsByObjectIdReturningStmt, objectId.String())
+	if err != nil {
+		return nil, err
+	}
+	return collectDeletedParts(rows)
+}
+
+func (br *pgxRepository) DeletePartsByObjectIdAndSequenceNumberReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, sequenceNumber int) ([]part.Entity, error) {
+	rows, err := tx.QueryContext(ctx, deletePartsByObjectIdAndSequenceNumberReturningStmt, objectId.String(), sequenceNumber)
+	if err != nil {
+		return nil, err
+	}
+	return collectDeletedParts(rows)
 }

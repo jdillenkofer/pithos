@@ -18,38 +18,9 @@ import (
 func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObject")
 	defer span.End()
-	ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
-
 	var object metadatastore.Object
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if !ifNoneMatchStar {
-			versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
-			if err != nil {
-				return err
-			}
-			versioningEnabled := versioningConfig.Status != nil && *versioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
-
-			if !versioningEnabled {
-				// In unversioned/suspended mode, writes overwrite the null version.
-				// Remove its part content before metadata replacement.
-				previousObject, err := mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), bucketName, key, "null")
-				if err != nil && err != storage.ErrNoSuchKey {
-					return err
-				}
-				if previousObject != nil {
-					for _, part := range previousObject.Parts {
-						store, err := mbs.partStores.ByName(part.StoreName)
-						if err != nil {
-							return err
-						}
-						err = store.DeletePart(ctx, tx, part.Id)
-						if err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
+		ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 		partId, err := partstore.NewRandomPartId()
 		if err != nil {
@@ -73,6 +44,10 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		if err != nil {
+			return err
+		}
 
 		object = metadatastore.Object{
 			Key:               key,
@@ -88,7 +63,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			Size:              *originalSize,
 			Parts: []metadatastore.Part{
 				{
-					Id:                *partId,
+					Id:                dedupedPartID,
 					ETag:              *calculatedChecksums.ETag,
 					ChecksumCRC32:     calculatedChecksums.ChecksumCRC32,
 					ChecksumCRC32C:    calculatedChecksums.ChecksumCRC32C,
@@ -97,6 +72,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 					ChecksumSHA256:    calculatedChecksums.ChecksumSHA256,
 					Size:              *originalSize,
 					StoreName:         storeName,
+					RefPreAcquired:    refPreAcquired,
 				},
 			},
 		}
@@ -112,11 +88,11 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if opts != nil {
 			metadataPutObjectOptions.IfMatchETag = opts.IfMatchETag
 		}
-		err = mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
+		metadataResult, err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
 		if err != nil {
 			return err
 		}
-		return nil
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
 		return nil, err
@@ -154,6 +130,9 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 		if currentDeleteMarkerErr != nil {
 			existingObject = nil
+		}
+		if existingObject != nil && !objectPartManifestComplete(existingObject) {
+			return storage.ErrNoSuchKey
 		}
 
 		// Validate WriteOffset condition.
@@ -195,9 +174,13 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		if err = metadatastore.ValidateChecksums(checksumInput, *newPartChecksums); err != nil {
 			return err
 		}
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, newPartChecksums, *newPartSize)
+		if err != nil {
+			return err
+		}
 
 		newPart := metadatastore.Part{
-			Id:                *newPartId,
+			Id:                dedupedPartID,
 			ETag:              *newPartChecksums.ETag,
 			ChecksumCRC32:     newPartChecksums.ChecksumCRC32,
 			ChecksumCRC32C:    newPartChecksums.ChecksumCRC32C,
@@ -206,6 +189,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			ChecksumSHA256:    newPartChecksums.ChecksumSHA256,
 			Size:              *newPartSize,
 			StoreName:         storeName,
+			RefPreAcquired:    refPreAcquired,
 		}
 
 		// Build the combined part list (existing parts first, then new part).
@@ -227,33 +211,23 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 
 		if existingObject != nil {
 			if versioningEnabled {
-				// Versioned append creates a new object version, so existing parts need
-				// fresh IDs instead of being reused in the new version metadata.
+				// The new version shares the unchanged prefix. Pre-acquiring registry
+				// references prevents a concurrent delete from condemning those parts.
 				allParts = make([]metadatastore.Part, 0, len(existingObject.Parts)+1)
+				partIDs := make([]partstore.PartId, len(existingObject.Parts))
+				for i, existingPart := range existingObject.Parts {
+					partIDs[i] = existingPart.Id
+				}
+				added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), partIDs)
+				if err != nil {
+					return err
+				}
+				if !added {
+					return storage.ErrNoSuchKey
+				}
 				for _, existingPart := range existingObject.Parts {
-					existingPartStore, partErr := mbs.partStores.ByName(existingPart.StoreName)
-					if partErr != nil {
-						return partErr
-					}
-					existingPartReader, partErr := existingPartStore.GetPart(ctx, tx, existingPart.Id)
-					if partErr != nil {
-						return partErr
-					}
-
-					newExistingPartID, partErr := partstore.NewRandomPartId()
-					if partErr != nil {
-						existingPartReader.Close()
-						return partErr
-					}
-
-					partErr = existingPartStore.PutPart(ctx, tx, *newExistingPartID, existingPartReader)
-					existingPartReader.Close()
-					if partErr != nil {
-						return partErr
-					}
-
 					clonedPart := existingPart
-					clonedPart.Id = *newExistingPartID
+					clonedPart.RefPreAcquired = true
 					allParts = append(allParts, clonedPart)
 				}
 			} else {
@@ -294,7 +268,8 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 
 		metaOpts := &metadatastore.AppendObjectOptions{}
-		if err = mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts); err != nil {
+		metadataResult, err := mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts)
+		if err != nil {
 			// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a
 			// concurrent write that changed the object between our HeadObject read
 			// and this update. It surfaces that as ErrCASFailure. From the caller's
@@ -305,7 +280,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			}
 			return err
 		}
-		return nil
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
 		return nil, err
@@ -356,52 +331,58 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			}
 		}
 
-		// When every part already lives in the target store (e.g. the class was
-		// only remapped in config, or the classes share a store), just relabel
-		// the object without moving any data.
-		needsMove := false
-		for _, part := range object.Parts {
-			if !partStoreNamesEqual(part.StoreName, targetStoreName) {
-				needsMove = true
-				break
-			}
-		}
-
-		newParts := object.Parts
-		if needsMove {
-			newParts = make([]metadatastore.Part, len(object.Parts))
-			for i, srcPart := range object.Parts {
-				srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
-				if err != nil {
-					return err
-				}
-				newPartId, err := partstore.NewRandomPartId()
-				if err != nil {
-					return err
-				}
-				srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
-				if err != nil {
-					return err
-				}
-				err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
-				srcReader.Close()
-				if err != nil {
-					return err
-				}
-				// Free the source bytes now that a copy exists in the target
-				// store. DeletePart defers the physical removal to commit, so the
-				// source survives an aborted transition and in-flight readers
-				// holding an open handle keep working.
-				if err := srcStore.DeletePart(ctx, tx, srcPart.Id); err != nil {
-					return err
-				}
+		// Parts already in the target store (e.g. the class was only remapped
+		// in config, or the classes share a store) keep their ids and are
+		// shared: TransitionObject below replaces this object's part rows, so
+		// a registry reference must be pre-acquired for every retained id or
+		// the removal would condemn the part and delete live content. Only
+		// cross-store parts are copied, because a part id belongs to exactly
+		// one store.
+		newParts := make([]metadatastore.Part, len(object.Parts))
+		sharedPartIDs := make([]partstore.PartId, 0, len(object.Parts))
+		for i, srcPart := range object.Parts {
+			if partStoreNamesEqual(srcPart.StoreName, targetStoreName) {
 				newParts[i] = srcPart
-				newParts[i].Id = *newPartId
-				newParts[i].StoreName = targetStoreName
+				newParts[i].RefPreAcquired = true
+				sharedPartIDs = append(sharedPartIDs, srcPart.Id)
+				continue
+			}
+			srcStore, err := mbs.partStores.ByName(srcPart.StoreName)
+			if err != nil {
+				return err
+			}
+			newPartId, err := partstore.NewRandomPartId()
+			if err != nil {
+				return err
+			}
+			srcReader, err := srcStore.GetPart(ctx, tx, srcPart.Id)
+			if err != nil {
+				return err
+			}
+			err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
+			srcReader.Close()
+			if err != nil {
+				return err
+			}
+			newParts[i] = srcPart
+			newParts[i].Id = *newPartId
+			newParts[i].StoreName = targetStoreName
+		}
+		if len(sharedPartIDs) > 0 {
+			added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), sharedPartIDs)
+			if err != nil {
+				return err
+			}
+			if !added {
+				return storage.ErrNoSuchKey
 			}
 		}
 
-		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
+		metadataResult, err := mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
+		if err != nil {
+			return err
+		}
+		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 }
 

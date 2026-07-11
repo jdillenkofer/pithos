@@ -3,52 +3,53 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
-	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
-func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) error {
+func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObject")
 	defer span.End()
+	result := metadatastore.PartMutationResult{}
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if bucketEntity == nil {
-		return metadatastore.ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
 
 	latestObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	objectExists := latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker
 	if opts != nil && opts.IfMatchETag != nil {
 		if *opts.IfMatchETag == metadatastore.ETagWildcard {
 			if !objectExists {
-				return metadatastore.ErrPreconditionFailed
+				return nil, metadatastore.ErrPreconditionFailed
 			}
 		} else if !objectExists || latestObjectEntity.ETag != *opts.IfMatchETag {
-			return metadatastore.ErrPreconditionFailed
+			return nil, metadatastore.ErrPreconditionFailed
 		}
 	}
 	if opts != nil && opts.IfNoneMatchStar && objectExists {
-		return metadatastore.ErrPreconditionFailed
+		return nil, metadatastore.ErrPreconditionFailed
 	}
 	if opts != nil && opts.IfNoneMatchStar {
 		latestObjectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if latestObjectEntity != nil && !latestObjectEntity.IsDeleteMarker {
-			return metadatastore.ErrPreconditionFailed
+			return nil, metadatastore.ErrPreconditionFailed
 		}
 	}
 
@@ -56,10 +57,10 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		lockedObjectEntity := *latestObjectEntity
 		locked, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, latestObjectEntity.OptimisticLockVersion)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !*locked {
-			return metadatastore.ErrPreconditionFailed
+			return nil, metadatastore.ErrPreconditionFailed
 		}
 		latestObjectEntity = &lockedObjectEntity
 	}
@@ -89,22 +90,22 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		if latestObjectEntity != nil {
 			latestObjectEntity.IsLatest = false
 			if err := sms.objectRepository.SaveObject(ctx, tx, latestObjectEntity); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
 			if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
-				return metadatastore.ErrPreconditionFailed
+				return nil, metadatastore.ErrPreconditionFailed
 			}
-			return err
+			return nil, err
 		}
 	} else {
 		nullVersionEntity, err := sms.objectRepository.FindNullObjectVersionByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if opts != nil && opts.IfNoneMatchStar && nullVersionEntity != nil {
-			return metadatastore.ErrPreconditionFailed
+			return nil, metadatastore.ErrPreconditionFailed
 		}
 		nullVersion := "null"
 		objectEntity.VersionID = &nullVersion
@@ -112,7 +113,7 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		if latestObjectEntity != nil {
 			latestObjectEntity.IsLatest = false
 			if err := sms.objectRepository.SaveObject(ctx, tx, latestObjectEntity); err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -121,45 +122,28 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 			objectEntity.OptimisticLockVersion = nullVersionEntity.OptimisticLockVersion
 			if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
 				if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
-					return metadatastore.ErrPreconditionFailed
+					return nil, metadatastore.ErrPreconditionFailed
 				}
-				return err
+				return nil, err
 			}
-			err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id)
+			unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *objectEntity.Id)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			result.UnreferencedParts = append(result.UnreferencedParts, unreferencedParts...)
 		} else {
 			if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
 				if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
-					return metadatastore.ErrPreconditionFailed
+					return nil, metadatastore.ErrPreconditionFailed
 				}
-				return err
+				return nil, err
 			}
 		}
 	}
 
 	objectId := objectEntity.Id
-	sequenceNumber := 0
-	for _, partStruc := range obj.Parts {
-		partEntity := part.Entity{
-			PartId:            partStruc.Id,
-			ObjectId:          *objectId,
-			ETag:              partStruc.ETag,
-			ChecksumCRC32:     partStruc.ChecksumCRC32,
-			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
-			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
-			ChecksumSHA1:      partStruc.ChecksumSHA1,
-			ChecksumSHA256:    partStruc.ChecksumSHA256,
-			Size:              partStruc.Size,
-			SequenceNumber:    sequenceNumber,
-			PartStoreName:     partStruc.StoreName,
-		}
-		err = sms.partRepository.SavePart(ctx, tx, &partEntity)
-		if err != nil {
-			return err
-		}
-		sequenceNumber += 1
+	if err = sms.savePartRows(ctx, tx, *objectId, obj.Parts, 0); err != nil {
+		return nil, err
 	}
 
 	obj.VersionID = objectEntity.VersionID
@@ -168,25 +152,25 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 	// are replaced with the values supplied on the new object (empty when none
 	// were provided).
 	if err := sms.replaceObjectTags(ctx, tx, *objectId, obj.Tags); err != nil {
-		return err
+		return nil, err
 	}
 	if err := sms.replaceObjectUserMetadata(ctx, tx, *objectId, obj.Metadata.UserMetadata); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &result, nil
 }
 
-func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.AppendObjectOptions) error {
+func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.AppendObjectOptions) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AppendObject")
 	defer span.End()
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if bucketEntity == nil {
-		return metadatastore.ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
@@ -197,10 +181,22 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	// Check whether an object already exists at this key.
 	oldObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, obj.Key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if oldObjectEntity != nil {
+		existingParts, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *oldObjectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+		if len(obj.Parts) < len(existingParts) {
+			return nil, fmt.Errorf("append part list lost existing parts")
+		}
+		for i, existingPart := range existingParts {
+			if obj.Parts[i].Id != existingPart.PartId {
+				return nil, fmt.Errorf("append part prefix mismatch at sequence %d", i)
+			}
+		}
 		updatedEntity := object.Entity{
 			Id:             oldObjectEntity.Id,
 			BucketName:     bucketName,
@@ -219,39 +215,15 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 		applySystemMetadataToEntity(&updatedEntity, systemMetadataFromEntity(oldObjectEntity))
 		updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &updatedEntity, oldObjectEntity.OptimisticLockVersion)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !*updated {
-			return metadatastore.ErrCASFailure
+			return nil, metadatastore.ErrCASFailure
 		}
-
-		err = sms.partRepository.DeletePartsByObjectId(ctx, tx, *oldObjectEntity.Id)
-		if err != nil {
-			return err
+		if err = sms.savePartRows(ctx, tx, *updatedEntity.Id, obj.Parts[len(existingParts):], len(existingParts)); err != nil {
+			return nil, err
 		}
-
-		sequenceNumber := 0
-		for _, partStruc := range obj.Parts {
-			partEntity := part.Entity{
-				PartId:            partStruc.Id,
-				ObjectId:          *updatedEntity.Id,
-				ETag:              partStruc.ETag,
-				ChecksumCRC32:     partStruc.ChecksumCRC32,
-				ChecksumCRC32C:    partStruc.ChecksumCRC32C,
-				ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
-				ChecksumSHA1:      partStruc.ChecksumSHA1,
-				ChecksumSHA256:    partStruc.ChecksumSHA256,
-				Size:              partStruc.Size,
-				SequenceNumber:    sequenceNumber,
-				PartStoreName:     partStruc.StoreName,
-			}
-			err = sms.partRepository.SavePart(ctx, tx, &partEntity)
-			if err != nil {
-				return err
-			}
-			sequenceNumber++
-		}
-		return nil
+		return &metadatastore.PartMutationResult{}, nil
 	}
 
 	// No existing object — create a new one (same semantics as PutObject).
@@ -271,43 +243,24 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	applySystemMetadataToEntity(&newEntity, obj.Metadata)
 	err = sms.objectRepository.SaveObject(ctx, tx, &newEntity)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	sequenceNumber := 0
-	for _, partStruc := range obj.Parts {
-		partEntity := part.Entity{
-			PartId:            partStruc.Id,
-			ObjectId:          *newEntity.Id,
-			ETag:              partStruc.ETag,
-			ChecksumCRC32:     partStruc.ChecksumCRC32,
-			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
-			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
-			ChecksumSHA1:      partStruc.ChecksumSHA1,
-			ChecksumSHA256:    partStruc.ChecksumSHA256,
-			Size:              partStruc.Size,
-			SequenceNumber:    sequenceNumber,
-			PartStoreName:     partStruc.StoreName,
-		}
-		err = sms.partRepository.SavePart(ctx, tx, &partEntity)
-		if err != nil {
-			return err
-		}
-		sequenceNumber++
+	if err = sms.savePartRows(ctx, tx, *newEntity.Id, obj.Parts, 0); err != nil {
+		return nil, err
 	}
-	return nil
+	return &metadatastore.PartMutationResult{}, nil
 }
 
-func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, versionID *string, expectedETag string, storageClass string, parts []metadatastore.Part) error {
+func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, versionID *string, expectedETag string, storageClass string, parts []metadatastore.Part) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.TransitionObject")
 	defer span.End()
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !*exists {
-		return metadatastore.ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
 	}
 
 	var objectEntity *object.Entity
@@ -317,50 +270,35 @@ func (sms *sqlMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, b
 		objectEntity, err = sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if objectEntity == nil || objectEntity.IsDeleteMarker {
-		return metadatastore.ErrNoSuchKey
+		return nil, metadatastore.ErrNoSuchKey
 	}
 	if objectEntity.ETag != expectedETag {
-		return metadatastore.ErrPreconditionFailed
+		return nil, metadatastore.ErrPreconditionFailed
 	}
 
 	objectEntity.StorageClass = &storageClass
 	// Guard against a concurrent replacement between the read and the update.
 	updated, err := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, objectEntity, objectEntity.OptimisticLockVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !*updated {
-		return metadatastore.ErrPreconditionFailed
+		return nil, metadatastore.ErrPreconditionFailed
 	}
 
-	// Replace the part rows with the relocated parts (new ids in the target
-	// store). The old rows' part data becomes unreferenced and is collected by
-	// the per-store GC.
-	if err := sms.partRepository.DeletePartsByObjectId(ctx, tx, *objectEntity.Id); err != nil {
-		return err
+	// Replace the part rows with the transitioned parts. Relocated parts carry
+	// new ids in the target store; parts that stayed in place keep their ids
+	// and arrive with a pre-acquired registry reference, so the removal below
+	// cannot condemn them.
+	unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
 	}
-	sequenceNumber := 0
-	for _, partStruc := range parts {
-		partEntity := part.Entity{
-			PartId:            partStruc.Id,
-			ObjectId:          *objectEntity.Id,
-			ETag:              partStruc.ETag,
-			ChecksumCRC32:     partStruc.ChecksumCRC32,
-			ChecksumCRC32C:    partStruc.ChecksumCRC32C,
-			ChecksumCRC64NVME: partStruc.ChecksumCRC64NVME,
-			ChecksumSHA1:      partStruc.ChecksumSHA1,
-			ChecksumSHA256:    partStruc.ChecksumSHA256,
-			Size:              partStruc.Size,
-			SequenceNumber:    sequenceNumber,
-			PartStoreName:     partStruc.StoreName,
-		}
-		if err := sms.partRepository.SavePart(ctx, tx, &partEntity); err != nil {
-			return err
-		}
-		sequenceNumber++
+	if err := sms.savePartRows(ctx, tx, *objectEntity.Id, parts, 0); err != nil {
+		return nil, err
 	}
-	return nil
+	return &metadatastore.PartMutationResult{UnreferencedParts: unreferencedParts}, nil
 }

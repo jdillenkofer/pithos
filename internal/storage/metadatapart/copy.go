@@ -40,6 +40,9 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			}
 			return &storage.CurrentDeleteMarkerError{VersionID: versionID}
 		}
+		if !objectPartManifestComplete(srcObject) {
+			return storage.ErrNoSuchKey
+		}
 
 		if opts != nil {
 			if err := evaluateCopySourceConditions(opts.CopySourceConditions, srcObject); err != nil {
@@ -82,6 +85,10 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			if err != nil {
 				return err
 			}
+			dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, dstStoreName, dstStore, *newPartId, checksums, *size)
+			if err != nil {
+				return err
+			}
 			dstObject.ETag = *checksums.ETag
 			dstObject.ChecksumCRC32 = checksums.ChecksumCRC32
 			dstObject.ChecksumCRC32C = checksums.ChecksumCRC32C
@@ -92,7 +99,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Size = *size
 			dstObject.Parts = []metadatastore.Part{
 				{
-					Id:                *newPartId,
+					Id:                dedupedPartID,
 					ETag:              *checksums.ETag,
 					ChecksumCRC32:     checksums.ChecksumCRC32,
 					ChecksumCRC32C:    checksums.ChecksumCRC32C,
@@ -101,13 +108,38 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 					ChecksumSHA256:    checksums.ChecksumSHA256,
 					Size:              *size,
 					StoreName:         dstStoreName,
+					RefPreAcquired:    refPreAcquired,
 				},
 			}
 		} else {
-			// Full copy: duplicate every source part to a fresh part id, preserving
-			// the part structure and therefore the exact source ETag and checksums.
+			// Full copies within one physical store share source parts. Cross-store
+			// parts are copied because a part id belongs to exactly one store.
 			newParts := make([]metadatastore.Part, len(srcObject.Parts))
+			sharedPartIDs := make([]partstore.PartId, 0, len(srcObject.Parts))
 			for i, srcPart := range srcObject.Parts {
+				if partStoreNamesEqual(srcPart.StoreName, dstStoreName) {
+					newParts[i] = srcPart
+					newParts[i].RefPreAcquired = true
+					sharedPartIDs = append(sharedPartIDs, srcPart.Id)
+					continue
+				}
+				// The source part's stored checksums can identify identical
+				// content already in the destination store without reading
+				// any bytes.
+				dedupEntry, canDedup := dedupEntryForPartMetadata(dstStoreName, srcPart)
+				if canDedup {
+					sharedID, err := mbs.tryShareDedupPart(ctx, tx, dedupEntry)
+					if err != nil {
+						return err
+					}
+					if sharedID != nil {
+						newParts[i] = srcPart
+						newParts[i].Id = *sharedID
+						newParts[i].StoreName = dstStoreName
+						newParts[i].RefPreAcquired = true
+						continue
+					}
+				}
 				newPartId, err := partstore.NewRandomPartId()
 				if err != nil {
 					return err
@@ -128,6 +160,21 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				newParts[i] = srcPart
 				newParts[i].Id = *newPartId
 				newParts[i].StoreName = dstStoreName
+				if canDedup {
+					dedupEntry.PartId = *newPartId
+					if _, err := mbs.metadataStore.TryIndexDedupPart(ctx, tx.SqlTx(), dedupEntry); err != nil {
+						return err
+					}
+				}
+			}
+			if len(sharedPartIDs) > 0 {
+				added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), sharedPartIDs)
+				if err != nil {
+					return err
+				}
+				if !added {
+					return storage.ErrNoSuchKey
+				}
 			}
 			dstObject.ETag = srcObject.ETag
 			dstObject.ChecksumCRC32 = srcObject.ChecksumCRC32
@@ -165,36 +212,11 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Tags = srcObject.Tags
 		}
 
-		// Remove the previous destination object's part content (if any) before
-		// overwriting. When the destination equals the source, the previous parts
-		// are the original part ids; the freshly copied parts use new ids and remain.
-		// On a versioning-enabled destination the previous version is retained, so
-		// its part content must stay; only the overwritten null version loses its
-		// parts (mirroring PutObject).
-		dstVersioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), dstBucket)
+		metadataResult, err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil)
 		if err != nil {
 			return err
 		}
-		dstVersioningEnabled := dstVersioningConfig.Status != nil && *dstVersioningConfig.Status == metadatastore.BucketVersioningStatusEnabled
-		if !dstVersioningEnabled {
-			previousDst, err := mbs.metadataStore.HeadObjectVersion(ctx, tx.SqlTx(), dstBucket, dstKey, "null")
-			if err != nil && err != storage.ErrNoSuchKey {
-				return err
-			}
-			if previousDst != nil {
-				for _, part := range previousDst.Parts {
-					store, err := mbs.partStores.ByName(part.StoreName)
-					if err != nil {
-						return err
-					}
-					if err := store.DeletePart(ctx, tx, part.Id); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		if err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil); err != nil {
+		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 			return err
 		}
 

@@ -11,9 +11,12 @@ import (
 
 type Repository interface {
 	FindInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
+	FindInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error)
 	FindPartsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]Entity, error)
 	SavePart(ctx context.Context, tx *sql.Tx, part *Entity) error
 	DeletePartsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
+	DeletePartsByObjectIdReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]Entity, error)
+	DeletePartsByObjectIdAndSequenceNumberReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, sequenceNumber int) ([]Entity, error)
 }
 
 type Entity struct {
