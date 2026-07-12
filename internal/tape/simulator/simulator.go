@@ -390,7 +390,7 @@ func (d *Device) SpaceRecords(ctx context.Context, count int) error {
 		return err
 	}
 	target, resultErr := d.spaceRecordsTarget(count)
-	if err := d.moveTo(ctx, target); err != nil {
+	if err := d.spaceTo(ctx, target); err != nil {
 		return err
 	}
 	return resultErr
@@ -433,7 +433,7 @@ func (d *Device) SpaceFilemarks(ctx context.Context, count int) error {
 		return err
 	}
 	target, resultErr := d.spaceFilemarksTarget(count)
-	if err := d.moveTo(ctx, target); err != nil {
+	if err := d.spaceTo(ctx, target); err != nil {
 		return err
 	}
 	return resultErr
@@ -479,6 +479,17 @@ func (d *Device) SeekToEOD(ctx context.Context) error {
 // moveTo repositions the head to the given block, charging the seek cost.
 func (d *Device) moveTo(ctx context.Context, block int) error {
 	cost := d.latency.seekCost(d.offsetOf(d.cursor), d.offsetOf(block), d.scaleCapacity)
+	if err := d.sleep(ctx, cost); err != nil {
+		return err
+	}
+	d.cursor = block
+	return nil
+}
+
+// spaceTo advances or backs over records without treating each spacing
+// command as a fresh random seek.
+func (d *Device) spaceTo(ctx context.Context, block int) error {
+	cost := d.latency.spaceCost(d.offsetOf(d.cursor), d.offsetOf(block), d.scaleCapacity)
 	if err := d.sleep(ctx, cost); err != nil {
 		return err
 	}
