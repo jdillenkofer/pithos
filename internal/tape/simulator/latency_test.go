@@ -111,6 +111,37 @@ func TestSeekCostScalesWithDistance(t *testing.T) {
 	require.Greater(t, longHop, shortHop)
 }
 
+func TestSpacingDoesNotChargeSeekFloorPerFilemark(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	minSeek := 2 * time.Second
+	dev, recorder := openRecordedDevice(t, Options{
+		Capacity: 1 << 20,
+		Latency: LatencyProfile{
+			FullTapeLocate: time.Second,
+			MinSeek:        minSeek,
+		},
+	})
+
+	for range 4 {
+		require.NoError(t, dev.WriteRecord(ctx, make([]byte, 64<<10)))
+		require.NoError(t, dev.WriteFilemarks(ctx, 1))
+	}
+	require.NoError(t, dev.Rewind(ctx))
+
+	recorder.sleeps = nil
+	require.NoError(t, dev.SpaceFilemarks(ctx, 1))
+	require.Len(t, recorder.sleeps, 1)
+	require.Positive(t, recorder.sleeps[0])
+	require.Less(t, recorder.sleeps[0], minSeek)
+
+	// A random locate over the same region still includes the seek floor.
+	recorder.sleeps = nil
+	require.NoError(t, dev.LocateBlock(ctx, 0))
+	require.Len(t, recorder.sleeps, 1)
+	require.GreaterOrEqual(t, recorder.sleeps[0], minSeek)
+}
+
 func TestRewindCostScalesWithHeadPosition(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
@@ -176,6 +207,8 @@ func TestLatencyCostMath(t *testing.T) {
 	require.Equal(t, 2*time.Second+50*time.Second, p.seekCost(500, 0, 1000))
 	// Distances are clamped to a full tape pass.
 	require.Equal(t, 2*time.Second+100*time.Second, p.seekCost(0, 5000, 1000))
+	require.Equal(t, 50*time.Second, p.spaceCost(0, 500, 1000))
+	require.Equal(t, time.Duration(0), p.spaceCost(500, 500, 1000))
 
 	require.Equal(t, time.Duration(0), p.rewindCost(0, 1000))
 	require.Equal(t, 2*time.Second+45*time.Second, p.rewindCost(500, 1000))

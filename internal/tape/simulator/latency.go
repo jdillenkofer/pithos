@@ -106,6 +106,21 @@ func (p LatencyProfile) seekCost(from, to, scaleCapacity int64) time.Duration {
 	return p.MinSeek + scaleByDistance(p.FullTapeLocate, dist, scaleCapacity)
 }
 
+// spaceCost estimates traversal performed by a space-records or
+// space-filemarks command. Unlike a locate, spacing is a continuation of the
+// current tape motion and therefore does not pay the start/stop seek floor for
+// every record or filemark crossed.
+func (p LatencyProfile) spaceCost(from, to, scaleCapacity int64) time.Duration {
+	if from == to {
+		return 0
+	}
+	dist := from - to
+	if dist < 0 {
+		dist = -dist
+	}
+	return scaleByDistance(p.FullTapeLocate, dist, scaleCapacity)
+}
+
 // rewindCost estimates a rewind from the given distance to the beginning of
 // the tape.
 func (p LatencyProfile) rewindCost(distanceFromBOT, scaleCapacity int64) time.Duration {
