@@ -1,0 +1,20 @@
+{
+  "benchmark": "BenchmarkLTOThroughputMatrix",
+  "date": "2026-07-12",
+  "baseCommit": "ae4deaaa03119df7c5368b67be4d311819417f15",
+  "goos": "darwin",
+  "goarch": "arm64",
+  "cpu": "Apple M2",
+  "iterationsPerCase": 1,
+  "caseCount": 360,
+  "elapsedSeconds": 1180.166,
+  "ltoGenerations": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "recordSizesKiB": [256, 1024, 4096],
+  "dataSizesMiB": [8, 32, 64],
+  "rangeSizeMiB": 8,
+  "operations": ["read", "read-range-seq", "read-range-random", "write"],
+  "driveLoadTimeIncluded": false,
+  "latencySleepsEnabled": true,
+  "ioBacking": "1 GiB HFS+ RAM disk mounted at /Volumes/PithosBench",
+  "command": "PITHOS_TAPE_BENCH_DIR=/Volumes/PithosBench GOCACHE=/tmp/pithos-go-cache go test ./internal/tape/simulator -run '^$' -bench '^BenchmarkLTOThroughputMatrix$' -benchtime=1x -count=1"
+}
