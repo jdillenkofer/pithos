@@ -49,6 +49,23 @@ func TestSimulatorTapeDeviceRejectsUnknownLatencyProfile(t *testing.T) {
 	assert.ErrorContains(t, err, "unknown tape latency profile")
 }
 
+func TestSimulatorTapeDeviceAcceptsAllLTOProfiles(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for generation := 1; generation <= 10; generation++ {
+		t.Run(fmt.Sprintf("lto%d", generation), func(t *testing.T) {
+			jsonData := fmt.Sprintf(`{
+				 "type": "SimulatorTapeDevice",
+				 "path": %s,
+				 "latency": "lto%d"
+			 }`, strconv.Quote(filepath.Join(t.TempDir(), "tape.sim")), generation)
+			instantiator, err := CreateTapeDeviceInstantiatorFromJson([]byte(jsonData))
+			require.NoError(t, err)
+			_, err = instantiator.Instantiate(nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestCanCreateStTapeDeviceOpenerFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

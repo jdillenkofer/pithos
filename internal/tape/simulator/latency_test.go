@@ -184,3 +184,25 @@ func TestLatencyCostMath(t *testing.T) {
 	require.Equal(t, time.Duration(0), p.transferCost(0, 1<<20))
 	require.Equal(t, time.Duration(0), p.transferCost(1<<20, 0))
 }
+
+func TestAllLTOGenerationProfiles(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	var previousCapacity int64
+	for generation := 1; generation <= 10; generation++ {
+		profile, ok := LTOProfile(generation)
+		require.True(t, ok, "generation %d", generation)
+		require.Positive(t, profile.NativeCapacity)
+		require.Greater(t, profile.NativeCapacity, previousCapacity)
+		require.Positive(t, profile.LoadTime)
+		require.Positive(t, profile.FullTapeRewind)
+		require.Positive(t, profile.FullTapeLocate)
+		require.Positive(t, profile.MinSeek)
+		require.Positive(t, profile.ReadThroughput)
+		require.Equal(t, profile.ReadThroughput, profile.WriteThroughput)
+		previousCapacity = profile.NativeCapacity
+	}
+	_, ok := LTOProfile(0)
+	require.False(t, ok)
+	_, ok = LTOProfile(11)
+	require.False(t, ok)
+}

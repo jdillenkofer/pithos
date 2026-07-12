@@ -16,6 +16,10 @@ import (
 // free, so sequential access stays streaming. Transfers cost
 // bytes/throughput.
 type LatencyProfile struct {
+	// NativeCapacity is the generation's nominal uncompressed cartridge
+	// capacity. It is used only to scale positioning latency when a simulated
+	// tape was created without an explicit capacity.
+	NativeCapacity int64
 	// LoadTime is charged when the device is opened (cartridge load and
 	// thread time).
 	LoadTime time.Duration
@@ -41,19 +45,52 @@ type LatencyProfile struct {
 // drive: ~360 MB/s native throughput, average locate from BOT around a
 // minute, full rewind about one and a half minutes.
 func DefaultLTO8Profile() LatencyProfile {
+	profile, _ := LTOProfile(8)
+	return profile
+}
+
+// LTOProfile returns a representative full-height drive profile for an LTO
+// generation. Transfer rates are native (uncompressed); capacities are
+// decimal cartridge capacities. Positioning varies by drive model, so the
+// values deliberately model the class of hardware rather than a particular
+// vendor model.
+func LTOProfile(generation int) (LatencyProfile, bool) {
+	type generationSpec struct {
+		capacityGB    int64
+		throughputMiB int64
+		loadSeconds   int64
+	}
+	specs := map[int]generationSpec{
+		1:  {capacityGB: 100, throughputMiB: 15, loadSeconds: 20},
+		2:  {capacityGB: 200, throughputMiB: 35, loadSeconds: 18},
+		3:  {capacityGB: 400, throughputMiB: 80, loadSeconds: 15},
+		4:  {capacityGB: 800, throughputMiB: 120, loadSeconds: 15},
+		5:  {capacityGB: 1_500, throughputMiB: 140, loadSeconds: 12},
+		6:  {capacityGB: 2_500, throughputMiB: 160, loadSeconds: 12},
+		7:  {capacityGB: 6_000, throughputMiB: 300, loadSeconds: 15},
+		8:  {capacityGB: 12_000, throughputMiB: 360, loadSeconds: 15},
+		9:  {capacityGB: 18_000, throughputMiB: 400, loadSeconds: 17},
+		10: {capacityGB: 40_000, throughputMiB: 400, loadSeconds: 12},
+	}
+	spec, ok := specs[generation]
+	if !ok {
+		return LatencyProfile{}, false
+	}
+	capacity := spec.capacityGB * 1_000_000_000
 	return LatencyProfile{
-		LoadTime:          15 * time.Second,
+		NativeCapacity:    capacity,
+		LoadTime:          time.Duration(spec.loadSeconds) * time.Second,
 		FullTapeRewind:    90 * time.Second,
 		FullTapeLocate:    110 * time.Second,
 		MinSeek:           2 * time.Second,
-		ReadThroughput:    360 << 20,
-		WriteThroughput:   360 << 20,
-		FilemarkWriteTime: 1 * time.Second,
-	}
+		ReadThroughput:    spec.throughputMiB << 20,
+		WriteThroughput:   spec.throughputMiB << 20,
+		FilemarkWriteTime: time.Second,
+	}, true
 }
 
-// defaultScaleCapacity is the assumed tape length for distance scaling when
-// the tape file has unlimited capacity (LTO-8 native capacity, 12 TB).
+// defaultScaleCapacity is the fallback tape length for distance scaling when
+// neither the medium nor the selected latency profile supplies a capacity.
 const defaultScaleCapacity = 12_000_000_000_000
 
 // seekCost estimates a locate between two byte offsets. Staying in place is

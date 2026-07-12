@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
@@ -22,7 +24,6 @@ const (
 	stTapeDeviceType        = "StTapeDevice"
 
 	latencyProfileNone = "none"
-	latencyProfileLTO8 = "lto8"
 )
 
 // DeviceOpener opens a tape device; it is called at lifecycle start.
@@ -34,7 +35,7 @@ type SimulatorTapeDeviceConfiguration struct {
 	Path          internalConfig.StringProvider `json:"path"`
 	CapacityBytes internalConfig.Int64Provider  `json:"capacityBytes,omitempty"`
 	// Latency selects the simulated drive timing: "" or "none" disables
-	// latency, "lto8" simulates an LTO-8 class drive.
+	// latency; "lto1" through "lto10" simulate the corresponding LTO class.
 	Latency  internalConfig.StringProvider `json:"latency,omitempty"`
 	ReadOnly internalConfig.BoolProvider   `json:"readOnly,omitempty"`
 	internalConfig.DynamicJsonType
@@ -48,10 +49,17 @@ func (s *SimulatorTapeDeviceConfiguration) Instantiate(diProvider dependencyinje
 	var latency simulator.LatencyProfile
 	switch s.Latency.Value() {
 	case "", latencyProfileNone:
-	case latencyProfileLTO8:
-		latency = simulator.DefaultLTO8Profile()
 	default:
-		return nil, fmt.Errorf("unknown tape latency profile %q", s.Latency.Value())
+		value := s.Latency.Value()
+		generation, err := strconv.Atoi(strings.TrimPrefix(value, "lto"))
+		if err != nil || value != fmt.Sprintf("lto%d", generation) {
+			return nil, fmt.Errorf("unknown tape latency profile %q", s.Latency.Value())
+		}
+		var ok bool
+		latency, ok = simulator.LTOProfile(generation)
+		if !ok {
+			return nil, fmt.Errorf("unknown tape latency profile %q", s.Latency.Value())
+		}
 	}
 	path := s.Path.Value()
 	opts := simulator.Options{
