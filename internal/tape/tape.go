@@ -81,6 +81,9 @@ type Device interface {
 	ReadRecord(ctx context.Context, p []byte) (int, error)
 	// WriteFilemarks writes count filemarks at the current position.
 	WriteFilemarks(ctx context.Context, count int) error
+	// Flush commits buffered writes durably to the medium without writing a
+	// filemark or moving the head. It is a no-op on a read-only medium.
+	Flush(ctx context.Context) error
 
 	// Rewind positions the head at the beginning of the tape.
 	Rewind(ctx context.Context) error

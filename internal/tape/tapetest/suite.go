@@ -203,6 +203,26 @@ func RunDeviceSuite(t *testing.T, open func(t *testing.T) tape.Device) {
 		requireBlock(t, dev, 4)
 	})
 
+	t.Run("FlushPreservesPositionAndData", func(t *testing.T) {
+		dev := open(t)
+		recordA := record(10, 'a')
+		recordB := record(20, 'b')
+		writeRecords(t, dev, recordA, recordB)
+		require.NoError(t, dev.Flush(ctx))
+		// Flush neither writes a filemark nor moves the head.
+		requireBlock(t, dev, 2)
+
+		// Appending after a flush continues at end-of-data, and everything
+		// reads back intact.
+		writeRecords(t, dev, record(30, 'c'))
+		require.NoError(t, dev.Rewind(ctx))
+		require.Equal(t, recordA, readRecord(t, dev))
+		require.Equal(t, recordB, readRecord(t, dev))
+		require.Equal(t, record(30, 'c'), readRecord(t, dev))
+		_, err := dev.ReadRecord(ctx, make([]byte, readBufferSize))
+		require.ErrorIs(t, err, tape.ErrEndOfData)
+	})
+
 	t.Run("ShortBuffer", func(t *testing.T) {
 		dev := open(t)
 		recordA := record(100, 'a')

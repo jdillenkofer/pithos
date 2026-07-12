@@ -180,6 +180,25 @@ func (d *stDevice) WriteFilemarks(ctx context.Context, count int) error {
 	return nil
 }
 
+func (d *stDevice) Flush(ctx context.Context) error {
+	_, span := d.tracer.Start(ctx, "stDevice.Flush")
+	defer span.End()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.checkOpen(ctx); err != nil {
+		return err
+	}
+	if d.readOnly {
+		return nil
+	}
+	// MTWEOF with count 0 flushes the driver's write buffer to the medium
+	// without writing a filemark or repositioning the head.
+	if err := d.ioctlOp(mtWEOF, 0); err != nil {
+		return fmt.Errorf("flushing writes to %s: %w", d.path, err)
+	}
+	return nil
+}
+
 func (d *stDevice) Rewind(ctx context.Context) error {
 	_, span := d.tracer.Start(ctx, "stDevice.Rewind")
 	defer span.End()

@@ -326,6 +326,25 @@ func (d *Device) WriteFilemarks(ctx context.Context, count int) error {
 	return nil
 }
 
+func (d *Device) Flush(ctx context.Context) error {
+	_, span := d.tracer.Start(ctx, "simulatorDevice.Flush")
+	defer span.End()
+	if err := d.lock(ctx); err != nil {
+		return err
+	}
+	defer d.unlock()
+	if err := d.checkOpen(); err != nil {
+		return err
+	}
+	if d.readOnly {
+		return nil
+	}
+	if err := d.f.Sync(); err != nil {
+		return fmt.Errorf("flushing simulated tape: %w", err)
+	}
+	return nil
+}
+
 func (d *Device) Rewind(ctx context.Context) error {
 	ctx, span := d.tracer.Start(ctx, "simulatorDevice.Rewind")
 	defer span.End()
