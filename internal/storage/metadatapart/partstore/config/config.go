@@ -25,6 +25,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	tapePartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape"
+	tapeConfig "github.com/jdillenkofer/pithos/internal/tape/config"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -38,6 +40,7 @@ const (
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 	cachePartStoreType                    = "CachePartStore"
+	tapePartStoreType                     = "TapePartStore"
 )
 
 type PartStoreInstantiator = internalConfig.DynamicJsonInstantiator[partstore.PartStore]
@@ -53,6 +56,42 @@ func (f *FilesystemPartStoreConfiguration) RegisterReferences(diCollection depen
 
 func (f *FilesystemPartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
 	return filesystem.New(f.Root.Value())
+}
+
+type TapePartStoreConfiguration struct {
+	DeviceInstantiator tapeConfig.TapeDeviceInstantiator `json:"-"`
+	RawDevice          json.RawMessage                   `json:"device"`
+	RecordSizeBytes    internalConfig.Int64Provider      `json:"recordSizeBytes,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (t *TapePartStoreConfiguration) UnmarshalJSON(b []byte) error {
+	type tapePartStoreConfiguration TapePartStoreConfiguration
+	err := json.Unmarshal(b, (*tapePartStoreConfiguration)(t))
+	if err != nil {
+		return err
+	}
+	t.DeviceInstantiator, err = tapeConfig.CreateTapeDeviceInstantiatorFromJson(t.RawDevice)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *TapePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return t.DeviceInstantiator.RegisterReferences(diCollection)
+}
+
+func (t *TapePartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	deviceOpener, err := t.DeviceInstantiator.Instantiate(diProvider)
+	if err != nil {
+		return nil, err
+	}
+	opts := []tapePartStore.Option{}
+	if t.RecordSizeBytes.Value() > 0 {
+		opts = append(opts, tapePartStore.WithRecordSize(int(t.RecordSizeBytes.Value())))
+	}
+	return tapePartStore.New(deviceOpener, opts...)
 }
 
 type TinkEncryptionPartStoreMiddlewareConfiguration struct {
@@ -594,6 +633,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &ErasureCodedPartStoreMiddlewareConfiguration{}
 	case cachePartStoreType:
 		bi = &CachePartStoreConfiguration{}
+	case tapePartStoreType:
+		bi = &TapePartStoreConfiguration{}
 	default:
 		return nil, errors.New("unknown partStore type")
 	}
