@@ -17,6 +17,7 @@ type RecoveredPart struct {
 	Location          Locator
 	ObjectID          *partstore.ObjectId
 	PartNumber        *uint64
+	PartCount         *uint64
 	Length            uint64
 	Hash              [32]byte
 	Checkpointed      bool
@@ -32,6 +33,12 @@ type LogicalOp struct {
 	ExpectedPrevious   *GenerationID
 	ExpectedGeneration *GenerationID
 }
+
+// IsActivate reports whether the op is an activation.
+func (o LogicalOp) IsActivate() bool { return o.Kind == kindActivate }
+
+// IsDelete reports whether the op is a deletion.
+func (o LogicalOp) IsDelete() bool { return o.Kind == kindDelete }
 
 // RecoveryResult is the state reconstructed from a journal directory.
 type RecoveryResult struct {
@@ -178,6 +185,7 @@ func applyRecord(h *recordHeader, body []byte, fileIndex uint64, recordOffset, n
 			PartID:     p.partID,
 			ObjectID:   p.objectID,
 			PartNumber: p.partNumber,
+			PartCount:  p.partCount,
 			Location:   Locator{FileIndex: fileIndex, DataOffset: nextOffset, DataEndOffset: nextOffset},
 		}
 	case kindPartData:

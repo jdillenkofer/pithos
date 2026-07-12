@@ -434,6 +434,13 @@ func (j *Journal) Close() error {
 // JournalID returns the identifier shared by this journal's segment files.
 func (j *Journal) JournalID() [16]byte { return j.journalID }
 
+// Snapshot rescans the journal directory and returns its durable state. It
+// reflects records that are durable on disk (appended and, per the durability
+// mode, synced); in-flight writes not yet durable are not included.
+func (j *Journal) Snapshot() (*RecoveryResult, error) {
+	return Scan(j.dir)
+}
+
 type payloadReader struct {
 	f       *os.File
 	offset  int64
