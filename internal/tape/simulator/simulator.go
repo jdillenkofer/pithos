@@ -360,10 +360,31 @@ func (d *Device) LocateBlock(ctx context.Context, block uint64) error {
 		target = len(d.index)
 		resultErr = tape.ErrEndOfData
 	}
-	if err := d.moveTo(ctx, target); err != nil {
-		return err
+	var moveErr error
+	if d.crossesOnlyForwardFilemarks(target) {
+		// A ranged read can stop after the final data record without consuming
+		// its filemark. Locating to the immediately following segment is still
+		// sequential tape motion, not a random seek.
+		moveErr = d.spaceTo(ctx, target)
+	} else {
+		moveErr = d.moveTo(ctx, target)
+	}
+	if moveErr != nil {
+		return moveErr
 	}
 	return resultErr
+}
+
+func (d *Device) crossesOnlyForwardFilemarks(target int) bool {
+	if target <= d.cursor || target > len(d.index) {
+		return false
+	}
+	for _, e := range d.index[d.cursor:target] {
+		if e.kind != entryFilemark {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Device) Tell(ctx context.Context) (tape.Position, error) {
