@@ -19,6 +19,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -30,6 +31,8 @@ import (
 )
 
 const defaultRecordSize = 256 << 10
+
+const indexRebuildProgressInterval = 10 * time.Second
 
 // DeviceOpener opens the tape device backing the store; it is called during
 // Start so that slow device operations (cartridge load) happen at lifecycle
@@ -93,10 +96,13 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
+	loadStarted := time.Now()
+	slog.InfoContext(ctx, "Loading tape device")
 	device, err := s.deviceOpener(ctx)
 	if err != nil {
 		return fmt.Errorf("opening tape device: %w", err)
 	}
+	slog.InfoContext(ctx, "Tape device loaded", "elapsed", time.Since(loadStarted).Round(time.Millisecond))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.device = device
@@ -113,11 +119,31 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 // terminating filemark) is not indexed and gets sealed with a filemark and a
 // tombstone so later appends stay parseable. Must be called with mu held.
 func (s *tapePartStore) rebuildIndex(ctx context.Context) error {
+	started := time.Now()
+	slog.InfoContext(ctx, "Rebuilding tape part index")
 	if err := s.device.Rewind(ctx); err != nil {
 		return err
 	}
 
 	liveCopies := map[partstore.PartId]map[uint64]struct{}{}
+	var scannedSegments uint64
+	var dataSegments uint64
+	var tombstones uint64
+	lastProgress := started
+	logProgress := func(block uint64) {
+		if time.Since(lastProgress) < indexRebuildProgressInterval {
+			return
+		}
+		slog.InfoContext(ctx, "Rebuilding tape part index",
+			"elapsed", time.Since(started).Round(time.Second),
+			"block", block,
+			"segments", scannedSegments,
+			"dataSegments", dataSegments,
+			"tombstones", tombstones,
+			"liveParts", len(liveCopies),
+		)
+		lastProgress = time.Now()
+	}
 	needFilemarkSeal := false
 	var sealTombstone *header
 	buf := make([]byte, headerBufferSize)
@@ -134,8 +160,10 @@ scan:
 			break scan
 		case errors.Is(err, tapedev.ErrFilemark):
 			// Stray filemark (empty segment), skip it.
+			logProgress(pos.Block)
 			continue
 		case errors.Is(err, io.ErrShortBuffer):
+			scannedSegments++
 			// Too large for a header: not written by this store.
 			slog.Warn("Skipping unrecognized tape segment", "block", pos.Block)
 			if skipErr := s.device.SpaceFilemarks(ctx, 1); skipErr != nil {
@@ -145,6 +173,7 @@ scan:
 				}
 				return skipErr
 			}
+			logProgress(pos.Block)
 			continue
 		case err != nil:
 			return err
@@ -152,6 +181,7 @@ scan:
 
 		h, err := decodeHeader(buf[:n])
 		if err != nil {
+			scannedSegments++
 			slog.Warn("Skipping unparseable tape segment header", "block", pos.Block, "error", err)
 			if skipErr := s.device.SpaceFilemarks(ctx, 1); skipErr != nil {
 				if errors.Is(skipErr, tapedev.ErrEndOfData) {
@@ -160,8 +190,10 @@ scan:
 				}
 				return skipErr
 			}
+			logProgress(pos.Block)
 			continue
 		}
+		scannedSegments++
 
 		truncated := false
 		if err := s.device.SpaceFilemarks(ctx, 1); err != nil {
@@ -173,6 +205,7 @@ scan:
 
 		switch h.kind {
 		case kindData:
+			dataSegments++
 			if truncated {
 				// Crash mid-PutPart: the part is incomplete, seal it away.
 				slog.Warn("Sealing truncated tape part segment", "partId", h.partId.String(), "block", pos.Block)
@@ -185,6 +218,7 @@ scan:
 			}
 			liveCopies[h.partId][pos.Block] = struct{}{}
 		case kindTombstone:
+			tombstones++
 			// A tombstone record is atomic; apply it even if its filemark
 			// is missing.
 			if h.invalidatedBlock == tombstoneAllCopies {
@@ -200,6 +234,7 @@ scan:
 				break scan
 			}
 		}
+		logProgress(pos.Block)
 	}
 
 	s.index = make(map[partstore.PartId]uint64, len(liveCopies))
@@ -220,6 +255,13 @@ scan:
 			slog.Warn("Failed to seal truncated tape tail", "error", err)
 		}
 	}
+	slog.InfoContext(ctx, "Tape part index rebuilt",
+		"elapsed", time.Since(started).Round(time.Millisecond),
+		"segments", scannedSegments,
+		"dataSegments", dataSegments,
+		"tombstones", tombstones,
+		"liveParts", len(s.index),
+	)
 	return nil
 }
 
