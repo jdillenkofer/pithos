@@ -31,14 +31,15 @@ type mtPos struct {
 	BlkNo int64
 }
 
-// Tape operations for mtOp.Op.
+// Tape operations for mtOp.Op. Values are from <linux/mtio.h>.
 const (
-	mtWEOF   = 0  // write count filemarks
 	mtFSF    = 1  // forward space over count filemarks
 	mtBSF    = 2  // backward space over count filemarks
 	mtFSR    = 3  // forward space count records
 	mtBSR    = 4  // backward space count records
+	mtWEOF   = 5  // write count filemarks
 	mtREW    = 6  // rewind
+	mtNOP    = 8  // no op; flushes the driver's write buffer as a side effect
 	mtEOM    = 12 // space to end of recorded media
 	mtSETBLK = 20 // set block size (0 = variable block mode)
 	mtSEEK   = 22 // seek to block
