@@ -142,6 +142,38 @@ func TestSpacingDoesNotChargeSeekFloorPerFilemark(t *testing.T) {
 	require.GreaterOrEqual(t, recorder.sleeps[0], minSeek)
 }
 
+func TestLocateAcrossAdjacentFilemarkIsSequential(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	minSeek := 2 * time.Second
+	dev, recorder := openRecordedDevice(t, Options{
+		Capacity: 1 << 20,
+		Latency: LatencyProfile{
+			FullTapeLocate: time.Second,
+			MinSeek:        minSeek,
+		},
+	})
+
+	require.NoError(t, dev.WriteRecord(ctx, make([]byte, 64<<10))) // block 0
+	require.NoError(t, dev.WriteFilemarks(ctx, 1))                 // block 1
+	require.NoError(t, dev.WriteRecord(ctx, make([]byte, 64<<10))) // block 2
+	require.NoError(t, dev.Rewind(ctx))
+	_, err := dev.ReadRecord(ctx, make([]byte, 64<<10))
+	require.NoError(t, err) // cursor now points at the filemark
+
+	recorder.sleeps = nil
+	require.NoError(t, dev.LocateBlock(ctx, 2))
+	require.Len(t, recorder.sleeps, 1)
+	require.Positive(t, recorder.sleeps[0])
+	require.Less(t, recorder.sleeps[0], minSeek)
+
+	// Moving back across data remains a random locate.
+	recorder.sleeps = nil
+	require.NoError(t, dev.LocateBlock(ctx, 0))
+	require.Len(t, recorder.sleeps, 1)
+	require.GreaterOrEqual(t, recorder.sleeps[0], minSeek)
+}
+
 func TestRewindCostScalesWithHeadPosition(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
