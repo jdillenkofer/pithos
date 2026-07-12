@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
 	tapedev "github.com/jdillenkofer/pithos/internal/tape"
 )
@@ -49,6 +50,21 @@ func NewMigrator(j *journal.Journal, device tapedev.Device, recordSize int, poli
 	}
 }
 
+// MigratedPart records where a part landed on tape after migration.
+type MigratedPart struct {
+	PartID     partstore.PartId
+	Generation journal.GenerationID
+	StartBlock uint64
+	Length     uint64
+	Hash       [32]byte
+}
+
+// MigrationResult is the outcome of one MigrateOnce call.
+type MigrationResult struct {
+	SegmentID [16]byte
+	Parts     []MigratedPart
+}
+
 // PreviousSegment returns the id of the last segment this migrator committed
 // (or the seed value if none), for chain linkage.
 func (m *Migrator) PreviousSegment() [16]byte {
@@ -59,39 +75,40 @@ func (m *Migrator) PreviousSegment() [16]byte {
 
 // MigrateOnce plans and, if the plan is ready (or force is set), writes one
 // tape segment from the journal's live, committed, not-yet-checkpointed parts.
-// It returns the number of parts migrated (0 when there is nothing ready).
-func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (int, error) {
+// The returned result lists the migrated parts and their tape blocks; Parts is
+// empty when there was nothing ready to migrate.
+func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	snap, err := m.journal.Snapshot()
 	if err != nil {
-		return 0, err
+		return MigrationResult{}, err
 	}
 
 	candidates, byGen, activateSeqByGen := m.buildCandidates(snap)
 	if len(candidates) == 0 {
-		return 0, nil
+		return MigrationResult{}, nil
 	}
 	plan := PlanSegment(candidates, m.policy)
 	if len(plan.Parts) == 0 {
-		return 0, nil
+		return MigrationResult{}, nil
 	}
 	if !plan.Ready && !force {
-		return 0, nil
+		return MigrationResult{}, nil
 	}
 
 	writer, err := NewSegmentWriter(ctx, m.device, m.recordSize, m.previousSegment, m.nextSequence)
 	if err != nil {
-		return 0, err
+		return MigrationResult{}, err
 	}
 
-	migrated := make([]journal.GenerationID, 0, len(plan.Parts))
+	migrated := make([]MigratedPart, 0, len(plan.Parts))
 	for _, cand := range plan.Parts {
 		part := byGen[cand.Generation]
 		reader, err := m.journal.OpenPayload(part.Location)
 		if err != nil {
-			return 0, fmt.Errorf("opening journal payload for part %s: %w", part.PartID.String(), err)
+			return MigrationResult{}, fmt.Errorf("opening journal payload for part %s: %w", part.PartID.String(), err)
 		}
 		meta := segPartBeginPayload{
 			generation: part.Generation,
@@ -99,41 +116,47 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (int, error) {
 			objectID:   part.ObjectID,
 			partNumber: part.PartNumber,
 		}
-		_, writeErr := writer.WritePart(ctx, meta, reader)
+		startBlock, writeErr := writer.WritePart(ctx, meta, reader)
 		closeErr := reader.Close()
 		if writeErr != nil {
-			return 0, fmt.Errorf("writing part %s to tape: %w", part.PartID.String(), writeErr)
+			return MigrationResult{}, fmt.Errorf("writing part %s to tape: %w", part.PartID.String(), writeErr)
 		}
 		if closeErr != nil {
-			return 0, closeErr
+			return MigrationResult{}, closeErr
 		}
 		writer.AddActivate(segActivatePayload{
 			partID:     part.PartID,
 			generation: part.Generation,
 			sequence:   activateSeqByGen[part.Generation],
 		})
-		migrated = append(migrated, part.Generation)
+		migrated = append(migrated, MigratedPart{
+			PartID:     part.PartID,
+			Generation: part.Generation,
+			StartBlock: startBlock,
+			Length:     part.Length,
+			Hash:       part.Hash,
+		})
 	}
 
 	segmentID, err := writer.Finish(ctx)
 	if err != nil {
 		// The segment is not committed; recovery ignores it and the parts stay
 		// authoritative in the journal.
-		return 0, fmt.Errorf("committing tape segment: %w", err)
+		return MigrationResult{}, fmt.Errorf("committing tape segment: %w", err)
 	}
 
 	// The segment is durable on tape. Checkpoint each part so its journal copy
 	// becomes reclaimable. A crash here leaves both copies, which recovery
 	// deduplicates by generation.
-	for _, gen := range migrated {
-		if _, err := m.journal.Checkpoint(ctx, gen, segmentID); err != nil {
-			return 0, fmt.Errorf("checkpointing migrated part: %w", err)
+	for _, p := range migrated {
+		if _, err := m.journal.Checkpoint(ctx, p.Generation, segmentID); err != nil {
+			return MigrationResult{}, fmt.Errorf("checkpointing migrated part: %w", err)
 		}
 	}
 
 	m.previousSegment = segmentID
 	m.nextSequence += uint64(len(plan.Parts))*4 + 8 // rough per-segment record span
-	return len(plan.Parts), nil
+	return MigrationResult{SegmentID: segmentID, Parts: migrated}, nil
 }
 
 // buildCandidates selects live parts whose payload is committed in the journal

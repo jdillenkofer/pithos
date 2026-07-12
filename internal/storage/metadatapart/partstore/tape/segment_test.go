@@ -100,7 +100,7 @@ func TestSegmentWriteAndScanRoundtrip(t *testing.T) {
 	segmentID, err := w.Finish(ctx)
 	require.NoError(t, err)
 
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
 	seg := segments[0]
@@ -148,7 +148,7 @@ func TestSegmentChainScan(t *testing.T) {
 	seg2ID, err := w2.Finish(ctx)
 	require.NoError(t, err)
 
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 2)
 	require.Equal(t, seg1ID, segments[0].header.segmentID)
@@ -178,7 +178,7 @@ func TestSegmentScanIgnoresTornTailSegment(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, dev.WriteRecord(ctx, pb))
 
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
 	require.Equal(t, seg1ID, segments[0].header.segmentID)
@@ -201,7 +201,7 @@ func TestSegmentScanRejectsFooterWithoutCommit(t *testing.T) {
 	require.NoError(t, dev.WriteRecord(ctx, rec))
 	require.NoError(t, dev.WriteFilemarks(ctx, 1))
 
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Empty(t, segments)
 }
@@ -209,7 +209,7 @@ func TestSegmentScanRejectsFooterWithoutCommit(t *testing.T) {
 func TestSegmentScanEmptyTape(t *testing.T) {
 	ctx := context.Background()
 	dev := openSimulator(t)
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Empty(t, segments)
 }

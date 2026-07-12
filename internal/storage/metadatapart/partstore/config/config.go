@@ -31,6 +31,7 @@ import (
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	tapePartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
 	tapeConfig "github.com/jdillenkofer/pithos/internal/tape/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/oauth2"
@@ -73,7 +74,22 @@ type TapePartStoreConfiguration struct {
 	DeviceInstantiator tapeConfig.TapeDeviceInstantiator `json:"-"`
 	RawDevice          json.RawMessage                   `json:"device"`
 	RecordSizeBytes    internalConfig.Int64Provider      `json:"recordSizeBytes,omitempty"`
+	JournalDirectory   internalConfig.StringProvider     `json:"journalDirectory"`
+	DurabilityMode     internalConfig.StringProvider     `json:"durabilityMode,omitempty"`
+	GroupCommit        TapeGroupCommitConfiguration      `json:"groupCommit,omitempty"`
+	Packing            TapePackingConfiguration          `json:"packing,omitempty"`
 	internalConfig.DynamicJsonType
+}
+
+type TapeGroupCommitConfiguration struct {
+	MaxDelayMs internalConfig.Int64Provider `json:"maxDelayMs,omitempty"`
+	MaxBytes   internalConfig.Int64Provider `json:"maxBytes,omitempty"`
+}
+
+type TapePackingConfiguration struct {
+	TargetBytes    internalConfig.Int64Provider `json:"targetBytes,omitempty"`
+	MaxBytes       internalConfig.Int64Provider `json:"maxBytes,omitempty"`
+	MaxWaitSeconds internalConfig.Int64Provider `json:"maxWaitSeconds,omitempty"`
 }
 
 func (t *TapePartStoreConfiguration) UnmarshalJSON(b []byte) error {
@@ -98,10 +114,33 @@ func (t *TapePartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	opts := []tapePartStore.Option{}
+	opts := []tapePartStore.Option{tapePartStore.WithJournalDir(t.JournalDirectory.Value())}
 	if t.RecordSizeBytes.Value() > 0 {
 		opts = append(opts, tapePartStore.WithRecordSize(int(t.RecordSizeBytes.Value())))
 	}
+	switch t.DurabilityMode.Value() {
+	case "", "per-part":
+		opts = append(opts, tapePartStore.WithDurability(journal.DurabilityPerPart))
+	case "group-commit":
+		opts = append(opts, tapePartStore.WithDurability(journal.DurabilityGroupCommit))
+	default:
+		return nil, fmt.Errorf("invalid tape durability mode %q (want per-part or group-commit)", t.DurabilityMode.Value())
+	}
+	opts = append(opts, tapePartStore.WithGroupCommit(journal.GroupCommitPolicy{
+		MaxDelay: time.Duration(t.GroupCommit.MaxDelayMs.Value()) * time.Millisecond,
+		MaxBytes: t.GroupCommit.MaxBytes.Value(),
+	}))
+	packing := tapePartStore.DefaultPackingPolicy()
+	if value := t.Packing.TargetBytes.Value(); value > 0 {
+		packing.TargetBytes = value
+	}
+	if value := t.Packing.MaxBytes.Value(); value > 0 {
+		packing.MaxBytes = value
+	}
+	if value := t.Packing.MaxWaitSeconds.Value(); value > 0 {
+		packing.MaxWait = time.Duration(value) * time.Second
+	}
+	opts = append(opts, tapePartStore.WithPackingPolicy(packing))
 	return tapePartStore.New(deviceOpener, opts...)
 }
 

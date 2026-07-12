@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -23,18 +22,18 @@ import (
 // testRecordSize is tiny so even short test content spans multiple records.
 const testRecordSize = 8
 
-func newTapeStore(t *testing.T, tapePath string) partstore.PartStore {
+func newTapeStore(t *testing.T, tapePath, journalPath string) *tapePartStore {
 	t.Helper()
 	store, err := New(func(ctx context.Context) (tapedev.Device, error) {
 		return simulator.Open(ctx, tapePath, simulator.Options{})
-	}, WithRecordSize(testRecordSize))
+	}, WithRecordSize(testRecordSize), WithJournalDir(journalPath))
 	require.NoError(t, err)
-	return store
+	return store.(*tapePartStore)
 }
 
-func newStartedTapeStore(t *testing.T, tapePath string) partstore.PartStore {
+func newStartedTapeStore(t *testing.T, tapePath, journalPath string) *tapePartStore {
 	t.Helper()
-	store := newTapeStore(t, tapePath)
+	store := newTapeStore(t, tapePath, journalPath)
 	require.NoError(t, store.Start(context.Background()))
 	return store
 }
@@ -63,18 +62,21 @@ func TestTapePartStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	db := openTestDb(t)
-	store := newTapeStore(t, filepath.Join(t.TempDir(), "tape.sim"))
+	root := t.TempDir()
+	store := newTapeStore(t, filepath.Join(root, "tape.sim"), filepath.Join(root, "journal"))
 	content := []byte("TapePartStore content spanning multiple tape records")
 	err := partstore.Tester(store, db, content)
 	assert.Nil(t, err)
 }
 
-func TestTapePartStoreRebuildAfterRestart(t *testing.T) {
+func TestTapePartStoreRecoversWithoutDatabase(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	tapePath := filepath.Join(t.TempDir(), "tape.sim")
-	store := newStartedTapeStore(t, tapePath)
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
 
 	partA, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
@@ -85,10 +87,13 @@ func TestTapePartStoreRebuildAfterRestart(t *testing.T) {
 
 	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
 	require.NoError(t, store.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
+	store.runMigration(ctx, true)
+	require.Equal(t, locationTape, store.index[*partA].location)
+	require.Equal(t, locationTape, store.index[*partB].location)
 	require.NoError(t, store.DeletePart(ctx, nil, *partA))
 	require.NoError(t, store.Stop(ctx))
 
-	restarted := newStartedTapeStore(t, tapePath)
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
 	defer restarted.Stop(ctx)
 
 	partIds, err := restarted.GetPartIds(ctx, nil)
@@ -103,28 +108,25 @@ func TestTapePartStoreRebuildAfterRestart(t *testing.T) {
 	require.ErrorIs(t, err, partstore.ErrPartNotFound)
 }
 
-func TestTapePartStoreDeleteOnlyAppends(t *testing.T) {
+func TestTapePartStoreDeleteIsDurable(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	tapePath := filepath.Join(t.TempDir(), "tape.sim")
-	store := newStartedTapeStore(t, tapePath)
-	defer store.Stop(ctx)
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	require.NoError(t, store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("some part content"))))
 
-	infoBefore, err := os.Stat(tapePath)
-	require.NoError(t, err)
-
 	require.NoError(t, store.DeletePart(ctx, nil, *partId))
+	require.NoError(t, store.Stop(ctx))
 
-	infoAfter, err := os.Stat(tapePath)
-	require.NoError(t, err)
-	require.Greater(t, infoAfter.Size(), infoBefore.Size(), "delete must only append a tombstone")
-
-	partIds, err := store.GetPartIds(ctx, nil)
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
+	defer restarted.Stop(ctx)
+	partIds, err := restarted.GetPartIds(ctx, nil)
 	require.NoError(t, err)
 	require.Empty(t, partIds)
 }
@@ -133,9 +135,11 @@ func TestTapePartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	tapePath := filepath.Join(t.TempDir(), "tape.sim")
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
 	db := openTestDb(t)
-	store := newStartedTapeStore(t, tapePath)
+	store := newStartedTapeStore(t, tapePath, journalPath)
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
@@ -170,10 +174,10 @@ func TestTapePartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("new"), content)
 
-	// The rolled-back overwrite must stay invisible across a restart: its
-	// tombstone only invalidates the rolled-back copy, not the committed one.
+	// The compensating activation must restore the previous generation across
+	// restart; the rolled-back overwrite must never become visible.
 	require.NoError(t, store.Stop(ctx))
-	restarted := newStartedTapeStore(t, tapePath)
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
 	defer restarted.Stop(ctx)
 
 	content, err = readPart(t, restarted, *partId)
@@ -185,8 +189,10 @@ func TestTapePartStoreOverwriteKeepsNewestAcrossRestart(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	tapePath := filepath.Join(t.TempDir(), "tape.sim")
-	store := newStartedTapeStore(t, tapePath)
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
@@ -198,7 +204,7 @@ func TestTapePartStoreOverwriteKeepsNewestAcrossRestart(t *testing.T) {
 	require.Equal(t, []byte("version 2"), content)
 
 	require.NoError(t, store.Stop(ctx))
-	restarted := newStartedTapeStore(t, tapePath)
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
 	defer restarted.Stop(ctx)
 
 	content, err = readPart(t, restarted, *partId)
@@ -210,7 +216,8 @@ func TestTapePartStoreInterleavedReaders(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	store := newStartedTapeStore(t, filepath.Join(t.TempDir(), "tape.sim"))
+	root := t.TempDir()
+	store := newStartedTapeStore(t, filepath.Join(root, "tape.sim"), filepath.Join(root, "journal"))
 	defer store.Stop(ctx)
 
 	partA, err := partstore.NewRandomPartId()
@@ -263,27 +270,30 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	tapePath := filepath.Join(t.TempDir(), "tape.sim")
-	store := newStartedTapeStore(t, tapePath)
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
 
 	partA, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	contentA := []byte("committed part content")
 	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
+	store.runMigration(ctx, true)
+	require.Equal(t, locationTape, store.index[*partA].location)
 	require.NoError(t, store.Stop(ctx))
 
 	// Simulate a crash mid-PutPart: a data segment without its terminating
 	// filemark, appended directly on the device.
-	truncatedId, err := partstore.NewRandomPartId()
-	require.NoError(t, err)
 	device, err := simulator.Open(ctx, tapePath, simulator.Options{})
 	require.NoError(t, err)
 	require.NoError(t, device.SeekToEOD(ctx))
-	require.NoError(t, device.WriteRecord(ctx, encodeDataHeader(*truncatedId)))
-	require.NoError(t, device.WriteRecord(ctx, []byte("partial ")))
+	tornRecord, err := encodeSegmentRecord(segKindHeader, 999, []byte("truncated v2 header"))
+	require.NoError(t, err)
+	require.NoError(t, device.WriteRecord(ctx, tornRecord))
 	require.NoError(t, device.Close())
 
-	restarted := newStartedTapeStore(t, tapePath)
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
 
 	partIds, err := restarted.GetPartIds(ctx, nil)
 	require.NoError(t, err)
@@ -299,9 +309,10 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	require.NoError(t, err)
 	contentB := []byte("appended after sealing")
 	require.NoError(t, restarted.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
+	restarted.runMigration(ctx, true)
 	require.NoError(t, restarted.Stop(ctx))
 
-	final := newStartedTapeStore(t, tapePath)
+	final := newStartedTapeStore(t, tapePath, journalPath)
 	defer final.Stop(ctx)
 
 	partIds, err = final.GetPartIds(ctx, nil)
@@ -316,7 +327,8 @@ func TestTapePartStoreEmptyPart(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
-	store := newStartedTapeStore(t, filepath.Join(t.TempDir(), "tape.sim"))
+	root := t.TempDir()
+	store := newStartedTapeStore(t, filepath.Join(root, "tape.sim"), filepath.Join(root, "journal"))
 	defer store.Stop(ctx)
 
 	partId, err := partstore.NewRandomPartId()

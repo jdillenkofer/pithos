@@ -69,19 +69,36 @@ func TestCanCreateTapePartStoreFromJson(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	tapePath := filepath.Join(*tempDir, "tape.sim")
+	journalPath := filepath.Join(*tempDir, "journal")
 	jsonData := fmt.Sprintf(`{
 				 "type": "TapePartStore",
 				 "recordSizeBytes": 262144,
+				 "journalDirectory": %s,
+				 "durabilityMode": "group-commit",
+				 "groupCommit": {"maxDelayMs": 5, "maxBytes": 1048576},
+				 "packing": {"targetBytes": 1048576, "maxBytes": 4194304, "maxWaitSeconds": 1},
 				 "device": {
 					 "type": "SimulatorTapeDevice",
 					 "path": %s,
 					 "latency": "none"
 				 }
-			 }`, strconv.Quote(tapePath))
+			 }`, strconv.Quote(journalPath), strconv.Quote(tapePath))
 
 	partStore, err := createPartStoreFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, partStore)
+}
+
+func TestTapePartStoreConfigurationRequiresJournalDirectory(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "TapePartStore",
+		"device": {"type": "SimulatorTapeDevice", "path": "tape.sim", "latency": "none"}
+	}`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.ErrorContains(t, err, "journal directory")
+	assert.Nil(t, partStore)
 }
 
 func TestCanCreateCachePartStoreFromJson(t *testing.T) {

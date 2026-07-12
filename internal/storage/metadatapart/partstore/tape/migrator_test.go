@@ -51,12 +51,12 @@ func TestMigrateOnceHappyPath(t *testing.T) {
 	id2, gen2 := stageActivePart(t, j, []byte("two"))
 
 	m := NewMigrator(j, dev, 4096, migrationTestPolicy(), [16]byte{}, 1)
-	n, err := m.MigrateOnce(ctx, true)
+	res, err := m.MigrateOnce(ctx, true)
 	require.NoError(t, err)
-	require.Equal(t, 2, n)
+	require.Len(t, res.Parts, 2)
 
 	// The tape holds one committed segment with both parts.
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
 	require.Equal(t, uint64(2), segments[0].footer.partCount)
@@ -87,16 +87,16 @@ func TestMigrateAlreadyCheckpointedNotRemigrated(t *testing.T) {
 	stageActivePart(t, j, []byte("data"))
 
 	m := NewMigrator(j, dev, 4096, migrationTestPolicy(), [16]byte{}, 1)
-	n, err := m.MigrateOnce(ctx, true)
+	res, err := m.MigrateOnce(ctx, true)
 	require.NoError(t, err)
-	require.Equal(t, 1, n)
+	require.Len(t, res.Parts, 1)
 
 	// A second run finds nothing left to migrate (the part is checkpointed).
-	n, err = m.MigrateOnce(ctx, true)
+	res, err = m.MigrateOnce(ctx, true)
 	require.NoError(t, err)
-	require.Equal(t, 0, n)
+	require.Empty(t, res.Parts)
 
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
 }
@@ -123,7 +123,7 @@ func TestMigrateCrashBeforeSegmentCommit(t *testing.T) {
 	require.NoError(t, reader.Close())
 
 	// No trusted segment exists on tape.
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Empty(t, segments)
 
@@ -159,7 +159,7 @@ func TestMigrateCrashAfterCommitBeforeCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	// Tape copy exists and is trusted.
-	segments, err := scanSegments(ctx, dev)
+	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
 	require.Equal(t, segmentID, segments[0].header.segmentID)

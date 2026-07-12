@@ -245,65 +245,70 @@ type scannedSegment struct {
 // scanSegments reads every committed segment from the beginning of the tape.
 // It verifies each segment's footer and commit and loads its index and logical
 // operations without reading part data. Scanning stops at the first
-// uncommitted or truncated segment (a crash tail); its block is returned so
-// the caller can seal it.
-func scanSegments(ctx context.Context, dev tapedev.Device) ([]scannedSegment, error) {
+// uncommitted or truncated segment (a crash tail). It also returns tailBlock:
+// the block where the trusted region ends, i.e. the clean append point. If
+// end-of-data is beyond tailBlock, the bytes in between are an untrusted tail
+// the caller should seal.
+func scanSegments(ctx context.Context, dev tapedev.Device) (segments []scannedSegment, tailBlock uint64, err error) {
 	if err := dev.Rewind(ctx); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	buf := make([]byte, segControlBufferSize)
-	var segments []scannedSegment
 
 	for {
 		pos, err := dev.Tell(ctx)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		segStart := pos.Block
 
 		n, err := dev.ReadRecord(ctx, buf)
 		switch {
 		case errors.Is(err, tapedev.ErrEndOfData):
-			return segments, nil
+			return segments, segStart, nil
 		case errors.Is(err, tapedev.ErrFilemark):
 			// Stray filemark (e.g. a sealed truncated tail); skip it.
 			continue
 		case errors.Is(err, io.ErrShortBuffer):
 			// A record too large to be a control record is not a segment header.
-			return segments, nil
+			return segments, segStart, nil
 		case err != nil:
-			return nil, err
+			return nil, 0, err
 		}
 		rec, err := decodeSegmentRecord(buf[:n])
 		if err != nil || rec.kind != segKindHeader {
 			// Not one of our segment headers: end of the trusted region.
-			return segments, nil
+			return segments, segStart, nil
 		}
 		header, err := decodeSegmentHeader(rec.payload)
 		if err != nil {
-			return segments, nil
+			return segments, segStart, nil
 		}
 
 		seg, ok, err := scanOneSegment(ctx, dev, buf, segStart, header)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if !ok {
 			// Uncommitted or truncated tail segment: stop here.
-			return segments, nil
+			return segments, segStart, nil
 		}
 		segments = append(segments, seg)
 
 		// Position at the start of the next segment (just past this segment's
 		// terminating filemark).
 		if err := dev.LocateBlock(ctx, seg.footer.indexStartBlock); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if err := dev.SpaceFilemarks(ctx, 1); err != nil {
 			if errors.Is(err, tapedev.ErrEndOfData) {
-				return segments, nil
+				endPos, terr := dev.Tell(ctx)
+				if terr != nil {
+					return nil, 0, terr
+				}
+				return segments, endPos.Block, nil
 			}
-			return nil, err
+			return nil, 0, err
 		}
 	}
 }
