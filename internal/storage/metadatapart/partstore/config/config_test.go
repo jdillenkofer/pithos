@@ -62,6 +62,28 @@ func TestCanCreateFilesystemPartStoreFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateTapePartStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	assert.Nil(t, err)
+	t.Cleanup(cleanup)
+
+	tapePath := filepath.Join(*tempDir, "tape.sim")
+	jsonData := fmt.Sprintf(`{
+				 "type": "TapePartStore",
+				 "recordSizeBytes": 262144,
+				 "device": {
+					 "type": "SimulatorTapeDevice",
+					 "path": %s,
+					 "latency": "none"
+				 }
+			 }`, strconv.Quote(tapePath))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
 func TestCanCreateCachePartStoreFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	tempDir, cleanup, err := config.CreateTempDir()
