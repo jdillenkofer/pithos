@@ -104,7 +104,10 @@ func open(ctx context.Context, path string, opts Options, sleep sleepFunc) (*Dev
 
 	scaleCapacity := capacity
 	if scaleCapacity == 0 {
-		scaleCapacity = defaultScaleCapacity
+		scaleCapacity = opts.Latency.NativeCapacity
+		if scaleCapacity == 0 {
+			scaleCapacity = defaultScaleCapacity
+		}
 	}
 	d := &Device{
 		f:             f,
