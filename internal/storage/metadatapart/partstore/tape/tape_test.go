@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -338,4 +339,29 @@ func TestTapePartStoreEmptyPart(t *testing.T) {
 	content, err := readPart(t, store, *partId)
 	require.NoError(t, err)
 	require.Empty(t, content)
+}
+
+func TestTapePartStoreStagesTapeReadsOnDisk(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, filepath.Join(root, "tape.sim"), journalPath)
+	defer store.Stop(ctx)
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := bytes.Repeat([]byte("cache me"), 128)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader(content)))
+	store.runMigration(ctx, true)
+	require.Equal(t, locationTape, store.index[*partID].location)
+
+	got, err := readPart(t, store, *partID)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+
+	entries, err := os.ReadDir(filepath.Join(journalPath, "read-cache"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 }

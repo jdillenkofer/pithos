@@ -253,7 +253,12 @@ func scanSegments(ctx context.Context, dev tapedev.Device) (segments []scannedSe
 	if err := dev.Rewind(ctx); err != nil {
 		return nil, 0, err
 	}
-	buf := make([]byte, segControlBufferSize)
+	// Recovery deliberately scans forward. The old fast path skipped to the
+	// terminating filemark and then sought backwards to the footer and index.
+	// On a real drive every backward locate is expensive; a single forward pass
+	// verifies the content hash as well as the CRC on every record.
+	buf := make([]byte, segMaxPayloadSize+segEnvelopeSize+segPayloadCRC)
+	var previousSegment [16]byte
 
 	for {
 		pos, err := dev.Tell(ctx)
@@ -284,94 +289,64 @@ func scanSegments(ctx context.Context, dev tapedev.Device) (segments []scannedSe
 		if err != nil {
 			return segments, segStart, nil
 		}
+		if header.previousSegment != previousSegment {
+			return segments, segStart, nil
+		}
 
-		seg, ok, err := scanOneSegment(ctx, dev, buf, segStart, header)
+		headerBytes := append([]byte(nil), buf[:n]...)
+		seg, ok, err := scanForwardSegment(ctx, dev, buf, segStart, header, headerBytes)
 		if err != nil {
 			return nil, 0, err
 		}
 		if !ok {
-			// Uncommitted or truncated tail segment: stop here.
 			return segments, segStart, nil
 		}
 		segments = append(segments, seg)
-
-		// Position at the start of the next segment (just past this segment's
-		// terminating filemark).
-		if err := dev.LocateBlock(ctx, seg.footer.indexStartBlock); err != nil {
-			return nil, 0, err
-		}
-		if err := dev.SpaceFilemarks(ctx, 1); err != nil {
-			if errors.Is(err, tapedev.ErrEndOfData) {
-				endPos, terr := dev.Tell(ctx)
-				if terr != nil {
-					return nil, 0, terr
-				}
-				return segments, endPos.Block, nil
-			}
-			return nil, 0, err
-		}
+		previousSegment = seg.header.segmentID
 	}
 }
 
-// scanOneSegment verifies and loads one segment whose header has already been
-// read; the head is positioned just past the header record. It returns ok=false
-// (without error) for an uncommitted or truncated tail segment.
-func scanOneSegment(ctx context.Context, dev tapedev.Device, buf []byte, segStart uint64, header segmentHeaderPayload) (scannedSegment, bool, error) {
-	// Find the terminating filemark to locate the footer and commit.
-	if err := dev.SpaceFilemarks(ctx, 1); err != nil {
-		if errors.Is(err, tapedev.ErrEndOfData) {
-			return scannedSegment{}, false, nil
+// scanForwardSegment consumes the remainder of one physical tape file without
+// relocating the head. It validates every record's CRC and the footer's hash
+// over all covered records before accepting the segment.
+func scanForwardSegment(ctx context.Context, dev tapedev.Device, buf []byte, segStart uint64, header segmentHeaderPayload, headerRecord []byte) (scannedSegment, bool, error) {
+	seg := scannedSegment{header: header, firstBlock: segStart}
+	content := sha256.New()
+	_, _ = content.Write(headerRecord)
+	var recordCount, byteCount uint64 = 1, uint64(len(headerRecord))
+	var footer *segmentFooterPayload
+	var commit *segmentCommitPayload
+	var trailerStart uint64
+
+	for {
+		pos, err := dev.Tell(ctx)
+		if err != nil {
+			return scannedSegment{}, false, err
 		}
-		return scannedSegment{}, false, err
-	}
-	pos, err := dev.Tell(ctx)
-	if err != nil {
-		return scannedSegment{}, false, err
-	}
-	endBlock := pos.Block // just past the filemark
-	if endBlock < segStart+4 {
-		// Too few records for header + footer + commit + filemark.
-		return scannedSegment{}, false, nil
-	}
-	commitBlock := endBlock - 2
-	footerBlock := endBlock - 3
-
-	commitRec, ok, err := readControlAt(ctx, dev, buf, commitBlock, segKindCommit)
-	if err != nil || !ok {
-		return scannedSegment{}, false, err
-	}
-	commit, err := decodeSegmentCommit(commitRec.payload)
-	if err != nil {
-		return scannedSegment{}, false, nil
-	}
-	footerRec, ok, err := readControlAt(ctx, dev, buf, footerBlock, segKindFooter)
-	if err != nil || !ok {
-		return scannedSegment{}, false, err
-	}
-	footer, err := decodeSegmentFooter(footerRec.payload)
-	if err != nil {
-		return scannedSegment{}, false, nil
-	}
-
-	// Cross-check identities and the commit's footer hash.
-	if footer.segmentID != header.segmentID || commit.segmentID != header.segmentID {
-		return scannedSegment{}, false, nil
-	}
-	if sha256.Sum256(encodeSegmentFooter(footer)) != commit.footerHash {
-		return scannedSegment{}, false, nil
-	}
-
-	seg := scannedSegment{header: header, footer: footer, firstBlock: segStart}
-
-	// Read the trailer records (logical ops then index chunks) from the
-	// trailer start up to the footer, skipping all part data.
-	if err := dev.LocateBlock(ctx, footer.indexStartBlock); err != nil {
-		return scannedSegment{}, false, err
-	}
-	for block := footer.indexStartBlock; block < footerBlock; block++ {
 		n, err := dev.ReadRecord(ctx, buf)
-		if errors.Is(err, tapedev.ErrFilemark) || errors.Is(err, tapedev.ErrEndOfData) {
-			break
+		if errors.Is(err, tapedev.ErrFilemark) {
+			if footer == nil || commit == nil {
+				return scannedSegment{}, false, nil
+			}
+			if footer.segmentID != header.segmentID || commit.segmentID != header.segmentID || sha256.Sum256(encodeSegmentFooter(*footer)) != commit.footerHash {
+				return scannedSegment{}, false, nil
+			}
+			var gotHash [32]byte
+			copy(gotHash[:], content.Sum(nil))
+			if footer.contentHash != gotHash || footer.recordCount != recordCount || footer.segmentByteCount != byteCount || footer.partCount != uint64(len(seg.index)) {
+				return scannedSegment{}, false, nil
+			}
+			if trailerStart == 0 {
+				trailerStart = pos.Block // empty trailer starts at the footer
+			}
+			if footer.indexStartBlock != trailerStart {
+				return scannedSegment{}, false, nil
+			}
+			seg.footer = *footer
+			return seg, true, nil
+		}
+		if errors.Is(err, tapedev.ErrEndOfData) || errors.Is(err, io.ErrShortBuffer) {
+			return scannedSegment{}, false, nil
 		}
 		if err != nil {
 			return scannedSegment{}, false, err
@@ -380,49 +355,64 @@ func scanOneSegment(ctx context.Context, dev tapedev.Device, buf []byte, segStar
 		if err != nil {
 			return scannedSegment{}, false, nil
 		}
+
 		switch rec.kind {
-		case segKindIndexChunk:
-			entries, err := decodeSegIndexChunk(rec.payload)
+		case segKindFooter:
+			if footer != nil || commit != nil {
+				return scannedSegment{}, false, nil
+			}
+			decoded, err := decodeSegmentFooter(rec.payload)
 			if err != nil {
 				return scannedSegment{}, false, nil
 			}
-			seg.index = append(seg.index, entries...)
+			footer = &decoded
+			continue
+		case segKindCommit:
+			if footer == nil || commit != nil {
+				return scannedSegment{}, false, nil
+			}
+			decoded, err := decodeSegmentCommit(rec.payload)
+			if err != nil {
+				return scannedSegment{}, false, nil
+			}
+			commit = &decoded
+			continue
+		}
+		if footer != nil { // footer and commit must be terminal records.
+			return scannedSegment{}, false, nil
+		}
+		_, _ = content.Write(buf[:n])
+		recordCount++
+		byteCount += uint64(n)
+
+		switch rec.kind {
 		case segKindActivate:
+			if trailerStart == 0 {
+				trailerStart = pos.Block
+			}
 			a, err := decodeSegActivate(rec.payload)
 			if err != nil {
 				return scannedSegment{}, false, nil
 			}
 			seg.activates = append(seg.activates, a)
 		case segKindDelete:
+			if trailerStart == 0 {
+				trailerStart = pos.Block
+			}
 			d, err := decodeSegDelete(rec.payload)
 			if err != nil {
 				return scannedSegment{}, false, nil
 			}
 			seg.deletes = append(seg.deletes, d)
+		case segKindIndexChunk:
+			if trailerStart == 0 {
+				trailerStart = pos.Block
+			}
+			entries, err := decodeSegIndexChunk(rec.payload)
+			if err != nil {
+				return scannedSegment{}, false, nil
+			}
+			seg.index = append(seg.index, entries...)
 		}
 	}
-	return seg, true, nil
-}
-
-// readControlAt locates block and reads a single control record, requiring its
-// kind. ok is false if the record is missing or the wrong kind.
-func readControlAt(ctx context.Context, dev tapedev.Device, buf []byte, block uint64, wantKind uint8) (*segRecord, bool, error) {
-	if err := dev.LocateBlock(ctx, block); err != nil {
-		if errors.Is(err, tapedev.ErrEndOfData) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	n, err := dev.ReadRecord(ctx, buf)
-	if err != nil {
-		if errors.Is(err, tapedev.ErrFilemark) || errors.Is(err, tapedev.ErrEndOfData) || errors.Is(err, io.ErrShortBuffer) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	rec, err := decodeSegmentRecord(buf[:n])
-	if err != nil || rec.kind != wantKind {
-		return nil, false, nil
-	}
-	return rec, true, nil
 }

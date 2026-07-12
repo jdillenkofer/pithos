@@ -22,6 +22,8 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -64,6 +66,7 @@ type tapePartStore struct {
 	*lifecycle.ValidatedLifecycle
 	deviceOpener DeviceOpener
 	journalDir   string
+	cacheDir     string
 	recordSize   int
 	durability   journal.DurabilityMode
 	groupCommit  journal.GroupCommitPolicy
@@ -104,6 +107,18 @@ func WithJournalDir(dir string) Option {
 			return errors.New("journal directory must not be empty")
 		}
 		s.journalDir = dir
+		return nil
+	}
+}
+
+// WithReadCacheDir sets the mandatory disk staging cache used for
+// tape-resident parts. When omitted it lives below the journal directory.
+func WithReadCacheDir(dir string) Option {
+	return func(s *tapePartStore) error {
+		if dir == "" {
+			return errors.New("read cache directory must not be empty")
+		}
+		s.cacheDir = dir
 		return nil
 	}
 }
@@ -156,6 +171,9 @@ func New(deviceOpener DeviceOpener, opts ...Option) (partstore.PartStore, error)
 	if s.journalDir == "" {
 		return nil, errors.New("tape part store requires a journal directory (WithJournalDir)")
 	}
+	if s.cacheDir == "" {
+		s.cacheDir = filepath.Join(s.journalDir, "read-cache")
+	}
 	return s, nil
 }
 
@@ -179,6 +197,11 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 	if err != nil {
 		_ = device.Close()
 		return fmt.Errorf("opening journal: %w", err)
+	}
+	if err := os.MkdirAll(s.cacheDir, 0o755); err != nil {
+		_ = j.Close()
+		_ = device.Close()
+		return fmt.Errorf("creating tape read cache: %w", err)
 	}
 
 	s.mu.Lock()
@@ -513,6 +536,10 @@ func (s *tapePartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	if entry.location == locationJournal {
 		return j.OpenPayload(entry.journalLoc)
 	}
+	return s.openCachedTapePart(ctx, partId, entry)
+}
+
+func (s *tapePartStore) newTapePartReader(ctx context.Context, partId partstore.PartId, entry indexEntry) *tapePartReader {
 	return &tapePartReader{
 		store:              s,
 		ctx:                ctx,
@@ -523,7 +550,53 @@ func (s *tapePartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 		nextBlock:          entry.tapeBlock,
 		buf:                make([]byte, max(segControlBufferSize, s.recordSize+segEnvelopeSize+segPayloadCRC)),
 		hasher:             sha256.New(),
-	}, nil
+	}
+}
+
+// openCachedTapePart makes disk staging mandatory for tape-resident payloads.
+// A complete immutable generation is written and synced before it becomes
+// visible in the cache, so range readers never need to reposition tape.
+func (s *tapePartStore) openCachedTapePart(ctx context.Context, partID partstore.PartId, entry indexEntry) (io.ReadCloser, error) {
+	path := filepath.Join(s.cacheDir, entry.generation.String()+".part")
+	if info, err := os.Stat(path); err == nil && uint64(info.Size()) == entry.length {
+		return os.Open(path)
+	}
+
+	tmp, err := os.CreateTemp(s.cacheDir, ".staging-*")
+	if err != nil {
+		return nil, err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	reader := s.newTapePartReader(ctx, partID, entry)
+	written, copyErr := io.Copy(tmp, reader)
+	closeErr := reader.Close()
+	if copyErr != nil {
+		_ = tmp.Close()
+		return nil, fmt.Errorf("staging tape part %s: %w", partID.String(), copyErr)
+	}
+	if closeErr != nil {
+		_ = tmp.Close()
+		return nil, closeErr
+	}
+	if uint64(written) != entry.length {
+		_ = tmp.Close()
+		return nil, fmt.Errorf("staging tape part %s: short copy %d of %d bytes", partID.String(), written, entry.length)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		// Another reader may have completed the same immutable generation.
+		if _, statErr := os.Stat(path); statErr != nil {
+			return nil, err
+		}
+	}
+	return os.Open(path)
 }
 
 func (s *tapePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
@@ -681,7 +754,7 @@ func (r *tapePartReader) fill() error {
 	if s.device == nil {
 		return tapedev.ErrClosed
 	}
-	if err := s.device.LocateBlock(r.ctx, r.nextBlock); err != nil {
+	if err := r.positionLocked(); err != nil {
 		return err
 	}
 	if !r.headerVerified {
@@ -730,6 +803,32 @@ func (r *tapePartReader) fill() error {
 	// Copy out of the shared buffer: pending must survive the next fill.
 	r.pending = append(r.pending[:0], rec.payload...)
 	return nil
+}
+
+// positionLocked keeps the tape streaming when this reader (or the next
+// physically adjacent part reader) already owns the head. A part ends just
+// before its PART_COMMIT record; consuming that one control record lets the
+// next part begin without a costly LocateBlock. Must hold store.mu.
+func (r *tapePartReader) positionLocked() error {
+	pos, err := r.store.device.Tell(r.ctx)
+	if err != nil {
+		return err
+	}
+	if pos.Block == r.nextBlock {
+		return nil
+	}
+	if !r.headerVerified && pos.Block+1 == r.nextBlock {
+		n, err := r.store.device.ReadRecord(r.ctx, r.buf)
+		if err != nil {
+			return err
+		}
+		rec, err := decodeSegmentRecord(r.buf[:n])
+		if err != nil || rec.kind != segKindPartCommit {
+			return fmt.Errorf("tape part %s: expected adjacent part commit at block %d", r.partId.String(), pos.Block)
+		}
+		return nil
+	}
+	return r.store.device.LocateBlock(r.ctx, r.nextBlock)
 }
 
 func (r *tapePartReader) Close() error {
