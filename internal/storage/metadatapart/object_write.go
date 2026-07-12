@@ -33,8 +33,13 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		}
 		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(requestedStorageClass))
 
+		putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+			ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(bucketName.String(), key.String(), "")),
+			PartNumber: ptrutils.ToPtr(uint64(1)),
+			PartCount:  ptrutils.ToPtr(uint64(1)),
+		}}
 		originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			return store.PutPart(ctx, tx, *partId, reader)
+			return store.PutPart(ctx, tx, *partId, putOptions, reader)
 		})
 		if err != nil {
 			return err
@@ -163,8 +168,16 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			return err
 		}
 
+		appendPartNumber := uint64(1)
+		if existingObject != nil {
+			appendPartNumber = uint64(len(existingObject.Parts)) + 1
+		}
+		putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+			ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(bucketName.String(), key.String(), "")),
+			PartNumber: ptrutils.ToPtr(appendPartNumber),
+		}}
 		newPartSize, newPartChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
-			return store.PutPart(ctx, tx, *newPartId, r)
+			return store.PutPart(ctx, tx, *newPartId, putOptions, r)
 		})
 		if err != nil {
 			return err
@@ -359,7 +372,15 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			if err != nil {
 				return err
 			}
-			err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
+			// Transitioned parts keep their object grouping; part order within
+			// the object is the manifest position.
+			putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+				ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(bucketName.String(), key.String(), "")),
+				PartNumber: ptrutils.ToPtr(uint64(i) + 1),
+				PartCount:  ptrutils.ToPtr(uint64(len(object.Parts))),
+				ObjectSize: ptrutils.ToPtr(uint64(object.Size)),
+			}}
+			err = targetStore.PutPart(ctx, tx, *newPartId, putOptions, srcReader)
 			srcReader.Close()
 			if err != nil {
 				return err

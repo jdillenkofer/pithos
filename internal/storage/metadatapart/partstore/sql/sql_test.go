@@ -98,7 +98,7 @@ func TestSqlPartStore_Chunking(t *testing.T) {
 
 	// Put the large part
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(data))
 	})
 	assert.Nil(t, err)
 
@@ -151,10 +151,10 @@ func TestSqlPartStore_PartStoreIdScopesSharedTable(t *testing.T) {
 
 	ctx := context.Background()
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := hotStore.PutPart(ctx, tx, sharedPartId, bytes.NewReader([]byte("hot"))); err != nil {
+		if err := hotStore.PutPart(ctx, tx, sharedPartId, partstore.PutPartOptions{}, bytes.NewReader([]byte("hot"))); err != nil {
 			return err
 		}
-		return coldStore.PutPart(ctx, tx, sharedPartId, bytes.NewReader([]byte("cold")))
+		return coldStore.PutPart(ctx, tx, sharedPartId, partstore.PutPartOptions{}, bytes.NewReader([]byte("cold")))
 	})
 	require.NoError(t, err)
 

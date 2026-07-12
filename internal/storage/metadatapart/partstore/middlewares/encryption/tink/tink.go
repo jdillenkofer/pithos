@@ -396,7 +396,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.PutPart")
 	defer span.End()
 
@@ -491,7 +491,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx dat
 
 	}()
 
-	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
+	return mw.innerPartStore.PutPart(ctx, tx, partId, options, pipeReader)
 }
 
 // SupportsTxFreeGetPart delegates to the inner store; the middleware itself

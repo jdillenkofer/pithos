@@ -55,9 +55,13 @@ func New(db database.Database, partContentRepository partContent.Repository, opt
 
 const chunkSize = 256 * 1000 * 1000 // 256MB
 
-func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (bs *sqlPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := bs.tracer.Start(ctx, "sqlPartStore.PutPart")
 	defer span.End()
+
+	if err := options.Placement.Validate(); err != nil {
+		return err
+	}
 
 	// Delete existing content first to avoid stale chunks if overwriting
 	err := bs.partContentRepository.DeletePartContentById(ctx, tx.SqlTx(), bs.partStoreId, partId)

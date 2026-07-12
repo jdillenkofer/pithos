@@ -24,7 +24,7 @@ type mockPartStore struct{}
 
 func (m *mockPartStore) Start(ctx context.Context) error { return nil }
 func (m *mockPartStore) Stop(ctx context.Context) error  { return nil }
-func (m *mockPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (m *mockPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	return nil
 }
 func (m *mockPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {

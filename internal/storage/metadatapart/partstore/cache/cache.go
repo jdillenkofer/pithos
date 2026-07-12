@@ -64,7 +64,7 @@ func (ps *cachePartStore) Stop(ctx context.Context) error {
 	return ps.innerPartStore.Stop(ctx)
 }
 
-func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.PutPart")
 	defer span.End()
 
@@ -73,7 +73,7 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	teed := &cacheBufferingReader{Reader: reader, maxPartSizeBytes: ps.maxPartSizeBytes, data: &buf}
 	teed.cacheEligible = true
 
-	err := ps.innerPartStore.PutPart(ctx, tx, partId, teed)
+	err := ps.innerPartStore.PutPart(ctx, tx, partId, options, teed)
 	if err != nil {
 		return err
 	}

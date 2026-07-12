@@ -93,7 +93,7 @@ func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	}
 
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		return ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("new")))
+		return ps.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("new")))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 
 	errRollback := fmt.Errorf("rollback")
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("staged"))); err != nil {
+		if err := ps.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("staged"))); err != nil {
 			return err
 		}
 		return errRollback

@@ -200,9 +200,13 @@ func (s *sftpPartStore) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.PutPart")
 	defer span.End()
+
+	if err := options.Placement.Validate(); err != nil {
+		return err
+	}
 
 	filename := s.getFilename(partId)
 	if tx != nil {

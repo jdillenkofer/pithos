@@ -76,7 +76,7 @@ func TestReplayStreamsOutboxChunks(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	require.NoError(t, database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return obs.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+		return obs.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(content))
 	}))
 
 	obs.maybeProcessOutboxEntries(ctx)

@@ -14,9 +14,45 @@ import (
 
 var ErrPartNotFound error = errors.New("part not found")
 
+// PlacementHints carry optional information about the logical object a part
+// belongs to. They are optimization metadata for stores that benefit from
+// grouping related parts physically (e.g. tape segment packing) — never
+// identity or correctness data: deduplication can share one part between
+// many objects, so a store must produce identical results if hints are
+// dropped entirely.
+type PlacementHints struct {
+	// ObjectID groups parts that belong to the same logical object write.
+	ObjectID *ObjectId
+	// PartNumber orders parts within the object. Requires ObjectID.
+	PartNumber *uint64
+
+	// PartCount is the expected total number of parts of the object, if known.
+	PartCount *uint64
+	// ObjectSize is the expected total object size in bytes, if known.
+	ObjectSize *uint64
+}
+
+// Validate rejects hint combinations that carry no meaning: a part number
+// without an object to order it within.
+func (h PlacementHints) Validate() error {
+	if h.PartNumber != nil && h.ObjectID == nil {
+		return errors.New("placement hints: part number requires object ID")
+	}
+	return nil
+}
+
+type PutPartOptions struct {
+	Placement PlacementHints
+}
+
+// PutPartWithoutHints writes a part without any placement hints.
+func PutPartWithoutHints(ctx context.Context, pm PartManager, tx database.Tx, partId PartId, reader io.Reader) error {
+	return pm.PutPart(ctx, tx, partId, PutPartOptions{}, reader)
+}
+
 // Core part operations
 type PartManager interface {
-	PutPart(ctx context.Context, tx database.Tx, partId PartId, reader io.Reader) error
+	PutPart(ctx context.Context, tx database.Tx, partId PartId, options PutPartOptions, reader io.Reader) error
 	// GetPart returns a ReadCloser for the part with the given partId.
 	// If the part does not exist, ErrPartNotFound is returned.
 	// The caller is responsible for closing the ReadCloser.
@@ -81,7 +117,7 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	part := ioutils.NewByteReadSeekCloser(content)
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return partStore.PutPart(ctx, tx, *partId, part)
+		return PutPartWithoutHints(ctx, partStore, tx, *partId, part)
 	})
 	if err != nil {
 		return err
@@ -93,7 +129,7 @@ func Tester(partStore PartStore, db database.Database, content []byte) error {
 	}
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return partStore.PutPart(ctx, tx, *partId, part)
+		return PutPartWithoutHints(ctx, partStore, tx, *partId, part)
 	})
 	if err != nil {
 		return err

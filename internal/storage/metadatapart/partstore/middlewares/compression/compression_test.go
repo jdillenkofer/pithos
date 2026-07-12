@@ -239,7 +239,7 @@ func TestCompressionPartStoreMiddleware_CrossAlgorithmRead(t *testing.T) {
 	content := bytes.Repeat([]byte("cross-algo-content-"), 4096)
 
 	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return gzipStore.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+		return gzipStore.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(content))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestCompressionPartStoreMiddleware_ReadsLegacyPlainDataWithoutHeader(t *tes
 	content := []byte("legacy-data-without-compression-header")
 
 	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return inner.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+		return inner.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(content))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *tes
 	content := append(header[:], payload...)
 
 	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return inner.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+		return inner.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(content))
 	}); err != nil {
 		t.Fatal(err)
 	}

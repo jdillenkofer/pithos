@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
@@ -63,8 +64,12 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			return err
 		}
 
+		putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+			ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(bucketName.String(), key.String(), uploadId.String())),
+			PartNumber: ptrutils.ToPtr(uint64(partNumber)),
+		}}
 		originalSize, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
-			return store.PutPart(ctx, tx, *partId, reader)
+			return store.PutPart(ctx, tx, *partId, putOptions, reader)
 		})
 		if err != nil {
 			return err
@@ -214,8 +219,12 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		if err != nil {
 			return err
 		}
+		putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+			ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(dstBucket.String(), dstKey.String(), uploadId.String())),
+			PartNumber: ptrutils.ToPtr(uint64(partNumber)),
+		}}
 		size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
-			return store.PutPart(ctx, tx, *newPartId, r)
+			return store.PutPart(ctx, tx, *newPartId, putOptions, r)
 		})
 		if err != nil {
 			return err

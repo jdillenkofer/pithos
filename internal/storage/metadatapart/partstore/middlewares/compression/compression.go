@@ -110,7 +110,7 @@ func (mw *PartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
-func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	sample := make([]byte, mw.sampleSize)
 	n, err := io.ReadFull(reader, sample)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -167,7 +167,7 @@ func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, part
 		}
 	}()
 
-	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
+	return mw.innerPartStore.PutPart(ctx, tx, partId, options, pipeReader)
 }
 
 func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (float64, error) {

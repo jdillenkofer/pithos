@@ -48,7 +48,7 @@ func TestOutboxGetPartTxFree(t *testing.T) {
 	// Write the part into the outbox but do not start the store, so the
 	// entry stays pending and must be served from the DB.
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return outboxStore.PutPart(ctx, tx, *partId, bytes.NewReader(content))
+		return outboxStore.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(content))
 	})
 	require.NoError(t, err)
 
@@ -63,9 +63,9 @@ func TestOutboxGetPartTxFree(t *testing.T) {
 	// exists in the inner store.
 	emptyPartId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, inner.PutPart(ctx, nil, *emptyPartId, bytes.NewReader([]byte("stale content"))))
+	require.NoError(t, inner.PutPart(ctx, nil, *emptyPartId, partstore.PutPartOptions{}, bytes.NewReader([]byte("stale content"))))
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return outboxStore.PutPart(ctx, tx, *emptyPartId, bytes.NewReader(nil))
+		return outboxStore.PutPart(ctx, tx, *emptyPartId, partstore.PutPartOptions{}, bytes.NewReader(nil))
 	})
 	require.NoError(t, err)
 
@@ -138,6 +138,6 @@ func TestOutboxCommitAfterStopDoesNotPanic(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	require.NoError(t, database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return outboxStore.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("committed after stop")))
+		return outboxStore.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("committed after stop")))
 	}))
 }

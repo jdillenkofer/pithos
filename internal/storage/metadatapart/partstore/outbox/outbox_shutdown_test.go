@@ -40,7 +40,7 @@ func (s *cancelAwarePartStore) Stop(context.Context) error {
 	return nil
 }
 
-func (s *cancelAwarePartStore) PutPart(ctx context.Context, _ database.Tx, _ partstore.PartId, _ io.Reader) error {
+func (s *cancelAwarePartStore) PutPart(ctx context.Context, _ database.Tx, _ partstore.PartId, _ partstore.PutPartOptions, _ io.Reader) error {
 	s.startOnce.Do(func() { close(s.processingStarted) })
 	<-ctx.Done()
 	return ctx.Err()
@@ -75,7 +75,7 @@ func TestStopCancelsInFlightReplayBeforeStoppingInnerStore(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	require.NoError(t, database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("blocked replay")))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("blocked replay")))
 	}))
 	require.NoError(t, store.Start(ctx))
 

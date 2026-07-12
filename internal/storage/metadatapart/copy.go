@@ -79,8 +79,13 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			if err != nil {
 				return err
 			}
+			putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+				ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(dstBucket.String(), dstKey.String(), "")),
+				PartNumber: ptrutils.ToPtr(uint64(1)),
+				PartCount:  ptrutils.ToPtr(uint64(1)),
+			}}
 			size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
-				return dstStore.PutPart(ctx, tx, *newPartId, r)
+				return dstStore.PutPart(ctx, tx, *newPartId, putOptions, r)
 			})
 			if err != nil {
 				return err
@@ -152,7 +157,13 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				if err != nil {
 					return err
 				}
-				err = dstStore.PutPart(ctx, tx, *newPartId, srcReader)
+				putOptions := partstore.PutPartOptions{Placement: partstore.PlacementHints{
+					ObjectID:   ptrutils.ToPtr(partstore.DeriveObjectId(dstBucket.String(), dstKey.String(), "")),
+					PartNumber: ptrutils.ToPtr(uint64(i) + 1),
+					PartCount:  ptrutils.ToPtr(uint64(len(srcObject.Parts))),
+					ObjectSize: ptrutils.ToPtr(uint64(srcObject.Size)),
+				}}
+				err = dstStore.PutPart(ctx, tx, *newPartId, putOptions, srcReader)
 				srcReader.Close()
 				if err != nil {
 					return err

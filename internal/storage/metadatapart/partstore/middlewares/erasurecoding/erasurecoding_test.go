@@ -59,8 +59,8 @@ func (f *faultyPartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 	return f.PartStore.GetPart(ctx, tx, partId)
 }
 
-func (f *faultyPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
-	err := f.PartStore.PutPart(ctx, tx, partId, reader)
+func (f *faultyPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
+	err := f.PartStore.PutPart(ctx, tx, partId, options, reader)
 	if err == nil {
 		f.markAvailable(partId)
 	}
@@ -114,7 +114,7 @@ func TestErasureCodingPartStoreRoundtrip(t *testing.T) {
 	data := bytes.Repeat([]byte("abc123"), 20000)
 
 	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(data))
 	})
 	assert.Nil(t, err)
 
@@ -148,7 +148,7 @@ func TestErasureCodingPartStoreAllowsConcurrentHealthyReads(t *testing.T) {
 	data := bytes.Repeat([]byte("concurrent-read"), 10000)
 
 	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(data))
 	})
 	assert.Nil(t, err)
 
@@ -202,7 +202,7 @@ func TestErasureCodingPartStoreCanReconstructMissingShard(t *testing.T) {
 	data := bytes.Repeat([]byte("payload"), 25000)
 
 	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(data))
 	})
 	assert.Nil(t, err)
 
@@ -285,7 +285,7 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	data := bytes.Repeat([]byte("scan-heal"), 20000)
 
 	err = database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader(data))
 	})
 	assert.Nil(t, err)
 

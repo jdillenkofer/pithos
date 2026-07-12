@@ -18,7 +18,7 @@ type fakePartStore struct {
 
 func (f *fakePartStore) Start(ctx context.Context) error { return nil }
 func (f *fakePartStore) Stop(ctx context.Context) error  { return nil }
-func (f *fakePartStore) PutPart(ctx context.Context, tx database.Tx, partId PartId, reader io.Reader) error {
+func (f *fakePartStore) PutPart(ctx context.Context, tx database.Tx, partId PartId, options PutPartOptions, reader io.Reader) error {
 	return nil
 }
 func (f *fakePartStore) GetPart(ctx context.Context, tx database.Tx, partId PartId) (io.ReadCloser, error) {

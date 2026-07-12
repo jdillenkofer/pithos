@@ -78,9 +78,13 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	return bs.ensureRootDir()
 }
 
-func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.PutPart")
 	defer span.End()
+
+	if err := options.Placement.Validate(); err != nil {
+		return err
+	}
 
 	filename := bs.getFilename(partId)
 	if tx != nil {

@@ -211,7 +211,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 			return err
 		}
 		for i, id := range liveIDs {
-			if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewReader([]byte{byte(i)})); err != nil {
+			if err := env.physicalStore.PutPart(ctx, tx, id, partstore.PutPartOptions{}, bytes.NewReader([]byte{byte(i)})); err != nil {
 				return err
 			}
 			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
@@ -302,7 +302,7 @@ func runGCBackfillScenario(t *testing.T, env *gcTestEnv) {
 		}
 	}
 	putObject := func(tx database.Tx, key string, part metadatastore.Part) error {
-		if err := env.physicalStore.PutPart(ctx, tx, part.Id, bytes.NewReader([]byte("abc"))); err != nil {
+		if err := env.physicalStore.PutPart(ctx, tx, part.Id, partstore.PutPartOptions{}, bytes.NewReader([]byte("abc"))); err != nil {
 			return err
 		}
 		_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{

@@ -39,7 +39,7 @@ func TestGetPartSeeksOverSeekableInnerStore(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, middleware.PutPart(ctx, nil, *partId, bytes.NewReader(content)))
+	require.NoError(t, middleware.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader(content)))
 
 	rc, err := middleware.GetPart(ctx, nil, *partId)
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestGetPartSeeksOverCompressionMiddleware(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, middleware.PutPart(ctx, nil, *partId, bytes.NewReader(content)))
+	require.NoError(t, middleware.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader(content)))
 
 	// Sequential read of the whole part.
 	rc, err := middleware.GetPart(ctx, nil, *partId)

@@ -83,8 +83,8 @@ func TestTapePartStoreRebuildAfterRestart(t *testing.T) {
 	contentA := []byte("part A content")
 	contentB := []byte("part B content, a bit longer")
 
-	require.NoError(t, store.PutPart(ctx, nil, *partA, bytes.NewReader(contentA)))
-	require.NoError(t, store.PutPart(ctx, nil, *partB, bytes.NewReader(contentB)))
+	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
+	require.NoError(t, store.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
 	require.NoError(t, store.DeletePart(ctx, nil, *partA))
 	require.NoError(t, store.Stop(ctx))
 
@@ -113,7 +113,7 @@ func TestTapePartStoreDeleteOnlyAppends(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, store.PutPart(ctx, nil, *partId, bytes.NewReader([]byte("some part content"))))
+	require.NoError(t, store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("some part content"))))
 
 	infoBefore, err := os.Stat(tapePath)
 	require.NoError(t, err)
@@ -141,13 +141,13 @@ func TestTapePartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("new")))
+		return store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("new")))
 	})
 	require.NoError(t, err)
 
 	errRollback := fmt.Errorf("rollback")
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("staged"))); err != nil {
+		if err := store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("staged"))); err != nil {
 			return err
 		}
 		return errRollback
@@ -190,8 +190,8 @@ func TestTapePartStoreOverwriteKeepsNewestAcrossRestart(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, store.PutPart(ctx, nil, *partId, bytes.NewReader([]byte("version 1"))))
-	require.NoError(t, store.PutPart(ctx, nil, *partId, bytes.NewReader([]byte("version 2"))))
+	require.NoError(t, store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("version 1"))))
+	require.NoError(t, store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("version 2"))))
 
 	content, err := readPart(t, store, *partId)
 	require.NoError(t, err)
@@ -220,8 +220,8 @@ func TestTapePartStoreInterleavedReaders(t *testing.T) {
 	contentA := bytes.Repeat([]byte("a"), 5*testRecordSize+3)
 	contentB := bytes.Repeat([]byte("b"), 4*testRecordSize+1)
 
-	require.NoError(t, store.PutPart(ctx, nil, *partA, bytes.NewReader(contentA)))
-	require.NoError(t, store.PutPart(ctx, nil, *partB, bytes.NewReader(contentB)))
+	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
+	require.NoError(t, store.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
 
 	readerA, err := store.GetPart(ctx, nil, *partA)
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	partA, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	contentA := []byte("committed part content")
-	require.NoError(t, store.PutPart(ctx, nil, *partA, bytes.NewReader(contentA)))
+	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
 	require.NoError(t, store.Stop(ctx))
 
 	// Simulate a crash mid-PutPart: a data segment without its terminating
@@ -298,7 +298,7 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	partB, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	contentB := []byte("appended after sealing")
-	require.NoError(t, restarted.PutPart(ctx, nil, *partB, bytes.NewReader(contentB)))
+	require.NoError(t, restarted.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
 	require.NoError(t, restarted.Stop(ctx))
 
 	final := newStartedTapeStore(t, tapePath)
@@ -321,7 +321,7 @@ func TestTapePartStoreEmptyPart(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, store.PutPart(ctx, nil, *partId, bytes.NewReader(nil)))
+	require.NoError(t, store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader(nil)))
 
 	content, err := readPart(t, store, *partId)
 	require.NoError(t, err)

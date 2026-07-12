@@ -361,9 +361,13 @@ func (s *tapePartStore) checkStarted() error {
 	return nil
 }
 
-func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := s.tracer.Start(ctx, "tapePartStore.PutPart")
 	defer span.End()
+
+	if err := options.Placement.Validate(); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	if err := s.checkStarted(); err != nil {

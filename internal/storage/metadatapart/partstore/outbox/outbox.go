@@ -314,7 +314,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 func (obs *outboxPartStore) replayPutPart(ctx context.Context, entry *partOutboxEntry.Entity) error {
 	if !partstore.SupportsTxFreePutPart(obs.innerPartStore) {
 		return database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-			return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, &lazyOutboxChunkReadCloser{
+			return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, partstore.PutPartOptions{}, &lazyOutboxChunkReadCloser{
 				ctx: ctx, tx: tx, repo: obs.partOutboxEntryRepository, outboxId: obs.outboxId, entryId: *entry.Id,
 			})
 		})
@@ -330,7 +330,7 @@ func (obs *outboxPartStore) replayPutPart(ctx context.Context, entry *partOutbox
 		return err
 	}
 	reader = readers[0]
-	putErr := obs.innerPartStore.PutPart(ctx, nil, entry.PartId, reader)
+	putErr := obs.innerPartStore.PutPart(ctx, nil, entry.PartId, partstore.PutPartOptions{}, reader)
 	closeErr := reader.Close()
 	if putErr != nil {
 		return putErr
@@ -435,9 +435,13 @@ func (obs *outboxPartStore) storePartOutboxEntry(ctx context.Context, tx databas
 	return entry.Id, nil
 }
 
-func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := obs.tracer.Start(ctx, "outboxPartStore.PutPart")
 	defer span.End()
+
+	if err := options.Placement.Validate(); err != nil {
+		return err
+	}
 
 	entryId, err := obs.storePartOutboxEntry(ctx, tx, partOutboxEntry.PutPartOperation, partId)
 	if err != nil {

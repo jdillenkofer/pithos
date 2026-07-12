@@ -71,7 +71,7 @@ func newMemoryPartStore() *memoryPartStore {
 func (s *memoryPartStore) Start(ctx context.Context) error { return nil }
 func (s *memoryPartStore) Stop(ctx context.Context) error  { return nil }
 
-func (s *memoryPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *memoryPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return err
@@ -137,7 +137,7 @@ func TestCachePartStore_PutAndDeleteInvalidate(t *testing.T) {
 	store, err := New(cache, inner, Options{MaxPartSizeBytes: 1024, CacheReadErrorsAsMiss: true})
 	assert.NoError(t, err)
 
-	err = store.PutPart(ctx, nil, *partId, bytes.NewReader([]byte("v1")))
+	err = store.PutPart(ctx, nil, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("v1")))
 	assert.NoError(t, err)
 
 	rc, err := store.GetPart(ctx, nil, *partId)
@@ -193,7 +193,7 @@ func TestCachePartStore_SkipsMutatingCacheInsideTxByDefault(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+		if err := store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("v1"))); err != nil {
 			return err
 		}
 
@@ -218,7 +218,7 @@ func TestCachePartStore_AppliesPendingMutationsOnTxCommit(t *testing.T) {
 	assert.NoError(t, err)
 
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+		if err := store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("v1"))); err != nil {
 			return err
 		}
 
@@ -249,7 +249,7 @@ func TestCachePartStore_DropsPendingMutationsOnTxRollback(t *testing.T) {
 
 	errRollback := fmt.Errorf("rollback")
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := store.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("v1"))); err != nil {
+		if err := store.PutPart(ctx, tx, *partId, partstore.PutPartOptions{}, bytes.NewReader([]byte("v1"))); err != nil {
 			return err
 		}
 		return errRollback

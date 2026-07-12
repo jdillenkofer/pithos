@@ -226,7 +226,7 @@ func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
 	return idx, dataBytes, payloadLen, h, nil
 }
 
-func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	unlock := e.partLocker.Lock(partId)
 	defer unlock()
 
@@ -239,7 +239,7 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, pa
 		pr, pw := io.Pipe()
 		pipeReaders[i], pipeWriters[i] = pr, pw
 		go func(idx int) {
-			errCh <- e.partStores[idx].PutPart(ctx, tx, partId, pr)
+			errCh <- e.partStores[idx].PutPart(ctx, tx, partId, options, pr)
 		}(i)
 		if _, err := pipeWriters[i].Write(e.shardHeader(i)); err != nil {
 			return err
@@ -446,7 +446,9 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				healPipeWriters[i] = pwHeal
 				healingShardCount++
 				go func(idx int, reader *io.PipeReader) {
-					healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
+					// Healing happens on the read path where no placement
+					// hints are available.
+					healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, partstore.PutPartOptions{}, reader)
 				}(i, prHeal)
 				if _, err := pwHeal.Write(e.shardHeader(i)); err != nil {
 					_ = pwHeal.CloseWithError(err)
