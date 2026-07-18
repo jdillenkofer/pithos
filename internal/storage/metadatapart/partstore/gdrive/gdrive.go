@@ -373,6 +373,8 @@ func (s *gdrivePartStore) SupportsTxFreeGetPart() bool {
 	return true
 }
 
+func (s *gdrivePartStore) SupportsTxFreePutPart() bool { return true }
+
 func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "gdrivePartStore.GetPart")
 	defer span.End()

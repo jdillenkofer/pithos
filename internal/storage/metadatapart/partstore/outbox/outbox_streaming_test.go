@@ -28,6 +28,18 @@ type countingChunkRepository struct {
 	chunkReads atomic.Int32
 }
 
+type txFreeRecordingPartStore struct {
+	partstore.PartStore
+	putSawTransaction atomic.Bool
+}
+
+func (s *txFreeRecordingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+	s.putSawTransaction.Store(tx != nil)
+	return s.PartStore.PutPart(ctx, tx, partId, reader)
+}
+
+func (s *txFreeRecordingPartStore) SupportsTxFreePutPart() bool { return true }
+
 func (r *countingChunkRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*partOutboxEntry.ContentChunk, error) {
 	r.bulkReads.Add(1)
 	return r.Repository.FindPartOutboxEntryChunksById(ctx, tx, outboxId, id)
@@ -47,8 +59,9 @@ func TestReplayStreamsOutboxChunks(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	inner, err := filesystemPartStore.New(filepath.Join(storagePath, "parts"))
+	filesystemStore, err := filesystemPartStore.New(filepath.Join(storagePath, "parts"))
 	require.NoError(t, err)
+	inner := &txFreeRecordingPartStore{PartStore: filesystemStore}
 	require.NoError(t, inner.Start(ctx))
 	defer inner.Stop(ctx)
 
@@ -70,6 +83,7 @@ func TestReplayStreamsOutboxChunks(t *testing.T) {
 
 	require.Zero(t, countingRepo.bulkReads.Load())
 	require.EqualValues(t, 3, countingRepo.chunkReads.Load()) // chunks 0, 1, then EOF at 2
+	require.False(t, inner.putSawTransaction.Load(), "replay must not hold a write transaction during PutPart")
 	reader, err := inner.GetPart(ctx, nil, *partId)
 	require.NoError(t, err)
 	defer reader.Close()

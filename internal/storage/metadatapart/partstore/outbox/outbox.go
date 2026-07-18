@@ -105,7 +105,6 @@ var _ partstore.PartStore = (*outboxPartStore)(nil)
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
-var errPartOutboxClaimLost = errors.New("part outbox claim lost before commit")
 var errPartOutboxEntryVanished = errors.New("part outbox entry deleted while it was being read")
 
 // maxGetPartRaceRetries bounds how often GetPart re-evaluates when an outbox
@@ -165,6 +164,19 @@ func (obs *outboxPartStore) releasePartOutboxEntry(ctx context.Context, entry *p
 		return false, err
 	}
 	return released, nil
+}
+
+func (obs *outboxPartStore) finalizePartOutboxEntry(ctx context.Context, entry *partOutboxEntry.Entity) (bool, error) {
+	var deleted bool
+	err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		deleted, err = obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
 }
 
 func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry *partOutboxEntry.Entity) func() {
@@ -257,53 +269,35 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
-		err = database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-			var operationErr error
-			switch entry.Operation {
-			case partOutboxEntry.PutPartOperation:
-				// Stream content from the outbox through the transaction that also
-				// applies and finalizes the mutation. Only one chunk is retained at a
-				// time, and an empty entry naturally reads as an empty part.
-				putPartReader := &lazyOutboxChunkReadCloser{
-					ctx:       ctx,
-					tx:        tx,
-					repo:      obs.partOutboxEntryRepository,
-					outboxId:  obs.outboxId,
-					entryId:   *entry.Id,
-					nextChunk: 0,
-				}
-				operationErr = obs.innerPartStore.PutPart(ctx, tx, entry.PartId, putPartReader)
-			case partOutboxEntry.DeletePartOperation:
-				operationErr = obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
-			default:
-				slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
-				operationErr = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
-			}
-			if operationErr != nil {
-				return operationErr
-			}
-
-			// Finalize in the same transaction as the inner-store mutation. All
-			// production part stores defer externally visible changes to transaction
-			// hooks, so a worker whose lease was taken over cannot publish stale data.
-			deleted, err := obs.partOutboxEntryRepository.DeletePartOutboxEntryByClaimOwner(ctx, tx.SqlTx(), obs.outboxId, *entry.Id, obs.claimOwner)
-			if err != nil {
-				return err
-			}
-			if !deleted {
-				return errPartOutboxClaimLost
-			}
-			return nil
-		})
+		switch entry.Operation {
+		case partOutboxEntry.PutPartOperation:
+			err = obs.replayPutPart(ctx, entry)
+		case partOutboxEntry.DeletePartOperation:
+			err = obs.replayDeletePart(ctx, entry)
+		default:
+			slog.Warn(fmt.Sprint("Invalid operation", entry.Operation, "during outbox processing."))
+			err = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
+		}
 		stopHeartbeat()
 		if err != nil {
 			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
-			if errors.Is(err, errPartOutboxClaimLost) {
-				slog.Warn("Part outbox mutation rolled back because the claim was lost", "entryId", entry.Id.String())
-				return
-			}
 			waitForPartOutboxRetry(ctx)
+			return
+		}
+
+		// The external mutation has completed, so remove the durable entry in a
+		// separate, short write transaction. A lost lease leaves the entry for its
+		// new owner to replay; tx-free-capable stores make those replays idempotent.
+		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
+		if err != nil {
+			obs.metrics.errorsCounter.Inc()
+			waitForPartOutboxRetry(ctx)
+			return
+		}
+		if !deleted {
+			obs.metrics.errorsCounter.Inc()
+			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}
 		processedOutboxEntryCount += 1
@@ -311,6 +305,46 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	if processedOutboxEntryCount > 0 {
 		slog.Info(fmt.Sprintf("Processed %d outbox entries", processedOutboxEntryCount))
 	}
+}
+
+// replayPutPart keeps the database transaction read-only while it streams
+// outbox chunks, then performs the potentially slow inner-store write without
+// any database transaction. Stores that cannot write tx-free retain the
+// transactional fallback for compatibility.
+func (obs *outboxPartStore) replayPutPart(ctx context.Context, entry *partOutboxEntry.Entity) error {
+	if !partstore.SupportsTxFreePutPart(obs.innerPartStore) {
+		return database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, &lazyOutboxChunkReadCloser{
+				ctx: ctx, tx: tx, repo: obs.partOutboxEntryRepository, outboxId: obs.outboxId, entryId: *entry.Id,
+			})
+		})
+	}
+
+	var reader io.ReadCloser
+	readers, err := database.WithTxReadClosers(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(readCtx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+		return []io.ReadCloser{&lazyOutboxChunkReadCloser{
+			ctx: readCtx, tx: tx, repo: obs.partOutboxEntryRepository, outboxId: obs.outboxId, entryId: *entry.Id,
+		}}, nil
+	})
+	if err != nil {
+		return err
+	}
+	reader = readers[0]
+	putErr := obs.innerPartStore.PutPart(ctx, nil, entry.PartId, reader)
+	closeErr := reader.Close()
+	if putErr != nil {
+		return putErr
+	}
+	return closeErr
+}
+
+func (obs *outboxPartStore) replayDeletePart(ctx context.Context, entry *partOutboxEntry.Entity) error {
+	if partstore.SupportsTxFreeDeletePart(obs.innerPartStore) {
+		return obs.innerPartStore.DeletePart(ctx, nil, entry.PartId)
+	}
+	return database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return obs.innerPartStore.DeletePart(ctx, tx, entry.PartId)
+	})
 }
 
 func (obs *outboxPartStore) processOutboxLoop(ctx context.Context) {

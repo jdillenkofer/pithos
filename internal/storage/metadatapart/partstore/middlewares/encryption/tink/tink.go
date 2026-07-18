@@ -500,6 +500,10 @@ func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreeGetPart() bool {
 	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
 }
 
+func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreePutPart() bool {
+	return partstore.SupportsTxFreePutPart(mw.innerPartStore)
+}
+
 func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := mw.tracer.Start(ctx, "TinkEncryptionPartStoreMiddleware.GetPart")
 	defer span.End()

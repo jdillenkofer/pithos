@@ -322,6 +322,15 @@ func (e *erasureCodingPartStore) SupportsTxFreeGetPart() bool {
 	return true
 }
 
+func (e *erasureCodingPartStore) SupportsTxFreePutPart() bool {
+	for _, ps := range e.partStores {
+		if !partstore.SupportsTxFreePutPart(ps) {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	unlock := e.partLocker.RLock(partId)
 	readers, healShards, err := e.openPartReaders(ctx, tx, partId)

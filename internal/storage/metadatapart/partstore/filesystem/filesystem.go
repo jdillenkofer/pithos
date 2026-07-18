@@ -157,6 +157,8 @@ func (bs *filesystemPartStore) SupportsTxFreeGetPart() bool {
 	return true
 }
 
+func (bs *filesystemPartStore) SupportsTxFreePutPart() bool { return true }
+
 func (bs *filesystemPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := bs.tracer.Start(ctx, "filesystemPartStore.GetPart")
 	defer span.End()

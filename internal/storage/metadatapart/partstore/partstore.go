@@ -41,6 +41,16 @@ type TxFreeGetPartSupporter interface {
 
 type TxFreeDeletePartSupporter interface{ SupportsTxFreeDeletePart() bool }
 
+// TxFreePutPartSupporter is implemented by part stores whose PutPart can be
+// called with a nil transaction. Outbox workers use this to avoid holding a
+// database write transaction open while an external store receives a part.
+type TxFreePutPartSupporter interface{ SupportsTxFreePutPart() bool }
+
+func SupportsTxFreePutPart(ps PartStore) bool {
+	s, ok := ps.(TxFreePutPartSupporter)
+	return ok && s.SupportsTxFreePutPart()
+}
+
 func SupportsTxFreeDeletePart(ps PartStore) bool {
 	s, ok := ps.(TxFreeDeletePartSupporter)
 	return ok && s.SupportsTxFreeDeletePart()

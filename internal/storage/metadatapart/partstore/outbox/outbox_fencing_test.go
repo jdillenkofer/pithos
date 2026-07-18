@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,7 +29,7 @@ func (r *rejectFinalizeRepository) DeletePartOutboxEntryByClaimOwner(context.Con
 	return false, nil
 }
 
-func TestLostClaimRollsBackInnerPartMutation(t *testing.T) {
+func TestLostClaimLeavesInnerPartMutationForIdempotentReplay(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
 
@@ -58,6 +58,10 @@ func TestLostClaimRollsBackInnerPartMutation(t *testing.T) {
 
 	obs.maybeProcessOutboxEntries(ctx)
 
-	_, err = inner.GetPart(ctx, nil, *partId)
-	require.True(t, errors.Is(err, partstore.ErrPartNotFound), "inner mutation must roll back when finalization loses the claim")
+	reader, err := inner.GetPart(ctx, nil, *partId)
+	require.NoError(t, err)
+	defer reader.Close()
+	content, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, []byte("must not be published"), content)
 }

@@ -118,6 +118,10 @@ func (ps *cachePartStore) SupportsTxFreeGetPart() bool {
 	return partstore.SupportsTxFreeGetPart(ps.innerPartStore)
 }
 
+func (ps *cachePartStore) SupportsTxFreePutPart() bool {
+	return partstore.SupportsTxFreePutPart(ps.innerPartStore)
+}
+
 func (ps *cachePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.GetPart")
 	defer span.End()
