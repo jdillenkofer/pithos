@@ -44,6 +44,7 @@ func newFakeDriveServer() *fakeDriveServer {
 	mux.HandleFunc("GET /files", f.handleList)
 	mux.HandleFunc("POST /files", f.handleCreateMetadata)
 	mux.HandleFunc("POST /upload/drive/v3/files", f.handleUpload)
+	mux.HandleFunc("PATCH /upload/drive/v3/files/{id}", f.handleUploadUpdate)
 	mux.HandleFunc("GET /files/{id}", f.handleGet)
 	mux.HandleFunc("PATCH /files/{id}", f.handlePatch)
 	mux.HandleFunc("DELETE /files/{id}", f.handleDelete)
@@ -223,10 +224,56 @@ func (f *fakeDriveServer) handleCreateMetadata(w http.ResponseWriter, r *http.Re
 	writeJson(w, http.StatusOK, fileResource(file))
 }
 
+func (f *fakeDriveServer) handleUploadUpdate(w http.ResponseWriter, r *http.Request) {
+	_, content, err := parseMultipartUploadBody(r)
+	if err != nil {
+		writeApiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	f.mu.Lock()
+	file, ok := f.files[r.PathValue("id")]
+	if ok {
+		file.Content = content
+	}
+	f.mu.Unlock()
+	if !ok {
+		writeApiError(w, http.StatusNotFound, "File not found")
+		return
+	}
+	writeJson(w, http.StatusOK, fileResource(file))
+}
+
 type fakeDriveFileMetadata struct {
 	Name     string   `json:"name"`
 	MimeType string   `json:"mimeType"`
 	Parents  []string `json:"parents"`
+}
+
+func parseMultipartUploadBody(r *http.Request) (fakeDriveFileMetadata, []byte, error) {
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		return fakeDriveFileMetadata{}, nil, fmt.Errorf("expected multipart/related body")
+	}
+	multipartReader := multipart.NewReader(r.Body, params["boundary"])
+
+	metadataPart, err := multipartReader.NextPart()
+	if err != nil {
+		return fakeDriveFileMetadata{}, nil, err
+	}
+	var metadata fakeDriveFileMetadata
+	if err := json.NewDecoder(metadataPart).Decode(&metadata); err != nil {
+		return fakeDriveFileMetadata{}, nil, err
+	}
+
+	contentPart, err := multipartReader.NextPart()
+	if err != nil {
+		return fakeDriveFileMetadata{}, nil, err
+	}
+	content, err := io.ReadAll(contentPart)
+	if err != nil {
+		return fakeDriveFileMetadata{}, nil, err
+	}
+	return metadata, content, nil
 }
 
 func (f *fakeDriveServer) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -234,30 +281,7 @@ func (f *fakeDriveServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeApiError(w, http.StatusBadRequest, fmt.Sprintf("fake server only supports uploadType=multipart, got %q", uploadType))
 		return
 	}
-	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
-		writeApiError(w, http.StatusBadRequest, "expected multipart/related body")
-		return
-	}
-	multipartReader := multipart.NewReader(r.Body, params["boundary"])
-
-	metadataPart, err := multipartReader.NextPart()
-	if err != nil {
-		writeApiError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var metadata fakeDriveFileMetadata
-	if err := json.NewDecoder(metadataPart).Decode(&metadata); err != nil {
-		writeApiError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	contentPart, err := multipartReader.NextPart()
-	if err != nil {
-		writeApiError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	content, err := io.ReadAll(contentPart)
+	metadata, content, err := parseMultipartUploadBody(r)
 	if err != nil {
 		writeApiError(w, http.StatusBadRequest, err.Error())
 		return

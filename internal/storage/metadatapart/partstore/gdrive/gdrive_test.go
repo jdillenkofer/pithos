@@ -120,7 +120,7 @@ func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
 	assert.Equal(t, []partstore.PartId{*partId}, partIds)
 }
 
-func TestGoogleDrivePartStoreReadsNewestDuplicate(t *testing.T) {
+func TestGoogleDrivePartStorePutPartReusesExistingFile(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	fakeServer := newFakeDriveServer()
@@ -131,18 +131,21 @@ func TestGoogleDrivePartStoreReadsNewestDuplicate(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("old content"))))
 
-	// Simulate a duplicate left behind by an interrupted overwrite: Drive
-	// allows several files with the same name, the newest must win. Duplicates
-	// only ever originate from a crashed pithos process, so drop the file id
-	// cache like a restart would.
 	partName := store.(*gdrivePartStore).getPartName(*partId)
-	folderId := store.(*gdrivePartStore).folderId
-	fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("new content"))
-	store.(*gdrivePartStore).fileIdCache.Delete(partName)
+	cached, ok := store.(*gdrivePartStore).fileIdCache.Load(partName)
+	assert.True(t, ok)
+	originalFileID := cached.(string)
+
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("new content"))))
+
+	cached, ok = store.(*gdrivePartStore).fileIdCache.Load(partName)
+	assert.True(t, ok)
+	assert.Equal(t, originalFileID, cached.(string))
 
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("new content"), content)
+	assert.Equal(t, 2, fakeServer.fileCount())
 }
 
 // TestGoogleDrivePartStoreAgainstRealDrive runs the conformance suite against
@@ -220,7 +223,7 @@ func TestGoogleDrivePartStorePutThenDeleteSameFlow(t *testing.T) {
 }
 
 // The outbox worker replays PutPart without a transaction and may retry after
-// a failure; retries must not accumulate duplicate files.
+// a failure; retries must keep using the same part file.
 func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

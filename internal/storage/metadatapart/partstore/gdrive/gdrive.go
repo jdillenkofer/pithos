@@ -137,13 +137,12 @@ func escapeQueryValue(value string) string {
 }
 
 // findFileIdsByName returns the ids of all non-trashed files with the given
-// name inside the part folder, newest first. Drive allows duplicate names
-// (e.g. after an overwrite of the same part id); the newest file wins for
-// reads, deletes remove every duplicate.
+// name inside the part folder. The store updates an existing part file in
+// place, so reads only need any matching file id.
 func (s *gdrivePartStore) findFileIdsByName(ctx context.Context, name string) ([]string, error) {
 	query := fmt.Sprintf("name = '%s' and '%s' in parents and trashed = false", escapeQueryValue(name), s.folderId)
 	fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
-		return s.svc.Files.List().Q(query).Fields("files(id)").OrderBy("createdTime desc").Context(ctx).Do()
+		return s.svc.Files.List().Q(query).Fields("files(id)").Context(ctx).Do()
 	}, nil)
 	if err != nil {
 		return nil, err
@@ -155,8 +154,8 @@ func (s *gdrivePartStore) findFileIdsByName(ctx context.Context, name string) ([
 	return fileIds, nil
 }
 
-// findFileIdByName returns the id of the newest non-trashed file with the
-// given name, or "" if none exists.
+// findFileIdByName returns the id of any non-trashed file with the given
+// name, or "" if none exists.
 func (s *gdrivePartStore) findFileIdByName(ctx context.Context, name string) (string, error) {
 	fileIds, err := s.findFileIdsByName(ctx, name)
 	if err != nil {
@@ -168,8 +167,8 @@ func (s *gdrivePartStore) findFileIdByName(ctx context.Context, name string) (st
 	return fileIds[0], nil
 }
 
-// deleteAllFilesByName deletes every file with the given name (newest-first
-// duplicates included) and drops the cache entry.
+// deleteAllFilesByName deletes every file with the given name and drops the
+// cache entry.
 func (s *gdrivePartStore) deleteAllFilesByName(ctx context.Context, name string) error {
 	s.fileIdCache.Delete(name)
 	fileIds, err := s.findFileIdsByName(ctx, name)
@@ -186,7 +185,23 @@ func (s *gdrivePartStore) deleteAllFilesByName(ctx context.Context, name string)
 }
 
 func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io.Reader) (fileId string, err error) {
-	file, err := s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).Media(reader).Fields("id").Context(ctx).Do()
+	fileId, err = s.findFileIdByName(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if fileId != "" {
+		_, err = doRetriableOperation(ctx, func() (*drive.File, error) {
+			return s.svc.Files.Update(fileId, &drive.File{}).Media(reader).Fields("id").Context(ctx).Do()
+		}, nil)
+		if err != nil {
+			return "", err
+		}
+		return fileId, nil
+	}
+
+	file, err := doRetriableOperation(ctx, func() (*drive.File, error) {
+		return s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).Media(reader).Fields("id").Context(ctx).Do()
+	}, nil)
 	if err != nil {
 		return "", err
 	}
@@ -219,19 +234,6 @@ func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 		return err
 	}
 	s.fileIdCache.Store(partName, fileId)
-
-	// Without a transaction (e.g. the outbox worker replaying an upload, which
-	// may retry after a failure) remove any older duplicate. Best-effort: the
-	// upload itself succeeded and reads prefer the newest file either way.
-	fileIds, err := s.findFileIdsByName(ctx, partName)
-	if err != nil {
-		return nil
-	}
-	for _, existingFileId := range fileIds {
-		if existingFileId != fileId {
-			_ = s.deleteFile(ctx, existingFileId)
-		}
-	}
 	return nil
 }
 
@@ -402,7 +404,6 @@ func (s *gdrivePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]par
 		}
 		for _, file := range fileList.Files {
 			if partId, ok := s.tryGetPartIdFromName(file.Name); ok {
-				// Duplicate names can briefly exist during an overwrite; report each part once.
 				if _, alreadySeen := seen[*partId]; !alreadySeen {
 					seen[*partId] = struct{}{}
 					partIds = append(partIds, *partId)
