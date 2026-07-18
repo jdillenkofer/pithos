@@ -415,8 +415,9 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 
 - Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
 - Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity).
-- During transactional writes, temp files (`.<part>.tmp.<ulid>`) and backup files (`<part>.txbackup.<ulid>`) briefly exist next to the part files. If pithos crashes mid-transaction they can be left behind; they are ignored by pithos and automatically deleted on the next start once they are older than 24 hours.
-- Part operations of one transaction are executed against Drive with bounded parallelism (8 concurrent calls) at commit time. Deleting large multi-part objects still costs a few API round trips per part — the `OutboxPartStore` wrapper moves that work off the request path entirely.
+- Uploads cost a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit with bounded parallelism (8 concurrent calls).
+- Because Drive charges at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
+- Temp/backup files from older pithos versions (`.<part>.tmp.<ulid>`, `<part>.txbackup.<ulid>`) are cleaned up automatically on start once they are older than 24 hours.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 
 ### Post-Quantum Encryption

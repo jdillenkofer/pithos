@@ -200,10 +200,13 @@ func TestGoogleDrivePartStoreReadsNewestDuplicate(t *testing.T) {
 	putPartInTx(t, db, store, *partId, []byte("old content"))
 
 	// Simulate a duplicate left behind by an interrupted overwrite: Drive
-	// allows several files with the same name, the newest must win.
+	// allows several files with the same name, the newest must win. Duplicates
+	// only ever originate from a crashed pithos process, so drop the file id
+	// cache like a restart would.
 	partName := store.(*gdrivePartStore).getPartName(*partId)
 	folderId := store.(*gdrivePartStore).folderId
 	fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("new content"))
+	store.(*gdrivePartStore).fileIdCache.Delete(partName)
 
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
@@ -339,4 +342,26 @@ func TestGoogleDrivePartStoreSweepsStaleTransientFilesOnStart(t *testing.T) {
 
 	// Folder + part + fresh temp survive; the two stale files are gone.
 	assert.Equal(t, 3, fakeServer.fileCount())
+}
+
+// The outbox worker replays PutPart without a transaction and may retry after
+// a failure; retries must not accumulate duplicate files.
+func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("first attempt"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
+
+	content, err := readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("second attempt"), content)
+	// Part folder + exactly one part file.
+	assert.Equal(t, 2, fakeServer.fileCount())
 }

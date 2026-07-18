@@ -58,6 +58,9 @@ type gdrivePartStore struct {
 	// hooks can execute them with bounded parallelism. Keyed by the underlying
 	// *sql.Tx because child tx controllers are distinct values sharing it.
 	txBatches map[*sql.Tx]*txBatch
+	// fileIdCache maps part name → Drive file id so reads and deletes can skip
+	// the files.list lookup. Best-effort: a stale entry falls back to a lookup.
+	fileIdCache sync.Map
 }
 
 // Compile-time check to ensure gdrivePartStore implements partstore.PartStore
@@ -213,22 +216,53 @@ func escapeQueryValue(value string) string {
 	return escaped.String()
 }
 
-// findFileIdByName returns the file id of the newest non-trashed file with the
-// given name inside the part folder, or "" if none exists. Drive allows
-// duplicate names; the newest file wins so that readers observe the latest
-// successfully published content.
-func (s *gdrivePartStore) findFileIdByName(ctx context.Context, name string) (string, error) {
+// findFileIdsByName returns the ids of all non-trashed files with the given
+// name inside the part folder, newest first. Drive allows duplicate names
+// (e.g. after an overwrite of the same part id); the newest file wins for
+// reads, deletes remove every duplicate.
+func (s *gdrivePartStore) findFileIdsByName(ctx context.Context, name string) ([]string, error) {
 	query := fmt.Sprintf("name = '%s' and '%s' in parents and trashed = false", escapeQueryValue(name), s.folderId)
 	fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
-		return s.svc.Files.List().Q(query).Fields("files(id)").OrderBy("createdTime desc").PageSize(1).Context(ctx).Do()
+		return s.svc.Files.List().Q(query).Fields("files(id)").OrderBy("createdTime desc").Context(ctx).Do()
 	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	fileIds := make([]string, 0, len(fileList.Files))
+	for _, file := range fileList.Files {
+		fileIds = append(fileIds, file.Id)
+	}
+	return fileIds, nil
+}
+
+// findFileIdByName returns the id of the newest non-trashed file with the
+// given name, or "" if none exists.
+func (s *gdrivePartStore) findFileIdByName(ctx context.Context, name string) (string, error) {
+	fileIds, err := s.findFileIdsByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	if len(fileList.Files) == 0 {
+	if len(fileIds) == 0 {
 		return "", nil
 	}
-	return fileList.Files[0].Id, nil
+	return fileIds[0], nil
+}
+
+// deleteAllFilesByName deletes every file with the given name (newest-first
+// duplicates included) and drops the cache entry.
+func (s *gdrivePartStore) deleteAllFilesByName(ctx context.Context, name string) error {
+	s.fileIdCache.Delete(name)
+	fileIds, err := s.findFileIdsByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, fileId := range fileIds {
+		if err := s.deleteFile(ctx, fileId); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io.Reader) (fileId string, err error) {
@@ -237,13 +271,6 @@ func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io
 		return "", err
 	}
 	return file.Id, nil
-}
-
-func (s *gdrivePartStore) renameFile(ctx context.Context, fileId string, newName string) error {
-	_, err := doRetriableOperation(ctx, func() (*drive.File, error) {
-		return s.svc.Files.Update(fileId, &drive.File{Name: newName}).Fields("id").Context(ctx).Do()
-	}, nil)
-	return err
 }
 
 // deleteFile permanently deletes a file (bypassing the trash). Deleting an
@@ -269,16 +296,21 @@ const (
 	txOpDelete
 )
 
-// driveTxOp is one staged part operation inside a transaction. The
-// backup/publish state is tracked per operation so a failed or rolled back
-// batch can undo exactly what it did.
+// driveTxOp is one staged part operation inside a transaction.
+//
+// Puts upload the file under its final name at call time (one API call) and
+// simply delete it again on rollback. A file that is visible in Drive before
+// its transaction commits is harmless: readers only ask for parts referenced
+// by committed metadata, and the garbage collector's grace window (keyed on
+// the part id's ULID timestamp) protects in-flight parts. Crash leftovers are
+// unreferenced parts the garbage collector removes.
+//
+// Deletes defer all Drive work to after the commit; a failed post-commit
+// delete leaves an unreferenced part for the garbage collector.
 type driveTxOp struct {
-	kind         txOpKind
-	partName     string
-	tempFileId   string // put only: the already uploaded temp file
-	backupName   string
-	backupFileId string
-	published    bool
+	kind     txOpKind
+	partName string
+	fileId   string // put only: the uploaded file
 }
 
 type txBatch struct {
@@ -294,9 +326,6 @@ func (s *gdrivePartStore) addTxOp(tx database.Tx, op *driveTxOp) {
 	if !ok {
 		batch = &txBatch{}
 		s.txBatches[sqlTx] = batch
-		tx.OnPreCommit(func(hookCtx context.Context) error {
-			return s.runBatch(hookCtx, batch, s.opPreCommit)
-		})
 		tx.OnAfterCommit(func(hookCtx context.Context) error {
 			s.removeTxBatch(sqlTx)
 			return s.runBatch(hookCtx, batch, s.opAfterCommit)
@@ -354,76 +383,17 @@ func (s *gdrivePartStore) runBatch(ctx context.Context, batch *txBatch, fn func(
 	return errors.Join(errs...)
 }
 
-func (s *gdrivePartStore) opPreCommit(ctx context.Context, op *driveTxOp) error {
-	switch op.kind {
-	case txOpPut:
-		existingFileId, err := s.findFileIdByName(ctx, op.partName)
-		if err != nil {
-			return err
-		}
-		if existingFileId != "" {
-			if err := s.renameFile(ctx, existingFileId, op.backupName); err != nil {
-				return err
-			}
-			op.backupFileId = existingFileId
-		}
-		if err := s.renameFile(ctx, op.tempFileId, op.partName); err != nil {
-			if op.backupFileId != "" {
-				_ = s.renameFile(ctx, op.backupFileId, op.partName)
-				op.backupFileId = ""
-			}
-			return err
-		}
-		op.published = true
-		return nil
-	case txOpDelete:
-		fileId, err := s.findFileIdByName(ctx, op.partName)
-		if err != nil {
-			return err
-		}
-		if fileId == "" {
-			return nil
-		}
-		if err := s.renameFile(ctx, fileId, op.backupName); err != nil {
-			if isNotFoundError(err) {
-				return nil
-			}
-			return err
-		}
-		op.backupFileId = fileId
-		return nil
-	}
-	return nil
-}
-
 func (s *gdrivePartStore) opAfterCommit(ctx context.Context, op *driveTxOp) error {
-	if op.backupFileId != "" {
-		return s.deleteFile(ctx, op.backupFileId)
+	if op.kind == txOpDelete {
+		return s.deleteAllFilesByName(ctx, op.partName)
 	}
 	return nil
 }
 
 func (s *gdrivePartStore) opRollback(ctx context.Context, op *driveTxOp) error {
-	switch op.kind {
-	case txOpPut:
-		if !op.published {
-			return s.deleteFile(ctx, op.tempFileId)
-		}
-		_ = s.deleteFile(ctx, op.tempFileId)
-		if op.backupFileId != "" {
-			return s.renameFile(ctx, op.backupFileId, op.partName)
-		}
-		return nil
-	case txOpDelete:
-		if op.backupFileId != "" {
-			err := s.renameFile(ctx, op.backupFileId, op.partName)
-			// A later operation in the same transaction may already have
-			// removed the file; the part is gone either way.
-			if err != nil && !isNotFoundError(err) {
-				return err
-			}
-		}
-		return nil
+	if op.kind == txOpPut {
+		s.fileIdCache.CompareAndDelete(op.partName, op.fileId)
+		return s.deleteFile(ctx, op.fileId)
 	}
 	return nil
 }
@@ -433,35 +403,32 @@ func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	defer span.End()
 
 	partName := s.getPartName(partId)
-	tempName := "." + partName + ".tmp." + ulid.Make().String()
-	tempFileId, err := s.uploadFile(ctx, tempName, reader)
+	fileId, err := s.uploadFile(ctx, partName, reader)
 	if err != nil {
 		return err
 	}
+	s.fileIdCache.Store(partName, fileId)
 
 	if tx != nil {
 		s.addTxOp(tx, &driveTxOp{
-			kind:       txOpPut,
-			partName:   partName,
-			tempFileId: tempFileId,
-			backupName: partName + ".txbackup." + ulid.Make().String(),
+			kind:     txOpPut,
+			partName: partName,
+			fileId:   fileId,
 		})
 		return nil
 	}
 
-	// A direct create with the final name would silently produce a duplicate,
-	// since Drive allows multiple files with the same name in one folder.
-	existingFileId, err := s.findFileIdByName(ctx, partName)
+	// Without a transaction (e.g. the outbox worker replaying an upload, which
+	// may retry after a failure) remove any older duplicate. Best-effort: the
+	// upload itself succeeded and reads prefer the newest file either way.
+	fileIds, err := s.findFileIdsByName(ctx, partName)
 	if err != nil {
-		_ = s.deleteFile(ctx, tempFileId)
-		return err
+		return nil
 	}
-	if err := s.renameFile(ctx, tempFileId, partName); err != nil {
-		_ = s.deleteFile(ctx, tempFileId)
-		return err
-	}
-	if existingFileId != "" {
-		return s.deleteFile(ctx, existingFileId)
+	for _, existingFileId := range fileIds {
+		if existingFileId != fileId {
+			_ = s.deleteFile(ctx, existingFileId)
+		}
 	}
 	return nil
 }
@@ -476,6 +443,19 @@ func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 	defer span.End()
 
 	partName := s.getPartName(partId)
+
+	// Try the cached file id first; on a stale entry fall back to a lookup.
+	if cached, ok := s.fileIdCache.Load(partName); ok {
+		body, err := s.downloadFile(ctx, cached.(string))
+		if err == nil {
+			return body, nil
+		}
+		if !errors.Is(err, partstore.ErrPartNotFound) {
+			return nil, err
+		}
+		s.fileIdCache.CompareAndDelete(partName, cached)
+	}
+
 	fileId, err := s.findFileIdByName(ctx, partName)
 	if err != nil {
 		return nil, err
@@ -483,7 +463,12 @@ func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 	if fileId == "" {
 		return nil, partstore.ErrPartNotFound
 	}
-	resp, err := doRetriableOperation(ctx, func() (io.ReadCloser, error) {
+	s.fileIdCache.Store(partName, fileId)
+	return s.downloadFile(ctx, fileId)
+}
+
+func (s *gdrivePartStore) downloadFile(ctx context.Context, fileId string) (io.ReadCloser, error) {
+	return doRetriableOperation(ctx, func() (io.ReadCloser, error) {
 		resp, err := s.svc.Files.Get(fileId).Context(ctx).Download()
 		if err != nil {
 			if isNotFoundError(err) {
@@ -495,10 +480,6 @@ func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 	}, func(err error) bool {
 		return errors.Is(err, partstore.ErrPartNotFound)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
 }
 
 func (s *gdrivePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
@@ -540,21 +521,13 @@ func (s *gdrivePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 	partName := s.getPartName(partId)
 	if tx != nil {
 		s.addTxOp(tx, &driveTxOp{
-			kind:       txOpDelete,
-			partName:   partName,
-			backupName: partName + ".txbackup." + ulid.Make().String(),
+			kind:     txOpDelete,
+			partName: partName,
 		})
 		return nil
 	}
 
-	fileId, err := s.findFileIdByName(ctx, partName)
-	if err != nil {
-		return err
-	}
-	if fileId == "" {
-		return nil
-	}
-	return s.deleteFile(ctx, fileId)
+	return s.deleteAllFilesByName(ctx, partName)
 }
 
 func (s *gdrivePartStore) SupportsTxFreeDeletePart() bool { return true }
