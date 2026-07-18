@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -118,14 +119,14 @@ func (s *gdrivePartStore) tryGetPartIdFromName(name string) (partId *partstore.P
 // escapeQueryValue escapes a string for use inside single quotes in a Drive
 // query expression.
 func escapeQueryValue(value string) string {
-	escaped := ""
+	var escaped strings.Builder
 	for _, r := range value {
 		if r == '\'' || r == '\\' {
-			escaped += "\\"
+			escaped.WriteByte('\\')
 		}
-		escaped += string(r)
+		escaped.WriteRune(r)
 	}
-	return escaped
+	return escaped.String()
 }
 
 // findFileIdByName returns the file id of the newest non-trashed file with the
