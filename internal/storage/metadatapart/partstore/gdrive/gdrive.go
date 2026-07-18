@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -467,19 +468,118 @@ func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 	return s.downloadFile(ctx, fileId)
 }
 
+// downloadFile opens the file eagerly (so a missing part surfaces as
+// ErrPartNotFound here, not on the first Read) and returns a seekable reader:
+// seeking closes the stream and the next Read reopens it with an HTTP Range
+// header, so ranged object reads that start in the middle of a part do not
+// download and discard the part's head.
 func (s *gdrivePartStore) downloadFile(ctx context.Context, fileId string) (io.ReadCloser, error) {
+	body, err := s.downloadFileAt(ctx, fileId, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &driveFileReadSeekCloser{store: s, ctx: ctx, fileId: fileId, body: body, size: -1}, nil
+}
+
+// errRangeNotSatisfiable marks a download whose offset is at or past EOF.
+var errRangeNotSatisfiable = errors.New("requested range not satisfiable")
+
+func (s *gdrivePartStore) downloadFileAt(ctx context.Context, fileId string, offset int64) (io.ReadCloser, error) {
 	return doRetriableOperation(ctx, func() (io.ReadCloser, error) {
-		resp, err := s.svc.Files.Get(fileId).Context(ctx).Download()
+		call := s.svc.Files.Get(fileId).Context(ctx)
+		if offset > 0 {
+			call.Header().Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+		resp, err := call.Download()
 		if err != nil {
 			if isNotFoundError(err) {
 				return nil, partstore.ErrPartNotFound
+			}
+			var apiErr *googleapi.Error
+			if errors.As(err, &apiErr) && apiErr.Code == http.StatusRequestedRangeNotSatisfiable {
+				return nil, errRangeNotSatisfiable
 			}
 			return nil, err
 		}
 		return resp.Body, nil
 	}, func(err error) bool {
-		return errors.Is(err, partstore.ErrPartNotFound)
+		return errors.Is(err, partstore.ErrPartNotFound) || errors.Is(err, errRangeNotSatisfiable)
 	})
+}
+
+type driveFileReadSeekCloser struct {
+	store  *gdrivePartStore
+	ctx    context.Context
+	fileId string
+	offset int64
+	size   int64 // -1 until fetched (only needed for io.SeekEnd)
+	body   io.ReadCloser
+	closed bool
+}
+
+var _ io.ReadSeekCloser = (*driveFileReadSeekCloser)(nil)
+
+func (r *driveFileReadSeekCloser) Read(p []byte) (int, error) {
+	if r.closed {
+		return 0, io.EOF
+	}
+	if r.body == nil {
+		body, err := r.store.downloadFileAt(r.ctx, r.fileId, r.offset)
+		if err != nil {
+			// Seeking beyond EOF is allowed; reads there report EOF.
+			if errors.Is(err, errRangeNotSatisfiable) {
+				return 0, io.EOF
+			}
+			return 0, err
+		}
+		r.body = body
+	}
+	n, err := r.body.Read(p)
+	r.offset += int64(n)
+	return n, err
+}
+
+func (r *driveFileReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	var newOffset int64
+	switch whence {
+	case io.SeekStart:
+		newOffset = offset
+	case io.SeekCurrent:
+		newOffset = r.offset + offset
+	case io.SeekEnd:
+		if r.size < 0 {
+			file, err := doRetriableOperation(r.ctx, func() (*drive.File, error) {
+				return r.store.svc.Files.Get(r.fileId).Fields("size").Context(r.ctx).Do()
+			}, nil)
+			if err != nil {
+				return r.offset, err
+			}
+			r.size = file.Size
+		}
+		newOffset = r.size + offset
+	default:
+		return r.offset, fmt.Errorf("invalid seek whence: %d", whence)
+	}
+	if newOffset < 0 {
+		return r.offset, errors.New("negative seek offset")
+	}
+	if newOffset != r.offset && r.body != nil {
+		_ = r.body.Close()
+		r.body = nil
+	}
+	r.offset = newOffset
+	return r.offset, nil
+}
+
+func (r *driveFileReadSeekCloser) Close() error {
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	if r.body != nil {
+		return r.body.Close()
+	}
+	return nil
 }
 
 func (s *gdrivePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {

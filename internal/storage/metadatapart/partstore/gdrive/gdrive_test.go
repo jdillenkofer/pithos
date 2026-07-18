@@ -365,3 +365,45 @@ func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
 	// Part folder + exactly one part file.
 	assert.Equal(t, 2, fakeServer.fileCount())
 }
+
+// Ranged object reads skip into the middle of a part via Seek; the store must
+// serve that with an HTTP Range request instead of downloading the part head.
+func TestGoogleDrivePartStoreReaderSeeks(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	db := openTestDb(t)
+	store := startTestStore(t, fakeServer)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+	putPartInTx(t, db, store, *partId, []byte("0123456789"))
+
+	reader, err := store.GetPart(context.Background(), nil, *partId)
+	assert.Nil(t, err)
+	defer reader.Close()
+	seeker, ok := reader.(io.ReadSeekCloser)
+	assert.True(t, ok)
+
+	// Forward seek from the start.
+	_, err = seeker.Seek(4, io.SeekStart)
+	assert.Nil(t, err)
+	content, err := io.ReadAll(seeker)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("456789"), content)
+
+	// Suffix read via SeekEnd (fetches the size lazily).
+	_, err = seeker.Seek(-3, io.SeekEnd)
+	assert.Nil(t, err)
+	content, err = io.ReadAll(seeker)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("789"), content)
+
+	// Seeking past EOF reads as empty, like a file.
+	_, err = seeker.Seek(100, io.SeekStart)
+	assert.Nil(t, err)
+	content, err = io.ReadAll(seeker)
+	assert.Nil(t, err)
+	assert.Empty(t, content)
+}

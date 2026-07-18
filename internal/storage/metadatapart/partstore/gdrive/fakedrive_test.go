@@ -107,6 +107,7 @@ func fileResource(file *fakeDriveFile) map[string]any {
 		"name":     file.Name,
 		"mimeType": file.MimeType,
 		"parents":  file.Parents,
+		"size":     strconv.FormatInt(int64(len(file.Content)), 10),
 	}
 }
 
@@ -278,9 +279,26 @@ func (f *fakeDriveServer) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("alt") == "media" {
+		content := file.Content
+		status := http.StatusOK
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			offsetStr, ok := strings.CutPrefix(rangeHeader, "bytes=")
+			offsetStr, _, _ = strings.Cut(offsetStr, "-")
+			offset, err := strconv.ParseInt(offsetStr, 10, 64)
+			if !ok || err != nil {
+				writeApiError(w, http.StatusBadRequest, "unsupported range header")
+				return
+			}
+			if offset >= int64(len(content)) {
+				writeApiError(w, http.StatusRequestedRangeNotSatisfiable, "range not satisfiable")
+				return
+			}
+			content = content[offset:]
+			status = http.StatusPartialContent
+		}
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(file.Content)
+		w.WriteHeader(status)
+		_, _ = w.Write(content)
 		return
 	}
 	writeJson(w, http.StatusOK, fileResource(file))
