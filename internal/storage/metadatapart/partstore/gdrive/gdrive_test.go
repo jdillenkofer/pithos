@@ -2,7 +2,6 @@ package gdrive
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,10 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
-	"github.com/oklog/ulid/v2"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -320,28 +317,6 @@ func TestGoogleDrivePartStorePutThenDeleteSameTx(t *testing.T) {
 		assert.Equal(t, 1, fakeServer.fileCount())
 		fakeServer.Close()
 	}
-}
-
-func TestGoogleDrivePartStoreSweepsStaleTransientFilesOnStart(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	fakeServer := newFakeDriveServer()
-	t.Cleanup(fakeServer.Close)
-
-	// Seed the folder and files before the store starts.
-	folderId := fakeServer.addFile(testFolderName, "application/vnd.google-apps.folder", nil, nil)
-	partName := "0123456789abcdef0123456789abcdef"
-	staleUlid := ulid.MustNew(ulid.Timestamp(time.Now().Add(-48*time.Hour)), rand.Reader).String()
-	freshUlid := ulid.Make().String()
-	fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("part"))
-	fakeServer.addFile("."+partName+".tmp."+staleUlid, "application/octet-stream", []string{folderId}, []byte("stale temp"))
-	fakeServer.addFile(partName+".txbackup."+staleUlid, "application/octet-stream", []string{folderId}, []byte("stale backup"))
-	fakeServer.addFile("."+partName+".tmp."+freshUlid, "application/octet-stream", []string{folderId}, []byte("fresh temp"))
-
-	startTestStore(t, fakeServer)
-
-	// Folder + part + fresh temp survive; the two stale files are gone.
-	assert.Equal(t, 3, fakeServer.fileCount())
 }
 
 // The outbox worker replays PutPart without a transaction and may retry after

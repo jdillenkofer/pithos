@@ -22,7 +22,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
-	"github.com/oklog/ulid/v2"
 )
 
 const maxDriveRetries = 5
@@ -34,11 +33,6 @@ const folderMimeType = "application/vnd.google-apps.folder"
 // Sequential execution would put the whole per-part latency on the commit
 // path and blow past client timeouts.
 const maxConcurrentDriveOps = 8
-
-// staleTransientFileMaxAge is the age after which leftover temp/backup files
-// (from crashed or interrupted transactions) are deleted on Start. Files
-// belonging to in-flight transactions are far younger than this.
-const staleTransientFileMaxAge = 24 * time.Hour
 
 // Scope is the OAuth scope the part store needs. drive.file only grants
 // access to files created by this application, so the part folder must be
@@ -97,67 +91,7 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 	if err := s.ensureFolder(ctx); err != nil {
 		return err
 	}
-	s.sweepStaleTransientFiles(ctx)
 	return nil
-}
-
-// tryGetTransientFileTime extracts the creation time from a temp
-// (".<part>.tmp.<ulid>") or backup ("<part>.txbackup.<ulid>") file name.
-func tryGetTransientFileTime(name string) (time.Time, bool) {
-	trimmed := strings.TrimPrefix(name, ".")
-	var ulidStr string
-	if i := strings.Index(trimmed, ".tmp."); i == 32 && strings.HasPrefix(name, ".") {
-		ulidStr = trimmed[i+len(".tmp."):]
-	} else if i := strings.Index(trimmed, ".txbackup."); i == 32 && !strings.HasPrefix(name, ".") {
-		ulidStr = trimmed[i+len(".txbackup."):]
-	} else {
-		return time.Time{}, false
-	}
-	if _, err := hex.DecodeString(trimmed[:32]); err != nil {
-		return time.Time{}, false
-	}
-	id, err := ulid.ParseStrict(ulidStr)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return ulid.Time(id.Time()), true
-}
-
-// sweepStaleTransientFiles deletes temp/backup files left behind by crashed or
-// interrupted transactions. Best-effort: failures are logged, never fatal, so
-// a sweep problem cannot prevent the store from starting.
-func (s *gdrivePartStore) sweepStaleTransientFiles(ctx context.Context) {
-	cutoff := time.Now().Add(-staleTransientFileMaxAge)
-	query := fmt.Sprintf("'%s' in parents and trashed = false", s.folderId)
-	pageToken := ""
-	swept := 0
-	for {
-		fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
-			return s.svc.Files.List().Q(query).Fields("nextPageToken, files(id, name)").PageSize(1000).PageToken(pageToken).Context(ctx).Do()
-		}, nil)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("Drive stale file sweep aborted: %v", err))
-			return
-		}
-		for _, file := range fileList.Files {
-			createdAt, ok := tryGetTransientFileTime(file.Name)
-			if !ok || !createdAt.Before(cutoff) {
-				continue
-			}
-			if err := s.deleteFile(ctx, file.Id); err != nil {
-				slog.Warn(fmt.Sprintf("Drive stale file sweep could not delete %s: %v", file.Name, err))
-				continue
-			}
-			swept++
-		}
-		pageToken = fileList.NextPageToken
-		if pageToken == "" {
-			break
-		}
-	}
-	if swept > 0 {
-		slog.Info(fmt.Sprintf("Drive stale file sweep deleted %d leftover temp/backup files", swept))
-	}
 }
 
 // ensureFolder finds or creates the part folder. Under the drive.file scope
