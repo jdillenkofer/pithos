@@ -32,6 +32,23 @@ func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
 	assert.Equal(t, "EnvString", stringProvider.Value())
 }
 
+func TestCanCreateStringProviderFromFileJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir := t.TempDir()
+	tempFile := tempDir + string(os.PathSeparator) + "token.json"
+	err := os.WriteFile(tempFile, []byte("FileString"), 0o600)
+	assert.Nil(t, err)
+	jsonData, err := json.Marshal(map[string]string{
+		"type": "File",
+		"path": tempFile,
+	})
+	assert.Nil(t, err)
+	stringProvider := StringProvider{}
+	err = json.Unmarshal(jsonData, &stringProvider)
+	assert.Nil(t, err)
+	assert.Equal(t, "FileString", stringProvider.Value())
+}
+
 func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	jsonData := `1`

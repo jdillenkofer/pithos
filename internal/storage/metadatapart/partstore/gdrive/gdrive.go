@@ -86,11 +86,11 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 
 // NewProactiveTokenSource wraps an OAuth token with background refresh so the
 // Google Drive client keeps a fresh access token while the process is running.
-func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration) oauth2.TokenSource {
+func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration, persist func(*oauth2.Token) error) oauth2.TokenSource {
 	if cfg == nil || token == nil || token.RefreshToken == "" {
 		return oauth2.StaticTokenSource(token)
 	}
-	source := &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow}
+	source := &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow, persist: persist}
 	if refreshWindow > 0 {
 		go source.run()
 	}
@@ -101,6 +101,7 @@ type proactiveTokenSource struct {
 	cfg           *oauth2.Config
 	token         *oauth2.Token
 	refreshWindow time.Duration
+	persist       func(*oauth2.Token) error
 	mu            sync.Mutex
 }
 
@@ -125,6 +126,11 @@ func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
 		return nil, err
 	}
 	s.token = refreshed
+	if s.persist != nil {
+		if err := s.persist(s.token); err != nil {
+			return nil, err
+		}
+	}
 	return s.token, nil
 }
 

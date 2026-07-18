@@ -35,7 +35,7 @@ func TestProactiveTokenSourceRefreshesAccessToken(t *testing.T) {
 		Expiry:       time.Now().Add(1 * time.Hour),
 	}
 
-	source := NewProactiveTokenSource(cfg, initialToken, time.Hour)
+	source := NewProactiveTokenSource(cfg, initialToken, time.Hour, nil)
 	refreshed, err := source.Token()
 	require.NoError(t, err)
 	assert.Equal(t, "refreshed-access", refreshed.AccessToken)
