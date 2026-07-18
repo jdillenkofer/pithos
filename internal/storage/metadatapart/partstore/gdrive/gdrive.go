@@ -14,6 +14,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -81,6 +82,63 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// NewProactiveTokenSource wraps an OAuth token with background refresh so the
+// Google Drive client keeps a fresh access token while the process is running.
+func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration) oauth2.TokenSource {
+	if cfg == nil || token == nil || token.RefreshToken == "" {
+		return oauth2.StaticTokenSource(token)
+	}
+	source := &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow}
+	if refreshWindow > 0 {
+		go source.run()
+	}
+	return source
+}
+
+type proactiveTokenSource struct {
+	cfg           *oauth2.Config
+	token         *oauth2.Token
+	refreshWindow time.Duration
+	mu            sync.Mutex
+}
+
+func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.token == nil {
+		return nil, errors.New("token is nil")
+	}
+	if s.token.RefreshToken == "" {
+		return s.token, nil
+	}
+	if s.token.Expiry.IsZero() || time.Until(s.token.Expiry) > s.refreshWindow {
+		return s.token, nil
+	}
+	refreshCandidate := *s.token
+	refreshCandidate.AccessToken = ""
+	refreshCandidate.Expiry = time.Now().Add(-time.Minute)
+	refreshed, err := s.cfg.TokenSource(context.Background(), &refreshCandidate).Token()
+	if err != nil {
+		return nil, err
+	}
+	s.token = refreshed
+	return s.token, nil
+}
+
+func (s *proactiveTokenSource) run() {
+	if s.refreshWindow <= 0 {
+		return
+	}
+	ticker := time.NewTicker(s.refreshWindow / 2)
+	defer ticker.Stop()
+	for range ticker.C {
+		if _, err := s.Token(); err != nil {
+			slog.Warn("Google Drive token refresh failed", "err", err)
+		}
+	}
 }
 
 // ensureFolder finds or creates the part folder. Under the drive.file scope

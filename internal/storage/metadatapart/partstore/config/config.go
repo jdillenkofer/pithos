@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"crypto/mlkem"
 	"encoding/hex"
 	"encoding/json"
@@ -454,9 +453,10 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 		Scopes:       []string{gdrive.Scope},
 	}
 	// The token source transparently exchanges the refresh token for new
-	// access tokens for the lifetime of the process.
+	// access tokens before expiry, so the Drive client stays usable even while
+	// the process is idle.
 	clientOptions := []option.ClientOption{
-		option.WithTokenSource(oauthConfig.TokenSource(context.Background(), &token)),
+		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute)),
 	}
 	if endpoint := g.Endpoint.Value(); endpoint != "" {
 		clientOptions = append(clientOptions, option.WithEndpoint(endpoint))
