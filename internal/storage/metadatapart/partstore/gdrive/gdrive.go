@@ -2,12 +2,14 @@ package gdrive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -26,6 +28,17 @@ const maxDriveRetries = 5
 
 const folderMimeType = "application/vnd.google-apps.folder"
 
+// maxConcurrentDriveOps bounds the number of parallel Drive API calls when a
+// transaction touches many parts (e.g. deleting a large multi-part object).
+// Sequential execution would put the whole per-part latency on the commit
+// path and blow past client timeouts.
+const maxConcurrentDriveOps = 8
+
+// staleTransientFileMaxAge is the age after which leftover temp/backup files
+// (from crashed or interrupted transactions) are deleted on Start. Files
+// belonging to in-flight transactions are far younger than this.
+const staleTransientFileMaxAge = 24 * time.Hour
+
 // Scope is the OAuth scope the part store needs. drive.file only grants
 // access to files created by this application, so the part folder must be
 // created by pithos itself (see ensureFolder).
@@ -38,6 +51,13 @@ type gdrivePartStore struct {
 	svc           *drive.Service
 	folderId      string
 	tracer        trace.Tracer
+	// txBatchesMu guards txBatches; a single tx can be shared across fan-out
+	// goroutines (see database.TxController).
+	txBatchesMu sync.Mutex
+	// txBatches collects all part operations of one transaction so the commit
+	// hooks can execute them with bounded parallelism. Keyed by the underlying
+	// *sql.Tx because child tx controllers are distinct values sharing it.
+	txBatches map[*sql.Tx]*txBatch
 }
 
 // Compile-time check to ensure gdrivePartStore implements partstore.PartStore
@@ -56,6 +76,7 @@ func New(folderName string, clientOptions ...option.ClientOption) (partstore.Par
 		folderName:         folderName,
 		clientOptions:      clientOptions,
 		tracer:             otel.Tracer("internal/storage/metadatapart/partstore/gdrive"),
+		txBatches:          map[*sql.Tx]*txBatch{},
 	}
 	return bs, nil
 }
@@ -69,7 +90,70 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 		return err
 	}
 	s.svc = svc
-	return s.ensureFolder(ctx)
+	if err := s.ensureFolder(ctx); err != nil {
+		return err
+	}
+	s.sweepStaleTransientFiles(ctx)
+	return nil
+}
+
+// tryGetTransientFileTime extracts the creation time from a temp
+// (".<part>.tmp.<ulid>") or backup ("<part>.txbackup.<ulid>") file name.
+func tryGetTransientFileTime(name string) (time.Time, bool) {
+	trimmed := strings.TrimPrefix(name, ".")
+	var ulidStr string
+	if i := strings.Index(trimmed, ".tmp."); i == 32 && strings.HasPrefix(name, ".") {
+		ulidStr = trimmed[i+len(".tmp."):]
+	} else if i := strings.Index(trimmed, ".txbackup."); i == 32 && !strings.HasPrefix(name, ".") {
+		ulidStr = trimmed[i+len(".txbackup."):]
+	} else {
+		return time.Time{}, false
+	}
+	if _, err := hex.DecodeString(trimmed[:32]); err != nil {
+		return time.Time{}, false
+	}
+	id, err := ulid.ParseStrict(ulidStr)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ulid.Time(id.Time()), true
+}
+
+// sweepStaleTransientFiles deletes temp/backup files left behind by crashed or
+// interrupted transactions. Best-effort: failures are logged, never fatal, so
+// a sweep problem cannot prevent the store from starting.
+func (s *gdrivePartStore) sweepStaleTransientFiles(ctx context.Context) {
+	cutoff := time.Now().Add(-staleTransientFileMaxAge)
+	query := fmt.Sprintf("'%s' in parents and trashed = false", s.folderId)
+	pageToken := ""
+	swept := 0
+	for {
+		fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
+			return s.svc.Files.List().Q(query).Fields("nextPageToken, files(id, name)").PageSize(1000).PageToken(pageToken).Context(ctx).Do()
+		}, nil)
+		if err != nil {
+			slog.Warn(fmt.Sprintf("Drive stale file sweep aborted: %v", err))
+			return
+		}
+		for _, file := range fileList.Files {
+			createdAt, ok := tryGetTransientFileTime(file.Name)
+			if !ok || !createdAt.Before(cutoff) {
+				continue
+			}
+			if err := s.deleteFile(ctx, file.Id); err != nil {
+				slog.Warn(fmt.Sprintf("Drive stale file sweep could not delete %s: %v", file.Name, err))
+				continue
+			}
+			swept++
+		}
+		pageToken = fileList.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	if swept > 0 {
+		slog.Info(fmt.Sprintf("Drive stale file sweep deleted %d leftover temp/backup files", swept))
+	}
 }
 
 // ensureFolder finds or creates the part folder. Under the drive.file scope
@@ -178,6 +262,172 @@ func (s *gdrivePartStore) Stop(ctx context.Context) error {
 	return s.ValidatedLifecycle.Stop(ctx)
 }
 
+type txOpKind int
+
+const (
+	txOpPut txOpKind = iota
+	txOpDelete
+)
+
+// driveTxOp is one staged part operation inside a transaction. The
+// backup/publish state is tracked per operation so a failed or rolled back
+// batch can undo exactly what it did.
+type driveTxOp struct {
+	kind         txOpKind
+	partName     string
+	tempFileId   string // put only: the already uploaded temp file
+	backupName   string
+	backupFileId string
+	published    bool
+}
+
+type txBatch struct {
+	ops []*driveTxOp
+}
+
+// addTxOp stages op for tx, registering the commit hooks once per transaction.
+func (s *gdrivePartStore) addTxOp(tx database.Tx, op *driveTxOp) {
+	s.txBatchesMu.Lock()
+	defer s.txBatchesMu.Unlock()
+	sqlTx := tx.SqlTx()
+	batch, ok := s.txBatches[sqlTx]
+	if !ok {
+		batch = &txBatch{}
+		s.txBatches[sqlTx] = batch
+		tx.OnPreCommit(func(hookCtx context.Context) error {
+			return s.runBatch(hookCtx, batch, s.opPreCommit)
+		})
+		tx.OnAfterCommit(func(hookCtx context.Context) error {
+			s.removeTxBatch(sqlTx)
+			return s.runBatch(hookCtx, batch, s.opAfterCommit)
+		})
+		tx.OnRollback(func(hookCtx context.Context) error {
+			s.removeTxBatch(sqlTx)
+			return s.runBatch(hookCtx, batch, s.opRollback)
+		})
+	}
+	batch.ops = append(batch.ops, op)
+}
+
+func (s *gdrivePartStore) removeTxBatch(sqlTx *sql.Tx) {
+	s.txBatchesMu.Lock()
+	defer s.txBatchesMu.Unlock()
+	delete(s.txBatches, sqlTx)
+}
+
+// runBatch applies fn to every operation of the batch with bounded
+// parallelism. Operations on the same part (e.g. the dedup path puts and
+// deletes a part in one transaction) keep their registration order; distinct
+// parts run concurrently.
+func (s *gdrivePartStore) runBatch(ctx context.Context, batch *txBatch, fn func(context.Context, *driveTxOp) error) error {
+	opsByPart := map[string][]*driveTxOp{}
+	partOrder := []string{}
+	for _, op := range batch.ops {
+		if _, ok := opsByPart[op.partName]; !ok {
+			partOrder = append(partOrder, op.partName)
+		}
+		opsByPart[op.partName] = append(opsByPart[op.partName], op)
+	}
+
+	sem := make(chan struct{}, maxConcurrentDriveOps)
+	var wg sync.WaitGroup
+	var errsMu sync.Mutex
+	var errs []error
+	for _, partName := range partOrder {
+		ops := opsByPart[partName]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			for _, op := range ops {
+				if err := fn(ctx, op); err != nil {
+					errsMu.Lock()
+					errs = append(errs, err)
+					errsMu.Unlock()
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
+}
+
+func (s *gdrivePartStore) opPreCommit(ctx context.Context, op *driveTxOp) error {
+	switch op.kind {
+	case txOpPut:
+		existingFileId, err := s.findFileIdByName(ctx, op.partName)
+		if err != nil {
+			return err
+		}
+		if existingFileId != "" {
+			if err := s.renameFile(ctx, existingFileId, op.backupName); err != nil {
+				return err
+			}
+			op.backupFileId = existingFileId
+		}
+		if err := s.renameFile(ctx, op.tempFileId, op.partName); err != nil {
+			if op.backupFileId != "" {
+				_ = s.renameFile(ctx, op.backupFileId, op.partName)
+				op.backupFileId = ""
+			}
+			return err
+		}
+		op.published = true
+		return nil
+	case txOpDelete:
+		fileId, err := s.findFileIdByName(ctx, op.partName)
+		if err != nil {
+			return err
+		}
+		if fileId == "" {
+			return nil
+		}
+		if err := s.renameFile(ctx, fileId, op.backupName); err != nil {
+			if isNotFoundError(err) {
+				return nil
+			}
+			return err
+		}
+		op.backupFileId = fileId
+		return nil
+	}
+	return nil
+}
+
+func (s *gdrivePartStore) opAfterCommit(ctx context.Context, op *driveTxOp) error {
+	if op.backupFileId != "" {
+		return s.deleteFile(ctx, op.backupFileId)
+	}
+	return nil
+}
+
+func (s *gdrivePartStore) opRollback(ctx context.Context, op *driveTxOp) error {
+	switch op.kind {
+	case txOpPut:
+		if !op.published {
+			return s.deleteFile(ctx, op.tempFileId)
+		}
+		_ = s.deleteFile(ctx, op.tempFileId)
+		if op.backupFileId != "" {
+			return s.renameFile(ctx, op.backupFileId, op.partName)
+		}
+		return nil
+	case txOpDelete:
+		if op.backupFileId != "" {
+			err := s.renameFile(ctx, op.backupFileId, op.partName)
+			// A later operation in the same transaction may already have
+			// removed the file; the part is gone either way.
+			if err != nil && !isNotFoundError(err) {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
 func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "gdrivePartStore.PutPart")
 	defer span.End()
@@ -190,45 +440,11 @@ func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	}
 
 	if tx != nil {
-		backupName := partName + ".txbackup." + ulid.Make().String()
-		backupFileId := ""
-		published := false
-		tx.OnPreCommit(func(hookCtx context.Context) error {
-			existingFileId, err := s.findFileIdByName(hookCtx, partName)
-			if err != nil {
-				return err
-			}
-			if existingFileId != "" {
-				if err := s.renameFile(hookCtx, existingFileId, backupName); err != nil {
-					return err
-				}
-				backupFileId = existingFileId
-			}
-			if err := s.renameFile(hookCtx, tempFileId, partName); err != nil {
-				if backupFileId != "" {
-					_ = s.renameFile(hookCtx, backupFileId, partName)
-					backupFileId = ""
-				}
-				return err
-			}
-			published = true
-			return nil
-		})
-		tx.OnAfterCommit(func(hookCtx context.Context) error {
-			if backupFileId != "" {
-				return s.deleteFile(hookCtx, backupFileId)
-			}
-			return nil
-		})
-		tx.OnRollback(func(hookCtx context.Context) error {
-			if published {
-				_ = s.deleteFile(hookCtx, tempFileId)
-				if backupFileId != "" {
-					return s.renameFile(hookCtx, backupFileId, partName)
-				}
-				return nil
-			}
-			return s.deleteFile(hookCtx, tempFileId)
+		s.addTxOp(tx, &driveTxOp{
+			kind:       txOpPut,
+			partName:   partName,
+			tempFileId: tempFileId,
+			backupName: partName + ".txbackup." + ulid.Make().String(),
 		})
 		return nil
 	}
@@ -323,36 +539,10 @@ func (s *gdrivePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 
 	partName := s.getPartName(partId)
 	if tx != nil {
-		backupName := partName + ".txbackup." + ulid.Make().String()
-		backupFileId := ""
-		tx.OnPreCommit(func(hookCtx context.Context) error {
-			fileId, err := s.findFileIdByName(hookCtx, partName)
-			if err != nil {
-				return err
-			}
-			if fileId == "" {
-				return nil
-			}
-			if err := s.renameFile(hookCtx, fileId, backupName); err != nil {
-				if isNotFoundError(err) {
-					return nil
-				}
-				return err
-			}
-			backupFileId = fileId
-			return nil
-		})
-		tx.OnAfterCommit(func(hookCtx context.Context) error {
-			if backupFileId != "" {
-				return s.deleteFile(hookCtx, backupFileId)
-			}
-			return nil
-		})
-		tx.OnRollback(func(hookCtx context.Context) error {
-			if backupFileId != "" {
-				return s.renameFile(hookCtx, backupFileId, partName)
-			}
-			return nil
+		s.addTxOp(tx, &driveTxOp{
+			kind:       txOpDelete,
+			partName:   partName,
+			backupName: partName + ".txbackup." + ulid.Make().String(),
 		})
 		return nil
 	}

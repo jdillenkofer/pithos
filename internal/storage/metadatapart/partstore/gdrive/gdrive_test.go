@@ -2,6 +2,7 @@ package gdrive
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	"github.com/oklog/ulid/v2"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -234,4 +237,106 @@ func TestGoogleDrivePartStoreAgainstRealDrive(t *testing.T) {
 	assert.Nil(t, err)
 	err = partstore.Tester(store, db, []byte("GoogleDrivePartStore"))
 	assert.Nil(t, err)
+}
+
+func TestGoogleDrivePartStoreDeletesManyPartsInOneTx(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	db := openTestDb(t)
+	store := startTestStore(t, fakeServer)
+
+	partIds := make([]partstore.PartId, 0, 20)
+	for range 20 {
+		partId, err := partstore.NewRandomPartId()
+		assert.Nil(t, err)
+		putPartInTx(t, db, store, *partId, []byte("content"))
+		partIds = append(partIds, *partId)
+	}
+
+	// Rolled back bulk delete keeps every part.
+	err := database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		for _, partId := range partIds {
+			assert.Nil(t, store.DeletePart(ctx, tx, partId))
+		}
+		return errForcedRollback
+	})
+	assert.ErrorIs(t, err, errForcedRollback)
+	for _, partId := range partIds {
+		content, err := readPart(t, store, partId)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("content"), content)
+	}
+
+	// Committed bulk delete removes every part and leaves no backups.
+	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		for _, partId := range partIds {
+			assert.Nil(t, store.DeletePart(ctx, tx, partId))
+		}
+		return nil
+	})
+	assert.Nil(t, err)
+	for _, partId := range partIds {
+		_, err := readPart(t, store, partId)
+		assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	}
+	// Only the part folder remains.
+	assert.Equal(t, 1, fakeServer.fileCount())
+}
+
+// The dedup path (internal/storage/metadatapart/dedup.go) puts a part and
+// deletes it again inside the same transaction.
+func TestGoogleDrivePartStorePutThenDeleteSameTx(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	for _, commit := range []bool{true, false} {
+		fakeServer := newFakeDriveServer()
+		db := openTestDb(t)
+		store := startTestStore(t, fakeServer)
+
+		partId, err := partstore.NewRandomPartId()
+		assert.Nil(t, err)
+
+		err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			assert.Nil(t, store.PutPart(ctx, tx, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
+			assert.Nil(t, store.DeletePart(ctx, tx, *partId))
+			if !commit {
+				return errForcedRollback
+			}
+			return nil
+		})
+		if commit {
+			assert.Nil(t, err)
+		} else {
+			assert.ErrorIs(t, err, errForcedRollback)
+		}
+
+		_, err = readPart(t, store, *partId)
+		assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+		assert.Equal(t, 1, fakeServer.fileCount())
+		fakeServer.Close()
+	}
+}
+
+func TestGoogleDrivePartStoreSweepsStaleTransientFilesOnStart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+
+	// Seed the folder and files before the store starts.
+	folderId := fakeServer.addFile(testFolderName, "application/vnd.google-apps.folder", nil, nil)
+	partName := "0123456789abcdef0123456789abcdef"
+	staleUlid := ulid.MustNew(ulid.Timestamp(time.Now().Add(-48*time.Hour)), rand.Reader).String()
+	freshUlid := ulid.Make().String()
+	fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("part"))
+	fakeServer.addFile("."+partName+".tmp."+staleUlid, "application/octet-stream", []string{folderId}, []byte("stale temp"))
+	fakeServer.addFile(partName+".txbackup."+staleUlid, "application/octet-stream", []string{folderId}, []byte("stale backup"))
+	fakeServer.addFile("."+partName+".tmp."+freshUlid, "application/octet-stream", []string{folderId}, []byte("fresh temp"))
+
+	startTestStore(t, fakeServer)
+
+	// Folder + part + fresh temp survive; the two stale files are gone.
+	assert.Equal(t, 3, fakeServer.fileCount())
 }

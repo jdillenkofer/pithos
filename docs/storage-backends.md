@@ -415,7 +415,8 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 
 - Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
 - Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity).
-- During transactional writes, temp files (`.<part>.tmp.<ulid>`) and backup files (`<part>.txbackup.<ulid>`) briefly exist next to the part files. If pithos crashes mid-transaction they can be left behind; they are ignored by pithos and can be deleted manually (the ULID suffix encodes their creation time).
+- During transactional writes, temp files (`.<part>.tmp.<ulid>`) and backup files (`<part>.txbackup.<ulid>`) briefly exist next to the part files. If pithos crashes mid-transaction they can be left behind; they are ignored by pithos and automatically deleted on the next start once they are older than 24 hours.
+- Part operations of one transaction are executed against Drive with bounded parallelism (8 concurrent calls) at commit time. Deleting large multi-part objects still costs a few API round trips per part — the `OutboxPartStore` wrapper moves that work off the request path entirely.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 
 ### Post-Quantum Encryption
