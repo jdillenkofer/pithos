@@ -30,6 +30,10 @@ const folderMimeType = "application/vnd.google-apps.folder"
 // Scope is the OAuth scope the part store needs. drive.file only grants
 // access to files created by this application, so the part folder must be
 // created by pithos itself (see ensureFolder).
+//
+// The store is intended for single-instance use: multiple pithos instances
+// writing to the same Drive part folder can race on part uploads because the
+// part name is used as the Drive file identity.
 const Scope = drive.DriveFileScope
 
 type gdrivePartStore struct {
