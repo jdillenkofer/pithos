@@ -2,7 +2,6 @@ package gdrive
 
 import (
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -28,12 +27,6 @@ const maxDriveRetries = 5
 
 const folderMimeType = "application/vnd.google-apps.folder"
 
-// maxConcurrentDriveOps bounds the number of parallel Drive API calls when a
-// transaction touches many parts (e.g. deleting a large multi-part object).
-// Sequential execution would put the whole per-part latency on the commit
-// path and blow past client timeouts.
-const maxConcurrentDriveOps = 8
-
 // Scope is the OAuth scope the part store needs. drive.file only grants
 // access to files created by this application, so the part folder must be
 // created by pithos itself (see ensureFolder).
@@ -46,13 +39,6 @@ type gdrivePartStore struct {
 	svc           *drive.Service
 	folderId      string
 	tracer        trace.Tracer
-	// txBatchesMu guards txBatches; a single tx can be shared across fan-out
-	// goroutines (see database.TxController).
-	txBatchesMu sync.Mutex
-	// txBatches collects all part operations of one transaction so the commit
-	// hooks can execute them with bounded parallelism. Keyed by the underlying
-	// *sql.Tx because child tx controllers are distinct values sharing it.
-	txBatches map[*sql.Tx]*txBatch
 	// fileIdCache maps part name → Drive file id so reads and deletes can skip
 	// the files.list lookup. Best-effort: a stale entry falls back to a lookup.
 	fileIdCache sync.Map
@@ -74,7 +60,6 @@ func New(folderName string, clientOptions ...option.ClientOption) (partstore.Par
 		folderName:         folderName,
 		clientOptions:      clientOptions,
 		tracer:             otel.Tracer("internal/storage/metadatapart/partstore/gdrive"),
-		txBatches:          map[*sql.Tx]*txBatch{},
 	}
 	return bs, nil
 }
@@ -224,115 +209,6 @@ func (s *gdrivePartStore) Stop(ctx context.Context) error {
 	return s.ValidatedLifecycle.Stop(ctx)
 }
 
-type txOpKind int
-
-const (
-	txOpPut txOpKind = iota
-	txOpDelete
-)
-
-// driveTxOp is one staged part operation inside a transaction.
-//
-// Puts upload the file under its final name at call time (one API call) and
-// simply delete it again on rollback. A file that is visible in Drive before
-// its transaction commits is harmless: readers only ask for parts referenced
-// by committed metadata, and the garbage collector's grace window (keyed on
-// the part id's ULID timestamp) protects in-flight parts. Crash leftovers are
-// unreferenced parts the garbage collector removes.
-//
-// Deletes defer all Drive work to after the commit; a failed post-commit
-// delete leaves an unreferenced part for the garbage collector.
-type driveTxOp struct {
-	kind     txOpKind
-	partName string
-	fileId   string // put only: the uploaded file
-}
-
-type txBatch struct {
-	ops []*driveTxOp
-}
-
-// addTxOp stages op for tx, registering the commit hooks once per transaction.
-func (s *gdrivePartStore) addTxOp(tx database.Tx, op *driveTxOp) {
-	s.txBatchesMu.Lock()
-	defer s.txBatchesMu.Unlock()
-	sqlTx := tx.SqlTx()
-	batch, ok := s.txBatches[sqlTx]
-	if !ok {
-		batch = &txBatch{}
-		s.txBatches[sqlTx] = batch
-		tx.OnAfterCommit(func(hookCtx context.Context) error {
-			s.removeTxBatch(sqlTx)
-			return s.runBatch(hookCtx, batch, s.opAfterCommit)
-		})
-		tx.OnRollback(func(hookCtx context.Context) error {
-			s.removeTxBatch(sqlTx)
-			return s.runBatch(hookCtx, batch, s.opRollback)
-		})
-	}
-	batch.ops = append(batch.ops, op)
-}
-
-func (s *gdrivePartStore) removeTxBatch(sqlTx *sql.Tx) {
-	s.txBatchesMu.Lock()
-	defer s.txBatchesMu.Unlock()
-	delete(s.txBatches, sqlTx)
-}
-
-// runBatch applies fn to every operation of the batch with bounded
-// parallelism. Operations on the same part (e.g. the dedup path puts and
-// deletes a part in one transaction) keep their registration order; distinct
-// parts run concurrently.
-func (s *gdrivePartStore) runBatch(ctx context.Context, batch *txBatch, fn func(context.Context, *driveTxOp) error) error {
-	opsByPart := map[string][]*driveTxOp{}
-	partOrder := []string{}
-	for _, op := range batch.ops {
-		if _, ok := opsByPart[op.partName]; !ok {
-			partOrder = append(partOrder, op.partName)
-		}
-		opsByPart[op.partName] = append(opsByPart[op.partName], op)
-	}
-
-	sem := make(chan struct{}, maxConcurrentDriveOps)
-	var wg sync.WaitGroup
-	var errsMu sync.Mutex
-	var errs []error
-	for _, partName := range partOrder {
-		ops := opsByPart[partName]
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			for _, op := range ops {
-				if err := fn(ctx, op); err != nil {
-					errsMu.Lock()
-					errs = append(errs, err)
-					errsMu.Unlock()
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	return errors.Join(errs...)
-}
-
-func (s *gdrivePartStore) opAfterCommit(ctx context.Context, op *driveTxOp) error {
-	if op.kind == txOpDelete {
-		return s.deleteAllFilesByName(ctx, op.partName)
-	}
-	return nil
-}
-
-func (s *gdrivePartStore) opRollback(ctx context.Context, op *driveTxOp) error {
-	if op.kind == txOpPut {
-		s.fileIdCache.CompareAndDelete(op.partName, op.fileId)
-		return s.deleteFile(ctx, op.fileId)
-	}
-	return nil
-}
-
 func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "gdrivePartStore.PutPart")
 	defer span.End()
@@ -343,15 +219,6 @@ func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 		return err
 	}
 	s.fileIdCache.Store(partName, fileId)
-
-	if tx != nil {
-		s.addTxOp(tx, &driveTxOp{
-			kind:     txOpPut,
-			partName: partName,
-			fileId:   fileId,
-		})
-		return nil
-	}
 
 	// Without a transaction (e.g. the outbox worker replaying an upload, which
 	// may retry after a failure) remove any older duplicate. Best-effort: the
@@ -555,14 +422,6 @@ func (s *gdrivePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 	defer span.End()
 
 	partName := s.getPartName(partId)
-	if tx != nil {
-		s.addTxOp(tx, &driveTxOp{
-			kind:     txOpDelete,
-			partName: partName,
-		})
-		return nil
-	}
-
 	return s.deleteAllFilesByName(ctx, partName)
 }
 

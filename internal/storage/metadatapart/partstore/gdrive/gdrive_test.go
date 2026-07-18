@@ -2,9 +2,7 @@ package gdrive
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -54,14 +52,6 @@ func startTestStore(t *testing.T, fakeServer *fakeDriveServer) partstore.PartSto
 	return store
 }
 
-func putPartInTx(t *testing.T, db database.Database, store partstore.PartStore, partId partstore.PartId, content []byte) {
-	t.Helper()
-	err := database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return store.PutPart(ctx, tx, partId, ioutils.NewByteReadSeekCloser(content))
-	})
-	assert.Nil(t, err)
-}
-
 func readPart(t *testing.T, store partstore.PartStore, partId partstore.PartId) ([]byte, error) {
 	t.Helper()
 	reader, err := store.GetPart(context.Background(), nil, partId)
@@ -71,8 +61,6 @@ func readPart(t *testing.T, store partstore.PartStore, partId partstore.PartId) 
 	defer reader.Close()
 	return io.ReadAll(reader)
 }
-
-var errForcedRollback = errors.New("forced rollback")
 
 func TestGoogleDrivePartStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
@@ -89,77 +77,26 @@ func TestGoogleDrivePartStore(t *testing.T) {
 	assert.Equal(t, 1, fakeServer.fileCount())
 }
 
-func TestGoogleDrivePartStorePutRollbackLeavesNoPart(t *testing.T) {
+func TestGoogleDrivePartStorePutPartAndDeletePartWorkWithoutTx(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	fakeServer := newFakeDriveServer()
 	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
 	store := startTestStore(t, fakeServer)
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
 
-	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		err := store.PutPart(ctx, tx, *partId, ioutils.NewByteReadSeekCloser([]byte("content")))
-		assert.Nil(t, err)
-		return errForcedRollback
-	})
-	assert.ErrorIs(t, err, errForcedRollback)
-
-	_, err = readPart(t, store, *partId)
-	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
-	assert.Equal(t, 1, fakeServer.fileCount())
-}
-
-func TestGoogleDrivePartStoreOverwriteRollbackKeepsOldContent(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	fakeServer := newFakeDriveServer()
-	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
-	store := startTestStore(t, fakeServer)
-
-	partId, err := partstore.NewRandomPartId()
+	err = store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content")))
 	assert.Nil(t, err)
-	putPartInTx(t, db, store, *partId, []byte("old content"))
-
-	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		err := store.PutPart(ctx, tx, *partId, ioutils.NewByteReadSeekCloser([]byte("new content")))
-		assert.Nil(t, err)
-		return errForcedRollback
-	})
-	assert.ErrorIs(t, err, errForcedRollback)
-
-	content, err := readPart(t, store, *partId)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("old content"), content)
-	// Part folder + the old part file.
-	assert.Equal(t, 2, fakeServer.fileCount())
-}
-
-func TestGoogleDrivePartStoreDeleteRollbackKeepsPart(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	fakeServer := newFakeDriveServer()
-	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
-	store := startTestStore(t, fakeServer)
-
-	partId, err := partstore.NewRandomPartId()
-	assert.Nil(t, err)
-	putPartInTx(t, db, store, *partId, []byte("content"))
-
-	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		err := store.DeletePart(ctx, tx, *partId)
-		assert.Nil(t, err)
-		return errForcedRollback
-	})
-	assert.ErrorIs(t, err, errForcedRollback)
-
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("content"), content)
+
+	err = store.DeletePart(context.Background(), nil, *partId)
+	assert.Nil(t, err)
+	_, err = readPart(t, store, *partId)
+	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
 }
 
 func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
@@ -167,12 +104,11 @@ func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
 
 	fakeServer := newFakeDriveServer()
 	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
 	store := startTestStore(t, fakeServer)
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	putPartInTx(t, db, store, *partId, []byte("content"))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
 
 	partName := store.(*gdrivePartStore).getPartName(*partId)
 	folderId := store.(*gdrivePartStore).folderId
@@ -189,12 +125,11 @@ func TestGoogleDrivePartStoreReadsNewestDuplicate(t *testing.T) {
 
 	fakeServer := newFakeDriveServer()
 	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
 	store := startTestStore(t, fakeServer)
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	putPartInTx(t, db, store, *partId, []byte("old content"))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("old content"))))
 
 	// Simulate a duplicate left behind by an interrupted overwrite: Drive
 	// allows several files with the same name, the newest must win. Duplicates
@@ -239,84 +174,49 @@ func TestGoogleDrivePartStoreAgainstRealDrive(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestGoogleDrivePartStoreDeletesManyPartsInOneTx(t *testing.T) {
+func TestGoogleDrivePartStoreDeletesManyParts(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	fakeServer := newFakeDriveServer()
 	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
 	store := startTestStore(t, fakeServer)
 
 	partIds := make([]partstore.PartId, 0, 20)
 	for range 20 {
 		partId, err := partstore.NewRandomPartId()
 		assert.Nil(t, err)
-		putPartInTx(t, db, store, *partId, []byte("content"))
+		assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
 		partIds = append(partIds, *partId)
 	}
 
-	// Rolled back bulk delete keeps every part.
-	err := database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		for _, partId := range partIds {
-			assert.Nil(t, store.DeletePart(ctx, tx, partId))
-		}
-		return errForcedRollback
-	})
-	assert.ErrorIs(t, err, errForcedRollback)
 	for _, partId := range partIds {
-		content, err := readPart(t, store, partId)
-		assert.Nil(t, err)
-		assert.Equal(t, []byte("content"), content)
+		assert.Nil(t, store.DeletePart(context.Background(), nil, partId))
 	}
-
-	// Committed bulk delete removes every part and leaves no backups.
-	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		for _, partId := range partIds {
-			assert.Nil(t, store.DeletePart(ctx, tx, partId))
-		}
-		return nil
-	})
-	assert.Nil(t, err)
 	for _, partId := range partIds {
 		_, err := readPart(t, store, partId)
 		assert.ErrorIs(t, err, partstore.ErrPartNotFound)
 	}
-	// Only the part folder remains.
 	assert.Equal(t, 1, fakeServer.fileCount())
 }
 
 // The dedup path (internal/storage/metadatapart/dedup.go) puts a part and
-// deletes it again inside the same transaction.
-func TestGoogleDrivePartStorePutThenDeleteSameTx(t *testing.T) {
+// deletes it again inside the same operation sequence.
+func TestGoogleDrivePartStorePutThenDeleteSameFlow(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	for _, commit := range []bool{true, false} {
-		fakeServer := newFakeDriveServer()
-		db := openTestDb(t)
-		store := startTestStore(t, fakeServer)
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
 
-		partId, err := partstore.NewRandomPartId()
-		assert.Nil(t, err)
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
 
-		err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-			assert.Nil(t, store.PutPart(ctx, tx, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
-			assert.Nil(t, store.DeletePart(ctx, tx, *partId))
-			if !commit {
-				return errForcedRollback
-			}
-			return nil
-		})
-		if commit {
-			assert.Nil(t, err)
-		} else {
-			assert.ErrorIs(t, err, errForcedRollback)
-		}
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
+	assert.Nil(t, store.DeletePart(context.Background(), nil, *partId))
 
-		_, err = readPart(t, store, *partId)
-		assert.ErrorIs(t, err, partstore.ErrPartNotFound)
-		assert.Equal(t, 1, fakeServer.fileCount())
-		fakeServer.Close()
-	}
+	_, err = readPart(t, store, *partId)
+	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	assert.Equal(t, 1, fakeServer.fileCount())
 }
 
 // The outbox worker replays PutPart without a transaction and may retry after
@@ -348,12 +248,11 @@ func TestGoogleDrivePartStoreReaderSeeks(t *testing.T) {
 
 	fakeServer := newFakeDriveServer()
 	t.Cleanup(fakeServer.Close)
-	db := openTestDb(t)
 	store := startTestStore(t, fakeServer)
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	putPartInTx(t, db, store, *partId, []byte("0123456789"))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("0123456789"))))
 
 	reader, err := store.GetPart(context.Background(), nil, *partId)
 	assert.Nil(t, err)
