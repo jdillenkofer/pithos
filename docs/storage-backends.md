@@ -8,7 +8,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 - **MetadataPartStorage**: Separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
-  - Configurable part stores (filesystem, SFTP)
+  - Configurable part stores (filesystem, SFTP, Google Drive)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
   - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
   - Emits [bucket event notifications](#bucket-event-notifications) by default, atomically with object mutations
@@ -349,7 +349,7 @@ prefix: `pending_entries` and `dead_lettered_entries` gauges, and
 
 SQL-backed `MetadataPartStorage` runs embedded SQLite/PostgreSQL migrations when the database starts. The object metadata migration adds columns for user-controllable system metadata and an `object_user_metadata` table for `x-amz-meta-*` values. The versioning migration adds bucket versioning state and object version columns; existing completed objects are marked as the latest `null` version so they remain accessible after upgrading.
 
-Filesystem and SFTP part stores can serve object bytes without holding a database transaction open for the entire download. This is also used through compatible part-store middlewares, including compression, cache, outbox, erasure coding, and Tink encryption. SQL part stores keep the read transaction open to preserve snapshot semantics for database-backed part content.
+Filesystem, SFTP, and Google Drive part stores can serve object bytes without holding a database transaction open for the entire download. This is also used through compatible part-store middlewares, including compression, cache, outbox, erasure coding, and Tink encryption. SQL part stores keep the read transaction open to preserve snapshot semantics for database-backed part content.
 
 ### Cache Part Store
 
@@ -375,6 +375,48 @@ Filesystem and SFTP part stores can serve object bytes without holding a databas
 ```
 
 > **Note:** Parts larger than `maxPartSizeBytes` are read/written through the inner store and marked as oversized to avoid repeated cache write attempts.
+
+### Google Drive Part Store
+
+Stores parts as files in a dedicated folder of a personal Google Drive. Pithos authenticates as a regular Google account via OAuth; access tokens are refreshed automatically from the stored refresh token for the lifetime of the process, so no re-authentication is needed after the one-time setup.
+
+```json
+{
+  "type": "GoogleDrivePartStore",
+  "clientId": "1234567890-abcdef.apps.googleusercontent.com",
+  "clientSecret": { "type": "EnvKey", "envKey": "PITHOS_GDRIVE_CLIENT_SECRET" },
+  "token": { "type": "EnvKey", "envKey": "PITHOS_GDRIVE_TOKEN" },
+  "folderName": "pithos-parts"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `clientId` | OAuth client id of your own Google Cloud OAuth client (see setup below). |
+| `clientSecret` | OAuth client secret. |
+| `token` | The OAuth token JSON printed by `pithos gdrive-auth`. It must contain a `refresh_token`. |
+| `folderName` | Optional Drive folder for the part files (default `pithos-parts`). The folder is created by pithos on first start. |
+
+#### Setup
+
+1. **Create a Google Cloud project** at <https://console.cloud.google.com/> (any personal Google account works) and enable the **Google Drive API** under *APIs & Services → Library*.
+2. **Configure the OAuth consent screen** (*APIs & Services → OAuth consent screen*): choose *External*, fill in the required fields, and **publish the app** (*Publishing status → In production*). While the app is in *Testing* status, Google expires refresh tokens after 7 days, which would break unattended operation. Publishing an unverified app is fine for personal use; verification is not required.
+3. **Create an OAuth client** (*APIs & Services → Credentials → Create credentials → OAuth client ID*) of type **TVs and Limited Input devices**. This client type enables the device flow that `pithos gdrive-auth` uses. Note the client id and client secret.
+4. **Authorize pithos** (one-time, works on headless servers):
+
+   ```sh
+   pithos gdrive-auth -client-id <CLIENT_ID> -client-secret <CLIENT_SECRET>
+   ```
+
+   The command prints a `https://www.google.com/device` URL and a short code. Open the URL in a browser on any device (phone, laptop, …), enter the code, and approve the access. The command then prints the token JSON to stdout.
+5. **Store the token** in the `token` field of the configuration, or in an environment variable referenced via `{"type": "EnvKey", "envKey": "..."}` as in the example above, and start pithos.
+
+#### Notes
+
+- Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
+- Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity).
+- During transactional writes, temp files (`.<part>.tmp.<ulid>`) and backup files (`<part>.txbackup.<ulid>`) briefly exist next to the part files. If pithos crashes mid-transaction they can be left behind; they are ignored by pithos and can be deleted manually (the ULID suffix encodes their creation time).
+- The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 
 ### Post-Quantum Encryption
 
