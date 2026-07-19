@@ -844,6 +844,32 @@ func TestCanCreateGoogleDrivePartStoreFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateOneDrivePartStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"tenantId": "consumers",
+		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}",
+		"folderName": "pithos-parts-test"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NoError(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestOneDrivePartStoreRequiresRefreshToken(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"token": "{\"access_token\":\"access\",\"token_type\":\"Bearer\"}"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, "OneDrivePartStore token contains no refresh_token")
+}
+
 func TestCanCreateGoogleDrivePartStoreFromJsonWithEnvKeys(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	t.Setenv("PITHOS_TEST_GDRIVE_CLIENT_SECRET", "test-client-secret")
