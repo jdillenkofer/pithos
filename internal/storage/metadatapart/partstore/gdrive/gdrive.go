@@ -115,7 +115,7 @@ func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
 	if s.token.RefreshToken == "" {
 		return s.token, nil
 	}
-	if s.token.Expiry.IsZero() || time.Until(s.token.Expiry) > s.refreshWindow {
+	if s.token.AccessToken != "" && !s.token.Expiry.IsZero() && time.Until(s.token.Expiry) > s.refreshWindow {
 		return s.token, nil
 	}
 	refreshCandidate := *s.token
