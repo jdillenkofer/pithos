@@ -378,7 +378,7 @@ Filesystem, SFTP, and Google Drive part stores can serve object bytes without ho
 
 ### Google Drive Part Store
 
-Stores parts as files in a dedicated folder of a personal Google Drive. Pithos authenticates as a regular Google account via OAuth; access tokens are refreshed automatically from the stored refresh token for the lifetime of the process, so no re-authentication is needed after the one-time setup.
+Stores parts as files in a dedicated folder of a personal Google Drive. Pithos authenticates as a regular Google account via OAuth; access tokens are refreshed automatically from the stored refresh token, including on startup when the current access token is already expired or missing its expiry information. This keeps Drive access working while the process stays up, without requiring a full re-authentication flow.
 
 ```json
 {
@@ -394,7 +394,7 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 | --- | --- |
 | `clientId` | OAuth client id of your own Google Cloud OAuth client (see setup below). |
 | `clientSecret` | OAuth client secret. |
-| `token` | The OAuth token JSON printed by `pithos gdrive-auth`. It must contain a `refresh_token`. |
+| `token` | The OAuth token JSON printed by `pithos gdrive-auth`. It must contain a `refresh_token`. The value may be provided inline, via an environment variable (`{"type": "EnvKey", "envKey": "..."}`), or via a file (`{"type": "File", "path": "/path/to/token.json"}`). |
 | `folderName` | Optional Drive folder for the part files (default `pithos-parts`). The folder is created by pithos on first start. |
 
 #### Setup
@@ -409,14 +409,14 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
    ```
 
    The command prints a `https://www.google.com/device` URL and a short code. Open the URL in a browser on any device (phone, laptop, …), enter the code, and approve the access. The command then prints the token JSON to stdout.
-5. **Store the token** in the `token` field of the configuration, or in an environment variable referenced via `{"type": "EnvKey", "envKey": "..."}` as in the example above, and start pithos.
+5. **Store the token** in the `token` field of the configuration, or in an environment variable referenced via `{"type": "EnvKey", "envKey": "..."}` (or a file via `{"type": "File", "path": "/path/to/token.json"}`), and start pithos.
 
 #### Notes
 
 - Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
 - The Google Drive part store is effectively single-instance only. Running multiple pithos instances against the same Drive part folder can race on part uploads and overwrite each other's state because the store relies on the part name as the file identity and does not provide cross-instance coordination. In practice it might work since outbox part stores are single-writers and ulids for parts are unique, but it is not guaranteed to be safe.
-- Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity).
-- Uploads cost a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit with bounded parallelism (8 concurrent calls).
+- Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity). When the token is backed by an environment variable or file, refreshed values are written back to that source so short restarts can reuse the latest token.
+- Uploads use a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit.
 - Because Drive requires at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
 - Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
