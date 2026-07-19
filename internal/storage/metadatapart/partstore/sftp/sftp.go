@@ -282,6 +282,8 @@ func (s *sftpPartStore) SupportsTxFreeGetPart() bool {
 	return true
 }
 
+func (s *sftpPartStore) SupportsTxFreePutPart() bool { return true }
+
 func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPart")
 	defer span.End()

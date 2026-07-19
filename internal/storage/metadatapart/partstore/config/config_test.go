@@ -826,3 +826,79 @@ func TestErasureCodedPartStoreMiddlewareRejectsNegativeHealScanInterval(t *testi
 	assert.Nil(t, partStore)
 	assert.Contains(t, err.Error(), "healScanIntervalSeconds must be >= 0")
 }
+
+const testGoogleDriveToken = `{"access_token":"ya29.test","token_type":"Bearer","refresh_token":"1//refresh-test","expiry":"2020-01-01T00:00:00Z"}`
+
+func TestCanCreateGoogleDrivePartStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := fmt.Sprintf(`{
+				 "type": "GoogleDrivePartStore",
+				 "clientId": "test-client-id.apps.googleusercontent.com",
+				 "clientSecret": "test-client-secret",
+				 "token": %s,
+				 "folderName": "pithos-parts-test"
+			 }`, strconv.Quote(testGoogleDriveToken))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestCanCreateGoogleDrivePartStoreFromJsonWithEnvKeys(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	t.Setenv("PITHOS_TEST_GDRIVE_CLIENT_SECRET", "test-client-secret")
+	t.Setenv("PITHOS_TEST_GDRIVE_TOKEN", testGoogleDriveToken)
+	jsonData := `{
+				 "type": "GoogleDrivePartStore",
+				 "clientId": "test-client-id.apps.googleusercontent.com",
+				 "clientSecret": { "type": "EnvKey", "envKey": "PITHOS_TEST_GDRIVE_CLIENT_SECRET" },
+				 "token": { "type": "EnvKey", "envKey": "PITHOS_TEST_GDRIVE_TOKEN" }
+			 }`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestGoogleDrivePartStoreRequiresClientId(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := fmt.Sprintf(`{
+				 "type": "GoogleDrivePartStore",
+				 "clientSecret": "test-client-secret",
+				 "token": %s
+			 }`, strconv.Quote(testGoogleDriveToken))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, partStore)
+	assert.Contains(t, err.Error(), "clientId is required")
+}
+
+func TestGoogleDrivePartStoreRequiresToken(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+				 "type": "GoogleDrivePartStore",
+				 "clientId": "test-client-id.apps.googleusercontent.com",
+				 "clientSecret": "test-client-secret"
+			 }`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, partStore)
+	assert.Contains(t, err.Error(), "token is required")
+}
+
+func TestGoogleDrivePartStoreRequiresRefreshToken(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+				 "type": "GoogleDrivePartStore",
+				 "clientId": "test-client-id.apps.googleusercontent.com",
+				 "clientSecret": "test-client-secret",
+				 "token": "{\"access_token\":\"ya29.test\",\"token_type\":\"Bearer\"}"
+			 }`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NotNil(t, err)
+	assert.Nil(t, partStore)
+	assert.Contains(t, err.Error(), "no refresh_token")
+}

@@ -55,6 +55,7 @@ func CreateTempDir() (tempDir *string, cleanup func(), err error) {
 const (
 	envKeyType = "EnvKey"
 	stdinType  = "Stdin"
+	fileType   = "File"
 )
 
 type envKeyProvider struct {
@@ -68,12 +69,40 @@ type stdinProvider struct {
 	DynamicJsonType
 }
 
+type fileProvider struct {
+	Path string `json:"path"`
+	DynamicJsonType
+}
+
 type StringProvider struct {
-	value string `json:"-"`
+	value  string `json:"-"`
+	envKey string `json:"-"`
+	file   string `json:"-"`
 }
 
 func (s *StringProvider) Value() string {
 	return s.value
+}
+
+func (s *StringProvider) SetValue(value string) {
+	s.value = value
+}
+
+func (s *StringProvider) WriteValue(value string) error {
+	switch {
+	case s.envKey != "":
+		if err := os.Setenv(s.envKey, value); err != nil {
+			return err
+		}
+	case s.file != "":
+		if err := os.WriteFile(s.file, []byte(value), 0o600); err != nil {
+			return err
+		}
+	default:
+		return errors.New("string provider does not support writing back")
+	}
+	s.value = value
+	return nil
 }
 
 func (s *StringProvider) UnmarshalJSON(b []byte) error {
@@ -96,6 +125,7 @@ func (s *StringProvider) UnmarshalJSON(b []byte) error {
 		if err = json.Unmarshal(b, &ekp); err != nil {
 			return err
 		}
+		s.envKey = ekp.EnvKey
 		s.value = os.Getenv(ekp.EnvKey)
 		return nil
 	case stdinType:
@@ -105,6 +135,18 @@ func (s *StringProvider) UnmarshalJSON(b []byte) error {
 		}
 		s.value, err = readFromStdin(sp.Prompt, sp.Hidden)
 		return err
+	case fileType:
+		fp := fileProvider{}
+		if err = json.Unmarshal(b, &fp); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(fp.Path)
+		if err != nil {
+			return err
+		}
+		s.file = fp.Path
+		s.value = string(data)
+		return nil
 	default:
 		return errors.New("invalid stringProvider type")
 	}

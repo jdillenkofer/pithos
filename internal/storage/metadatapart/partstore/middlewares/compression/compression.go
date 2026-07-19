@@ -196,6 +196,10 @@ func (mw *PartStoreMiddleware) SupportsTxFreeGetPart() bool {
 	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
 }
 
+func (mw *PartStoreMiddleware) SupportsTxFreePutPart() bool {
+	return partstore.SupportsTxFreePutPart(mw.innerPartStore)
+}
+
 func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	rc, err := mw.innerPartStore.GetPart(ctx, tx, partId)
 	if err != nil {

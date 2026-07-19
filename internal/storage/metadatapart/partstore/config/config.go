@@ -17,6 +17,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	partStoreCache "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/cache"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive"
 	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
@@ -26,6 +27,9 @@ import (
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 )
 
 const (
@@ -35,6 +39,7 @@ const (
 	tinkEncryptionPartStoreMiddlewareType = "TinkEncryptionPartStoreMiddleware"
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
+	googleDrivePartStoreType              = "GoogleDrivePartStore"
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 	cachePartStoreType                    = "CachePartStore"
@@ -401,6 +406,74 @@ func (s *SftpPartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 	return sftp.New(s.Addr.Value(), sshClientConfig, s.Root.Value())
 }
 
+type GoogleDrivePartStoreConfiguration struct {
+	ClientId     internalConfig.StringProvider `json:"clientId"`
+	ClientSecret internalConfig.StringProvider `json:"clientSecret"`
+	// Token is the OAuth token JSON printed by `pithos gdrive-auth`. It must
+	// contain a refresh_token; access tokens are refreshed automatically.
+	Token      internalConfig.StringProvider `json:"token"`
+	FolderName internalConfig.StringProvider `json:"folderName,omitempty"`
+	// Endpoint overrides the Drive API base URL (tests/emulators only).
+	Endpoint internalConfig.StringProvider `json:"endpoint,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (g *GoogleDrivePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
+func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	clientId := g.ClientId.Value()
+	if clientId == "" {
+		return nil, errors.New("clientId is required for GoogleDrivePartStore")
+	}
+	clientSecret := g.ClientSecret.Value()
+	if clientSecret == "" {
+		return nil, errors.New("clientSecret is required for GoogleDrivePartStore")
+	}
+	tokenJson := g.Token.Value()
+	if tokenJson == "" {
+		return nil, errors.New("token is required for GoogleDrivePartStore")
+	}
+	var token oauth2.Token
+	if err := json.Unmarshal([]byte(tokenJson), &token); err != nil {
+		return nil, fmt.Errorf("invalid GoogleDrivePartStore token: %w", err)
+	}
+	if token.RefreshToken == "" {
+		return nil, errors.New("GoogleDrivePartStore token contains no refresh_token")
+	}
+	folderName := g.FolderName.Value()
+	if folderName == "" {
+		folderName = "pithos-parts"
+	}
+	oauthConfig := &oauth2.Config{
+		ClientID:     clientId,
+		ClientSecret: clientSecret,
+		Endpoint:     google.Endpoint,
+		Scopes:       []string{gdrive.Scope},
+	}
+	// The token source transparently exchanges the refresh token for new
+	// access tokens before expiry, so the Drive client stays usable even while
+	// the process is idle. When the token came from an env var, the refreshed
+	// value is written back to that env var so short restarts keep working.
+	clientOptions := []option.ClientOption{
+		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
+			if tok == nil {
+				return nil
+			}
+			updatedTokenJson, err := json.Marshal(tok)
+			if err != nil {
+				return err
+			}
+			return g.Token.WriteValue(string(updatedTokenJson))
+		})),
+	}
+	if endpoint := g.Endpoint.Value(); endpoint != "" {
+		clientOptions = append(clientOptions, option.WithEndpoint(endpoint))
+	}
+	return gdrive.New(folderName, clientOptions...)
+}
+
 type SqlPartStoreConfiguration struct {
 	DatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
 	RawDatabase          json.RawMessage                     `json:"db"`
@@ -588,6 +661,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &OutboxPartStoreConfiguration{}
 	case sftpPartStoreType:
 		bi = &SftpPartStoreConfiguration{}
+	case googleDrivePartStoreType:
+		bi = &GoogleDrivePartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
 	case erasureCodedPartStoreMiddlewareType:

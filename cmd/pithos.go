@@ -29,6 +29,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
+	gdriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
@@ -83,6 +84,7 @@ const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
 const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
+const subcommandGdriveAuth = "gdrive-auth"
 
 const readHeaderTimeout = 10 * time.Second
 const monitoringReadTimeout = 30 * time.Second
@@ -94,7 +96,7 @@ const gracefulShutdownTimeout = 30 * time.Second
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth))
 		os.Exit(1)
 	}
 
@@ -117,8 +119,10 @@ func main() {
 		auditLogTool()
 	case subcommandTPMInfo:
 		tpmInfo()
+	case subcommandGdriveAuth:
+		gdriveAuthFlow(ctx)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth))
 		os.Exit(1)
 	}
 }
@@ -707,6 +711,38 @@ func auditLogTool() {
 		slog.Error(fmt.Sprintf("Audit log operation failed: %v", err))
 		os.Exit(1)
 	}
+}
+
+func gdriveAuthFlow(ctx context.Context) {
+	fs := flag.NewFlagSet(subcommandGdriveAuth, flag.ExitOnError)
+	clientId := fs.String("client-id", os.Getenv("PITHOS_GDRIVE_CLIENT_ID"), "OAuth client id (type \"TVs and Limited Input devices\"), defaults to $PITHOS_GDRIVE_CLIENT_ID")
+	clientSecret := fs.String("client-secret", os.Getenv("PITHOS_GDRIVE_CLIENT_SECRET"), "OAuth client secret, defaults to $PITHOS_GDRIVE_CLIENT_SECRET")
+	fs.Parse(os.Args[2:])
+
+	if *clientId == "" || *clientSecret == "" {
+		slog.Error("Both -client-id and -client-secret are required (or set PITHOS_GDRIVE_CLIENT_ID / PITHOS_GDRIVE_CLIENT_SECRET)")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	token, err := gdriveAuth.RunDeviceFlow(signalCtx, *clientId, *clientSecret, os.Stderr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Google Drive authorization failed: %v", err))
+		os.Exit(1)
+	}
+	tokenJson, err := gdriveAuth.FormatToken(token)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to serialize token: %v", err))
+		os.Exit(1)
+	}
+
+	fmt.Fprintln(os.Stderr, "Authorization successful. Store the following token JSON in the")
+	fmt.Fprintln(os.Stderr, "\"token\" field of your GoogleDrivePartStore configuration or in an")
+	fmt.Fprintln(os.Stderr, "environment variable referenced via {\"type\": \"EnvKey\", ...}:")
+	fmt.Println(tokenJson)
 }
 
 func tpmInfo() {
