@@ -98,3 +98,13 @@ This command performs trial key creations to detect:
 - Supported symmetric algorithms (AES) for `tpmSymmetricAlgorithm`
 
 Useful for verifying TPM compatibility before configuring the `TinkEncryptionPartStoreMiddleware` with TPM support.
+
+## `onedrive-auth`
+
+Runs the Microsoft device-code flow and prints the refreshable OAuth token needed by `OneDrivePartStore`.
+
+```sh
+pithos onedrive-auth -client-id <APPLICATION_CLIENT_ID> [-tenant-id consumers]
+```
+
+The tenant defaults to `consumers` for personal Microsoft accounts. See the [OneDrive setup guide](storage-backends.md#onedrive-part-store) for app-registration and permission steps.

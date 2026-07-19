@@ -8,7 +8,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 - **MetadataPartStorage**: Separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
-  - Configurable part stores (filesystem, SFTP, Google Drive)
+  - Configurable part stores (filesystem, SFTP, Google Drive, OneDrive)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
   - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
   - Emits [bucket event notifications](#bucket-event-notifications) by default, atomically with object mutations
@@ -420,6 +420,43 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 - Because Drive requires at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
 - Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
+
+### OneDrive Part Store
+
+Stores parts in a dedicated directory below OneDrive's private application folder. Pithos requests `Files.ReadWrite.AppFolder`, so it cannot read or change the user's other OneDrive files. Personal Microsoft accounts are supported by default; an organization can supply its tenant ID.
+
+```json
+{
+  "type": "OneDrivePartStore",
+  "clientId": "00000000-0000-0000-0000-000000000000",
+  "tenantId": "consumers",
+  "token": { "type": "EnvKey", "envKey": "PITHOS_ONEDRIVE_TOKEN" },
+  "folderName": "pithos-parts"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `clientId` | Microsoft Entra application (client) ID. |
+| `tenantId` | Optional tenant ID. Defaults to `consumers` for personal Microsoft accounts; use your directory tenant ID for an organizational account. |
+| `token` | OAuth token JSON printed by `pithos onedrive-auth`. It must contain a refresh token and may be inline, an `EnvKey`, or a `File` provider. |
+| `folderName` | Optional folder below the application's OneDrive folder (default `pithos-parts`). |
+
+#### Setup
+
+1. In the [Microsoft Entra admin center](https://entra.microsoft.com/), create an app registration. Select the account types you intend to support (for a personal OneDrive, include personal Microsoft accounts).
+2. Under **Authentication**, enable **Allow public client flows**. No client secret is needed because the authorization helper uses the device-code flow.
+3. Under **API permissions**, add the Microsoft Graph delegated permission `Files.ReadWrite.AppFolder`. The authorization request also includes `offline_access` so pithos receives a refresh token.
+4. Authorize the app once from any machine:
+
+   ```sh
+   pithos onedrive-auth -client-id <APPLICATION_CLIENT_ID>
+   ```
+
+   For an organizational account, also pass `-tenant-id <DIRECTORY_TENANT_ID>`. Open the displayed URL, enter the device code, and place the token JSON printed to stdout in the configuration.
+5. Start pithos. It creates its application folder and the configured part folder automatically.
+
+Access-token refresh and persistence through writable token providers are automatic. Multiple pithos instances may share the same folder: parts are addressed directly by their globally unique part IDs, and OneDrive atomically replaces the single item at that path, avoiding Google Drive's list-then-create duplicate-file race. The store supports seekable ranged reads and benefits from large multipart chunks, `OutboxPartStore`, and `CachePartStore` when latency matters. Uploads use Microsoft Graph upload sessions with sequential 10 MiB chunks, so parts are not constrained by the simple upload endpoint's 250 MB limit. Incoming streams are temporarily spooled to disk because Graph requires the total size in each chunk request.
 
 ### Post-Quantum Encryption
 

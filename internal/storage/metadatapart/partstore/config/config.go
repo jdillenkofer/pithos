@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/mlkem"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/erasurecoding"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive"
+	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
@@ -40,6 +43,7 @@ const (
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	googleDrivePartStoreType              = "GoogleDrivePartStore"
+	oneDrivePartStoreType                 = "OneDrivePartStore"
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 	cachePartStoreType                    = "CachePartStore"
@@ -418,6 +422,53 @@ type GoogleDrivePartStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type OneDrivePartStoreConfiguration struct {
+	ClientId   internalConfig.StringProvider `json:"clientId"`
+	TenantId   internalConfig.StringProvider `json:"tenantId,omitempty"`
+	Token      internalConfig.StringProvider `json:"token"`
+	FolderName internalConfig.StringProvider `json:"folderName,omitempty"`
+	Endpoint   internalConfig.StringProvider `json:"endpoint,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (o *OneDrivePartStoreConfiguration) RegisterReferences(dependencyinjection.DICollection) error {
+	return nil
+}
+func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	clientID := o.ClientId.Value()
+	if clientID == "" {
+		return nil, errors.New("clientId is required for OneDrivePartStore")
+	}
+	raw := o.Token.Value()
+	if raw == "" {
+		return nil, errors.New("token is required for OneDrivePartStore")
+	}
+	var token oauth2.Token
+	if err := json.Unmarshal([]byte(raw), &token); err != nil {
+		return nil, fmt.Errorf("invalid OneDrivePartStore token: %w", err)
+	}
+	if token.RefreshToken == "" {
+		return nil, errors.New("OneDrivePartStore token contains no refresh_token")
+	}
+	tenant := o.TenantId.Value()
+	if tenant == "" {
+		tenant = "consumers"
+	}
+	cfg := onedriveAuth.OAuthConfig(tenant, clientID)
+	source := onedrive.NewProactiveTokenSource(cfg, &token, 10*time.Minute, func(t *oauth2.Token) error {
+		b, e := json.Marshal(t)
+		if e != nil {
+			return e
+		}
+		return o.Token.WriteValue(string(b))
+	})
+	folder := o.FolderName.Value()
+	if folder == "" {
+		folder = "pithos-parts"
+	}
+	return onedrive.New(folder, o.Endpoint.Value(), oauth2.NewClient(context.Background(), source))
+}
+
 func (g *GoogleDrivePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	return nil
 }
@@ -663,6 +714,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SftpPartStoreConfiguration{}
 	case googleDrivePartStoreType:
 		bi = &GoogleDrivePartStoreConfiguration{}
+	case oneDrivePartStoreType:
+		bi = &OneDrivePartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
 	case erasureCodedPartStoreMiddlewareType:
