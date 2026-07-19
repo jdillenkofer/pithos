@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/mlkem"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	partStoreCache "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/cache"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/dropbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive"
 	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
@@ -40,6 +42,7 @@ const (
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	googleDrivePartStoreType              = "GoogleDrivePartStore"
+	dropboxPartStoreType                  = "DropboxPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 	cachePartStoreType                    = "CachePartStore"
@@ -418,6 +421,71 @@ type GoogleDrivePartStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type DropboxPartStoreConfiguration struct {
+	ClientId        internalConfig.StringProvider `json:"clientId"`
+	ClientSecret    internalConfig.StringProvider `json:"clientSecret"`
+	Token           internalConfig.StringProvider `json:"token"`
+	Root            internalConfig.StringProvider `json:"root,omitempty"`
+	APIEndpoint     internalConfig.StringProvider `json:"apiEndpoint,omitempty"`
+	ContentEndpoint internalConfig.StringProvider `json:"contentEndpoint,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (d *DropboxPartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
+func (d *DropboxPartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	clientId := d.ClientId.Value()
+	if clientId == "" {
+		return nil, errors.New("clientId is required for DropboxPartStore")
+	}
+	clientSecret := d.ClientSecret.Value()
+	if clientSecret == "" {
+		return nil, errors.New("clientSecret is required for DropboxPartStore")
+	}
+	var token oauth2.Token
+	if tokenJSON := d.Token.Value(); tokenJSON == "" {
+		return nil, errors.New("token is required for DropboxPartStore")
+	} else if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore token: %w", err)
+	}
+	if token.RefreshToken == "" {
+		return nil, errors.New("DropboxPartStore token contains no refresh_token")
+	}
+	apiEndpoint, contentEndpoint := d.APIEndpoint.Value(), d.ContentEndpoint.Value()
+	if err := dropbox.ValidateEndpoint(apiEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore apiEndpoint: %w", err)
+	}
+	if err := dropbox.ValidateEndpoint(contentEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore contentEndpoint: %w", err)
+	}
+	oauthConfig := &oauth2.Config{
+		ClientID:     clientId,
+		ClientSecret: clientSecret,
+		Endpoint:     oauth2.Endpoint{AuthURL: dropbox.OAuthEndpoint.AuthURL, TokenURL: dropbox.OAuthEndpoint.TokenURL},
+	}
+	tokenSource := gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
+		updated, err := json.Marshal(tok)
+		if err != nil {
+			return err
+		}
+		if err := d.Token.WriteValue(string(updated)); err != nil && !errors.Is(err, internalConfig.ErrStringProviderReadOnly) {
+			return err
+		}
+		return nil
+	})
+	root := d.Root.Value()
+	if root == "" {
+		root = "/pithos-parts"
+	}
+	return dropbox.New(root, dropbox.Options{
+		HTTPClient:      oauth2.NewClient(context.Background(), tokenSource),
+		APIEndpoint:     apiEndpoint,
+		ContentEndpoint: contentEndpoint,
+	})
+}
+
 func (g *GoogleDrivePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	return nil
 }
@@ -663,6 +731,8 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SftpPartStoreConfiguration{}
 	case googleDrivePartStoreType:
 		bi = &GoogleDrivePartStoreConfiguration{}
+	case dropboxPartStoreType:
+		bi = &DropboxPartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
 	case erasureCodedPartStoreMiddlewareType:

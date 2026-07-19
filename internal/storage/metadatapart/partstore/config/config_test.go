@@ -902,3 +902,32 @@ func TestGoogleDrivePartStoreRequiresRefreshToken(t *testing.T) {
 	assert.Nil(t, partStore)
 	assert.Contains(t, err.Error(), "no refresh_token")
 }
+
+const testDropboxToken = `{"access_token":"test-access","token_type":"Bearer","refresh_token":"test-refresh","expiry":"2020-01-01T00:00:00Z"}`
+
+func TestCanCreateDropboxPartStoreFromJson(t *testing.T) {
+	jsonData := fmt.Sprintf(`{
+		"type": "DropboxPartStore",
+		"clientId": "test-app-key",
+		"clientSecret": "test-app-secret",
+		"token": %s,
+		"root": "/pithos-parts-test"
+	}`, strconv.Quote(testDropboxToken))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NoError(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestDropboxPartStoreRequiresRefreshToken(t *testing.T) {
+	jsonData := `{
+		"type": "DropboxPartStore",
+		"clientId": "test-app-key",
+		"clientSecret": "test-app-secret",
+		"token": "{\"access_token\":\"test-access\",\"token_type\":\"Bearer\"}"
+	}`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.ErrorContains(t, err, "no refresh_token")
+	assert.Nil(t, partStore)
+}

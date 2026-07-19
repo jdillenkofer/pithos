@@ -8,7 +8,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 - **MetadataPartStorage**: Separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
-  - Configurable part stores (filesystem, SFTP, Google Drive)
+  - Configurable part stores (filesystem, SFTP, Google Drive, Dropbox)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
   - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
   - Emits [bucket event notifications](#bucket-event-notifications) by default, atomically with object mutations
@@ -418,6 +418,24 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 - Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity). When the token is backed by an environment variable or file, refreshed values are written back to that source so short restarts can reuse the latest token.
 - Uploads use a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit.
 - Because Drive requires at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
+
+### Dropbox Part Store
+
+Stores parts in a dedicated Dropbox folder. It supports transaction-free uploads, downloads, and deletes, and ranged reads reopen downloads with an HTTP `Range` request.
+
+```json
+{
+  "type": "DropboxPartStore",
+  "clientId": "your-dropbox-app-key",
+  "clientSecret": "your-dropbox-app-secret",
+  "token": { "type": "File", "path": "/path/to/dropbox-token.json" },
+  "root": "/pithos-parts"
+}
+```
+
+The token uses the standard OAuth token JSON shape and must include a `refresh_token`. Pithos refreshes access tokens automatically and writes refreshed token JSON back when the configured provider supports it (for example, `File` or `EnvKey`). Create a scoped Dropbox app with `files.content.read` and `files.content.write` permissions and obtain an offline refresh token for it. The optional `root` defaults to `/pithos-parts`.
+
+Dropbox's single-call upload endpoint limits an individual part to 150 MB, so configure the S3 client multipart chunk size below that limit. As with Google Drive, use a single Pithos writer for a given part folder unless writes are coordinated by an outbox.
 - Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 

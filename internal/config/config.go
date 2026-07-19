@@ -80,6 +80,8 @@ type StringProvider struct {
 	file   string `json:"-"`
 }
 
+var ErrStringProviderReadOnly = errors.New("string provider does not support writing back")
+
 func (s *StringProvider) Value() string {
 	return s.value
 }
@@ -99,7 +101,7 @@ func (s *StringProvider) WriteValue(value string) error {
 			return err
 		}
 	default:
-		return errors.New("string provider does not support writing back")
+		return ErrStringProviderReadOnly
 	}
 	s.value = value
 	return nil
