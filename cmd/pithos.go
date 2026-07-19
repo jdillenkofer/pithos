@@ -31,6 +31,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	gdriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
@@ -85,6 +86,7 @@ const subcommandValidateStorage = "validate-storage"
 const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
 const subcommandGdriveAuth = "gdrive-auth"
+const subcommandOnedriveAuth = "onedrive-auth"
 
 const readHeaderTimeout = 10 * time.Second
 const monitoringReadTimeout = 30 * time.Second
@@ -96,7 +98,7 @@ const gracefulShutdownTimeout = 30 * time.Second
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth))
 		os.Exit(1)
 	}
 
@@ -121,8 +123,10 @@ func main() {
 		tpmInfo()
 	case subcommandGdriveAuth:
 		gdriveAuthFlow(ctx)
+	case subcommandOnedriveAuth:
+		onedriveAuthFlow(ctx)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth))
 		os.Exit(1)
 	}
 }
@@ -743,6 +747,32 @@ func gdriveAuthFlow(ctx context.Context) {
 	fmt.Fprintln(os.Stderr, "\"token\" field of your GoogleDrivePartStore configuration or in an")
 	fmt.Fprintln(os.Stderr, "environment variable referenced via {\"type\": \"EnvKey\", ...}:")
 	fmt.Println(tokenJson)
+}
+
+func onedriveAuthFlow(ctx context.Context) {
+	fs := flag.NewFlagSet(subcommandOnedriveAuth, flag.ExitOnError)
+	clientID := fs.String("client-id", os.Getenv("PITHOS_ONEDRIVE_CLIENT_ID"), "Microsoft application (client) id, defaults to $PITHOS_ONEDRIVE_CLIENT_ID")
+	tenantID := fs.String("tenant-id", "consumers", "tenant id; use consumers for personal Microsoft accounts")
+	fs.Parse(os.Args[2:])
+	if *clientID == "" {
+		slog.Error("-client-id is required (or set PITHOS_ONEDRIVE_CLIENT_ID)")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	token, err := onedriveAuth.RunDeviceFlow(signalCtx, *tenantID, *clientID, os.Stderr)
+	if err != nil {
+		slog.Error(fmt.Sprintf("OneDrive authorization failed: %v", err))
+		os.Exit(1)
+	}
+	raw, err := onedriveAuth.FormatToken(token)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to serialize token: %v", err))
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "Authorization successful. Store this token JSON in the OneDrivePartStore token field:")
+	fmt.Println(raw)
 }
 
 func tpmInfo() {
