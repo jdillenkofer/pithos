@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.33
 	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.47.1
-	github.com/aws/aws-sdk-go-v2/service/lambda v1.98.0
+	github.com/aws/aws-sdk-go-v2/service/lambda v1.99.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.1
 	github.com/aws/aws-sdk-go-v2/service/sns v1.41.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.45.1
