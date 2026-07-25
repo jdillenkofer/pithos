@@ -271,6 +271,32 @@ func TestOneDriveTokenPersistenceFailureDoesNotFailRefresh(t *testing.T) {
 	assert.Equal(t, "fresh-access", token.AccessToken)
 }
 
+func TestOneDriveTokenSourceBoundsRefreshDuration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	cfg := &oauth2.Config{
+		ClientID: "client-id",
+		Endpoint: oauth2.Endpoint{TokenURL: server.URL},
+	}
+	source := newProactiveTokenSource(cfg, &oauth2.Token{
+		AccessToken:  "expired-access",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().Add(-time.Minute),
+	}, time.Minute, nil, 20*time.Millisecond)
+
+	startedAt := time.Now()
+	_, err := source.Token()
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(startedAt), time.Second)
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

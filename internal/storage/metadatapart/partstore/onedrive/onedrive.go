@@ -30,6 +30,7 @@ import (
 const Scope = "Files.ReadWrite.AppFolder"
 const defaultEndpoint = "https://graph.microsoft.com/v1.0"
 const uploadChunkSize = 10 * 1024 * 1024 // 32 * 320 KiB, as required by Graph.
+const defaultTokenRefreshTimeout = 15 * time.Second
 
 type store struct {
 	*lifecycle.ValidatedLifecycle
@@ -553,15 +554,20 @@ func graphError(resp *http.Response) error {
 
 // NewProactiveTokenSource refreshes Microsoft OAuth tokens before expiry.
 func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, window time.Duration, persist func(*oauth2.Token) error) oauth2.TokenSource {
-	return &tokenSource{cfg: cfg, token: token, window: window, persist: persist}
+	return newProactiveTokenSource(cfg, token, window, persist, defaultTokenRefreshTimeout)
+}
+
+func newProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, window time.Duration, persist func(*oauth2.Token) error, refreshTimeout time.Duration) oauth2.TokenSource {
+	return &tokenSource{cfg: cfg, token: token, window: window, refreshTimeout: refreshTimeout, persist: persist}
 }
 
 type tokenSource struct {
-	cfg     *oauth2.Config
-	token   *oauth2.Token
-	window  time.Duration
-	persist func(*oauth2.Token) error
-	mu      sync.Mutex
+	cfg            *oauth2.Config
+	token          *oauth2.Token
+	window         time.Duration
+	refreshTimeout time.Duration
+	persist        func(*oauth2.Token) error
+	mu             sync.Mutex
 }
 
 func (s *tokenSource) Token() (*oauth2.Token, error) {
@@ -576,7 +582,9 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 	t := *s.token
 	t.AccessToken = ""
 	t.Expiry = time.Now().Add(-time.Minute)
-	fresh, e := s.cfg.TokenSource(context.Background(), &t).Token()
+	refreshCtx, cancel := context.WithTimeout(context.Background(), s.refreshTimeout)
+	defer cancel()
+	fresh, e := s.cfg.TokenSource(refreshCtx, &t).Token()
 	if e != nil {
 		return nil, e
 	}

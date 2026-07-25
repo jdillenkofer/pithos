@@ -25,6 +25,7 @@ import (
 )
 
 const maxDriveRetries = 5
+const defaultTokenRefreshTimeout = 15 * time.Second
 
 const folderMimeType = "application/vnd.google-apps.folder"
 
@@ -88,18 +89,23 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 // it is requested. Refreshing on demand avoids a background goroutine whose
 // lifetime cannot be tied to the Drive client's lifecycle.
 func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration, persist func(*oauth2.Token) error) oauth2.TokenSource {
+	return newProactiveTokenSource(cfg, token, refreshWindow, persist, defaultTokenRefreshTimeout)
+}
+
+func newProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration, persist func(*oauth2.Token) error, refreshTimeout time.Duration) oauth2.TokenSource {
 	if cfg == nil || token == nil || token.RefreshToken == "" {
 		return oauth2.StaticTokenSource(token)
 	}
-	return &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow, persist: persist}
+	return &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow, refreshTimeout: refreshTimeout, persist: persist}
 }
 
 type proactiveTokenSource struct {
-	cfg           *oauth2.Config
-	token         *oauth2.Token
-	refreshWindow time.Duration
-	persist       func(*oauth2.Token) error
-	mu            sync.Mutex
+	cfg            *oauth2.Config
+	token          *oauth2.Token
+	refreshWindow  time.Duration
+	refreshTimeout time.Duration
+	persist        func(*oauth2.Token) error
+	mu             sync.Mutex
 }
 
 func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
@@ -118,7 +124,9 @@ func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
 	refreshCandidate := *s.token
 	refreshCandidate.AccessToken = ""
 	refreshCandidate.Expiry = time.Now().Add(-time.Minute)
-	refreshed, err := s.cfg.TokenSource(context.Background(), &refreshCandidate).Token()
+	refreshCtx, cancel := context.WithTimeout(context.Background(), s.refreshTimeout)
+	defer cancel()
+	refreshed, err := s.cfg.TokenSource(refreshCtx, &refreshCandidate).Token()
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package gdrive
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -130,4 +131,32 @@ func TestProactiveTokenSourceDoesNotRefreshInBackground(t *testing.T) {
 	_, err := source.Token()
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestProactiveTokenSourceBoundsRefreshDuration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+
+	cfg := &oauth2.Config{
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		Endpoint:     oauth2.Endpoint{TokenURL: server.URL},
+	}
+	initialToken := &oauth2.Token{
+		AccessToken:  "expired-access",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().Add(-time.Minute),
+	}
+
+	source := newProactiveTokenSource(cfg, initialToken, time.Minute, nil, 20*time.Millisecond)
+	startedAt := time.Now()
+	_, err := source.Token()
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(startedAt), time.Second)
 }
