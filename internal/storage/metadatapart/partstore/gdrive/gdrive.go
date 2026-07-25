@@ -149,11 +149,39 @@ func (s *gdrivePartStore) ensureFolder(ctx context.Context) error {
 		s.folderId = fileList.Files[0].Id
 		return nil
 	}
-	folder, err := doRetriableOperation(ctx, func() (*drive.File, error) {
-		return s.svc.Files.Create(&drive.File{Name: s.folderName, MimeType: folderMimeType}).Fields("id").Context(ctx).Do()
+
+	generated, err := doRetriableOperation(ctx, func() (*drive.GeneratedIds, error) {
+		return s.svc.Files.GenerateIds().Count(1).Space("drive").Fields("ids").Context(ctx).Do()
 	}, nil)
 	if err != nil {
 		return err
+	}
+	if len(generated.Ids) != 1 || generated.Ids[0] == "" {
+		return errors.New("Google Drive returned no generated folder id")
+	}
+	folderID := generated.Ids[0]
+	folder, err := doRetriableOperation(ctx, func() (*drive.File, error) {
+		return s.svc.Files.Create(&drive.File{
+			Id:       folderID,
+			Name:     s.folderName,
+			MimeType: folderMimeType,
+		}).Fields("id").Context(ctx).Do()
+	}, nil)
+	if err != nil {
+		// The create response can be lost after Drive committed the folder. A
+		// retry with the same pre-generated ID then returns 409. Verify that
+		// exact ID before treating the operation as failed.
+		existing, lookupErr := doRetriableOperation(ctx, func() (*drive.File, error) {
+			return s.svc.Files.Get(folderID).Fields("id,name,mimeType,trashed").Context(ctx).Do()
+		}, nil)
+		if lookupErr != nil {
+			return err
+		}
+		if existing == nil || existing.Id != folderID || existing.Name != s.folderName || existing.MimeType != folderMimeType || existing.Trashed {
+			return fmt.Errorf("Google Drive folder create failed and generated id %q belongs to an unexpected item: %w", folderID, err)
+		}
+		s.folderId = folderID
+		return nil
 	}
 	s.folderId = folder.Id
 	return nil

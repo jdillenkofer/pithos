@@ -100,6 +100,23 @@ func TestGoogleDrivePartStorePutPartAndDeletePartWorkWithoutTx(t *testing.T) {
 	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
 }
 
+func TestGoogleDrivePartStoreReconcilesAmbiguousFolderCreate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	fakeServer.failNextFolderCreateAfterCommitOnce()
+	store := newTestStore(t, fakeServer)
+
+	assert.NoError(t, store.Start(context.Background()))
+	t.Cleanup(func() {
+		assert.NoError(t, store.Stop(context.Background()))
+	})
+
+	assert.NotEmpty(t, store.(*gdrivePartStore).folderId)
+	assert.Equal(t, 1, fakeServer.fileCount())
+}
+
 func TestGoogleDrivePartStoreDisablesSDKUploadRetries(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

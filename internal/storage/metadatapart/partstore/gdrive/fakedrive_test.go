@@ -25,6 +25,7 @@ type fakeDriveServer struct {
 	nextId                    int
 	maxPageSize               int
 	failNextUploadAfterCommit bool
+	failNextFolderAfterCommit bool
 	server                    *httptest.Server
 }
 
@@ -44,6 +45,7 @@ func newFakeDriveServer() *fakeDriveServer {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /files", f.handleList)
+	mux.HandleFunc("GET /files/generateIds", f.handleGenerateIds)
 	mux.HandleFunc("POST /files", f.handleCreateMetadata)
 	mux.HandleFunc("POST /upload/drive/v3/files", f.handleUpload)
 	mux.HandleFunc("PATCH /upload/drive/v3/files/{id}", f.handleUploadUpdate)
@@ -70,8 +72,14 @@ func (f *fakeDriveServer) addFile(name string, mimeType string, parents []string
 }
 
 func (f *fakeDriveServer) insertLocked(name string, mimeType string, parents []string, content []byte) string {
-	f.nextId++
-	id := fmt.Sprintf("file-%d", f.nextId)
+	return f.insertLockedWithID("", name, mimeType, parents, content)
+}
+
+func (f *fakeDriveServer) insertLockedWithID(id, name string, mimeType string, parents []string, content []byte) string {
+	if id == "" {
+		f.nextId++
+		id = fmt.Sprintf("file-%d", f.nextId)
+	}
 	f.files[id] = &fakeDriveFile{
 		Id:       id,
 		Name:     name,
@@ -99,6 +107,12 @@ func (f *fakeDriveServer) failNextUploadAfterCommitOnce() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failNextUploadAfterCommit = true
+}
+
+func (f *fakeDriveServer) failNextFolderCreateAfterCommitOnce() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failNextFolderAfterCommit = true
 }
 
 func writeJson(w http.ResponseWriter, status int, v any) {
@@ -244,6 +258,14 @@ func (f *fakeDriveServer) handleList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (f *fakeDriveServer) handleGenerateIds(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.nextId++
+	id := fmt.Sprintf("file-%d", f.nextId)
+	f.mu.Unlock()
+	writeJson(w, http.StatusOK, map[string]any{"ids": []string{id}, "space": "drive"})
+}
+
 func (f *fakeDriveServer) handleCreateMetadata(w http.ResponseWriter, r *http.Request) {
 	var metadata fakeDriveFileMetadata
 	if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
@@ -251,9 +273,24 @@ func (f *fakeDriveServer) handleCreateMetadata(w http.ResponseWriter, r *http.Re
 		return
 	}
 	f.mu.Lock()
-	id := f.insertLocked(metadata.Name, metadata.MimeType, metadata.Parents, nil)
+	if metadata.Id != "" {
+		if _, exists := f.files[metadata.Id]; exists {
+			f.mu.Unlock()
+			writeApiError(w, http.StatusConflict, "File ID already exists")
+			return
+		}
+	}
+	id := f.insertLockedWithID(metadata.Id, metadata.Name, metadata.MimeType, metadata.Parents, nil)
 	file := f.files[id]
+	failAfterCommit := metadata.MimeType == folderMimeType && f.failNextFolderAfterCommit
+	if failAfterCommit {
+		f.failNextFolderAfterCommit = false
+	}
 	f.mu.Unlock()
+	if failAfterCommit {
+		writeApiError(w, http.StatusInternalServerError, "injected failure after folder commit")
+		return
+	}
 	writeJson(w, http.StatusOK, fileResource(file))
 }
 
@@ -277,6 +314,7 @@ func (f *fakeDriveServer) handleUploadUpdate(w http.ResponseWriter, r *http.Requ
 }
 
 type fakeDriveFileMetadata struct {
+	Id       string   `json:"id"`
 	Name     string   `json:"name"`
 	MimeType string   `json:"mimeType"`
 	Parents  []string `json:"parents"`
