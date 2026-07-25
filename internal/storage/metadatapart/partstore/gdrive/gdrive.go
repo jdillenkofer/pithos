@@ -267,11 +267,19 @@ func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io
 	// with a fresh reader; the name lookup above then updates an upload whose
 	// successful Create response may have been lost.
 	if fileId != "" {
-		if _, err = s.svc.Files.Update(fileId, &drive.File{}).Media(reader).Fields("id").Context(ctx).Do(); err != nil {
+		if _, err = s.svc.Files.Update(fileId, &drive.File{}).
+			Media(reader, googleapi.ChunkSize(0)).
+			Fields("id").
+			Context(ctx).
+			Do(); err != nil {
 			return "", err
 		}
 	} else {
-		file, createErr := s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).Media(reader).Fields("id").Context(ctx).Do()
+		file, createErr := s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).
+			Media(reader, googleapi.ChunkSize(0)).
+			Fields("id").
+			Context(ctx).
+			Do()
 		if createErr != nil {
 			return "", createErr
 		}

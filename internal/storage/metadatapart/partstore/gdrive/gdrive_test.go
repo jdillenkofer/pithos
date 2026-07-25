@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -97,6 +98,24 @@ func TestGoogleDrivePartStorePutPartAndDeletePartWorkWithoutTx(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = readPart(t, store, *partId)
 	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+}
+
+func TestGoogleDrivePartStoreDisablesSDKUploadRetries(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+	content := io.LimitReader(
+		ioutils.NewRepeatingReader([]byte("x")),
+		int64(googleapi.DefaultUploadChunkSize+1),
+	)
+
+	// The fake only accepts a single multipart upload. Without ChunkSize(0),
+	// the SDK turns this payload into a resumable upload with chunk retries.
+	assert.NoError(t, store.PutPart(context.Background(), nil, *partId, content))
 }
 
 func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {

@@ -153,6 +153,30 @@ func TestOneDrivePartStoreCanRetryStartAfterFailure(t *testing.T) {
 	require.NoError(t, ps.Stop(context.Background()))
 }
 
+func TestOneDrivePartStoreDoesNotRetryDataUpload(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	uploadRequests := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		if r.Method == http.MethodPost {
+			writeJSON(recorder, http.StatusOK, map[string]any{"uploadUrl": "http://graph.test/upload"})
+		} else {
+			uploadRequests++
+			http.Error(recorder, "temporary failure", http.StatusServiceUnavailable)
+		}
+		return recorder.Result(), nil
+	})}
+	ps, err := New("pithos-parts", "http://graph.test", client)
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	err = ps.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+
+	require.Error(t, err)
+	assert.Equal(t, 1, uploadRequests)
+}
+
 func TestOneDriveTokenPersistenceFailureDoesNotFailRefresh(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

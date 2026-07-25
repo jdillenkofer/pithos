@@ -128,6 +128,26 @@ func TestDropboxPartStoreSupportsTxFreeOperations(t *testing.T) {
 	require.True(t, partstore.SupportsTxFreeDeletePart(store))
 }
 
+func TestDropboxPartStoreDoesNotRetryDataUpload(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	uploadRequests := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		uploadRequests++
+		recorder := httptest.NewRecorder()
+		http.Error(recorder, "temporary failure", http.StatusServiceUnavailable)
+		return recorder.Result(), nil
+	})}
+	store, err := New("/parts", Options{HTTPClient: client})
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	err = store.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+
+	require.Error(t, err)
+	require.Equal(t, 1, uploadRequests)
+}
+
 func TestDropboxPartStoreCanRetryStartAfterFailure(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	requests := 0

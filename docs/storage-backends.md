@@ -376,6 +376,12 @@ Filesystem, SFTP, and Google Drive part stores can serve object bytes without ho
 
 > **Note:** Parts larger than `maxPartSizeBytes` are read/written through the inner store and marked as oversized to avoid repeated cache write attempts.
 
+> **Cloud upload reliability:** Google Drive, Dropbox, and OneDrive perform each
+> part data upload once. Wrap these stores in `OutboxPartStore` in production so
+> a failed upload is retried durably with a fresh reader. The cloud stores still
+> retry bounded, replayable control-plane requests such as listings and folder
+> setup.
+
 ### Google Drive Part Store
 
 Stores parts as files in a dedicated folder of a personal Google Drive. Pithos authenticates as a regular Google account via OAuth; access tokens are refreshed automatically from the stored refresh token, including on startup when the current access token is already expired or missing its expiry information. This keeps Drive access working while the process stays up, without requiring a full re-authentication flow.

@@ -171,7 +171,11 @@ func (s *store) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, offset+chunkSize-1, size))
-		resp, err := doWithClient(uploadClient, req)
+		// Do not retry data uploads here. A response can be lost after Graph has
+		// accepted the chunk, so replaying the same range is ambiguous. The
+		// OutboxPartStore retries the complete, idempotent PutPart with a fresh
+		// reader and upload session.
+		resp, err := uploadClient.Do(req)
 		if err != nil {
 			return err
 		}
@@ -212,34 +216,6 @@ func unauthenticatedClient(client *http.Client) *http.Client {
 	return &copy
 }
 
-func doWithClient(client *http.Client, req *http.Request) (*http.Response, error) {
-	for attempt := 0; ; attempt++ {
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		if (resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500) || attempt == 4 {
-			return resp, nil
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		req.Body, err = req.GetBody()
-		if err != nil {
-			return nil, err
-		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
-		if value := resp.Header.Get("Retry-After"); value != "" {
-			if seconds, err := strconv.Atoi(value); err == nil {
-				delay = time.Duration(seconds) * time.Second
-			}
-		}
-		select {
-		case <-req.Context().Done():
-			return nil, req.Context().Err()
-		case <-time.After(delay):
-		}
-	}
-}
 func (s *store) SupportsTxFreePutPart() bool { return true }
 
 func (s *store) GetPart(ctx context.Context, tx database.Tx, id partstore.PartId) (io.ReadCloser, error) {
