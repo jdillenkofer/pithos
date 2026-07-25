@@ -20,10 +20,12 @@ import (
 // query language, files.create (metadata-only and multipart media upload),
 // files.get (metadata and alt=media), files.update (rename) and files.delete.
 type fakeDriveServer struct {
-	mu     sync.Mutex
-	files  map[string]*fakeDriveFile
-	nextId int
-	server *httptest.Server
+	mu                        sync.Mutex
+	files                     map[string]*fakeDriveFile
+	nextId                    int
+	maxPageSize               int
+	failNextUploadAfterCommit bool
+	server                    *httptest.Server
 }
 
 type fakeDriveFile struct {
@@ -85,6 +87,18 @@ func (f *fakeDriveServer) fileCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.files)
+}
+
+func (f *fakeDriveServer) setMaxPageSize(maxPageSize int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.maxPageSize = maxPageSize
+}
+
+func (f *fakeDriveServer) failNextUploadAfterCommitOnce() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failNextUploadAfterCommit = true
 }
 
 func writeJson(w http.ResponseWriter, status int, v any) {
@@ -185,6 +199,7 @@ func (f *fakeDriveServer) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		matches = append(matches, file)
 	}
+	maxPageSize := f.maxPageSize
 	f.mu.Unlock()
 
 	orderBy := r.URL.Query().Get("orderBy")
@@ -194,12 +209,30 @@ func (f *fakeDriveServer) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		return matches[i].Seq < matches[j].Seq
 	})
+	pageSize := len(matches)
 	if pageSizeStr := r.URL.Query().Get("pageSize"); pageSizeStr != "" {
-		pageSize, err := strconv.Atoi(pageSizeStr)
-		if err == nil && len(matches) > pageSize {
-			matches = matches[:pageSize]
+		if requestedPageSize, err := strconv.Atoi(pageSizeStr); err == nil {
+			pageSize = requestedPageSize
 		}
 	}
+	if maxPageSize > 0 && pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	start := 0
+	if pageToken := r.URL.Query().Get("pageToken"); pageToken != "" {
+		if parsedStart, err := strconv.Atoi(pageToken); err == nil {
+			start = parsedStart
+		}
+	}
+	if start > len(matches) {
+		start = len(matches)
+	}
+	end := min(start+pageSize, len(matches))
+	nextPageToken := ""
+	if end < len(matches) {
+		nextPageToken = strconv.Itoa(end)
+	}
+	matches = matches[start:end]
 
 	fileResources := []map[string]any{}
 	for _, file := range matches {
@@ -207,7 +240,7 @@ func (f *fakeDriveServer) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJson(w, http.StatusOK, map[string]any{
 		"files":         fileResources,
-		"nextPageToken": "",
+		"nextPageToken": nextPageToken,
 	})
 }
 
@@ -290,7 +323,13 @@ func (f *fakeDriveServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	id := f.insertLocked(metadata.Name, metadata.MimeType, metadata.Parents, content)
 	file := f.files[id]
+	failAfterCommit := f.failNextUploadAfterCommit
+	f.failNextUploadAfterCommit = false
 	f.mu.Unlock()
+	if failAfterCommit {
+		writeApiError(w, http.StatusInternalServerError, "injected failure after upload commit")
+		return
+	}
 	writeJson(w, http.StatusOK, fileResource(file))
 }
 

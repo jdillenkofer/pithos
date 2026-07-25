@@ -244,6 +244,52 @@ func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
 	assert.Equal(t, 2, fakeServer.fileCount())
 }
 
+func TestGoogleDrivePartStoreDoesNotRetryAmbiguousUpload(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+
+	// Drive commits the file but returns a transient error. PutPart must not
+	// replay the already-consumed reader internally.
+	fakeServer.failNextUploadAfterCommitOnce()
+	err = store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("first attempt")))
+	assert.Error(t, err)
+	assert.Equal(t, 2, fakeServer.fileCount())
+
+	// A caller/outbox retry supplies a fresh reader and updates the committed
+	// file instead of creating a duplicate.
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
+	content, err := readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("second attempt"), content)
+	assert.Equal(t, 2, fakeServer.fileCount())
+}
+
+func TestGoogleDrivePartStoreDeletePartFindsDuplicatesAcrossPages(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+	fakeServer.setMaxPageSize(2)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+	partName := store.(*gdrivePartStore).getPartName(*partId)
+	folderId := store.(*gdrivePartStore).folderId
+	for range 5 {
+		fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("duplicate"))
+	}
+
+	assert.Nil(t, store.DeletePart(context.Background(), nil, *partId))
+	assert.Equal(t, 1, fakeServer.fileCount())
+}
+
 // Ranged object reads skip into the middle of a part via Seek; the store must
 // serve that with an HTTP Range request instead of downloading the part head.
 func TestGoogleDrivePartStoreReaderSeeks(t *testing.T) {

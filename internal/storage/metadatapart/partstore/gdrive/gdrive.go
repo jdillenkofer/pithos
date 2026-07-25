@@ -84,17 +84,14 @@ func (s *gdrivePartStore) Start(ctx context.Context) error {
 	return nil
 }
 
-// NewProactiveTokenSource wraps an OAuth token with background refresh so the
-// Google Drive client keeps a fresh access token while the process is running.
+// NewProactiveTokenSource wraps an OAuth token and refreshes it early whenever
+// it is requested. Refreshing on demand avoids a background goroutine whose
+// lifetime cannot be tied to the Drive client's lifecycle.
 func NewProactiveTokenSource(cfg *oauth2.Config, token *oauth2.Token, refreshWindow time.Duration, persist func(*oauth2.Token) error) oauth2.TokenSource {
 	if cfg == nil || token == nil || token.RefreshToken == "" {
 		return oauth2.StaticTokenSource(token)
 	}
-	source := &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow, persist: persist}
-	if refreshWindow > 0 {
-		go source.run()
-	}
-	return source
+	return &proactiveTokenSource{cfg: cfg, token: token, refreshWindow: refreshWindow, persist: persist}
 }
 
 type proactiveTokenSource struct {
@@ -128,23 +125,13 @@ func (s *proactiveTokenSource) Token() (*oauth2.Token, error) {
 	s.token = refreshed
 	if s.persist != nil {
 		if err := s.persist(s.token); err != nil {
-			return nil, err
+			// Persisting a refreshed token is best-effort. In particular, inline
+			// token providers cannot be written back; that must not make an
+			// otherwise successful OAuth refresh fail the Drive request.
+			slog.Warn("Could not persist refreshed Google Drive token", "err", err)
 		}
 	}
 	return s.token, nil
-}
-
-func (s *proactiveTokenSource) run() {
-	if s.refreshWindow <= 0 {
-		return
-	}
-	ticker := time.NewTicker(s.refreshWindow / 2)
-	defer ticker.Stop()
-	for range ticker.C {
-		if _, err := s.Token(); err != nil {
-			slog.Warn("Google Drive token refresh failed", "err", err)
-		}
-	}
 }
 
 // ensureFolder finds or creates the part folder. Under the drive.file scope
@@ -209,15 +196,28 @@ func escapeQueryValue(value string) string {
 // place, so reads only need any matching file id.
 func (s *gdrivePartStore) findFileIdsByName(ctx context.Context, name string) ([]string, error) {
 	query := fmt.Sprintf("name = '%s' and '%s' in parents and trashed = false", escapeQueryValue(name), s.folderId)
-	fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
-		return s.svc.Files.List().Q(query).Fields("files(id)").Context(ctx).Do()
-	}, nil)
-	if err != nil {
-		return nil, err
-	}
-	fileIds := make([]string, 0, len(fileList.Files))
-	for _, file := range fileList.Files {
-		fileIds = append(fileIds, file.Id)
+	fileIds := []string{}
+	pageToken := ""
+	for {
+		fileList, err := doRetriableOperation(ctx, func() (*drive.FileList, error) {
+			return s.svc.Files.List().
+				Q(query).
+				Fields("nextPageToken, files(id)").
+				PageSize(1000).
+				PageToken(pageToken).
+				Context(ctx).
+				Do()
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range fileList.Files {
+			fileIds = append(fileIds, file.Id)
+		}
+		pageToken = fileList.NextPageToken
+		if pageToken == "" {
+			break
+		}
 	}
 	return fileIds, nil
 }
@@ -253,27 +253,50 @@ func (s *gdrivePartStore) deleteAllFilesByName(ctx context.Context, name string)
 }
 
 func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io.Reader) (fileId string, err error) {
-	fileId, err = s.findFileIdByName(ctx, name)
+	fileIds, err := s.findFileIdsByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	if fileId != "" {
-		_, err = doRetriableOperation(ctx, func() (*drive.File, error) {
-			return s.svc.Files.Update(fileId, &drive.File{}).Media(reader).Fields("id").Context(ctx).Do()
-		}, nil)
-		if err != nil {
-			return "", err
-		}
-		return fileId, nil
+	if len(fileIds) > 0 {
+		fileId = fileIds[0]
 	}
 
-	file, err := doRetriableOperation(ctx, func() (*drive.File, error) {
-		return s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).Media(reader).Fields("id").Context(ctx).Do()
-	}, nil)
+	// Media uploads are deliberately not wrapped in doRetriableOperation:
+	// PutPart accepts an arbitrary io.Reader, which cannot safely be replayed
+	// after a partially consumed request. The caller/outbox can retry PutPart
+	// with a fresh reader; the name lookup above then updates an upload whose
+	// successful Create response may have been lost.
+	if fileId != "" {
+		if _, err = s.svc.Files.Update(fileId, &drive.File{}).Media(reader).Fields("id").Context(ctx).Do(); err != nil {
+			return "", err
+		}
+	} else {
+		file, createErr := s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).Media(reader).Fields("id").Context(ctx).Do()
+		if createErr != nil {
+			return "", createErr
+		}
+		fileId = file.Id
+	}
+
+	// Clean up any duplicates left by an ambiguous create response or an
+	// earlier multi-instance race. Otherwise a later lookup could read stale
+	// content from an arbitrary duplicate.
+	fileIds, err = s.findFileIdsByName(ctx, name)
 	if err != nil {
 		return "", err
 	}
-	return file.Id, nil
+	var deleteErrs []error
+	for _, duplicateId := range fileIds {
+		if duplicateId != fileId {
+			if deleteErr := s.deleteFile(ctx, duplicateId); deleteErr != nil {
+				deleteErrs = append(deleteErrs, deleteErr)
+			}
+		}
+	}
+	if err := errors.Join(deleteErrs...); err != nil {
+		return "", err
+	}
+	return fileId, nil
 }
 
 // deleteFile permanently deletes a file (bypassing the trash). Deleting an

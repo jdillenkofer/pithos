@@ -452,10 +452,9 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{gdrive.Scope},
 	}
-	// The token source transparently exchanges the refresh token for new
-	// access tokens before expiry, so the Drive client stays usable even while
-	// the process is idle. When the token came from an env var, the refreshed
-	// value is written back to that env var so short restarts keep working.
+	// The token source transparently exchanges the refresh token for a new
+	// access token before each request that falls within the refresh window.
+	// Writable providers persist the refreshed value for subsequent restarts.
 	clientOptions := []option.ClientOption{
 		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
 			if tok == nil {
