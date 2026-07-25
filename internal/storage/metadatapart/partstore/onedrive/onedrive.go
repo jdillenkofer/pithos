@@ -179,16 +179,72 @@ func (s *store) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId
 		if err != nil {
 			return err
 		}
-		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-			err = graphError(resp)
-			resp.Body.Close()
+		err = validateUploadResponse(resp, offset+chunkSize, size)
+		resp.Body.Close()
+		if err != nil {
 			return err
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
 		offset += chunkSize
 	}
 	return nil
+}
+
+func validateUploadResponse(resp *http.Response, nextOffset, totalSize int64) error {
+	finalChunk := nextOffset == totalSize
+	if finalChunk {
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			_, err := io.Copy(io.Discard, resp.Body)
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return graphError(resp)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("Microsoft Graph returned HTTP %d for the final upload chunk; expected 200 or 201", resp.StatusCode)
+	}
+
+	if resp.StatusCode != http.StatusAccepted {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return graphError(resp)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("Microsoft Graph returned HTTP %d for an intermediate upload chunk; expected 202", resp.StatusCode)
+	}
+	var progress struct {
+		NextExpectedRanges []string `json:"nextExpectedRanges"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&progress); err != nil {
+		return fmt.Errorf("decode Microsoft Graph upload progress: %w", err)
+	}
+	expectedOffset, err := firstExpectedOffset(progress.NextExpectedRanges)
+	if err != nil {
+		return err
+	}
+	if expectedOffset != nextOffset {
+		return fmt.Errorf("Microsoft Graph expects upload offset %d, expected %d", expectedOffset, nextOffset)
+	}
+	return nil
+}
+
+func firstExpectedOffset(ranges []string) (int64, error) {
+	if len(ranges) == 0 {
+		return 0, errors.New("Microsoft Graph returned no nextExpectedRanges")
+	}
+	var first int64
+	for index, value := range ranges {
+		start, _, ok := strings.Cut(value, "-")
+		if !ok {
+			return 0, fmt.Errorf("Microsoft Graph returned invalid nextExpectedRange %q", value)
+		}
+		offset, err := strconv.ParseInt(start, 10, 64)
+		if err != nil || offset < 0 {
+			return 0, fmt.Errorf("Microsoft Graph returned invalid nextExpectedRange %q", value)
+		}
+		if index == 0 || offset < first {
+			first = offset
+		}
+	}
+	return first, nil
 }
 
 func (s *store) putEmptyPart(ctx context.Context, id partstore.PartId) error {

@@ -194,6 +194,55 @@ func TestOneDrivePartStoreDoesNotRetryDataUpload(t *testing.T) {
 	assert.Equal(t, 1, uploadRequests)
 }
 
+func TestOneDrivePartStoreRejectsAcceptedFinalChunk(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		if r.Method == http.MethodPost {
+			writeJSON(recorder, http.StatusOK, map[string]any{"uploadUrl": "http://graph.test/upload"})
+		} else {
+			writeJSON(recorder, http.StatusAccepted, map[string]any{"nextExpectedRanges": []string{"7-"}})
+		}
+		return recorder.Result(), nil
+	})}
+	ps, err := New("pithos-parts", "http://graph.test", client)
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	err = ps.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+
+	require.ErrorContains(t, err, "final upload chunk")
+}
+
+func TestOneDrivePartStoreValidatesNextExpectedRange(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	uploadRequests := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		if r.Method == http.MethodPost {
+			writeJSON(recorder, http.StatusOK, map[string]any{"uploadUrl": "http://graph.test/upload"})
+		} else {
+			uploadRequests++
+			writeJSON(recorder, http.StatusAccepted, map[string]any{"nextExpectedRanges": []string{"0-"}})
+		}
+		return recorder.Result(), nil
+	})}
+	ps, err := New("pithos-parts", "http://graph.test", client)
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := io.LimitReader(
+		strings.NewReader(strings.Repeat("x", uploadChunkSize)+"."),
+		uploadChunkSize+1,
+	)
+
+	err = ps.PutPart(context.Background(), nil, *id, content)
+
+	require.ErrorContains(t, err, "expects upload offset 0")
+	assert.Equal(t, 1, uploadRequests)
+}
+
 func TestOneDriveTokenPersistenceFailureDoesNotFailRefresh(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
