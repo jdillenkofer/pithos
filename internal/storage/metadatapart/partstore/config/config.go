@@ -455,13 +455,17 @@ func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvi
 		tenant = "consumers"
 	}
 	cfg := onedriveAuth.OAuthConfig(tenant, clientID)
-	source := onedrive.NewProactiveTokenSource(cfg, &token, 10*time.Minute, func(t *oauth2.Token) error {
-		b, e := json.Marshal(t)
-		if e != nil {
-			return e
+	var persist func(*oauth2.Token) error
+	if o.Token.CanWriteValue() {
+		persist = func(t *oauth2.Token) error {
+			b, e := json.Marshal(t)
+			if e != nil {
+				return e
+			}
+			return o.Token.WriteValue(string(b))
 		}
-		return o.Token.WriteValue(string(b))
-	})
+	}
+	source := onedrive.NewProactiveTokenSource(cfg, &token, 10*time.Minute, persist)
 	folder := o.FolderName.Value()
 	if folder == "" {
 		folder = "pithos-parts"

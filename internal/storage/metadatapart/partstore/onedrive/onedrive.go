@@ -38,6 +38,7 @@ type store struct {
 	client     *http.Client
 	folderID   string
 	tracer     trace.Tracer
+	startMu    sync.Mutex
 }
 
 var _ partstore.PartStore = (*store)(nil)
@@ -71,9 +72,9 @@ type itemList struct {
 }
 
 func (s *store) Start(ctx context.Context) error {
-	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
-		return err
-	}
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+
 	// The app root is created by Graph on first access.
 	var root driveItem
 	if err := s.doJSON(ctx, http.MethodGet, s.endpoint+"/me/drive/special/approot", nil, &root); err != nil {
@@ -91,6 +92,9 @@ func (s *store) Start(ctx context.Context) error {
 		}
 	}
 	if err != nil {
+		return err
+	}
+	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
 	s.folderID = folder.ID

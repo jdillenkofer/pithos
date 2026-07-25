@@ -122,6 +122,34 @@ func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
 	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
 }
 
+func TestOneDrivePartStoreCanRetryStartAfterFailure(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	rootRequests := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/me/drive/special/approot", func(w http.ResponseWriter, r *http.Request) {
+		rootRequests++
+		if rootRequests <= 5 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": "root"})
+	})
+	mux.HandleFunc("/me/drive/items/root:/pithos-parts", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"id": "folder"})
+	})
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, r)
+		return recorder.Result(), nil
+	})}
+	ps, err := New("pithos-parts", "http://graph.test", client)
+	require.NoError(t, err)
+
+	require.Error(t, ps.Start(context.Background()))
+	require.NoError(t, ps.Start(context.Background()))
+	require.NoError(t, ps.Stop(context.Background()))
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
