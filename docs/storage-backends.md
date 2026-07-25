@@ -415,9 +415,11 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 
 - Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
 - The Google Drive part store is effectively single-instance only. Running multiple pithos instances against the same Drive part folder can race on part uploads and overwrite each other's state because the store relies on the part name as the file identity and does not provide cross-instance coordination. In practice it might work since outbox part stores are single-writers and ulids for parts are unique, but it is not guaranteed to be safe.
-- Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity). When the token is backed by an environment variable or file, refreshed values are written back to that source so short restarts can reuse the latest token.
+- Access-token refresh is automatic until the refresh token is revoked. A `File` token provider persists refreshed token JSON across restarts. Inline and `EnvKey` values are treated as read-only configuration; the refreshed token is retained only in memory.
 - Uploads use a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit.
 - Because Drive requires at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
+- Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
+- The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 
 ### Dropbox Part Store
 
@@ -433,11 +435,9 @@ Stores parts in a dedicated Dropbox folder. It supports transaction-free uploads
 }
 ```
 
-The token uses the standard OAuth token JSON shape and must include a `refresh_token`. Pithos refreshes access tokens automatically and writes refreshed token JSON back when the configured provider supports it (for example, `File` or `EnvKey`). Create a scoped Dropbox app with `files.content.read` and `files.content.write` permissions and obtain an offline refresh token for it. The optional `root` defaults to `/pithos-parts`.
+The token uses the standard OAuth token JSON shape and must include a `refresh_token`. Pithos refreshes access tokens automatically. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Create a scoped Dropbox app with `files.content.read` and `files.content.write` permissions and request offline access (`token_access_type=offline`) during OAuth authorization so Dropbox returns a refresh token. The optional `root` defaults to `/pithos-parts`.
 
 Dropbox's single-call upload endpoint limits an individual part to 150 MB, so configure the S3 client multipart chunk size below that limit. As with Google Drive, use a single Pithos writer for a given part folder unless writes are coordinated by an outbox.
-- Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
-- The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
 
 ### OneDrive Part Store
 
@@ -474,7 +474,7 @@ Stores parts in a dedicated directory below OneDrive's private application folde
    For an organizational account, also pass `-tenant-id <DIRECTORY_TENANT_ID>`. Open the displayed URL, enter the device code, and place the token JSON printed to stdout in the configuration.
 5. Start pithos. It creates its application folder and the configured part folder automatically.
 
-Access-token refresh and persistence through writable token providers are automatic. Multiple pithos instances may share the same folder: parts are addressed directly by their globally unique part IDs, and OneDrive atomically replaces the single item at that path, avoiding Google Drive's list-then-create duplicate-file race. The store supports seekable ranged reads and benefits from large multipart chunks, `OutboxPartStore`, and `CachePartStore` when latency matters. Uploads use Microsoft Graph upload sessions with sequential 10 MiB chunks, so parts are not constrained by the simple upload endpoint's 250 MB limit. Incoming streams are temporarily spooled to disk because Graph requires the total size in each chunk request.
+Access-token refresh is automatic. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Multiple pithos instances may share the same folder: parts are addressed directly by their globally unique part IDs, and OneDrive atomically replaces the single item at that path, avoiding Google Drive's list-then-create duplicate-file race. The store supports seekable ranged reads and benefits from large multipart chunks, `OutboxPartStore`, and `CachePartStore` when latency matters. Uploads use Microsoft Graph upload sessions with sequential 10 MiB chunks, so parts are not constrained by the simple upload endpoint's 250 MB limit. Incoming streams are temporarily spooled to disk because Graph requires the total size in each chunk request.
 
 ### Post-Quantum Encryption
 

@@ -127,3 +127,60 @@ func TestDropboxPartStoreSupportsTxFreeOperations(t *testing.T) {
 	require.True(t, partstore.SupportsTxFreePutPart(store))
 	require.True(t, partstore.SupportsTxFreeDeletePart(store))
 }
+
+func TestDropboxPartStoreCanRetryStartAfterFailure(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		recorder := httptest.NewRecorder()
+		if requests <= maxRetries {
+			http.Error(recorder, "temporary failure", http.StatusServiceUnavailable)
+		} else {
+			io.WriteString(recorder, `{}`)
+		}
+		return recorder.Result(), nil
+	})}
+	store, err := New("/parts", Options{HTTPClient: client})
+	require.NoError(t, err)
+
+	require.Error(t, store.Start(context.Background()))
+	require.NoError(t, store.Start(context.Background()))
+	require.NoError(t, store.Stop(context.Background()))
+}
+
+func TestDropboxPartStoreRejectsFileAtRootPath(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusConflict)
+		io.WriteString(recorder, `{"error_summary":"path/conflict/file/"}`)
+		return recorder.Result(), nil
+	})}
+	store, err := New("/parts", Options{HTTPClient: client})
+	require.NoError(t, err)
+
+	require.Error(t, store.Start(context.Background()))
+}
+
+func TestDropboxPartStoreDoesNotTreatEveryConflictAsMissing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		recorder := httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusConflict)
+		io.WriteString(recorder, `{"error_summary":"path/restricted_content/"}`)
+		return recorder.Result(), nil
+	})}
+	store, err := New("/parts", Options{HTTPClient: client})
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	_, err = store.GetPart(context.Background(), nil, *id)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, partstore.ErrPartNotFound)
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

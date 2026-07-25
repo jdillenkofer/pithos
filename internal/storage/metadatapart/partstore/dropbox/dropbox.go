@@ -80,9 +80,6 @@ func normalizeRoot(root string) string {
 }
 
 func (s *dropboxPartStore) Start(ctx context.Context) error {
-	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
-		return err
-	}
 	body, _ := json.Marshal(map[string]any{"path": s.root, "autorename": false})
 	resp, err := s.do(ctx, s.apiEndpoint+"/files/create_folder_v2", body, nil, nil)
 	if err != nil {
@@ -90,12 +87,12 @@ func (s *dropboxPartStore) Start(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+		return s.ValidatedLifecycle.Start(ctx)
 	}
 	data, _ := io.ReadAll(resp.Body)
 	// Dropbox returns 409 when the folder already exists.
-	if resp.StatusCode == http.StatusConflict && bytes.Contains(data, []byte("conflict")) {
-		return nil
+	if resp.StatusCode == http.StatusConflict && bytes.Contains(data, []byte("path/conflict/folder")) {
+		return s.ValidatedLifecycle.Start(ctx)
 	}
 	return apiError(resp.StatusCode, data)
 }
@@ -165,8 +162,15 @@ func (s *dropboxPartStore) download(ctx context.Context, filePath string, offset
 		return nil, -1, err
 	}
 	if resp.StatusCode == 409 {
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
-		return nil, -1, partstore.ErrPartNotFound
+		if readErr != nil {
+			return nil, -1, readErr
+		}
+		if bytes.Contains(data, []byte("not_found")) {
+			return nil, -1, partstore.ErrPartNotFound
+		}
+		return nil, -1, apiError(resp.StatusCode, data)
 	}
 	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 		resp.Body.Close()

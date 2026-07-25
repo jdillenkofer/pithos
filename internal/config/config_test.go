@@ -16,7 +16,7 @@ func TestCanCreateStringProviderFromRawStringJson(t *testing.T) {
 	err := json.Unmarshal([]byte(jsonData), &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "String", stringProvider.Value())
-	assert.False(t, stringProvider.CanWriteValue())
+	assert.False(t, stringProvider.CanPersistValue())
 }
 
 func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
@@ -31,7 +31,9 @@ func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
 	err = json.Unmarshal([]byte(jsonData), &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "EnvString", stringProvider.Value())
-	assert.True(t, stringProvider.CanWriteValue())
+	assert.False(t, stringProvider.CanPersistValue())
+	assert.Error(t, stringProvider.WriteValue("updated"))
+	assert.Equal(t, "EnvString", os.Getenv("PITHOS_ENV_KEY_STRING_TEST"))
 }
 
 func TestCanCreateStringProviderFromFileJson(t *testing.T) {
@@ -49,7 +51,7 @@ func TestCanCreateStringProviderFromFileJson(t *testing.T) {
 	err = json.Unmarshal(jsonData, &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "FileString", stringProvider.Value())
-	assert.True(t, stringProvider.CanWriteValue())
+	assert.True(t, stringProvider.CanPersistValue())
 }
 
 func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {

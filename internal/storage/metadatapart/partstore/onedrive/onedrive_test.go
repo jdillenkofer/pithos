@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 )
 
 func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
@@ -148,6 +151,34 @@ func TestOneDrivePartStoreCanRetryStartAfterFailure(t *testing.T) {
 	require.Error(t, ps.Start(context.Background()))
 	require.NoError(t, ps.Start(context.Background()))
 	require.NoError(t, ps.Stop(context.Background()))
+}
+
+func TestOneDriveTokenPersistenceFailureDoesNotFailRefresh(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"access_token":  "fresh-access",
+			"refresh_token": "refresh-token",
+			"token_type":    "Bearer",
+			"expires_in":    3600,
+		})
+	}))
+	defer server.Close()
+	cfg := &oauth2.Config{
+		ClientID: "client-id",
+		Endpoint: oauth2.Endpoint{TokenURL: server.URL},
+	}
+	source := NewProactiveTokenSource(cfg, &oauth2.Token{
+		AccessToken:  "expired-access",
+		RefreshToken: "refresh-token",
+		Expiry:       time.Now().Add(-time.Minute),
+	}, time.Minute, func(*oauth2.Token) error {
+		return errors.New("read-only token provider")
+	})
+
+	token, err := source.Token()
+	require.NoError(t, err)
+	assert.Equal(t, "fresh-access", token.AccessToken)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

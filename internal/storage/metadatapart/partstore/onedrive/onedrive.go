@@ -516,7 +516,11 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 	}
 	s.token = fresh
 	if s.persist != nil {
-		e = s.persist(fresh)
+		if e = s.persist(fresh); e != nil {
+			// The refreshed access token is still usable. Persistence only
+			// improves restart behavior and must not fail storage operations.
+			slog.Warn("Could not persist refreshed OneDrive token", "err", e)
+		}
 	}
-	return fresh, e
+	return fresh, nil
 }

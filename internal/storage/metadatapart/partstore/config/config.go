@@ -458,7 +458,7 @@ func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvi
 	}
 	cfg := onedriveAuth.OAuthConfig(tenant, clientID)
 	var persist func(*oauth2.Token) error
-	if o.Token.CanWriteValue() {
+	if o.Token.CanPersistValue() {
 		persist = func(t *oauth2.Token) error {
 			b, e := json.Marshal(t)
 			if e != nil {
@@ -519,16 +519,17 @@ func (d *DropboxPartStoreConfiguration) Instantiate(diProvider dependencyinjecti
 		ClientSecret: clientSecret,
 		Endpoint:     oauth2.Endpoint{AuthURL: dropbox.OAuthEndpoint.AuthURL, TokenURL: dropbox.OAuthEndpoint.TokenURL},
 	}
-	tokenSource := gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
-		updated, err := json.Marshal(tok)
-		if err != nil {
-			return err
+	var persist func(*oauth2.Token) error
+	if d.Token.CanPersistValue() {
+		persist = func(tok *oauth2.Token) error {
+			updated, err := json.Marshal(tok)
+			if err != nil {
+				return err
+			}
+			return d.Token.WriteValue(string(updated))
 		}
-		if err := d.Token.WriteValue(string(updated)); err != nil && !errors.Is(err, internalConfig.ErrStringProviderReadOnly) {
-			return err
-		}
-		return nil
-	})
+	}
+	tokenSource := gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, persist)
 	root := d.Root.Value()
 	if root == "" {
 		root = "/pithos-parts"
@@ -576,9 +577,10 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 	}
 	// The token source transparently exchanges the refresh token for a new
 	// access token before each request that falls within the refresh window.
-	// Writable providers persist the refreshed value for subsequent restarts.
-	clientOptions := []option.ClientOption{
-		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
+	// File-backed providers persist the refreshed value across restarts.
+	var persist func(*oauth2.Token) error
+	if g.Token.CanPersistValue() {
+		persist = func(tok *oauth2.Token) error {
 			if tok == nil {
 				return nil
 			}
@@ -587,7 +589,10 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 				return err
 			}
 			return g.Token.WriteValue(string(updatedTokenJson))
-		})),
+		}
+	}
+	clientOptions := []option.ClientOption{
+		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, persist)),
 	}
 	if endpoint := g.Endpoint.Value(); endpoint != "" {
 		clientOptions = append(clientOptions, option.WithEndpoint(endpoint))

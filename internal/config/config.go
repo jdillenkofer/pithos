@@ -80,8 +80,6 @@ type StringProvider struct {
 	file   string `json:"-"`
 }
 
-var ErrStringProviderReadOnly = errors.New("string provider does not support writing back")
-
 func (s *StringProvider) Value() string {
 	return s.value
 }
@@ -90,22 +88,18 @@ func (s *StringProvider) SetValue(value string) {
 	s.value = value
 }
 
-func (s *StringProvider) CanWriteValue() bool {
-	return s.envKey != "" || s.file != ""
+// CanPersistValue reports whether writes survive a process restart.
+// Environment variables can only be changed in the current process.
+func (s *StringProvider) CanPersistValue() bool {
+	return s.file != ""
 }
 
 func (s *StringProvider) WriteValue(value string) error {
-	switch {
-	case s.envKey != "":
-		if err := os.Setenv(s.envKey, value); err != nil {
-			return err
-		}
-	case s.file != "":
-		if err := os.WriteFile(s.file, []byte(value), 0o600); err != nil {
-			return err
-		}
-	default:
-		return ErrStringProviderReadOnly
+	if s.file == "" {
+		return errors.New("string provider does not support persistent writes")
+	}
+	if err := os.WriteFile(s.file, []byte(value), 0o600); err != nil {
+		return err
 	}
 	s.value = value
 	return nil
