@@ -443,7 +443,10 @@ Stores parts in a dedicated Dropbox folder. It supports transaction-free uploads
 
 The token uses the standard OAuth token JSON shape and must include a `refresh_token`. Pithos refreshes access tokens automatically. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Create a scoped Dropbox app with `files.content.read` and `files.content.write` permissions and request offline access (`token_access_type=offline`) during OAuth authorization so Dropbox returns a refresh token. The optional `root` defaults to `/pithos-parts`.
 
-Dropbox's single-call upload endpoint limits an individual part to 150 MB, so configure the S3 client multipart chunk size below that limit. As with Google Drive, use a single Pithos writer for a given part folder unless writes are coordinated by an outbox.
+Parts up to 8 MiB use Dropbox's single-call upload endpoint. Larger parts use
+streaming upload sessions with 8 MiB chunks, so they are not constrained by the
+single-call endpoint's 150 MiB limit. As with Google Drive, use a single Pithos
+writer for a given part folder unless writes are coordinated by an outbox.
 
 ### OneDrive Part Store
 

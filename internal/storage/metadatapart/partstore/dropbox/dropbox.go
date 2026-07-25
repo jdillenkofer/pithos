@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -26,6 +27,7 @@ const (
 	defaultAPIEndpoint     = "https://api.dropboxapi.com/2"
 	defaultContentEndpoint = "https://content.dropboxapi.com/2"
 	maxRetries             = 5
+	uploadSessionChunkSize = 8 * 1024 * 1024
 )
 
 type Options struct {
@@ -118,22 +120,124 @@ func parsePartName(name string) (*partstore.PartId, bool) {
 func (s *dropboxPartStore) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "dropboxPartStore.PutPart")
 	defer span.End()
-	arg, _ := json.Marshal(map[string]any{"path": s.partPath(id), "mode": "overwrite", "autorename": false, "mute": true})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.contentEndpoint+"/files/upload", reader)
+
+	firstChunk, err := ioutils.ReadChunk(reader, uploadSessionChunkSize)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return s.putPartSingleRequest(ctx, id, bytes.NewReader(firstChunk))
+		}
+		return err
+	}
+
+	sessionID, err := s.startUploadSession(ctx, firstChunk)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Dropbox-API-Arg", string(arg))
-	resp, err := s.httpClient.Do(req)
+	offset := int64(len(firstChunk))
+	for {
+		chunk, readErr := ioutils.ReadChunk(reader, uploadSessionChunkSize)
+		if readErr == nil {
+			if err := s.appendUploadSession(ctx, sessionID, offset, chunk); err != nil {
+				return err
+			}
+			offset += int64(len(chunk))
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return s.finishUploadSession(ctx, sessionID, offset, id, chunk)
+		}
+		return readErr
+	}
+}
+
+func (s *dropboxPartStore) putPartSingleRequest(ctx context.Context, id partstore.PartId, reader io.Reader) error {
+	arg := map[string]any{"path": s.partPath(id), "mode": "overwrite", "autorename": false, "mute": true}
+	resp, err := s.doContentUpload(ctx, "/files/upload", arg, reader)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+	return checkUploadResponse(resp)
+}
+
+func (s *dropboxPartStore) startUploadSession(ctx context.Context, chunk []byte) (string, error) {
+	resp, err := s.doContentUpload(ctx, "/files/upload_session/start", map[string]bool{"close": false}, bytes.NewReader(chunk))
+	if err != nil {
+		return "", err
 	}
-	data, _ := io.ReadAll(resp.Body)
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", dropboxResponseError(resp)
+	}
+	var result struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode Dropbox upload session: %w", err)
+	}
+	if result.SessionID == "" {
+		return "", errors.New("Dropbox returned an empty upload session id")
+	}
+	return result.SessionID, nil
+}
+
+func (s *dropboxPartStore) appendUploadSession(ctx context.Context, sessionID string, offset int64, chunk []byte) error {
+	arg := map[string]any{
+		"cursor": map[string]any{"session_id": sessionID, "offset": offset},
+		"close":  false,
+	}
+	resp, err := s.doContentUpload(ctx, "/files/upload_session/append_v2", arg, bytes.NewReader(chunk))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkUploadResponse(resp)
+}
+
+func (s *dropboxPartStore) finishUploadSession(ctx context.Context, sessionID string, offset int64, id partstore.PartId, chunk []byte) error {
+	arg := map[string]any{
+		"cursor": map[string]any{"session_id": sessionID, "offset": offset},
+		"commit": map[string]any{
+			"path":       s.partPath(id),
+			"mode":       "overwrite",
+			"autorename": false,
+			"mute":       true,
+		},
+	}
+	resp, err := s.doContentUpload(ctx, "/files/upload_session/finish", arg, bytes.NewReader(chunk))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkUploadResponse(resp)
+}
+
+func (s *dropboxPartStore) doContentUpload(ctx context.Context, route string, arg any, reader io.Reader) (*http.Response, error) {
+	rawArg, err := json.Marshal(arg)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.contentEndpoint+route, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Dropbox-API-Arg", string(rawArg))
+	// Data uploads are deliberately attempted once. OutboxPartStore retries the
+	// complete idempotent PutPart with a fresh reader.
+	return s.httpClient.Do(req)
+}
+
+func checkUploadResponse(resp *http.Response) error {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return dropboxResponseError(resp)
+	}
+	_, err := io.Copy(io.Discard, resp.Body)
+	return err
+}
+
+func dropboxResponseError(resp *http.Response) error {
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	return apiError(resp.StatusCode, data)
 }
 

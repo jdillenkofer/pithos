@@ -18,8 +18,11 @@ import (
 )
 
 type fakeDropbox struct {
-	mu    sync.Mutex
-	files map[string][]byte
+	mu              sync.Mutex
+	files           map[string][]byte
+	sessions        map[string][]byte
+	nextSessionID   int
+	sessionRequests int
 }
 
 func (f *fakeDropbox) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +38,49 @@ func (f *fakeDropbox) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal([]byte(r.Header.Get("Dropbox-API-Arg")), &arg)
 		f.files[arg.Path], _ = io.ReadAll(r.Body)
+		io.WriteString(w, `{}`)
+	case "/2/files/upload_session/start":
+		f.nextSessionID++
+		sessionID := strconv.Itoa(f.nextSessionID)
+		f.sessions[sessionID], _ = io.ReadAll(r.Body)
+		f.sessionRequests++
+		json.NewEncoder(w).Encode(map[string]string{"session_id": sessionID})
+	case "/2/files/upload_session/append_v2":
+		var arg struct {
+			Cursor struct {
+				SessionID string `json:"session_id"`
+				Offset    int64  `json:"offset"`
+			} `json:"cursor"`
+		}
+		_ = json.Unmarshal([]byte(r.Header.Get("Dropbox-API-Arg")), &arg)
+		if int64(len(f.sessions[arg.Cursor.SessionID])) != arg.Cursor.Offset {
+			http.Error(w, "incorrect_offset", http.StatusConflict)
+			return
+		}
+		chunk, _ := io.ReadAll(r.Body)
+		f.sessions[arg.Cursor.SessionID] = append(f.sessions[arg.Cursor.SessionID], chunk...)
+		f.sessionRequests++
+		io.WriteString(w, `{}`)
+	case "/2/files/upload_session/finish":
+		var arg struct {
+			Cursor struct {
+				SessionID string `json:"session_id"`
+				Offset    int64  `json:"offset"`
+			} `json:"cursor"`
+			Commit struct {
+				Path string `json:"path"`
+			} `json:"commit"`
+		}
+		_ = json.Unmarshal([]byte(r.Header.Get("Dropbox-API-Arg")), &arg)
+		if int64(len(f.sessions[arg.Cursor.SessionID])) != arg.Cursor.Offset {
+			http.Error(w, "incorrect_offset", http.StatusConflict)
+			return
+		}
+		chunk, _ := io.ReadAll(r.Body)
+		f.sessions[arg.Cursor.SessionID] = append(f.sessions[arg.Cursor.SessionID], chunk...)
+		f.files[arg.Commit.Path] = f.sessions[arg.Cursor.SessionID]
+		delete(f.sessions, arg.Cursor.SessionID)
+		f.sessionRequests++
 		io.WriteString(w, `{}`)
 	case "/2/files/download":
 		var arg struct {
@@ -88,7 +134,7 @@ func (f *fakeDropbox) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestDropboxPartStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	fake := &fakeDropbox{files: map[string][]byte{}}
+	fake := &fakeDropbox{files: map[string][]byte{}, sessions: map[string][]byte{}}
 	server := httptest.NewServer(http.HandlerFunc(fake.serveHTTP))
 	defer server.Close()
 	store, err := New("/parts", Options{HTTPClient: server.Client(), APIEndpoint: server.URL + "/2", ContentEndpoint: server.URL + "/2"})
@@ -117,6 +163,31 @@ func TestDropboxPartStore(t *testing.T) {
 	require.NoError(t, store.DeletePart(context.Background(), nil, *id))
 	_, err = store.GetPart(context.Background(), nil, *id)
 	require.ErrorIs(t, err, partstore.ErrPartNotFound)
+}
+
+func TestDropboxPartStoreUsesUploadSessionForLargeParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	fake := &fakeDropbox{files: map[string][]byte{}, sessions: map[string][]byte{}}
+	server := httptest.NewServer(http.HandlerFunc(fake.serveHTTP))
+	defer server.Close()
+	store, err := New("/parts", Options{HTTPClient: server.Client(), APIEndpoint: server.URL + "/2", ContentEndpoint: server.URL + "/2"})
+	require.NoError(t, err)
+	require.NoError(t, store.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	payload := strings.Repeat("x", uploadSessionChunkSize) + "end"
+
+	require.NoError(t, store.PutPart(context.Background(), nil, *id, strings.NewReader(payload)))
+
+	reader, err := store.GetPart(context.Background(), nil, *id)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, payload, string(data))
+	require.Equal(t, 2, fake.sessionRequests)
+	require.Empty(t, fake.sessions)
 }
 
 func TestDropboxPartStoreSupportsTxFreeOperations(t *testing.T) {
