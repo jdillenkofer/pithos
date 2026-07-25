@@ -10,16 +10,23 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func OAuthConfig(tenantID, clientID string) *oauth2.Config {
+func OAuthConfig(tenantID, clientID string, permissionMode onedrive.PermissionMode) (*oauth2.Config, error) {
+	scope, err := permissionMode.Scope()
+	if err != nil {
+		return nil, err
+	}
 	if tenantID == "" {
 		tenantID = "consumers"
 	}
 	base := "https://login.microsoftonline.com/" + tenantID + "/oauth2/v2.0"
-	return &oauth2.Config{ClientID: clientID, Scopes: []string{onedrive.Scope, "offline_access"}, Endpoint: oauth2.Endpoint{AuthURL: base + "/authorize", TokenURL: base + "/token", DeviceAuthURL: base + "/devicecode", AuthStyle: oauth2.AuthStyleInParams}}
+	return &oauth2.Config{ClientID: clientID, Scopes: []string{scope, "offline_access"}, Endpoint: oauth2.Endpoint{AuthURL: base + "/authorize", TokenURL: base + "/token", DeviceAuthURL: base + "/devicecode", AuthStyle: oauth2.AuthStyleInParams}}, nil
 }
 
-func RunDeviceFlow(ctx context.Context, tenantID, clientID string, out io.Writer) (*oauth2.Token, error) {
-	cfg := OAuthConfig(tenantID, clientID)
+func RunDeviceFlow(ctx context.Context, tenantID, clientID string, permissionMode onedrive.PermissionMode, out io.Writer) (*oauth2.Token, error) {
+	cfg, err := OAuthConfig(tenantID, clientID, permissionMode)
+	if err != nil {
+		return nil, err
+	}
 	d, e := cfg.DeviceAuth(ctx)
 	if e != nil {
 		return nil, fmt.Errorf("device authorization request failed: %w", e)

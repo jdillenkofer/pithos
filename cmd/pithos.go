@@ -31,6 +31,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	gdriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive"
 	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
@@ -753,15 +754,27 @@ func onedriveAuthFlow(ctx context.Context) {
 	fs := flag.NewFlagSet(subcommandOnedriveAuth, flag.ExitOnError)
 	clientID := fs.String("client-id", os.Getenv("PITHOS_ONEDRIVE_CLIENT_ID"), "Microsoft application (client) id, defaults to $PITHOS_ONEDRIVE_CLIENT_ID")
 	tenantID := fs.String("tenant-id", "consumers", "tenant id; use consumers for personal Microsoft accounts")
+	permissionModeValue := fs.String("permission-mode", "", `required permission mode: "fullDrive" (stable) or "appFolderPreview" (least privilege, preview)`)
 	fs.Parse(os.Args[2:])
 	if *clientID == "" {
 		slog.Error("-client-id is required (or set PITHOS_ONEDRIVE_CLIENT_ID)")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
+	if *permissionModeValue == "" {
+		slog.Error("-permission-mode is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+	permissionMode, err := onedrive.ParsePermissionMode(*permissionModeValue)
+	if err != nil {
+		slog.Error(err.Error())
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
 	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	token, err := onedriveAuth.RunDeviceFlow(signalCtx, *tenantID, *clientID, os.Stderr)
+	token, err := onedriveAuth.RunDeviceFlow(signalCtx, *tenantID, *clientID, permissionMode, os.Stderr)
 	if err != nil {
 		slog.Error(fmt.Sprintf("OneDrive authorization failed: %v", err))
 		os.Exit(1)

@@ -846,16 +846,46 @@ func TestCanCreateGoogleDrivePartStoreFromJson(t *testing.T) {
 
 func TestCanCreateOneDrivePartStoreFromJson(t *testing.T) {
 	testutils.SkipIfIntegration(t)
+	for _, permissionMode := range []string{"fullDrive", "appFolderPreview"} {
+		t.Run(permissionMode, func(t *testing.T) {
+			jsonData := fmt.Sprintf(`{
+				"type": "OneDrivePartStore",
+				"clientId": "test-client-id",
+				"tenantId": "consumers",
+				"permissionMode": %q,
+				"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}",
+				"folderName": "pithos-parts-test"
+			}`, permissionMode)
+			partStore, err := createPartStoreFromJson([]byte(jsonData))
+			assert.NoError(t, err)
+			assert.NotNil(t, partStore)
+		})
+	}
+}
+
+func TestOneDrivePartStoreRequiresPermissionMode(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	jsonData := `{
 		"type": "OneDrivePartStore",
 		"clientId": "test-client-id",
-		"tenantId": "consumers",
-		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}",
-		"folderName": "pithos-parts-test"
+		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}"
 	}`
 	partStore, err := createPartStoreFromJson([]byte(jsonData))
-	assert.NoError(t, err)
-	assert.NotNil(t, partStore)
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, "permissionMode is required for OneDrivePartStore")
+}
+
+func TestOneDrivePartStoreRejectsInvalidPermissionMode(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"permissionMode": "unknown",
+		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, `invalid OneDrive permission mode "unknown": must be "fullDrive" or "appFolderPreview"`)
 }
 
 func TestOneDrivePartStoreRequiresRefreshToken(t *testing.T) {
@@ -863,6 +893,7 @@ func TestOneDrivePartStoreRequiresRefreshToken(t *testing.T) {
 	jsonData := `{
 		"type": "OneDrivePartStore",
 		"clientId": "test-client-id",
+		"permissionMode": "fullDrive",
 		"token": "{\"access_token\":\"access\",\"token_type\":\"Bearer\"}"
 	}`
 	partStore, err := createPartStoreFromJson([]byte(jsonData))

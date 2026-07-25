@@ -425,11 +425,12 @@ type GoogleDrivePartStoreConfiguration struct {
 }
 
 type OneDrivePartStoreConfiguration struct {
-	ClientId   internalConfig.StringProvider `json:"clientId"`
-	TenantId   internalConfig.StringProvider `json:"tenantId,omitempty"`
-	Token      internalConfig.StringProvider `json:"token"`
-	FolderName internalConfig.StringProvider `json:"folderName,omitempty"`
-	Endpoint   internalConfig.StringProvider `json:"endpoint,omitempty"`
+	ClientId       internalConfig.StringProvider `json:"clientId"`
+	TenantId       internalConfig.StringProvider `json:"tenantId,omitempty"`
+	PermissionMode internalConfig.StringProvider `json:"permissionMode"`
+	Token          internalConfig.StringProvider `json:"token"`
+	FolderName     internalConfig.StringProvider `json:"folderName,omitempty"`
+	Endpoint       internalConfig.StringProvider `json:"endpoint,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -440,6 +441,14 @@ func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvi
 	clientID := o.ClientId.Value()
 	if clientID == "" {
 		return nil, errors.New("clientId is required for OneDrivePartStore")
+	}
+	rawPermissionMode := o.PermissionMode.Value()
+	if rawPermissionMode == "" {
+		return nil, errors.New("permissionMode is required for OneDrivePartStore")
+	}
+	permissionMode, err := onedrive.ParsePermissionMode(rawPermissionMode)
+	if err != nil {
+		return nil, err
 	}
 	raw := o.Token.Value()
 	if raw == "" {
@@ -456,7 +465,10 @@ func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvi
 	if tenant == "" {
 		tenant = "consumers"
 	}
-	cfg := onedriveAuth.OAuthConfig(tenant, clientID)
+	cfg, err := onedriveAuth.OAuthConfig(tenant, clientID, permissionMode)
+	if err != nil {
+		return nil, err
+	}
 	var persist func(*oauth2.Token) error
 	if o.Token.CanPersistValue() {
 		persist = func(t *oauth2.Token) error {

@@ -104,7 +104,20 @@ Useful for verifying TPM compatibility before configuring the `TinkEncryptionPar
 Runs the Microsoft device-code flow and prints the refreshable OAuth token needed by `OneDrivePartStore`.
 
 ```sh
-pithos onedrive-auth -client-id <APPLICATION_CLIENT_ID> [-tenant-id consumers]
+pithos onedrive-auth \
+  -client-id <APPLICATION_CLIENT_ID> \
+  -permission-mode <fullDrive|appFolderPreview> \
+  [-tenant-id consumers]
 ```
 
-The tenant defaults to `consumers` for personal Microsoft accounts. See the [OneDrive setup guide](storage-backends.md#onedrive-part-store) for app-registration and permission steps.
+The permission mode is required and must match the `permissionMode` in the
+`OneDrivePartStore` configuration:
+
+- `fullDrive` requests the stable delegated `Files.ReadWrite` permission.
+- `appFolderPreview` requests the least-privilege delegated
+  `Files.ReadWrite.AppFolder` permission, which Microsoft currently marks as
+  preview.
+
+The tenant defaults to `consumers` for personal Microsoft accounts. See the
+[OneDrive setup guide](storage-backends.md#onedrive-part-store) for
+app-registration and permission steps.

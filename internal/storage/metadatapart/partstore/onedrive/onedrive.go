@@ -26,8 +26,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
-// Scope confines pithos to its application folder in the user's OneDrive.
-const Scope = "Files.ReadWrite.AppFolder"
 const defaultEndpoint = "https://graph.microsoft.com/v1.0"
 const uploadChunkSize = 10 * 1024 * 1024 // 32 * 320 KiB, as required by Graph.
 const defaultTokenRefreshTimeout = 15 * time.Second

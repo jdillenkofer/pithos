@@ -450,13 +450,27 @@ writer for a given part folder unless writes are coordinated by an outbox.
 
 ### OneDrive Part Store
 
-Stores parts in a dedicated directory below OneDrive's private application folder. Pithos requests `Files.ReadWrite.AppFolder`, so it cannot read or change the user's other OneDrive files. Personal Microsoft accounts are supported by default; an organization can supply its tenant ID.
+Stores parts in a dedicated directory below OneDrive's private application
+folder. The required permission mode makes the OAuth tradeoff explicit:
+
+- `fullDrive` requests the stable delegated `Files.ReadWrite` permission. Pithos
+  still stores parts only below its application folder, but the granted token
+  can read and change the signed-in user's other OneDrive files.
+- `appFolderPreview` requests the least-privilege delegated
+  `Files.ReadWrite.AppFolder` permission, so the token is confined to the
+  application's folder. Microsoft currently marks this delegated permission as
+  preview.
+
+Use `fullDrive` for production deployments that require generally available
+Microsoft Graph permissions. Personal Microsoft accounts are supported by
+default; an organization can supply its tenant ID.
 
 ```json
 {
   "type": "OneDrivePartStore",
   "clientId": "00000000-0000-0000-0000-000000000000",
   "tenantId": "consumers",
+  "permissionMode": "fullDrive",
   "token": { "type": "EnvKey", "envKey": "PITHOS_ONEDRIVE_TOKEN" },
   "folderName": "pithos-parts"
 }
@@ -466,6 +480,7 @@ Stores parts in a dedicated directory below OneDrive's private application folde
 | --- | --- |
 | `clientId` | Microsoft Entra application (client) ID. |
 | `tenantId` | Optional tenant ID. Defaults to `consumers` for personal Microsoft accounts; use your directory tenant ID for an organizational account. |
+| `permissionMode` | Required OAuth permission mode: `fullDrive` (stable `Files.ReadWrite`) or `appFolderPreview` (least-privilege preview `Files.ReadWrite.AppFolder`). |
 | `token` | OAuth token JSON printed by `pithos onedrive-auth`. It must contain a refresh token and may be inline, an `EnvKey`, or a `File` provider. |
 | `folderName` | Optional folder below the application's OneDrive folder (default `pithos-parts`). |
 
@@ -473,14 +488,22 @@ Stores parts in a dedicated directory below OneDrive's private application folde
 
 1. In the [Microsoft Entra admin center](https://entra.microsoft.com/), create an app registration. Select the account types you intend to support (for a personal OneDrive, include personal Microsoft accounts).
 2. Under **Authentication**, enable **Allow public client flows**. No client secret is needed because the authorization helper uses the device-code flow.
-3. Under **API permissions**, add the Microsoft Graph delegated permission `Files.ReadWrite.AppFolder`. The authorization request also includes `offline_access` so pithos receives a refresh token.
+3. Under **API permissions**, add the Microsoft Graph delegated permission that
+   matches the configured mode: `Files.ReadWrite` for `fullDrive`, or
+   `Files.ReadWrite.AppFolder` for `appFolderPreview`. The authorization request
+   also includes `offline_access` so pithos receives a refresh token.
 4. Authorize the app once from any machine:
 
    ```sh
-   pithos onedrive-auth -client-id <APPLICATION_CLIENT_ID>
+   pithos onedrive-auth \
+     -client-id <APPLICATION_CLIENT_ID> \
+     -permission-mode fullDrive
    ```
 
-   For an organizational account, also pass `-tenant-id <DIRECTORY_TENANT_ID>`. Open the displayed URL, enter the device code, and place the token JSON printed to stdout in the configuration.
+   Pass the same permission mode to the command and the `OneDrivePartStore`
+   configuration. For an organizational account, also pass
+   `-tenant-id <DIRECTORY_TENANT_ID>`. Open the displayed URL, enter the device
+   code, and place the token JSON printed to stdout in the configuration.
 5. Start pithos. It creates its application folder and the configured part folder automatically.
 
 Access-token refresh is automatic. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Multiple pithos instances may share the same folder: parts are addressed directly by their globally unique part IDs, and OneDrive atomically replaces the single item at that path, avoiding Google Drive's list-then-create duplicate-file race. The store supports seekable ranged reads and benefits from large multipart chunks, `OutboxPartStore`, and `CachePartStore` when latency matters. Uploads use Microsoft Graph upload sessions with sequential 10 MiB chunks, so parts are not constrained by the simple upload endpoint's 250 MB limit. Incoming streams are temporarily spooled to disk because Graph requires the total size in each chunk request.
