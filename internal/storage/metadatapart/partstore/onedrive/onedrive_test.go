@@ -24,6 +24,7 @@ func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	files := map[string][]byte{}
 	uploadRequests := 0
+	ignoreNextRange := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/me/drive/special/approot", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"id": "root"}) })
 	mux.HandleFunc("/me/drive/items/root:/pithos-parts", func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) })
@@ -68,8 +69,14 @@ func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
 					w.WriteHeader(416)
 					return
 				}
-				data = data[offset:]
-				w.WriteHeader(http.StatusPartialContent)
+				if ignoreNextRange {
+					ignoreNextRange = false
+				} else {
+					total := len(data)
+					data = data[offset:]
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, total-1, total))
+					w.WriteHeader(http.StatusPartialContent)
+				}
 			}
 			_, _ = w.Write(data)
 		case http.MethodDelete:
@@ -116,6 +123,16 @@ func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
 	data, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, "onedrive", string(data))
+
+	// OneDrive's download CDN may ignore Range and return 200 with the full
+	// object. The reader must still expose bytes from the requested offset.
+	ignoreNextRange = true
+	_, err = seeker.Seek(1, io.SeekStart)
+	require.NoError(t, err)
+	data, err = io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, payload[1:], data)
+
 	require.NoError(t, reader.Close())
 	ids, err := ps.GetPartIds(context.Background(), nil)
 	require.NoError(t, err)

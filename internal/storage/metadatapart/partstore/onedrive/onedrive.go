@@ -226,30 +226,11 @@ func (s *store) GetPart(ctx context.Context, tx database.Tx, id partstore.PartId
 func (s *store) SupportsTxFreeGetPart() bool { return true }
 
 func (s *store) openAt(ctx context.Context, name string, offset int64) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.itemURL(name)+":/content", nil)
+	body, err := s.openBodyAt(ctx, name, offset)
 	if err != nil {
 		return nil, err
 	}
-	if offset > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-	}
-	resp, err := s.do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		resp.Body.Close()
-		return nil, partstore.ErrPartNotFound
-	}
-	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-		resp.Body.Close()
-		return nil, io.EOF
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
-		return nil, graphError(resp)
-	}
-	return &readSeekCloser{s: s, ctx: ctx, name: name, body: resp.Body, offset: offset, size: -1}, nil
+	return &readSeekCloser{s: s, ctx: ctx, name: name, body: body, offset: offset, size: -1}, nil
 }
 
 type readSeekCloser struct {
@@ -288,6 +269,10 @@ func (s *store) openBodyAt(ctx context.Context, name string, off int64) (io.Read
 	if e != nil {
 		return nil, e
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil, partstore.ErrPartNotFound
+	}
 	if resp.StatusCode == 416 {
 		resp.Body.Close()
 		return nil, io.EOF
@@ -296,7 +281,56 @@ func (s *store) openBodyAt(ctx context.Context, name string, off int64) (io.Read
 		defer resp.Body.Close()
 		return nil, graphError(resp)
 	}
+	if off == 0 {
+		return resp.Body, nil
+	}
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+		start, e := contentRangeStart(resp.Header.Get("Content-Range"))
+		if e != nil {
+			resp.Body.Close()
+			return nil, e
+		}
+		if start != off {
+			resp.Body.Close()
+			return nil, fmt.Errorf("Microsoft Graph returned range starting at %d, expected %d", start, off)
+		}
+	case http.StatusOK:
+		// The OneDrive download CDN is allowed to ignore Range and return the
+		// complete object. Preserve io.Seeker semantics by discarding the prefix.
+		if _, e := io.CopyN(io.Discard, resp.Body, off); e != nil {
+			resp.Body.Close()
+			if errors.Is(e, io.EOF) {
+				return nil, io.EOF
+			}
+			return nil, e
+		}
+	default:
+		resp.Body.Close()
+		return nil, fmt.Errorf("Microsoft Graph returned unexpected HTTP %d for a range request", resp.StatusCode)
+	}
 	return resp.Body, nil
+}
+
+func contentRangeStart(value string) (int64, error) {
+	original := value
+	unit, value, ok := strings.Cut(value, " ")
+	if !ok || unit != "bytes" {
+		return 0, fmt.Errorf("invalid Content-Range header %q", original)
+	}
+	byteRange, _, ok := strings.Cut(value, "/")
+	if !ok {
+		return 0, fmt.Errorf("invalid Content-Range header %q", original)
+	}
+	start, _, ok := strings.Cut(byteRange, "-")
+	if !ok {
+		return 0, fmt.Errorf("invalid Content-Range header %q", original)
+	}
+	parsed, err := strconv.ParseInt(start, 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, fmt.Errorf("invalid Content-Range header %q", original)
+	}
+	return parsed, nil
 }
 func (r *readSeekCloser) Seek(off int64, w int) (int64, error) {
 	var n int64
