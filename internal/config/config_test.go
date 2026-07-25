@@ -16,6 +16,7 @@ func TestCanCreateStringProviderFromRawStringJson(t *testing.T) {
 	err := json.Unmarshal([]byte(jsonData), &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "String", stringProvider.Value())
+	assert.False(t, stringProvider.CanWriteValue())
 }
 
 func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
@@ -30,6 +31,7 @@ func TestCanCreateStringProviderFromEnvKeyStringJson(t *testing.T) {
 	err = json.Unmarshal([]byte(jsonData), &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "EnvString", stringProvider.Value())
+	assert.True(t, stringProvider.CanWriteValue())
 }
 
 func TestCanCreateStringProviderFromFileJson(t *testing.T) {
@@ -47,6 +49,7 @@ func TestCanCreateStringProviderFromFileJson(t *testing.T) {
 	err = json.Unmarshal(jsonData, &stringProvider)
 	assert.Nil(t, err)
 	assert.Equal(t, "FileString", stringProvider.Value())
+	assert.True(t, stringProvider.CanWriteValue())
 }
 
 func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {

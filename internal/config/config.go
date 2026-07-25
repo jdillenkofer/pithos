@@ -88,6 +88,10 @@ func (s *StringProvider) SetValue(value string) {
 	s.value = value
 }
 
+func (s *StringProvider) CanWriteValue() bool {
+	return s.envKey != "" || s.file != ""
+}
+
 func (s *StringProvider) WriteValue(value string) error {
 	switch {
 	case s.envKey != "":
