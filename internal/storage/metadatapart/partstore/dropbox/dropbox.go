@@ -413,7 +413,8 @@ func (s *dropboxPartStore) DeletePart(ctx context.Context, tx database.Tx, id pa
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+		_, err := io.Copy(io.Discard, resp.Body)
+		return err
 	}
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == 409 && bytes.Contains(data, []byte("not_found")) {

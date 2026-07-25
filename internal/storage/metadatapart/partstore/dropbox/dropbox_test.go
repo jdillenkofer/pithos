@@ -272,6 +272,41 @@ func TestDropboxPartStoreDoesNotTreatEveryConflictAsMissing(t *testing.T) {
 	require.NotErrorIs(t, err, partstore.ErrPartNotFound)
 }
 
+func TestDropboxPartStoreDrainsSuccessfulDeleteResponse(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	responseBody := &trackingReadCloser{reader: strings.NewReader(`{"metadata":{"name":"part"}}`)}
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       responseBody,
+			Request:    r,
+		}, nil
+	})}
+	store, err := New("/parts", Options{HTTPClient: client})
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	err = store.DeletePart(context.Background(), nil, *id)
+
+	require.NoError(t, err)
+	require.Zero(t, responseBody.reader.Len())
+	require.True(t, responseBody.closed)
+}
+
+type trackingReadCloser struct {
+	reader *strings.Reader
+	closed bool
+}
+
+func (r *trackingReadCloser) Read(p []byte) (int, error) { return r.reader.Read(p) }
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
