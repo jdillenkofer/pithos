@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -52,6 +54,38 @@ func TestCanCreateStringProviderFromFileJson(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, "FileString", stringProvider.Value())
 	assert.True(t, stringProvider.CanPersistValue())
+}
+
+func TestFileStringProviderPersistsValueAtomicallyWithRestrictedPermissions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir := t.TempDir()
+	tempFile := filepath.Join(tempDir, "token.json")
+	err := os.WriteFile(tempFile, []byte("old-token"), 0o644)
+	assert.NoError(t, err)
+	jsonData, err := json.Marshal(map[string]string{
+		"type": "File",
+		"path": tempFile,
+	})
+	assert.NoError(t, err)
+	stringProvider := StringProvider{}
+	err = json.Unmarshal(jsonData, &stringProvider)
+	assert.NoError(t, err)
+
+	err = stringProvider.WriteValue("new-token")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "new-token", stringProvider.Value())
+	persisted, err := os.ReadFile(tempFile)
+	assert.NoError(t, err)
+	assert.Equal(t, "new-token", string(persisted))
+	if runtime.GOOS != "windows" {
+		info, statErr := os.Stat(tempFile)
+		assert.NoError(t, statErr)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
+	temporaryFiles, err := filepath.Glob(filepath.Join(tempDir, ".token.json.tmp-*"))
+	assert.NoError(t, err)
+	assert.Empty(t, temporaryFiles)
 }
 
 func TestCanCreateInt64ProviderFromRawInt64Json(t *testing.T) {

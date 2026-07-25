@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -98,10 +101,66 @@ func (s *StringProvider) WriteValue(value string) error {
 	if s.file == "" {
 		return errors.New("string provider does not support persistent writes")
 	}
-	if err := os.WriteFile(s.file, []byte(value), 0o600); err != nil {
+	if err := writeFileAtomically(s.file, value, 0o600); err != nil {
 		return err
 	}
 	s.value = value
+	return nil
+}
+
+func writeFileAtomically(targetPath, value string, mode os.FileMode) (err error) {
+	parentDir := filepath.Dir(targetPath)
+	tempFile, err := os.CreateTemp(parentDir, "."+filepath.Base(targetPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := tempFile.Name()
+	tempFileClosed := false
+	defer func() {
+		if !tempFileClosed {
+			_ = tempFile.Close()
+		}
+		_ = os.Remove(tempPath)
+	}()
+
+	if err = tempFile.Chmod(mode); err != nil {
+		return err
+	}
+	written, err := tempFile.WriteString(value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
+	}
+	if err = tempFile.Sync(); err != nil {
+		return err
+	}
+	if err = tempFile.Close(); err != nil {
+		return err
+	}
+	tempFileClosed = true
+
+	if err = os.Rename(tempPath, targetPath); err != nil {
+		return err
+	}
+
+	// Syncing the parent makes the rename durable across a power loss on
+	// platforms that support fsync on directory handles.
+	if runtime.GOOS != "windows" {
+		parent, openErr := os.Open(parentDir)
+		if openErr != nil {
+			return openErr
+		}
+		syncErr := parent.Sync()
+		closeErr := parent.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
 	return nil
 }
 
