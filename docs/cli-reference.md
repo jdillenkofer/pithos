@@ -16,6 +16,18 @@ The temporary spool directory can be selected with
 `-spoolDir <path>`. The directory must already exist and be writable by the
 Pithos process. When omitted, Pithos uses the platform temporary directory.
 
+The listener and certificate flags mirror the environment variables documented
+in [Configuration](configuration.md#tls-and-acme):
+
+- `-httpEnabled`, `-port`, `-httpsEnabled`, and `-httpsPort`
+- `-monitoringPortEnabled`, `-monitoringPort`,
+  `-monitoringHttpsEnabled`, and `-monitoringHttpsPort`
+- `-tlsCertFile` and `-tlsKeyFile`
+- `-acmeEnabled`, `-acmeDomains`, `-acmeEmail`, `-acmeCacheDir`,
+  `-acmeCADirectoryURL`, `-acmeChallenge`, and `-acmeDNSProvider`
+
+Environment variables take precedence over command-line flags.
+
 ## `migrate-storage`
 
 Migrates data between two different storage configurations.

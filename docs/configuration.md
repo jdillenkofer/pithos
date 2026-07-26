@@ -7,10 +7,17 @@
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_BIND_ADDRESS` | IP address to bind the server to | `0.0.0.0` |
-| `PITHOS_PORT` | Port to run the server on | `9000` |
+| `PITHOS_HTTP_ENABLED` | Enable the S3/website HTTP listener | `true` |
+| `PITHOS_PORT` | S3/website HTTP port | `9000` |
+| `PITHOS_HTTPS_ENABLED` | Enable the S3/website HTTPS listener | `false` |
+| `PITHOS_HTTPS_PORT` | S3/website HTTPS port | `9443` |
 | `PITHOS_DOMAIN` | Domain name of the server | `localhost` |
 | `PITHOS_WEBSITE_DOMAIN` | Domain name of the website | `s3-website.localhost` |
 | `PITHOS_REGION` | AWS region for authentication | `eu-central-1` |
+
+HTTP and HTTPS are independent and serve the same S3 and website routes. Pithos
+does not redirect HTTP to HTTPS automatically. At least one S3 listener must be
+enabled.
 
 ### Authentication and Authorization
 
@@ -44,6 +51,97 @@ by an interrupted process may need to be cleaned up separately.
 |----------|-------------|---------|
 | `PITHOS_MONITORING_PORT` | Port for monitoring endpoints | `9090` |
 | `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `true` |
+| `PITHOS_MONITORING_HTTPS_ENABLED` | Enable the HTTPS monitoring listener | `false` |
+| `PITHOS_MONITORING_HTTPS_PORT` | HTTPS port for monitoring endpoints | `9444` |
+
+Monitoring routes remain isolated from S3 routes on both transports.
+
+### TLS and ACME
+
+Both HTTPS listeners share one certificate source. Configure either a static
+certificate/key pair or ACME, never both.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PITHOS_TLS_CERT_FILE` | PEM certificate chain for static TLS | - |
+| `PITHOS_TLS_KEY_FILE` | PEM private key for static TLS | - |
+| `PITHOS_ACME_ENABLED` | Manage certificates automatically; enabling this accepts the CA terms | `false` |
+| `PITHOS_ACME_DOMAINS` | Comma-separated certificate names | - |
+| `PITHOS_ACME_EMAIL` | Optional ACME account email | - |
+| `PITHOS_ACME_CACHE_DIR` | Persistent, writable certificate/account cache | - |
+| `PITHOS_ACME_CA_DIRECTORY_URL` | ACME directory endpoint | Let's Encrypt production |
+| `PITHOS_ACME_CHALLENGE` | `auto`, `http-01`, `tls-alpn-01`, or `dns-01` | `auto` |
+| `PITHOS_ACME_DNS_PROVIDER` | DNS provider used by `dns-01` | - |
+
+`auto` enables HTTP-01 when any HTTP listener is active and TLS-ALPN-01 on the
+HTTPS listeners. Public ACME validation still reaches port 80 for HTTP-01 and
+port 443 for TLS-ALPN-01: forward those public ports to the configured internal
+ports. DNS-01 does not require an inbound challenge port and is required for
+wildcard certificates.
+
+Supported DNS provider names are `cloudflare`, `route53`, `gcloud`, `azuredns`,
+`digitalocean`, `hetzner`, `dnsupdate` (or `rfc2136`), `exec`, and `httpreq`.
+Credentials use the corresponding
+[lego provider environment variables](https://go-acme.github.io/lego/dns/).
+Their `_FILE` forms are supported, which is useful with container secrets.
+
+S3 virtual-host addressing normally needs both the base name and its wildcard
+name, for example `s3.example.com,*.s3.example.com`. The wildcard makes
+DNS-01 mandatory.
+
+#### Static TLS
+
+```sh
+PITHOS_HTTPS_ENABLED=true \
+PITHOS_TLS_CERT_FILE=/run/secrets/tls.crt \
+PITHOS_TLS_KEY_FILE=/run/secrets/tls.key \
+pithos serve
+```
+
+This keeps the default HTTP listener active alongside HTTPS. Static files are
+loaded once during startup and are not hot-reloaded.
+
+#### Automatic ACME
+
+```sh
+PITHOS_HTTPS_ENABLED=true \
+PITHOS_ACME_ENABLED=true \
+PITHOS_ACME_DOMAINS=s3.example.com \
+PITHOS_ACME_EMAIL=admin@example.com \
+PITHOS_ACME_CACHE_DIR=/data/acme \
+pithos serve
+```
+
+Forward public TCP 80 to port 9000 and public TCP 443 to port 9443. To bind
+public 443 directly, set `PITHOS_HTTPS_PORT=443` and grant the process
+`CAP_NET_BIND_SERVICE` (for Docker, `--cap-add NET_BIND_SERVICE`).
+
+#### DNS wildcard and HTTPS-only
+
+```sh
+PITHOS_HTTP_ENABLED=false \
+PITHOS_HTTPS_ENABLED=true \
+PITHOS_ACME_ENABLED=true \
+PITHOS_ACME_DOMAINS='s3.example.com,*.s3.example.com' \
+PITHOS_ACME_CACHE_DIR=/data/acme \
+PITHOS_ACME_CHALLENGE=dns-01 \
+PITHOS_ACME_DNS_PROVIDER=cloudflare \
+CLOUDFLARE_DNS_API_TOKEN_FILE=/run/secrets/cloudflare-token \
+pithos serve
+```
+
+#### Monitoring HTTPS
+
+```sh
+PITHOS_MONITORING_HTTPS_ENABLED=true \
+PITHOS_HTTPS_ENABLED=true \
+PITHOS_TLS_CERT_FILE=/run/secrets/tls.crt \
+PITHOS_TLS_KEY_FILE=/run/secrets/tls.key \
+pithos serve
+```
+
+The monitoring HTTP listener on 9090 remains enabled in this example; set
+`PITHOS_MONITORING_PORT_ENABLED=false` for monitoring HTTPS only.
 
 ### Logging
 
