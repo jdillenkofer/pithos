@@ -19,14 +19,14 @@ const (
 // AEAD implements tink.AEAD interface using PKCS#11 for key operations.
 // The master key never leaves the HSM.
 type AEAD struct {
-	mu         sync.Mutex // Protects concurrent access to PKCS#11 operations
-	ctx        *pkcs11.Ctx
-	session    pkcs11.SessionHandle
-	keyHandle  pkcs11.ObjectHandle
-	modulePath string
-	tokenLabel string
-	slotID     uint
-	loggedIn   bool
+	mu        sync.Mutex // Protects concurrent access to PKCS#11 operations
+	module    *sharedModule
+	ctx       cryptokiContext
+	session   pkcs11.SessionHandle
+	keyHandle pkcs11.ObjectHandle
+	slotID    uint
+	loggedIn  bool
+	closed    bool
 }
 
 // NewAEAD creates a new PKCS#11 AEAD.
@@ -48,64 +48,54 @@ func NewAEAD(modulePath, tokenLabel, pin, keyLabel string) (*AEAD, error) {
 		return nil, errors.New("keyLabel is required")
 	}
 
-	// Initialize PKCS#11 context
-	ctx := pkcs11.New(modulePath)
-	if ctx == nil {
-		return nil, fmt.Errorf("failed to load PKCS#11 module: %s", modulePath)
+	module, err := modules.acquire(modulePath)
+	if err != nil {
+		return nil, err
 	}
-
-	if err := ctx.Initialize(); err != nil {
-		ctx.Destroy()
-		return nil, fmt.Errorf("failed to initialize PKCS#11: %w", err)
-	}
+	ctx := module.ctx
 
 	// Find the slot with the matching token label
 	slotID, err := findSlotByTokenLabel(ctx, tokenLabel)
 	if err != nil {
-		ctx.Finalize()
-		ctx.Destroy()
+		_ = module.pool.release(module)
 		return nil, err
 	}
 
 	// Open a session
 	session, err := ctx.OpenSession(slotID, pkcs11.CKF_SERIAL_SESSION|pkcs11.CKF_RW_SESSION)
 	if err != nil {
-		ctx.Finalize()
-		ctx.Destroy()
+		_ = module.pool.release(module)
 		return nil, fmt.Errorf("failed to open PKCS#11 session: %w", err)
 	}
 
 	// Login with UserPIN
-	if err := ctx.Login(session, pkcs11.CKU_USER, pin); err != nil {
-		ctx.CloseSession(session)
-		ctx.Finalize()
-		ctx.Destroy()
+	if err := module.acquireLogin(slotID, session, pin); err != nil {
+		_ = ctx.CloseSession(session)
+		_ = module.pool.release(module)
 		return nil, fmt.Errorf("failed to login to PKCS#11 token: %w", err)
 	}
 
 	// Find the AES key by label
 	keyHandle, err := findKeyByLabel(ctx, session, keyLabel)
 	if err != nil {
-		ctx.Logout(session)
-		ctx.CloseSession(session)
-		ctx.Finalize()
-		ctx.Destroy()
+		_ = module.releaseLogin(slotID, session)
+		_ = ctx.CloseSession(session)
+		_ = module.pool.release(module)
 		return nil, err
 	}
 
 	return &AEAD{
-		ctx:        ctx,
-		session:    session,
-		keyHandle:  keyHandle,
-		modulePath: modulePath,
-		tokenLabel: tokenLabel,
-		slotID:     slotID,
-		loggedIn:   true,
+		module:    module,
+		ctx:       ctx,
+		session:   session,
+		keyHandle: keyHandle,
+		slotID:    slotID,
+		loggedIn:  true,
 	}, nil
 }
 
 // findSlotByTokenLabel finds the slot ID for a token with the given label
-func findSlotByTokenLabel(ctx *pkcs11.Ctx, tokenLabel string) (uint, error) {
+func findSlotByTokenLabel(ctx cryptokiContext, tokenLabel string) (uint, error) {
 	slots, err := ctx.GetSlotList(true) // Only slots with tokens present
 	if err != nil {
 		return 0, fmt.Errorf("failed to get slot list: %w", err)
@@ -135,7 +125,7 @@ func trimLabel(label string) string {
 }
 
 // findKeyByLabel finds an AES key by its label
-func findKeyByLabel(ctx *pkcs11.Ctx, session pkcs11.SessionHandle, keyLabel string) (pkcs11.ObjectHandle, error) {
+func findKeyByLabel(ctx cryptokiContext, session pkcs11.SessionHandle, keyLabel string) (pkcs11.ObjectHandle, error) {
 	template := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_SECRET_KEY),
 		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_AES),
@@ -235,8 +225,13 @@ func (a *AEAD) Close() error {
 
 	var errs []error
 
+	if a.closed {
+		return nil
+	}
+	a.closed = true
+
 	if a.loggedIn {
-		if err := a.ctx.Logout(a.session); err != nil {
+		if err := a.module.releaseLogin(a.slotID, a.session); err != nil {
 			errs = append(errs, fmt.Errorf("failed to logout: %w", err))
 		}
 		a.loggedIn = false
@@ -246,11 +241,9 @@ func (a *AEAD) Close() error {
 		errs = append(errs, fmt.Errorf("failed to close session: %w", err))
 	}
 
-	if err := a.ctx.Finalize(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to finalize: %w", err))
+	if err := a.module.pool.release(a.module); err != nil {
+		errs = append(errs, err)
 	}
-
-	a.ctx.Destroy()
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)
