@@ -3,6 +3,7 @@ package pkcs11
 import (
 	"testing"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	miekgpkcs11 "github.com/miekg/pkcs11"
 )
 
@@ -13,6 +14,10 @@ type fakeCryptokiContext struct {
 	destroyCalls    int
 	loginCalls      int
 	logoutCalls     int
+	slots           []uint
+	tokenLabel      string
+	sessionFlags    uint
+	objectHandles   []miekgpkcs11.ObjectHandle
 }
 
 func (f *fakeCryptokiContext) Initialize(...miekgpkcs11.InitializeOption) error {
@@ -30,15 +35,16 @@ func (f *fakeCryptokiContext) Destroy() {
 }
 
 func (f *fakeCryptokiContext) GetSlotList(bool) ([]uint, error) {
-	return nil, nil
+	return f.slots, nil
 }
 
 func (f *fakeCryptokiContext) GetTokenInfo(uint) (miekgpkcs11.TokenInfo, error) {
-	return miekgpkcs11.TokenInfo{}, nil
+	return miekgpkcs11.TokenInfo{Label: f.tokenLabel}, nil
 }
 
-func (f *fakeCryptokiContext) OpenSession(uint, uint) (miekgpkcs11.SessionHandle, error) {
-	return 0, nil
+func (f *fakeCryptokiContext) OpenSession(_ uint, flags uint) (miekgpkcs11.SessionHandle, error) {
+	f.sessionFlags = flags
+	return 1, nil
 }
 
 func (f *fakeCryptokiContext) CloseSession(miekgpkcs11.SessionHandle) error {
@@ -60,7 +66,7 @@ func (f *fakeCryptokiContext) FindObjectsInit(miekgpkcs11.SessionHandle, []*miek
 }
 
 func (f *fakeCryptokiContext) FindObjects(miekgpkcs11.SessionHandle, int) ([]miekgpkcs11.ObjectHandle, bool, error) {
-	return nil, false, nil
+	return f.objectHandles, false, nil
 }
 
 func (f *fakeCryptokiContext) FindObjectsFinal(miekgpkcs11.SessionHandle) error {
@@ -84,6 +90,8 @@ func (f *fakeCryptokiContext) Decrypt(miekgpkcs11.SessionHandle, []byte) ([]byte
 }
 
 func TestModulePoolSharesModuleUntilLastRelease(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	fake := &fakeCryptokiContext{}
 	loadCalls := 0
 	pool := newModulePool(func(string) cryptokiContext {
@@ -123,6 +131,8 @@ func TestModulePoolSharesModuleUntilLastRelease(t *testing.T) {
 }
 
 func TestModulePoolDoesNotFinalizeExternalInitialization(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	fake := &fakeCryptokiContext{
 		initializeErr: miekgpkcs11.Error(miekgpkcs11.CKR_CRYPTOKI_ALREADY_INITIALIZED),
 	}
@@ -147,6 +157,8 @@ func TestModulePoolDoesNotFinalizeExternalInitialization(t *testing.T) {
 }
 
 func TestSharedModuleKeepsTokenLoggedInUntilLastRelease(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	fake := &fakeCryptokiContext{}
 	module := &sharedModule{
 		ctx:    fake,
@@ -179,6 +191,8 @@ func TestSharedModuleKeepsTokenLoggedInUntilLastRelease(t *testing.T) {
 }
 
 func TestSharedModuleRejectsDifferentPINForLoggedInToken(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	fake := &fakeCryptokiContext{}
 	module := &sharedModule{
 		ctx:    fake,
@@ -191,5 +205,36 @@ func TestSharedModuleRejectsDifferentPINForLoggedInToken(t *testing.T) {
 	err := module.acquireLogin(1, 11, "other-pin")
 	if err == nil {
 		t.Fatal("expected a PIN mismatch error")
+	}
+}
+
+func TestNewAEADOpensReadOnlySession(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{
+		slots:         []uint{1},
+		tokenLabel:    "token",
+		objectHandles: []miekgpkcs11.ObjectHandle{2},
+	}
+	originalModules := modules
+	modules = newModulePool(func(string) cryptokiContext {
+		return fake
+	})
+	t.Cleanup(func() {
+		modules = originalModules
+	})
+
+	aead, err := NewAEAD("/module.so", "token", "pin", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := aead.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if fake.sessionFlags != miekgpkcs11.CKF_SERIAL_SESSION {
+		t.Fatalf("session flags = %#x, want %#x", fake.sessionFlags, miekgpkcs11.CKF_SERIAL_SESSION)
 	}
 }
