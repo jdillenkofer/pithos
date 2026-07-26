@@ -2,6 +2,7 @@ package settings
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, des
 }
 
 func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
-	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
+	serveCommand := flag.NewFlagSet("serve", flag.ContinueOnError)
 	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
 	credentialsProviderAccessor := registerStringFlag(serveCommand, "credentialsProvider", defaultCredentialsProvider, "credential provider: auto, environment, file, or sql")
 	credentialsPathAccessor := registerStringFlag(serveCommand, "credentialsPath", defaultCredentialsPath, "path to the reloadable credentials JSON file")
@@ -101,6 +102,9 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
 		return nil, err
+	}
+	if serveCommand.NArg() != 0 {
+		return nil, fmt.Errorf("unexpected command-line arguments: %q", serveCommand.Args())
 	}
 
 	var trustedProxyCIDRs []string

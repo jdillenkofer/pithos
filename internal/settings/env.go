@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -57,27 +58,29 @@ func getStringFromEnv(envKey string) *string {
 	return &val
 }
 
-func getIntFromEnv(envKey string) *int {
+func getIntFromEnv(envKey string) (*int, error) {
 	val := os.Getenv(envKey)
 	if val == "" {
-		return nil
+		return nil, nil
 	}
 	int64Val, err := strconv.ParseInt(val, 10, 32)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid value for %s: %q must be an integer: %w", envKey, val, err)
 	}
 	intVal := int(int64Val)
-	return &intVal
+	return &intVal, nil
 }
 
-func getBoolFromEnv(envKey string) *bool {
+func getBoolFromEnv(envKey string) (*bool, error) {
 	val := os.Getenv(envKey)
-	val = strings.ToLower(val)
 	if val == "" {
-		return nil
+		return nil, nil
 	}
-	retval := val == "1" || val == "t" || val == "true"
-	return &retval
+	boolVal, err := strconv.ParseBool(val)
+	if err != nil {
+		return nil, fmt.Errorf("invalid value for %s: %q must be a boolean: %w", envKey, val, err)
+	}
+	return &boolVal, nil
 }
 
 func getStringSliceFromEnv(envKey string) []string {
@@ -108,26 +111,62 @@ func splitCommaSeparated(val string) []string {
 }
 
 func loadSettingsFromEnv() (*Settings, error) {
-	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
+	authenticationEnabled, err := getBoolFromEnv(authenticationEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	credentialsProvider := getStringFromEnv(credentialsProviderEnvKey)
 	credentialsPath := getStringFromEnv(credentialsPathEnvKey)
-	credentialsReloadIntervalSeconds := getIntFromEnv(credentialsReloadIntervalSecondsEnvKey)
-	credentialsDatabaseIndex := getIntFromEnv(credentialsDatabaseIndexEnvKey)
+	credentialsReloadIntervalSeconds, err := getIntFromEnv(credentialsReloadIntervalSecondsEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	credentialsDatabaseIndex, err := getIntFromEnv(credentialsDatabaseIndexEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	websiteDomain := getStringFromEnv(websiteDomainEnvKey)
 	bindAddress := getStringFromEnv(bindAddressEnvKey)
-	port := getIntFromEnv(portEnvKey)
-	httpEnabled := getBoolFromEnv(httpEnabledEnvKey)
-	httpsEnabled := getBoolFromEnv(httpsEnabledEnvKey)
-	httpsPort := getIntFromEnv(httpsPortEnvKey)
-	monitoringPort := getIntFromEnv(monitoringPortEnvKey)
-	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
-	monitoringHttpsEnabled := getBoolFromEnv(monitoringHttpsEnabledEnvKey)
-	monitoringHttpsPort := getIntFromEnv(monitoringHttpsPortEnvKey)
+	port, err := getIntFromEnv(portEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	httpEnabled, err := getBoolFromEnv(httpEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	httpsEnabled, err := getBoolFromEnv(httpsEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	httpsPort, err := getIntFromEnv(httpsPortEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	monitoringPort, err := getIntFromEnv(monitoringPortEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	monitoringPortEnabled, err := getBoolFromEnv(monitoringPortEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	monitoringHttpsEnabled, err := getBoolFromEnv(monitoringHttpsEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	monitoringHttpsPort, err := getIntFromEnv(monitoringHttpsPortEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	tlsCertFile := getStringFromEnv(tlsCertFileEnvKey)
 	tlsKeyFile := getStringFromEnv(tlsKeyFileEnvKey)
-	acmeEnabled := getBoolFromEnv(acmeEnabledEnvKey)
+	acmeEnabled, err := getBoolFromEnv(acmeEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	acmeDomains := getStringSliceFromEnv(acmeDomainsEnvKey)
 	acmeEmail := getStringFromEnv(acmeEmailEnvKey)
 	acmeCacheDir := getStringFromEnv(acmeCacheDirEnvKey)
@@ -137,17 +176,32 @@ func loadSettingsFromEnv() (*Settings, error) {
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
-	authorizerTimeoutMilliseconds := getIntFromEnv(authorizerTimeoutMillisecondsEnvKey)
+	authorizerTimeoutMilliseconds, err := getIntFromEnv(authorizerTimeoutMillisecondsEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	policyPath := getStringFromEnv(policyPathEnvKey)
-	policyReloadIntervalSeconds := getIntFromEnv(policyReloadIntervalSecondsEnvKey)
+	policyReloadIntervalSeconds, err := getIntFromEnv(policyReloadIntervalSecondsEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	spoolDir := getStringFromEnv(spoolDirEnvKey)
-	trustForwardedHeaders := getBoolFromEnv(trustForwardedHeadersEnvKey)
+	trustForwardedHeaders, err := getBoolFromEnv(trustForwardedHeadersEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	trustedProxyCIDRs := getStringSliceFromEnv(trustedProxyCIDRsEnvKey)
 	logLevel := getStringFromEnv(logLevelEnvKey)
-	otelEnabled := getBoolFromEnv(otelEnabledEnvKey)
+	otelEnabled, err := getBoolFromEnv(otelEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	otelExporter := getStringFromEnv(otelExporterEnvKey)
 	otelEndpoint := getStringFromEnv(otelEndpointEnvKey)
-	metricsGaugesIntervalSeconds := getIntFromEnv(metricsGaugesIntervalSecondsEnvKey)
+	metricsGaugesIntervalSeconds, err := getIntFromEnv(metricsGaugesIntervalSecondsEnvKey)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Settings{
 		authenticationEnabled:            authenticationEnabled,
