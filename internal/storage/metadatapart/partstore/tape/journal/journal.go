@@ -205,6 +205,13 @@ func (j *Journal) openNewFile() error {
 		_ = f.Close()
 		return err
 	}
+	// Persist the new directory entry independently from the file contents.
+	// Later durability syncs cover the records written to the file, but a file
+	// fsync alone does not guarantee that its name survives a power loss.
+	if err := ioutils.SyncDirectory(j.dir); err != nil {
+		_ = f.Close()
+		return err
+	}
 	return nil
 }
 
