@@ -505,24 +505,7 @@ func (s *tapePartStore) recoverLocked(ctx context.Context, label volumeLabel, da
 // sealTornTailLocked erases an untrusted tail after the last committed segment
 // by writing a filemark at the clean append point. Must hold s.mu.
 func (s *tapePartStore) sealTornTailLocked(ctx context.Context, tailBlock uint64) error {
-	if err := s.device.SeekToEOD(ctx); err != nil {
-		return err
-	}
-	pos, err := s.device.Tell(ctx)
-	if err != nil {
-		return err
-	}
-	if pos.Block <= tailBlock {
-		return nil // nothing untrusted beyond the last committed segment
-	}
-	slog.WarnContext(ctx, "Sealing untrusted tape tail", "tailBlock", tailBlock, "eod", pos.Block)
-	if err := s.device.LocateBlock(ctx, tailBlock); err != nil {
-		return err
-	}
-	if err := s.device.WriteFilemarks(ctx, 1); err != nil {
-		return err
-	}
-	return s.device.Flush(ctx)
+	return sealUntrustedTail(ctx, s.device, tailBlock)
 }
 
 func (s *tapePartStore) Stop(ctx context.Context) error {

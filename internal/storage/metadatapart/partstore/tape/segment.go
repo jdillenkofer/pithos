@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -63,7 +64,9 @@ type SegmentWriter struct {
 	finished bool
 }
 
-// NewSegmentWriter positions at end-of-data and writes the segment header.
+// NewSegmentWriter positions at end-of-data and writes the segment header. If
+// writing the header fails, the returned writer identifies the untrusted tail
+// that must be sealed before another segment is appended.
 func NewSegmentWriter(ctx context.Context, dev tapedev.Device, recordSize int, previousSegment [16]byte, sequenceStart uint64) (*SegmentWriter, error) {
 	var segmentID [16]byte
 	if _, err := rand.Read(segmentID[:]); err != nil {
@@ -95,9 +98,32 @@ func NewSegmentWriter(ctx context.Context, dev tapedev.Device, recordSize int, p
 		sequenceStart:   sequenceStart,
 	}
 	if err := w.writeData(ctx, segKindHeader, encodeSegmentHeader(w.header)); err != nil {
-		return nil, err
+		return w, err
 	}
 	return w, nil
+}
+
+// sealUntrustedTail truncates a failed append and leaves a filemark at its
+// starting block. A subsequent writer may then safely append after it.
+func sealUntrustedTail(ctx context.Context, dev tapedev.Device, tailBlock uint64) error {
+	if err := dev.SeekToEOD(ctx); err != nil {
+		return err
+	}
+	pos, err := dev.Tell(ctx)
+	if err != nil {
+		return err
+	}
+	if pos.Block <= tailBlock {
+		return nil
+	}
+	slog.WarnContext(ctx, "Sealing untrusted tape tail", "tailBlock", tailBlock, "eod", pos.Block)
+	if err := dev.LocateBlock(ctx, tailBlock); err != nil {
+		return err
+	}
+	if err := dev.WriteFilemarks(ctx, 1); err != nil {
+		return err
+	}
+	return dev.Flush(ctx)
 }
 
 func (w *SegmentWriter) SegmentID() [16]byte { return w.segmentID }

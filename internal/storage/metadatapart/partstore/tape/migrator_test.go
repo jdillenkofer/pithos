@@ -3,15 +3,34 @@ package tape
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
+	tapedev "github.com/jdillenkofer/pithos/internal/tape"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+type failRecordOnceDevice struct {
+	tapedev.Device
+	failAt int
+	writes int
+	failed bool
+	err    error
+}
+
+func (d *failRecordOnceDevice) WriteRecord(ctx context.Context, p []byte) error {
+	d.writes++
+	if !d.failed && d.writes == d.failAt {
+		d.failed = true
+		return d.err
+	}
+	return d.Device.WriteRecord(ctx, p)
+}
 
 func openJournal(t *testing.T) *journal.Journal {
 	t.Helper()
@@ -112,6 +131,32 @@ func TestMigrateAlreadyCheckpointedNotRemigrated(t *testing.T) {
 	segments, _, err := scanSegments(ctx, dev)
 	require.NoError(t, err)
 	require.Len(t, segments, 1)
+}
+
+func TestMigrateRetrySealsFailedSegmentTail(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	j := openJournal(t)
+	base := openSimulator(t)
+	partID, generation := stageActivePart(t, j, []byte("payload"))
+	writeErr := errors.New("injected tape write failure")
+	dev := &failRecordOnceDevice{Device: base, failAt: 2, err: writeErr}
+	m := NewMigrator(j, dev, 4096, migrationTestPolicy(), [16]byte{}, 1)
+
+	_, err := m.MigrateOnce(ctx, true)
+	require.ErrorIs(t, err, writeErr)
+
+	result, err := m.MigrateOnce(ctx, true)
+	require.NoError(t, err)
+	require.True(t, result.Committed)
+	require.Len(t, result.Parts, 1)
+
+	segments, _, err := scanSegments(ctx, base)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	require.Equal(t, generation, segments[0].index[0].generation)
+	require.Equal(t, partID, segments[0].index[0].partID)
 }
 
 func TestMigrateWritesMetadataOnlyDeletionSegment(t *testing.T) {

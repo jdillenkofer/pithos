@@ -36,6 +36,7 @@ type Migrator struct {
 	previousSegment [16]byte
 	nextSequence    uint64
 	capturedOps     map[partstore.PartId]capturedLogicalState
+	untrustedTail   *uint64
 }
 
 type capturedLogicalState struct {
@@ -120,10 +121,27 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 		return MigrationResult{}, nil
 	}
 
+	if m.untrustedTail != nil {
+		if err := sealUntrustedTail(ctx, m.device, *m.untrustedTail); err != nil {
+			return MigrationResult{}, fmt.Errorf("sealing failed tape segment at block %d: %w", *m.untrustedTail, err)
+		}
+		m.untrustedTail = nil
+	}
 	writer, err := NewSegmentWriter(ctx, m.device, m.recordSize, m.previousSegment, m.nextSequence)
 	if err != nil {
+		if writer != nil {
+			tailBlock := writer.firstBlock
+			m.untrustedTail = &tailBlock
+		}
 		return MigrationResult{}, err
 	}
+	segmentCommitted := false
+	defer func() {
+		if !segmentCommitted {
+			tailBlock := writer.firstBlock
+			m.untrustedTail = &tailBlock
+		}
+	}()
 
 	migrated := make([]MigratedPart, 0, len(plan.Parts))
 	for _, cand := range plan.Parts {
@@ -188,6 +206,7 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 	for _, op := range manifestOps {
 		m.capturedOps[op.PartID] = capturedStateFromOp(op)
 	}
+	segmentCommitted = true
 	return MigrationResult{SegmentID: segmentID, Parts: migrated, segment: segment, Committed: true}, nil
 }
 
