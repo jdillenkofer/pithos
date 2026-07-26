@@ -783,3 +783,32 @@ func TestTapePartStoreStagesTapeReadsOnDisk(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
+
+func TestTapePartStoreRetriesStaleJournalLocatorFromTape(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	store := newStartedTapeStore(t, filepath.Join(root, "tape.sim"), filepath.Join(root, "journal"))
+	defer store.Stop(ctx)
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := bytes.Repeat([]byte("survives journal compaction"), 64)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader(content)))
+	stale := store.index[*partID]
+
+	store.runMigration(ctx, true)
+	require.Equal(t, locationTape, store.index[*partID].location)
+
+	// Model a GetPart that copied the journal locator just before migration
+	// published the tape location, with compaction removing the old file before
+	// OpenPayload. A nonexistent file makes that interleaving deterministic.
+	stale.journalLoc.FileIndex = ^uint64(0)
+	reader, err := store.openPartAtEntry(ctx, *partID, stale, store.journal)
+	require.NoError(t, err)
+	defer reader.Close()
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+}

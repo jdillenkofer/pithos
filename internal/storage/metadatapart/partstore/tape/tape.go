@@ -753,8 +753,26 @@ func (s *tapePartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	if !ok {
 		return nil, partstore.ErrPartNotFound
 	}
+	return s.openPartAtEntry(ctx, partId, entry, j)
+}
+
+func (s *tapePartStore) openPartAtEntry(ctx context.Context, partId partstore.PartId, entry indexEntry, j *journal.Journal) (io.ReadCloser, error) {
 	if entry.location == locationJournal {
-		return j.OpenPayload(entry.journalLoc)
+		reader, err := j.OpenPayload(entry.journalLoc)
+		if err == nil {
+			return reader, nil
+		}
+
+		// Migration may have published the durable tape location and compacted
+		// the old journal file after GetPart copied entry. Retry from tape only
+		// when the same generation has made that transition.
+		s.mu.Lock()
+		refreshed, ok := s.index[partId]
+		s.mu.Unlock()
+		if !ok || refreshed.generation != entry.generation || refreshed.location != locationTape {
+			return nil, err
+		}
+		entry = refreshed
 	}
 	return s.openCachedTapePart(ctx, partId, entry)
 }
