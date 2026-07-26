@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -19,6 +20,7 @@ type tokenLogin struct {
 type sharedModule struct {
 	ctx                cryptokiContext
 	path               string
+	fileInfo           os.FileInfo
 	refs               int
 	ownsInitialization bool
 	pool               *modulePool
@@ -51,6 +53,10 @@ func (p *modulePool) acquire(modulePath string) (*sharedModule, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve PKCS#11 module path %q: %w", modulePath, err)
 	}
+	fileInfo, err := os.Stat(canonicalPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect PKCS#11 module %q: %w", canonicalPath, err)
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -58,6 +64,12 @@ func (p *modulePool) acquire(modulePath string) (*sharedModule, error) {
 	if module, ok := p.modules[canonicalPath]; ok {
 		module.refs++
 		return module, nil
+	}
+	for _, module := range p.modules {
+		if os.SameFile(module.fileInfo, fileInfo) {
+			module.refs++
+			return module, nil
+		}
 	}
 
 	ctx := p.load(canonicalPath)
@@ -77,6 +89,7 @@ func (p *modulePool) acquire(modulePath string) (*sharedModule, error) {
 	module := &sharedModule{
 		ctx:                ctx,
 		path:               canonicalPath,
+		fileInfo:           fileInfo,
 		refs:               1,
 		ownsInitialization: ownsInitialization,
 		pool:               p,

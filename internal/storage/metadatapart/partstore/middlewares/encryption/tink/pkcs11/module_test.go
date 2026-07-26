@@ -184,15 +184,11 @@ func TestModulePoolSharesEquivalentModulePaths(t *testing.T) {
 		loadCalls++
 		return fake
 	})
-	modulePath := createTestModuleFile(t)
-	workingDirectory, err := os.Getwd()
+	modulePath, err := filepath.Abs("module_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	relativePath, err := filepath.Rel(workingDirectory, modulePath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	relativePath := "module_test.go"
 
 	first, err := pool.acquire(modulePath)
 	if err != nil {
@@ -244,6 +240,45 @@ func TestModulePoolSharesSymlinkedModulePaths(t *testing.T) {
 
 	if first != second {
 		t.Fatal("expected symlinked paths to share the same module")
+	}
+	if loadCalls != 1 {
+		t.Fatalf("module loaded %d times", loadCalls)
+	}
+
+	if err := pool.release(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.release(second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModulePoolSharesHardLinkedModulePaths(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{}
+	loadCalls := 0
+	pool := newModulePool(func(string) cryptokiContext {
+		loadCalls++
+		return fake
+	})
+	modulePath := createTestModuleFile(t)
+	linkPath := filepath.Join(filepath.Dir(modulePath), "module-hardlink.so")
+	if err := os.Link(modulePath, linkPath); err != nil {
+		t.Skipf("hard links are unavailable: %v", err)
+	}
+
+	first, err := pool.acquire(modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pool.acquire(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != second {
+		t.Fatal("expected hard-linked paths to share the same module")
 	}
 	if loadCalls != 1 {
 		t.Fatalf("module loaded %d times", loadCalls)
