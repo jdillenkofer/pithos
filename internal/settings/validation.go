@@ -41,11 +41,11 @@ func (s *Settings) Validate() error {
 	}
 	addresses := make(map[string]string)
 	for _, listener := range listeners {
-		if !listener.enabled {
-			continue
-		}
 		if listener.port < 0 || listener.port > 65535 {
 			return fmt.Errorf("%s port must be in 0..65535", listener.name)
+		}
+		if !listener.enabled {
+			continue
 		}
 		address := net.JoinHostPort(s.BindAddress(), fmt.Sprint(listener.port))
 		// Port zero asks the kernel for a distinct ephemeral port per bind.

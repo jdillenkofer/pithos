@@ -125,6 +125,78 @@ func TestTLSSettingsEnvironmentOverridesCommandLine(t *testing.T) {
 	assert.Equal(t, []string{"example.com", "*.example.com"}, appSettings.ACMEDomains())
 }
 
+func TestLoadSettingsRejectsInvalidTypedEnvironmentValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name   string
+		envKey string
+		value  string
+	}{
+		{"authentication enabled", authenticationEnabledEnvKey, "yes"},
+		{"HTTP port", portEnvKey, "9000.0"},
+		{"HTTP enabled", httpEnabledEnvKey, "enabled"},
+		{"HTTPS enabled", httpsEnabledEnvKey, "tru"},
+		{"HTTPS port", httpsPortEnvKey, "9443x"},
+		{"monitoring port", monitoringPortEnvKey, "9090x"},
+		{"monitoring port enabled", monitoringPortEnabledEnvKey, "maybe"},
+		{"monitoring HTTPS enabled", monitoringHttpsEnabledEnvKey, "tru"},
+		{"monitoring HTTPS port", monitoringHttpsPortEnvKey, "9444x"},
+		{"ACME enabled", acmeEnabledEnvKey, "enabled"},
+		{"trust forwarded headers", trustForwardedHeadersEnvKey, "yes"},
+		{"OpenTelemetry enabled", otelEnabledEnvKey, "enabled"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(test.envKey, test.value)
+
+			appSettings, err := LoadSettings(nil)
+
+			assert.Nil(t, appSettings)
+			if assert.Error(t, err) {
+				assert.Contains(t, err.Error(), test.envKey)
+				assert.Contains(t, err.Error(), test.value)
+			}
+		})
+	}
+}
+
+func TestLoadSettingsAcceptsStrictBooleanEnvironmentValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	t.Setenv(httpEnabledEnvKey, "FALSE")
+	t.Setenv(httpsEnabledEnvKey, "1")
+
+	appSettings, err := LoadSettings(nil)
+
+	assert.NoError(t, err)
+	assert.False(t, appSettings.HTTPEnabled())
+	assert.True(t, appSettings.HTTPSEnabled())
+}
+
+func TestLoadSettingsRejectsInvalidTypedCommandLineValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"HTTPS enabled typo", []string{"-httpsEnabled=tru"}, "invalid boolean value"},
+		{"HTTPS port typo", []string{"-httpsPort=9443x"}, "invalid value"},
+		{"separate boolean value", []string{"-httpsEnabled", "false"}, "unexpected command-line arguments"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			appSettings, err := LoadSettings(test.args)
+
+			assert.Nil(t, appSettings)
+			assert.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
 func TestValidateTLSSettings(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	static := func() *Settings {
@@ -156,6 +228,8 @@ func TestValidateTLSSettings(t *testing.T) {
 	}{
 		{"no S3 listener", &Settings{httpEnabled: addrOf(false)}, "at least one S3"},
 		{"invalid HTTP port", &Settings{port: addrOf(-1)}, "0..65535"},
+		{"invalid disabled HTTPS port", &Settings{httpsPort: addrOf(-1)}, "0..65535"},
+		{"invalid disabled monitoring port", &Settings{monitoringPortEnabled: addrOf(false), monitoringPort: addrOf(65536)}, "0..65535"},
 		{"duplicate address", &Settings{monitoringPort: addrOf(defaultPort)}, "duplicate address"},
 		{"HTTPS without source", &Settings{httpsEnabled: addrOf(true)}, "requires static TLS files or ACME"},
 		{"certificate without key", &Settings{tlsCertFile: addrOf("cert.pem")}, "both certificate and key"},

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 )
 
@@ -57,7 +58,7 @@ func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, des
 }
 
 func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
-	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
+	serveCommand := flag.NewFlagSet("serve", flag.ContinueOnError)
 	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
@@ -93,6 +94,9 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	err := serveCommand.Parse(cmdArgs)
 	if err != nil {
 		return nil, err
+	}
+	if serveCommand.NArg() != 0 {
+		return nil, fmt.Errorf("unexpected command-line arguments: %q", serveCommand.Args())
 	}
 
 	var trustedProxyCIDRs []string
