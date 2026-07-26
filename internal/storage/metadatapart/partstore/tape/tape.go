@@ -906,11 +906,9 @@ func (s *tapePartStore) runMigration(ctx context.Context, force bool) {
 			slog.WarnContext(ctx, "Tape migration journal checkpoint batch failed", "parts", len(checkpoints), "error", err)
 			return
 		}
-		if err := s.journal.Compact(ctx); err != nil {
-			// Reclamation is an optimization; catalog + journal checkpoints are
-			// already durable, so keep serving and retry on the next migration.
-			slog.WarnContext(ctx, "Tape journal compaction failed", "error", err)
-		}
+		// Publish the durable tape locations before compaction can unlink their
+		// journal files. GetPart must never observe a journal locator after its
+		// backing file has become reclaimable.
 		s.mu.Lock()
 		for _, p := range res.Parts {
 			if entry, ok := s.index[p.PartID]; ok && entry.generation == p.Generation {
@@ -920,6 +918,11 @@ func (s *tapePartStore) runMigration(ctx context.Context, force bool) {
 			}
 		}
 		s.mu.Unlock()
+		if err := s.journal.Compact(ctx); err != nil {
+			// Reclamation is an optimization; catalog + journal checkpoints are
+			// already durable, so keep serving and retry on the next migration.
+			slog.WarnContext(ctx, "Tape journal compaction failed", "error", err)
+		}
 	}
 }
 
