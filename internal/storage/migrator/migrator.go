@@ -119,7 +119,7 @@ func migrateSingleObject(ctx context.Context, source, destination storage.Storag
 	obj := readers[0]
 	defer obj.Close()
 
-	tempFile, err := os.CreateTemp("", "pithos-migrator-*")
+	tempFile, err := ioutils.CreateSpoolFile("pithos-migrator-*")
 	if err != nil {
 		return err
 	}

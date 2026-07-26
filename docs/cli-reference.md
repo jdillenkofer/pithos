@@ -12,6 +12,10 @@ pithos serve [options]
 
 For a complete list of available command-line arguments, run `./pithos serve --help`.
 
+The temporary spool directory can be selected with
+`-spoolDir <path>`. The directory must already exist and be writable by the
+Pithos process. When omitted, Pithos uses the platform temporary directory.
+
 ## `migrate-storage`
 
 Migrates data between two different storage configurations.

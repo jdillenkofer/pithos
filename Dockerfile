@@ -30,6 +30,9 @@ FROM scratch
 
 WORKDIR /app
 
+# Used when neither -spoolDir nor PITHOS_SPOOL_DIR is set.
+ENV TMPDIR=/tmp
+
 # Copy binary and minimal passwd file for user mapping
 COPY --from=app-builder /go/bin/pithos /usr/local/bin/pithos
 COPY --from=app-builder /etc/passwd /etc/passwd

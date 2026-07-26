@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -121,7 +122,7 @@ func (s *store) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId
 	_, span := s.tracer.Start(ctx, "oneDrivePartStore.PutPart")
 	defer span.End()
 
-	file, err := os.CreateTemp("", "pithos-onedrive-part-*")
+	file, err := ioutils.CreateSpoolFile("pithos-onedrive-part-*")
 	if err != nil {
 		return err
 	}
