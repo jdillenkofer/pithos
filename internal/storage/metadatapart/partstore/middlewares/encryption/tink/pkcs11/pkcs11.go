@@ -62,7 +62,7 @@ func NewAEAD(modulePath, tokenLabel, pin, keyLabel string) (*AEAD, error) {
 	}
 
 	// Open a session
-	session, err := ctx.OpenSession(slotID, pkcs11.CKF_SERIAL_SESSION|pkcs11.CKF_RW_SESSION)
+	session, err := ctx.OpenSession(slotID, pkcs11.CKF_SERIAL_SESSION)
 	if err != nil {
 		_ = module.pool.release(module)
 		return nil, fmt.Errorf("failed to open PKCS#11 session: %w", err)
