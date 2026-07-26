@@ -56,3 +56,30 @@ func TestMergeSettingsTwoValues(t *testing.T) {
 	assert.Equal(t, "test2", *b.domain)
 	assert.Equal(t, b.domain, mergedSettings.domain)
 }
+
+func TestSpoolDirDefaultsToEmptyOverride(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	settings := &Settings{}
+
+	assert.Empty(t, settings.SpoolDir())
+}
+
+func TestLoadSpoolDirFromCmdArgs(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	settings, err := loadSettingsFromCmdArgs([]string{"-spoolDir", "/var/tmp/pithos"})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "/var/tmp/pithos", settings.SpoolDir())
+}
+
+func TestLoadSpoolDirFromEnv(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	t.Setenv(spoolDirEnvKey, "/var/tmp/pithos")
+
+	settings, err := loadSettingsFromEnv()
+
+	assert.NoError(t, err)
+	assert.Equal(t, "/var/tmp/pithos", settings.SpoolDir())
+}

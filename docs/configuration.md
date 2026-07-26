@@ -30,6 +30,13 @@
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_STORAGE_JSON_PATH` | Path to the storage configuration file | `./storage.json` |
+| `PITHOS_SPOOL_DIR` | Directory for temporary files used when operations must spool data to disk | Platform temporary directory |
+
+`PITHOS_SPOOL_DIR` must reference an existing directory writable by the Pithos
+process. If it is unset or empty, Pithos uses the platform temporary directory,
+including the standard `TMPDIR` environment variable on Unix-like systems.
+Spool files are removed when their operation completes, but files left behind
+by an interrupted process may need to be cleaned up separately.
 
 ### Monitoring
 

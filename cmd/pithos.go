@@ -23,6 +23,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/logging"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -148,6 +149,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
+	ioutils.SetSpoolDir(settings.SpoolDir())
 
 	// Set up OpenTelemetry.
 	if settings.OtelEnabled() {

@@ -29,7 +29,7 @@ func NewSmartCachedReadSeekCloser(r io.Reader, memoryLimit int64) (io.ReadSeekCl
 	}
 
 	// We exceeded the memory limit, switch to disk cache
-	f, err := os.CreateTemp("", diskCachePattern)
+	f, err := CreateSpoolFile(diskCachePattern)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func NewSmartCachedReadSeekCloser(r io.Reader, memoryLimit int64) (io.ReadSeekCl
 // and returns a ReadSeekCloser that reads from that file.
 // Closing the returned ReadSeekCloser will close and remove the temporary file.
 func NewDiskCachedReadSeekCloser(r io.Reader) (io.ReadSeekCloser, error) {
-	f, err := os.CreateTemp("", diskCachePattern)
+	f, err := CreateSpoolFile(diskCachePattern)
 	if err != nil {
 		return nil, err
 	}
