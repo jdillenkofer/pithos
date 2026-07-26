@@ -580,6 +580,7 @@ func (s *tapePartStore) checkStarted() error {
 }
 
 func (s *tapePartStore) SupportsTxFreeGetPart() bool    { return true }
+func (s *tapePartStore) SupportsTxFreePutPart() bool    { return true }
 func (s *tapePartStore) SupportsTxFreeDeletePart() bool { return true }
 
 func (s *tapePartStore) OperationalStatus() (OperationalStatus, error) {

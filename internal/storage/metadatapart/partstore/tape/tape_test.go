@@ -175,6 +175,12 @@ func TestTapePartStore(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestTapePartStoreSupportsTxFreePutPart(t *testing.T) {
+	root := t.TempDir()
+	store := newTapeStore(t, filepath.Join(root, "tape.sim"), filepath.Join(root, "journal"))
+	require.True(t, partstore.SupportsTxFreePutPart(store))
+}
+
 func TestTapePartStoreStartCanRetryAfterInitializationFailure(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
