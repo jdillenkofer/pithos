@@ -41,7 +41,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
   - Configurable cache policies (LFU, etc.)
   - Support for both in-memory and persistent caching
   - Skips caching oversized parts via `maxPartSizeBytes` hinting
-- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, and TPM 2.0
+- **TinkEncryptionPartStoreMiddleware**: Advanced encryption using Google Tink with support for AWS KMS, HashiCorp Vault, local KMS, TPM 2.0, and PKCS#11
   - Features envelope encryption and key rotation capabilities
   - Supports Post-Quantum Hybrid Encryption using ML-KEM-1024 (FIPS 203)
   - Uses seekable encrypted part reads for efficient ranged downloads when the inner part store supports seeking
@@ -294,6 +294,39 @@ prefix: `pending_entries` and `dead_lettered_entries` gauges, and
 ```
 
 > **Note:** `tpmKeyAlgorithm` supports `rsa-2048`, `rsa-4096`, `ecc-p256` (default), `ecc-p384`, `ecc-p521`, and Brainpool curves (`ecc-brainpool-p256`, `p384`, `p512`). `tpmSymmetricAlgorithm` can be `aes-128` or `aes-256` (default). `tpmPassword` is optional; when set, it provides password-based authorization for TPM key access.
+
+### PKCS#11 Encryption
+
+PKCS#11 support uses an AES key stored in an HSM or software token as the
+master key for envelope encryption. The key remains inside the provider.
+
+```json
+{
+  "type": "TinkEncryptionPartStoreMiddleware",
+  "kmsType": "pkcs11",
+  "pkcs11ModulePath": "/usr/lib64/pkcs11/libsofthsm2.so",
+  "pkcs11TokenLabel": "pithos",
+  "pkcs11Pin": {
+    "type": "EnvKey",
+    "envKey": "PITHOS_PKCS11_PIN"
+  },
+  "pkcs11KeyLabel": "pithos-master-key",
+  "innerPartStore": {
+    "type": "FilesystemPartStore",
+    "root": "./data/parts"
+  }
+}
+```
+
+The provider must support `CKM_AES_GCM`, and the selected AES key must permit
+encryption and decryption. Key labels must be unique within the token; Pithos
+rejects startup when multiple matching AES keys exist.
+
+> **Docker limitation:** The default Pithos Docker image is statically linked
+> and based on `scratch`, so it cannot dynamically load a PKCS#11 provider
+> library. This remains true if the library is bind-mounted into the container.
+> Use a dynamically linked native build or a custom image whose runtime and
+> system libraries are compatible with the HSM vendor's provider.
 
 ### Compression
 
