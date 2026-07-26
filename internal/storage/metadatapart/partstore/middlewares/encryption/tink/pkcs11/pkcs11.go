@@ -164,6 +164,7 @@ func (a *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 
 	// Setup GCM mechanism with IV and AAD
 	gcmParams := pkcs11.NewGCMParams(iv, associatedData, aesGCMTagSize*8)
+	defer gcmParams.Free()
 	mechanism := []*pkcs11.Mechanism{
 		pkcs11.NewMechanism(pkcs11.CKM_AES_GCM, gcmParams),
 	}
@@ -208,6 +209,7 @@ func (a *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 
 	// Setup GCM mechanism with IV and AAD
 	gcmParams := pkcs11.NewGCMParams(iv, associatedData, aesGCMTagSize*8)
+	defer gcmParams.Free()
 	mechanism := []*pkcs11.Mechanism{
 		pkcs11.NewMechanism(pkcs11.CKM_AES_GCM, gcmParams),
 	}
