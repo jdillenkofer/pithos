@@ -177,6 +177,12 @@ func (a *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encrypt: %w", err)
 	}
 
+	// Some HSMs replace the supplied IV, so persist the value actually used.
+	iv = gcmParams.IV()
+	if len(iv) != aesGCMIVSize {
+		return nil, fmt.Errorf("PKCS#11 module returned an invalid GCM IV length: got %d, want %d", len(iv), aesGCMIVSize)
+	}
+
 	// Prepend IV to ciphertext
 	result := make([]byte, len(iv)+len(ciphertext))
 	copy(result[:len(iv)], iv)
