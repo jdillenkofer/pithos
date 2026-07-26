@@ -208,6 +208,19 @@ func TestSharedModuleRejectsDifferentPINForLoggedInToken(t *testing.T) {
 	}
 }
 
+func TestFindKeyByLabelRejectsMultipleMatches(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{
+		objectHandles: []miekgpkcs11.ObjectHandle{1, 2},
+	}
+
+	_, err := findKeyByLabel(fake, 1, "duplicate-key")
+	if err == nil {
+		t.Fatal("expected an ambiguous key label error")
+	}
+}
+
 func TestNewAEADOpensReadOnlySession(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

@@ -137,13 +137,16 @@ func findKeyByLabel(ctx cryptokiContext, session pkcs11.SessionHandle, keyLabel 
 	}
 	defer ctx.FindObjectsFinal(session)
 
-	handles, _, err := ctx.FindObjects(session, 1)
+	handles, _, err := ctx.FindObjects(session, 2)
 	if err != nil {
 		return 0, fmt.Errorf("failed to find objects: %w", err)
 	}
 
 	if len(handles) == 0 {
 		return 0, fmt.Errorf("AES key with label %q not found", keyLabel)
+	}
+	if len(handles) > 1 {
+		return 0, fmt.Errorf("multiple AES keys with label %q found", keyLabel)
 	}
 
 	return handles[0], nil
