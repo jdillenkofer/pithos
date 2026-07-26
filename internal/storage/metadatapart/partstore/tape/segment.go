@@ -526,8 +526,11 @@ func scanSegmentManifest(ctx context.Context, dev tapedev.Device, buf []byte, se
 			seg.footer = *footer
 			return seg, true, nil
 		}
-		if errors.Is(err, tapedev.ErrEndOfData) || errors.Is(err, io.ErrShortBuffer) {
+		if errors.Is(err, tapedev.ErrEndOfData) {
 			return scannedSegment{}, false, nil
+		}
+		if errors.Is(err, io.ErrShortBuffer) {
+			return scannedSegment{}, false, fmt.Errorf("%w: oversized manifest record for segment %x", ErrCorruptTape, header.segmentID)
 		}
 		if err != nil {
 			return scannedSegment{}, false, err

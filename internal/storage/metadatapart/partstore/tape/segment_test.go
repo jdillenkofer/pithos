@@ -30,6 +30,22 @@ func (d *recordKindCountingDevice) ReadRecord(ctx context.Context, p []byte) (in
 	return n, err
 }
 
+type oversizedManifestDevice struct {
+	tapedev.Device
+}
+
+func (d *oversizedManifestDevice) ReadRecord(ctx context.Context, p []byte) (int, error) {
+	n, err := d.Device.ReadRecord(ctx, p)
+	if err != nil {
+		return n, err
+	}
+	record, decodeErr := decodeSegmentRecord(p[:n])
+	if decodeErr == nil && record.kind == segKindIndexChunk {
+		return 0, io.ErrShortBuffer
+	}
+	return n, nil
+}
+
 func openSimulator(t *testing.T) tapedev.Device {
 	t.Helper()
 	ctx := context.Background()
@@ -168,6 +184,22 @@ func TestSegmentScanSpacesOverPayloadRecords(t *testing.T) {
 	require.Zero(t, counting.readKinds[segKindPartData])
 	require.Equal(t, 1, counting.readKinds[segKindHeader])
 	require.Equal(t, 1, counting.readKinds[segKindIndexChunk])
+}
+
+func TestSegmentScanRejectsOversizedManifestRecord(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	base := openSimulator(t)
+	w, err := NewSegmentWriter(ctx, base, 1024, [16]byte{}, 1)
+	require.NoError(t, err)
+	_, err = w.WritePart(ctx, segPartBeginPayload{generation: segGen(t), partID: segPartID(t)}, bytes.NewReader([]byte("payload")))
+	require.NoError(t, err)
+	_, err = w.Finish(ctx)
+	require.NoError(t, err)
+
+	_, _, err = scanSegments(ctx, &oversizedManifestDevice{Device: base})
+	require.ErrorIs(t, err, ErrCorruptTape)
 }
 
 func TestSegmentChainScan(t *testing.T) {
