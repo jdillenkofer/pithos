@@ -80,6 +80,9 @@ type tapePartStore struct {
 	tracer        trace.Tracer
 	partLocks     *partLocker
 
+	lifecycleMu      sync.Mutex // serializes Start and Stop
+	lifecycleStarted bool
+
 	mu                 sync.Mutex // guards device, journal, migrator, index
 	device             tapedev.Device
 	journal            *journal.Journal
@@ -254,8 +257,10 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 	ctx, span := s.tracer.Start(ctx, "tapePartStore.Start")
 	defer span.End()
 
-	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
-		return err
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.lifecycleStarted {
+		return s.ValidatedLifecycle.Start(ctx)
 	}
 
 	device, err := s.deviceOpener(ctx)
@@ -285,34 +290,44 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.device = device
 	s.journal = j
+	failInitialization := func(err error) error {
+		s.device = nil
+		s.journal = nil
+		s.migrator = nil
+		s.catalog = nil
+		s.scheduler = nil
+		s.index = nil
+		s.mu.Unlock()
+		_ = j.Close()
+		_ = device.Close()
+		return err
+	}
 	label, dataStart, err := openVolume(ctx, device, s.volumeID)
 	if err != nil {
-		s.mu.Unlock()
-		_ = j.Close()
-		_ = device.Close()
-		return fmt.Errorf("opening tape volume: %w", err)
+		return failInitialization(fmt.Errorf("opening tape volume: %w", err))
 	}
 	if err := s.recoverLocked(ctx, label, dataStart); err != nil {
-		s.mu.Unlock()
-		_ = j.Close()
-		_ = device.Close()
-		return fmt.Errorf("recovering tape part store: %w", err)
+		return failInitialization(fmt.Errorf("recovering tape part store: %w", err))
 	}
 	scheduler, err := newDriveScheduler(device)
 	if err != nil {
-		s.mu.Unlock()
-		_ = j.Close()
-		_ = device.Close()
-		return fmt.Errorf("starting tape drive scheduler: %w", err)
+		return failInitialization(fmt.Errorf("starting tape drive scheduler: %w", err))
 	}
+	if err := s.ValidatedLifecycle.Start(ctx); err != nil {
+		s.mu.Unlock()
+		_ = scheduler.stop(context.Background())
+		s.mu.Lock()
+		return failInitialization(err)
+	}
+	s.lifecycleStarted = true
 	s.scheduler = scheduler
-	s.mu.Unlock()
-
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s.workerCancel = cancel
 	s.workerDone = make(chan struct{})
+	workerDone := s.workerDone
+	s.mu.Unlock()
 	go func() {
-		defer close(s.workerDone)
+		defer close(workerDone)
 		s.migrationLoop(workerCtx)
 	}()
 	return nil
@@ -511,6 +526,9 @@ func (s *tapePartStore) sealTornTailLocked(ctx context.Context, tailBlock uint64
 func (s *tapePartStore) Stop(ctx context.Context) error {
 	_, span := s.tracer.Start(ctx, "tapePartStore.Stop")
 	defer span.End()
+
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 
 	if s.workerCancel != nil {
 		s.workerCancel()

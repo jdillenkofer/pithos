@@ -81,6 +81,15 @@ func (d *filemarkFailingDevice) WriteFilemarks(context.Context, int) error {
 	return d.err
 }
 
+type rewindFailingDevice struct {
+	tapedev.Device
+	err error
+}
+
+func (d *rewindFailingDevice) Rewind(context.Context) error {
+	return d.err
+}
+
 type hookTx struct {
 	preCommit   []func(context.Context) error
 	afterCommit []func(context.Context) error
@@ -164,6 +173,42 @@ func TestTapePartStore(t *testing.T) {
 	content := []byte("TapePartStore content spanning multiple tape records")
 	err := partstore.Tester(store, db, content)
 	assert.Nil(t, err)
+}
+
+func TestTapePartStoreStartCanRetryAfterInitializationFailure(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+
+	// Initialize the cartridge so the retry only needs to reopen it.
+	initial := newStartedTapeStore(t, tapePath, journalPath)
+	require.NoError(t, initial.Stop(ctx))
+
+	startErr := errors.New("rewind failed")
+	var opens atomic.Int64
+	storeValue, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		device, err := simulator.Open(ctx, tapePath, simulator.Options{})
+		if err != nil {
+			return nil, err
+		}
+		if opens.Add(1) == 1 {
+			return &rewindFailingDevice{Device: device, err: startErr}, nil
+		}
+		return device, nil
+	}, WithRecordSize(testRecordSize), WithJournalDir(journalPath))
+	require.NoError(t, err)
+	store := storeValue.(*tapePartStore)
+
+	require.ErrorIs(t, store.Start(ctx), startErr)
+	require.Nil(t, store.device)
+	require.Nil(t, store.journal)
+	require.Error(t, store.checkStarted())
+
+	require.NoError(t, store.Start(ctx))
+	require.NoError(t, store.Stop(ctx))
 }
 
 func TestTapePartStoreRecoversWithoutDatabase(t *testing.T) {
