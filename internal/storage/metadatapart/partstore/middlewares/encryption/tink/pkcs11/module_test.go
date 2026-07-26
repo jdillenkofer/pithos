@@ -1,6 +1,7 @@
 package pkcs11
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,16 +11,18 @@ import (
 )
 
 type fakeCryptokiContext struct {
-	initializeErr   error
-	initializeCalls int
-	finalizeCalls   int
-	destroyCalls    int
-	loginCalls      int
-	logoutCalls     int
-	slots           []uint
-	tokenLabel      string
-	sessionFlags    uint
-	objectHandles   []miekgpkcs11.ObjectHandle
+	initializeErr    error
+	initializeCalls  int
+	finalizeCalls    int
+	destroyCalls     int
+	loginCalls       int
+	logoutCalls      int
+	slots            []uint
+	tokenLabel       string
+	sessionFlags     uint
+	objectHandles    []miekgpkcs11.ObjectHandle
+	encryptInitCalls int
+	decryptInitCalls int
 }
 
 func createTestModuleFile(t *testing.T) string {
@@ -86,6 +89,7 @@ func (f *fakeCryptokiContext) FindObjectsFinal(miekgpkcs11.SessionHandle) error 
 }
 
 func (f *fakeCryptokiContext) EncryptInit(miekgpkcs11.SessionHandle, []*miekgpkcs11.Mechanism, miekgpkcs11.ObjectHandle) error {
+	f.encryptInitCalls++
 	return nil
 }
 
@@ -94,6 +98,7 @@ func (f *fakeCryptokiContext) Encrypt(miekgpkcs11.SessionHandle, []byte) ([]byte
 }
 
 func (f *fakeCryptokiContext) DecryptInit(miekgpkcs11.SessionHandle, []*miekgpkcs11.Mechanism, miekgpkcs11.ObjectHandle) error {
+	f.decryptInitCalls++
 	return nil
 }
 
@@ -345,5 +350,40 @@ func TestNewAEADOpensReadOnlySession(t *testing.T) {
 
 	if fake.sessionFlags != miekgpkcs11.CKF_SERIAL_SESSION {
 		t.Fatalf("session flags = %#x, want %#x", fake.sessionFlags, miekgpkcs11.CKF_SERIAL_SESSION)
+	}
+}
+
+func TestAEADRejectsOperationsAfterClose(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{
+		slots:         []uint{1},
+		tokenLabel:    "token",
+		objectHandles: []miekgpkcs11.ObjectHandle{2},
+	}
+	originalModules := modules
+	modules = newModulePool(func(string) cryptokiContext {
+		return fake
+	})
+	t.Cleanup(func() {
+		modules = originalModules
+	})
+
+	aead, err := NewAEAD(createTestModuleFile(t), "token", "pin", "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aead.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := aead.Encrypt([]byte("plaintext"), nil); !errors.Is(err, errAEADClosed) {
+		t.Fatalf("Encrypt() error = %v, want %v", err, errAEADClosed)
+	}
+	if _, err := aead.Decrypt(nil, nil); !errors.Is(err, errAEADClosed) {
+		t.Fatalf("Decrypt() error = %v, want %v", err, errAEADClosed)
+	}
+	if fake.encryptInitCalls != 0 || fake.decryptInitCalls != 0 {
+		t.Fatal("closed AEAD accessed the PKCS#11 context")
 	}
 }

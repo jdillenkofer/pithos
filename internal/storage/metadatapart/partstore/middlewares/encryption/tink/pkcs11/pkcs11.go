@@ -16,6 +16,8 @@ const (
 	aesGCMTagSize = 16
 )
 
+var errAEADClosed = errors.New("PKCS#11 AEAD is closed")
+
 // AEAD implements tink.AEAD interface using PKCS#11 for key operations.
 // The master key never leaves the HSM.
 type AEAD struct {
@@ -159,6 +161,10 @@ func (a *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if a.closed {
+		return nil, errAEADClosed
+	}
+
 	// Generate random IV
 	iv := make([]byte, aesGCMIVSize)
 	if _, err := rand.Read(iv); err != nil {
@@ -201,6 +207,10 @@ func (a *AEAD) Encrypt(plaintext, associatedData []byte) ([]byte, error) {
 func (a *AEAD) Decrypt(ciphertext, associatedData []byte) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if a.closed {
+		return nil, errAEADClosed
+	}
 
 	if len(ciphertext) < aesGCMIVSize+aesGCMTagSize {
 		return nil, errors.New("ciphertext too short")
