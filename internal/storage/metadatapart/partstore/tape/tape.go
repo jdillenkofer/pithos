@@ -350,7 +350,7 @@ func (s *tapePartStore) recoverLocked(ctx context.Context, label volumeLabel, da
 	}
 	s.catalog = catalog
 	if err := s.sealTornTailLocked(ctx, tailBlock); err != nil {
-		slog.WarnContext(ctx, "Failed to seal untrusted tape tail", "error", err)
+		return fmt.Errorf("sealing untrusted tape tail: %w", err)
 	}
 
 	// Tape payload locations by generation, and the tape's logical operations.

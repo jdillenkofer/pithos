@@ -3,6 +3,7 @@ package tape
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,6 +69,15 @@ func (d *corruptManifestDevice) ReadRecord(ctx context.Context, p []byte) (int, 
 		d.corrupted = true
 	}
 	return n, err
+}
+
+type filemarkFailingDevice struct {
+	tapedev.Device
+	err error
+}
+
+func (d *filemarkFailingDevice) WriteFilemarks(context.Context, int) error {
+	return d.err
 }
 
 func newTapeStore(t *testing.T, tapePath, journalPath string) *tapePartStore {
@@ -375,6 +385,47 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	content, err = readPart(t, final, *partB)
 	require.NoError(t, err)
 	require.Equal(t, contentB, content)
+}
+
+func TestTapePartStoreFailsStartWhenTruncatedTailCannotBeSealed(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("committed"))))
+	store.runMigration(ctx, true)
+	previousSegment := store.catalog.PreviousSegment
+	nextSequence := store.catalog.Segments[len(store.catalog.Segments)-1].NextSequence
+	require.NoError(t, store.Stop(ctx))
+
+	device, err := simulator.Open(ctx, tapePath, simulator.Options{})
+	require.NoError(t, err)
+	require.NoError(t, device.SeekToEOD(ctx))
+	tornRecord, err := encodeSegmentRecord(segKindHeader, nextSequence, encodeSegmentHeader(segmentHeaderPayload{
+		segmentID:       [16]byte{0x99},
+		previousSegment: previousSegment,
+		sequenceStart:   nextSequence,
+	}))
+	require.NoError(t, err)
+	require.NoError(t, device.WriteRecord(ctx, tornRecord))
+	require.NoError(t, device.Close())
+
+	sealErr := errors.New("injected filemark failure")
+	restarted, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		device, err := simulator.Open(ctx, tapePath, simulator.Options{})
+		if err != nil {
+			return nil, err
+		}
+		return &filemarkFailingDevice{Device: device, err: sealErr}, nil
+	}, WithRecordSize(testRecordSize), WithJournalDir(journalPath))
+	require.NoError(t, err)
+	require.ErrorIs(t, restarted.Start(ctx), sealErr)
 }
 
 func TestTapeCatalogCorruptionRebuildsFromCompactManifests(t *testing.T) {
