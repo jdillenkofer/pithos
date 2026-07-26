@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	miekgpkcs11 "github.com/miekg/pkcs11"
@@ -42,17 +43,26 @@ func newModulePool(load func(string) cryptokiContext) *modulePool {
 var modules = newModulePool(loadCryptokiContext)
 
 func (p *modulePool) acquire(modulePath string) (*sharedModule, error) {
+	canonicalPath, err := filepath.Abs(modulePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve PKCS#11 module path %q: %w", modulePath, err)
+	}
+	canonicalPath, err = filepath.EvalSymlinks(canonicalPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve PKCS#11 module path %q: %w", modulePath, err)
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if module, ok := p.modules[modulePath]; ok {
+	if module, ok := p.modules[canonicalPath]; ok {
 		module.refs++
 		return module, nil
 	}
 
-	ctx := p.load(modulePath)
+	ctx := p.load(canonicalPath)
 	if ctx == nil {
-		return nil, fmt.Errorf("failed to load PKCS#11 module: %s", modulePath)
+		return nil, fmt.Errorf("failed to load PKCS#11 module: %s", canonicalPath)
 	}
 
 	ownsInitialization := true
@@ -66,13 +76,13 @@ func (p *modulePool) acquire(modulePath string) (*sharedModule, error) {
 
 	module := &sharedModule{
 		ctx:                ctx,
-		path:               modulePath,
+		path:               canonicalPath,
 		refs:               1,
 		ownsInitialization: ownsInitialization,
 		pool:               p,
 		logins:             make(map[uint]*tokenLogin),
 	}
-	p.modules[modulePath] = module
+	p.modules[canonicalPath] = module
 	return module, nil
 }
 

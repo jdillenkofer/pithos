@@ -1,6 +1,8 @@
 package pkcs11
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -18,6 +20,16 @@ type fakeCryptokiContext struct {
 	tokenLabel      string
 	sessionFlags    uint
 	objectHandles   []miekgpkcs11.ObjectHandle
+}
+
+func createTestModuleFile(t *testing.T) string {
+	t.Helper()
+
+	modulePath := filepath.Join(t.TempDir(), "module.so")
+	if err := os.WriteFile(modulePath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return modulePath
 }
 
 func (f *fakeCryptokiContext) Initialize(...miekgpkcs11.InitializeOption) error {
@@ -98,12 +110,13 @@ func TestModulePoolSharesModuleUntilLastRelease(t *testing.T) {
 		loadCalls++
 		return fake
 	})
+	modulePath := createTestModuleFile(t)
 
-	first, err := pool.acquire("/module.so")
+	first, err := pool.acquire(modulePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := pool.acquire("/module.so")
+	second, err := pool.acquire(modulePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +152,9 @@ func TestModulePoolDoesNotFinalizeExternalInitialization(t *testing.T) {
 	pool := newModulePool(func(string) cryptokiContext {
 		return fake
 	})
+	modulePath := createTestModuleFile(t)
 
-	module, err := pool.acquire("/module.so")
+	module, err := pool.acquire(modulePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +167,88 @@ func TestModulePoolDoesNotFinalizeExternalInitialization(t *testing.T) {
 	}
 	if fake.destroyCalls != 1 {
 		t.Fatalf("module handle destroyed %d times", fake.destroyCalls)
+	}
+}
+
+func TestModulePoolSharesEquivalentModulePaths(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{}
+	loadCalls := 0
+	pool := newModulePool(func(string) cryptokiContext {
+		loadCalls++
+		return fake
+	})
+	modulePath := createTestModuleFile(t)
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativePath, err := filepath.Rel(workingDirectory, modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := pool.acquire(modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pool.acquire(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != second {
+		t.Fatal("expected equivalent paths to share the same module")
+	}
+	if loadCalls != 1 {
+		t.Fatalf("module loaded %d times", loadCalls)
+	}
+
+	if err := pool.release(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.release(second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModulePoolSharesSymlinkedModulePaths(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fake := &fakeCryptokiContext{}
+	loadCalls := 0
+	pool := newModulePool(func(string) cryptokiContext {
+		loadCalls++
+		return fake
+	})
+	modulePath := createTestModuleFile(t)
+	linkPath := filepath.Join(t.TempDir(), "module-link.so")
+	if err := os.Symlink(modulePath, linkPath); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	first, err := pool.acquire(modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pool.acquire(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first != second {
+		t.Fatal("expected symlinked paths to share the same module")
+	}
+	if loadCalls != 1 {
+		t.Fatalf("module loaded %d times", loadCalls)
+	}
+
+	if err := pool.release(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.release(second); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -237,7 +333,7 @@ func TestNewAEADOpensReadOnlySession(t *testing.T) {
 		modules = originalModules
 	})
 
-	aead, err := NewAEAD("/module.so", "token", "pin", "key")
+	aead, err := NewAEAD(createTestModuleFile(t), "token", "pin", "key")
 	if err != nil {
 		t.Fatal(err)
 	}
