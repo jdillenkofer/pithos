@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -97,6 +98,41 @@ func TestGoogleDrivePartStorePutPartAndDeletePartWorkWithoutTx(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = readPart(t, store, *partId)
 	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+}
+
+func TestGoogleDrivePartStoreReconcilesAmbiguousFolderCreate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	fakeServer.failNextFolderCreateAfterCommitOnce()
+	store := newTestStore(t, fakeServer)
+
+	assert.NoError(t, store.Start(context.Background()))
+	t.Cleanup(func() {
+		assert.NoError(t, store.Stop(context.Background()))
+	})
+
+	assert.NotEmpty(t, store.(*gdrivePartStore).folderId)
+	assert.Equal(t, 1, fakeServer.fileCount())
+}
+
+func TestGoogleDrivePartStoreDisablesSDKUploadRetries(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+	content := io.LimitReader(
+		ioutils.NewRepeatingReader([]byte("x")),
+		int64(googleapi.DefaultUploadChunkSize+1),
+	)
+
+	// The fake only accepts a single multipart upload. Without ChunkSize(0),
+	// the SDK turns this payload into a resumable upload with chunk retries.
+	assert.NoError(t, store.PutPart(context.Background(), nil, *partId, content))
 }
 
 func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
@@ -242,6 +278,52 @@ func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
 	assert.Equal(t, []byte("second attempt"), content)
 	// Part folder + exactly one part file.
 	assert.Equal(t, 2, fakeServer.fileCount())
+}
+
+func TestGoogleDrivePartStoreDoesNotRetryAmbiguousUpload(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+
+	// Drive commits the file but returns a transient error. PutPart must not
+	// replay the already-consumed reader internally.
+	fakeServer.failNextUploadAfterCommitOnce()
+	err = store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("first attempt")))
+	assert.Error(t, err)
+	assert.Equal(t, 2, fakeServer.fileCount())
+
+	// A caller/outbox retry supplies a fresh reader and updates the committed
+	// file instead of creating a duplicate.
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
+	content, err := readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("second attempt"), content)
+	assert.Equal(t, 2, fakeServer.fileCount())
+}
+
+func TestGoogleDrivePartStoreDeletePartFindsDuplicatesAcrossPages(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	fakeServer := newFakeDriveServer()
+	t.Cleanup(fakeServer.Close)
+	store := startTestStore(t, fakeServer)
+	fakeServer.setMaxPageSize(2)
+
+	partId, err := partstore.NewRandomPartId()
+	assert.Nil(t, err)
+	partName := store.(*gdrivePartStore).getPartName(*partId)
+	folderId := store.(*gdrivePartStore).folderId
+	for range 5 {
+		fakeServer.addFile(partName, "application/octet-stream", []string{folderId}, []byte("duplicate"))
+	}
+
+	assert.Nil(t, store.DeletePart(context.Background(), nil, *partId))
+	assert.Equal(t, 1, fakeServer.fileCount())
 }
 
 // Ranged object reads skip into the middle of a part via Seek; the store must

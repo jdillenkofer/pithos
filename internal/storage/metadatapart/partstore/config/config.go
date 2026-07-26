@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/mlkem"
 	"encoding/hex"
 	"encoding/json"
@@ -16,12 +17,15 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	partStoreCache "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/cache"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/dropbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive"
 	compressionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/erasurecoding"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive"
+	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
@@ -40,6 +44,8 @@ const (
 	outboxPartStoreType                   = "OutboxPartStore"
 	sftpPartStoreType                     = "SftpPartStore"
 	googleDrivePartStoreType              = "GoogleDrivePartStore"
+	oneDrivePartStoreType                 = "OneDrivePartStore"
+	dropboxPartStoreType                  = "DropboxPartStore"
 	sqlPartStoreType                      = "SqlPartStore"
 	erasureCodedPartStoreMiddlewareType   = "ErasureCodedPartStoreMiddleware"
 	cachePartStoreType                    = "CachePartStore"
@@ -418,6 +424,135 @@ type GoogleDrivePartStoreConfiguration struct {
 	internalConfig.DynamicJsonType
 }
 
+type OneDrivePartStoreConfiguration struct {
+	ClientId       internalConfig.StringProvider `json:"clientId"`
+	TenantId       internalConfig.StringProvider `json:"tenantId,omitempty"`
+	PermissionMode internalConfig.StringProvider `json:"permissionMode"`
+	Token          internalConfig.StringProvider `json:"token"`
+	FolderName     internalConfig.StringProvider `json:"folderName,omitempty"`
+	Endpoint       internalConfig.StringProvider `json:"endpoint,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (o *OneDrivePartStoreConfiguration) RegisterReferences(dependencyinjection.DICollection) error {
+	return nil
+}
+func (o *OneDrivePartStoreConfiguration) Instantiate(dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	clientID := o.ClientId.Value()
+	if clientID == "" {
+		return nil, errors.New("clientId is required for OneDrivePartStore")
+	}
+	rawPermissionMode := o.PermissionMode.Value()
+	if rawPermissionMode == "" {
+		return nil, errors.New("permissionMode is required for OneDrivePartStore")
+	}
+	permissionMode, err := onedrive.ParsePermissionMode(rawPermissionMode)
+	if err != nil {
+		return nil, err
+	}
+	raw := o.Token.Value()
+	if raw == "" {
+		return nil, errors.New("token is required for OneDrivePartStore")
+	}
+	var token oauth2.Token
+	if err := json.Unmarshal([]byte(raw), &token); err != nil {
+		return nil, fmt.Errorf("invalid OneDrivePartStore token: %w", err)
+	}
+	if token.RefreshToken == "" {
+		return nil, errors.New("OneDrivePartStore token contains no refresh_token")
+	}
+	tenant := o.TenantId.Value()
+	if tenant == "" {
+		tenant = "consumers"
+	}
+	cfg, err := onedriveAuth.OAuthConfig(tenant, clientID, permissionMode)
+	if err != nil {
+		return nil, err
+	}
+	var persist func(*oauth2.Token) error
+	if o.Token.CanPersistValue() {
+		persist = func(t *oauth2.Token) error {
+			b, e := json.Marshal(t)
+			if e != nil {
+				return e
+			}
+			return o.Token.WriteValue(string(b))
+		}
+	}
+	source := onedrive.NewProactiveTokenSource(cfg, &token, 10*time.Minute, persist)
+	folder := o.FolderName.Value()
+	if folder == "" {
+		folder = "pithos-parts"
+	}
+	return onedrive.New(folder, o.Endpoint.Value(), oauth2.NewClient(context.Background(), source))
+}
+
+type DropboxPartStoreConfiguration struct {
+	ClientId        internalConfig.StringProvider `json:"clientId"`
+	ClientSecret    internalConfig.StringProvider `json:"clientSecret"`
+	Token           internalConfig.StringProvider `json:"token"`
+	Root            internalConfig.StringProvider `json:"root,omitempty"`
+	APIEndpoint     internalConfig.StringProvider `json:"apiEndpoint,omitempty"`
+	ContentEndpoint internalConfig.StringProvider `json:"contentEndpoint,omitempty"`
+	internalConfig.DynamicJsonType
+}
+
+func (d *DropboxPartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	return nil
+}
+
+func (d *DropboxPartStoreConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (partstore.PartStore, error) {
+	clientId := d.ClientId.Value()
+	if clientId == "" {
+		return nil, errors.New("clientId is required for DropboxPartStore")
+	}
+	clientSecret := d.ClientSecret.Value()
+	if clientSecret == "" {
+		return nil, errors.New("clientSecret is required for DropboxPartStore")
+	}
+	var token oauth2.Token
+	if tokenJSON := d.Token.Value(); tokenJSON == "" {
+		return nil, errors.New("token is required for DropboxPartStore")
+	} else if err := json.Unmarshal([]byte(tokenJSON), &token); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore token: %w", err)
+	}
+	if token.RefreshToken == "" {
+		return nil, errors.New("DropboxPartStore token contains no refresh_token")
+	}
+	apiEndpoint, contentEndpoint := d.APIEndpoint.Value(), d.ContentEndpoint.Value()
+	if err := dropbox.ValidateEndpoint(apiEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore apiEndpoint: %w", err)
+	}
+	if err := dropbox.ValidateEndpoint(contentEndpoint); err != nil {
+		return nil, fmt.Errorf("invalid DropboxPartStore contentEndpoint: %w", err)
+	}
+	oauthConfig := &oauth2.Config{
+		ClientID:     clientId,
+		ClientSecret: clientSecret,
+		Endpoint:     oauth2.Endpoint{AuthURL: dropbox.OAuthEndpoint.AuthURL, TokenURL: dropbox.OAuthEndpoint.TokenURL},
+	}
+	var persist func(*oauth2.Token) error
+	if d.Token.CanPersistValue() {
+		persist = func(tok *oauth2.Token) error {
+			updated, err := json.Marshal(tok)
+			if err != nil {
+				return err
+			}
+			return d.Token.WriteValue(string(updated))
+		}
+	}
+	tokenSource := gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, persist)
+	root := d.Root.Value()
+	if root == "" {
+		root = "/pithos-parts"
+	}
+	return dropbox.New(root, dropbox.Options{
+		HTTPClient:      oauth2.NewClient(context.Background(), tokenSource),
+		APIEndpoint:     apiEndpoint,
+		ContentEndpoint: contentEndpoint,
+	})
+}
+
 func (g *GoogleDrivePartStoreConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
 	return nil
 }
@@ -452,12 +587,12 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 		Endpoint:     google.Endpoint,
 		Scopes:       []string{gdrive.Scope},
 	}
-	// The token source transparently exchanges the refresh token for new
-	// access tokens before expiry, so the Drive client stays usable even while
-	// the process is idle. When the token came from an env var, the refreshed
-	// value is written back to that env var so short restarts keep working.
-	clientOptions := []option.ClientOption{
-		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, func(tok *oauth2.Token) error {
+	// The token source transparently exchanges the refresh token for a new
+	// access token before each request that falls within the refresh window.
+	// File-backed providers persist the refreshed value across restarts.
+	var persist func(*oauth2.Token) error
+	if g.Token.CanPersistValue() {
+		persist = func(tok *oauth2.Token) error {
 			if tok == nil {
 				return nil
 			}
@@ -466,7 +601,10 @@ func (g *GoogleDrivePartStoreConfiguration) Instantiate(diProvider dependencyinj
 				return err
 			}
 			return g.Token.WriteValue(string(updatedTokenJson))
-		})),
+		}
+	}
+	clientOptions := []option.ClientOption{
+		option.WithTokenSource(gdrive.NewProactiveTokenSource(oauthConfig, &token, 10*time.Minute, persist)),
 	}
 	if endpoint := g.Endpoint.Value(); endpoint != "" {
 		clientOptions = append(clientOptions, option.WithEndpoint(endpoint))
@@ -663,6 +801,10 @@ func CreatePartStoreInstantiatorFromJson(b []byte) (PartStoreInstantiator, error
 		bi = &SftpPartStoreConfiguration{}
 	case googleDrivePartStoreType:
 		bi = &GoogleDrivePartStoreConfiguration{}
+	case oneDrivePartStoreType:
+		bi = &OneDrivePartStoreConfiguration{}
+	case dropboxPartStoreType:
+		bi = &DropboxPartStoreConfiguration{}
 	case sqlPartStoreType:
 		bi = &SqlPartStoreConfiguration{}
 	case erasureCodedPartStoreMiddlewareType:

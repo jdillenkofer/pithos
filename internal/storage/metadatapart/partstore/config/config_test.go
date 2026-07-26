@@ -844,6 +844,63 @@ func TestCanCreateGoogleDrivePartStoreFromJson(t *testing.T) {
 	assert.NotNil(t, partStore)
 }
 
+func TestCanCreateOneDrivePartStoreFromJson(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, permissionMode := range []string{"fullDrive", "appFolderPreview"} {
+		t.Run(permissionMode, func(t *testing.T) {
+			jsonData := fmt.Sprintf(`{
+				"type": "OneDrivePartStore",
+				"clientId": "test-client-id",
+				"tenantId": "consumers",
+				"permissionMode": %q,
+				"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}",
+				"folderName": "pithos-parts-test"
+			}`, permissionMode)
+			partStore, err := createPartStoreFromJson([]byte(jsonData))
+			assert.NoError(t, err)
+			assert.NotNil(t, partStore)
+		})
+	}
+}
+
+func TestOneDrivePartStoreRequiresPermissionMode(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, "permissionMode is required for OneDrivePartStore")
+}
+
+func TestOneDrivePartStoreRejectsInvalidPermissionMode(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"permissionMode": "unknown",
+		"token": "{\"access_token\":\"access\",\"refresh_token\":\"refresh\",\"token_type\":\"Bearer\"}"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, `invalid OneDrive permission mode "unknown": must be "fullDrive" or "appFolderPreview"`)
+}
+
+func TestOneDrivePartStoreRequiresRefreshToken(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	jsonData := `{
+		"type": "OneDrivePartStore",
+		"clientId": "test-client-id",
+		"permissionMode": "fullDrive",
+		"token": "{\"access_token\":\"access\",\"token_type\":\"Bearer\"}"
+	}`
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.Nil(t, partStore)
+	assert.EqualError(t, err, "OneDrivePartStore token contains no refresh_token")
+}
+
 func TestCanCreateGoogleDrivePartStoreFromJsonWithEnvKeys(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	t.Setenv("PITHOS_TEST_GDRIVE_CLIENT_SECRET", "test-client-secret")
@@ -901,4 +958,33 @@ func TestGoogleDrivePartStoreRequiresRefreshToken(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, partStore)
 	assert.Contains(t, err.Error(), "no refresh_token")
+}
+
+const testDropboxToken = `{"access_token":"test-access","token_type":"Bearer","refresh_token":"test-refresh","expiry":"2020-01-01T00:00:00Z"}`
+
+func TestCanCreateDropboxPartStoreFromJson(t *testing.T) {
+	jsonData := fmt.Sprintf(`{
+		"type": "DropboxPartStore",
+		"clientId": "test-app-key",
+		"clientSecret": "test-app-secret",
+		"token": %s,
+		"root": "/pithos-parts-test"
+	}`, strconv.Quote(testDropboxToken))
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.NoError(t, err)
+	assert.NotNil(t, partStore)
+}
+
+func TestDropboxPartStoreRequiresRefreshToken(t *testing.T) {
+	jsonData := `{
+		"type": "DropboxPartStore",
+		"clientId": "test-app-key",
+		"clientSecret": "test-app-secret",
+		"token": "{\"access_token\":\"test-access\",\"token_type\":\"Bearer\"}"
+	}`
+
+	partStore, err := createPartStoreFromJson([]byte(jsonData))
+	assert.ErrorContains(t, err, "no refresh_token")
+	assert.Nil(t, partStore)
 }

@@ -8,7 +8,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 
 - **MetadataPartStorage**: Separates metadata and part storage
   - Supports various metadata stores (SQL databases: SQLite, PostgreSQL)
-  - Configurable part stores (filesystem, SFTP, Google Drive)
+  - Configurable part stores (filesystem, SFTP, Google Drive, OneDrive, Dropbox)
   - Persists object metadata, object tags, bucket CORS/lifecycle/website configuration, and bucket versioning state in the metadata store
   - Optional named extra part stores with a storage-class mapping, so objects of different classes live in different part stores (see [Storage Class Tiering](#storage-class-tiering-named-part-stores))
   - Emits [bucket event notifications](#bucket-event-notifications) by default, atomically with object mutations
@@ -376,6 +376,12 @@ Filesystem, SFTP, and Google Drive part stores can serve object bytes without ho
 
 > **Note:** Parts larger than `maxPartSizeBytes` are read/written through the inner store and marked as oversized to avoid repeated cache write attempts.
 
+> **Cloud upload reliability:** Google Drive, Dropbox, and OneDrive perform each
+> part data upload once. Wrap these stores in `OutboxPartStore` in production so
+> a failed upload is retried durably with a fresh reader. The cloud stores still
+> retry bounded, replayable control-plane requests such as listings and folder
+> setup.
+
 ### Google Drive Part Store
 
 Stores parts as files in a dedicated folder of a personal Google Drive. Pithos authenticates as a regular Google account via OAuth; access tokens are refreshed automatically from the stored refresh token, including on startup when the current access token is already expired or missing its expiry information. This keeps Drive access working while the process stays up, without requiring a full re-authentication flow.
@@ -415,11 +421,92 @@ Stores parts as files in a dedicated folder of a personal Google Drive. Pithos a
 
 - Pithos requests only the `drive.file` OAuth scope: it can access just the files and folders it created itself, not the rest of the Drive. This also means the part folder cannot be a pre-existing folder created in the Drive UI — pithos creates (or re-finds) it by name on start.
 - The Google Drive part store is effectively single-instance only. Running multiple pithos instances against the same Drive part folder can race on part uploads and overwrite each other's state because the store relies on the part name as the file identity and does not provide cross-instance coordination. In practice it might work since outbox part stores are single-writers and ulids for parts are unique, but it is not guaranteed to be safe.
-- Access token refresh is automatic. The refresh token in the config stays valid until revoked in the Google account's security settings (or after ~6 months of complete inactivity). When the token is backed by an environment variable or file, refreshed values are written back to that source so short restarts can reuse the latest token.
+- Access-token refresh is automatic until the refresh token is revoked. A `File` token provider persists refreshed token JSON across restarts. Inline and `EnvKey` values are treated as read-only configuration; the refreshed token is retained only in memory.
 - Uploads use a single Drive API call per part: the file is created under its final name during the write and simply deleted again if the transaction rolls back. Parts of uncommitted or crashed transactions are invisible to readers (reads go through committed metadata only) and are removed by the part garbage collector after its grace window. Deletes run after the commit.
 - Because Drive requires at least one API round trip per part, the S3 client's multipart chunk size directly controls throughput: prefer large chunks (e.g. `aws configure set s3.multipart_chunksize 64MB` or rclone's `--s3-chunk-size 64M`). The `OutboxPartStore` wrapper additionally moves all Drive calls off the request path.
 - Ranged object reads only download the parts overlapping the range, and the part readers are seekable: a range starting in the middle of a part is served with an HTTP `Range` request against Drive instead of downloading and discarding the part's head.
 - The Drive API has per-user request quotas and noticeably higher latency than object stores. For frequently read data, combine it with the [Cache Part Store](#cache-part-store) or use it as a cold tier via [Storage Class Tiering](#storage-class-tiering-named-part-stores).
+
+### Dropbox Part Store
+
+Stores parts in a dedicated Dropbox folder. It supports transaction-free uploads, downloads, and deletes, and ranged reads reopen downloads with an HTTP `Range` request.
+
+```json
+{
+  "type": "DropboxPartStore",
+  "clientId": "your-dropbox-app-key",
+  "clientSecret": "your-dropbox-app-secret",
+  "token": { "type": "File", "path": "/path/to/dropbox-token.json" },
+  "root": "/pithos-parts"
+}
+```
+
+The token uses the standard OAuth token JSON shape and must include a `refresh_token`. Pithos refreshes access tokens automatically. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Create a scoped Dropbox app with `files.content.read` and `files.content.write` permissions and request offline access (`token_access_type=offline`) during OAuth authorization so Dropbox returns a refresh token. The optional `root` defaults to `/pithos-parts`.
+
+Parts up to 8 MiB use Dropbox's single-call upload endpoint. Larger parts use
+streaming upload sessions with 8 MiB chunks, so they are not constrained by the
+single-call endpoint's 150 MiB limit. As with Google Drive, use a single Pithos
+writer for a given part folder unless writes are coordinated by an outbox.
+
+### OneDrive Part Store
+
+Stores parts in a dedicated directory below OneDrive's private application
+folder. The required permission mode makes the OAuth tradeoff explicit:
+
+- `fullDrive` requests the stable delegated `Files.ReadWrite` permission. Pithos
+  still stores parts only below its application folder, but the granted token
+  can read and change the signed-in user's other OneDrive files.
+- `appFolderPreview` requests the least-privilege delegated
+  `Files.ReadWrite.AppFolder` permission, so the token is confined to the
+  application's folder. Microsoft currently marks this delegated permission as
+  preview.
+
+Use `fullDrive` for production deployments that require generally available
+Microsoft Graph permissions. Personal Microsoft accounts are supported by
+default; an organization can supply its tenant ID.
+
+```json
+{
+  "type": "OneDrivePartStore",
+  "clientId": "00000000-0000-0000-0000-000000000000",
+  "tenantId": "consumers",
+  "permissionMode": "fullDrive",
+  "token": { "type": "EnvKey", "envKey": "PITHOS_ONEDRIVE_TOKEN" },
+  "folderName": "pithos-parts"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `clientId` | Microsoft Entra application (client) ID. |
+| `tenantId` | Optional tenant ID. Defaults to `consumers` for personal Microsoft accounts; use your directory tenant ID for an organizational account. |
+| `permissionMode` | Required OAuth permission mode: `fullDrive` (stable `Files.ReadWrite`) or `appFolderPreview` (least-privilege preview `Files.ReadWrite.AppFolder`). |
+| `token` | OAuth token JSON printed by `pithos onedrive-auth`. It must contain a refresh token and may be inline, an `EnvKey`, or a `File` provider. |
+| `folderName` | Optional folder below the application's OneDrive folder (default `pithos-parts`). |
+
+#### Setup
+
+1. In the [Microsoft Entra admin center](https://entra.microsoft.com/), create an app registration. Select the account types you intend to support (for a personal OneDrive, include personal Microsoft accounts).
+2. Under **Authentication**, enable **Allow public client flows**. No client secret is needed because the authorization helper uses the device-code flow.
+3. Under **API permissions**, add the Microsoft Graph delegated permission that
+   matches the configured mode: `Files.ReadWrite` for `fullDrive`, or
+   `Files.ReadWrite.AppFolder` for `appFolderPreview`. The authorization request
+   also includes `offline_access` so pithos receives a refresh token.
+4. Authorize the app once from any machine:
+
+   ```sh
+   pithos onedrive-auth \
+     -client-id <APPLICATION_CLIENT_ID> \
+     -permission-mode fullDrive
+   ```
+
+   Pass the same permission mode to the command and the `OneDrivePartStore`
+   configuration. For an organizational account, also pass
+   `-tenant-id <DIRECTORY_TENANT_ID>`. Open the displayed URL, enter the device
+   code, and place the token JSON printed to stdout in the configuration.
+5. Start pithos. It creates its application folder and the configured part folder automatically.
+
+Access-token refresh is automatic. A `File` token provider persists refreshed JSON across restarts; inline and `EnvKey` values remain unchanged. Multiple pithos instances may share the same folder: parts are addressed directly by their globally unique part IDs, and OneDrive atomically replaces the single item at that path, avoiding Google Drive's list-then-create duplicate-file race. The store supports seekable ranged reads and benefits from large multipart chunks, `OutboxPartStore`, and `CachePartStore` when latency matters. Uploads use Microsoft Graph upload sessions with sequential 10 MiB chunks, so parts are not constrained by the simple upload endpoint's 250 MB limit. Incoming streams are temporarily spooled to disk because Graph requires the total size in each chunk request.
 
 ### Post-Quantum Encryption
 
