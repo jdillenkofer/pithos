@@ -3,6 +3,7 @@ package tape
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,44 @@ type filemarkFailingDevice struct {
 
 func (d *filemarkFailingDevice) WriteFilemarks(context.Context, int) error {
 	return d.err
+}
+
+type hookTx struct {
+	preCommit   []func(context.Context) error
+	afterCommit []func(context.Context) error
+	rollback    []func(context.Context) error
+}
+
+func (tx *hookTx) SqlTx() *sql.Tx { return nil }
+func (tx *hookTx) DBHandle() any  { return nil }
+
+func (tx *hookTx) OnPreCommit(fn func(context.Context) error) {
+	tx.preCommit = append(tx.preCommit, fn)
+}
+
+func (tx *hookTx) OnAfterCommit(fn func(context.Context) error) {
+	tx.afterCommit = append(tx.afterCommit, fn)
+}
+
+func (tx *hookTx) OnRollback(fn func(context.Context) error) {
+	tx.rollback = append(tx.rollback, fn)
+}
+
+func (tx *hookTx) commit(ctx context.Context) error {
+	for _, fn := range tx.preCommit {
+		if err := fn(ctx); err != nil {
+			for _, rollback := range tx.rollback {
+				_ = rollback(ctx)
+			}
+			return err
+		}
+	}
+	for _, fn := range tx.afterCommit {
+		if err := fn(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newTapeStore(t *testing.T, tapePath, journalPath string) *tapePartStore {
@@ -268,6 +307,39 @@ func TestTapePartStoreOverwriteKeepsNewestAcrossRestart(t *testing.T) {
 	content, err = readPart(t, restarted, *partId)
 	require.NoError(t, err)
 	require.Equal(t, []byte("version 2"), content)
+}
+
+func TestTapePartStoreSerializesInterleavedOverwrites(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("initial"))))
+
+	first := &hookTx{}
+	second := &hookTx{}
+	require.NoError(t, store.PutPart(ctx, first, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("first"))))
+	require.NoError(t, store.PutPart(ctx, second, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("second"))))
+
+	require.NoError(t, first.commit(ctx))
+	require.NoError(t, second.commit(ctx))
+	content, err := readPart(t, store, *partID)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), content)
+
+	require.NoError(t, store.Stop(ctx))
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
+	defer restarted.Stop(ctx)
+
+	content, err = readPart(t, restarted, *partID)
+	require.NoError(t, err)
+	require.Equal(t, []byte("second"), content)
 }
 
 func TestTapePartStoreInterleavedReaders(t *testing.T) {

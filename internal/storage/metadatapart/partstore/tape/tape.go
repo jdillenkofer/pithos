@@ -78,6 +78,7 @@ type tapePartStore struct {
 	groupCommit   journal.GroupCommitPolicy
 	policy        SegmentPackingPolicy
 	tracer        trace.Tracer
+	partLocks     *partLocker
 
 	mu                 sync.Mutex // guards device, journal, migrator, index
 	device             tapedev.Device
@@ -232,6 +233,7 @@ func New(deviceOpener DeviceOpener, opts ...Option) (partstore.PartStore, error)
 		recordSize:         defaultRecordSize,
 		policy:             DefaultPackingPolicy(),
 		tracer:             otel.Tracer("internal/storage/metadatapart/partstore/tape"),
+		partLocks:          newPartLocker(),
 		trigger:            make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
@@ -662,11 +664,6 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		return err
 	}
 	j := s.journal
-	var prevGen *journal.GenerationID
-	if entry, ok := s.index[partId]; ok {
-		g := entry.generation
-		prevGen = &g
-	}
 	s.mu.Unlock()
 
 	gen, err := journal.NewGenerationID()
@@ -688,6 +685,16 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	newEntry := indexEntry{generation: gen, length: loc.Length, hash: loc.Hash, location: locationJournal, journalLoc: loc}
 
 	if tx == nil {
+		unlock := s.partLocks.Lock(partId)
+		defer unlock()
+
+		s.mu.Lock()
+		var prevGen *journal.GenerationID
+		if entry, ok := s.index[partId]; ok {
+			g := entry.generation
+			prevGen = &g
+		}
+		s.mu.Unlock()
 		if _, err := j.Activate(ctx, partId, gen, prevGen); err != nil {
 			return err
 		}
@@ -699,7 +706,17 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	}
 
 	activated := false
+	var prevGen *journal.GenerationID
+	var unlock func()
 	tx.OnPreCommit(func(ctx context.Context) error {
+		unlock = s.partLocks.Lock(partId)
+		s.mu.Lock()
+		if entry, ok := s.index[partId]; ok {
+			g := entry.generation
+			prevGen = &g
+		}
+		s.mu.Unlock()
+
 		// Activation is the logical commit point: durable before the database
 		// commits, so a crash after this leaves a live orphan (not data loss)
 		// that GC condemns later.
@@ -710,6 +727,7 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		return nil
 	})
 	tx.OnAfterCommit(func(context.Context) error {
+		defer unlock()
 		s.mu.Lock()
 		s.index[partId] = newEntry
 		s.mu.Unlock()
@@ -717,6 +735,9 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		return nil
 	})
 	tx.OnRollback(func(ctx context.Context) error {
+		if unlock != nil {
+			defer unlock()
+		}
 		if !activated {
 			j.AbandonGeneration(gen)
 			return nil
@@ -793,6 +814,9 @@ func (s *tapePartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 	defer span.End()
 
 	apply := func(ctx context.Context) error {
+		unlock := s.partLocks.Lock(partId)
+		defer unlock()
+
 		s.mu.Lock()
 		if err := s.checkStarted(); err != nil {
 			s.mu.Unlock()
