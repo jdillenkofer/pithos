@@ -59,9 +59,22 @@ docker run -p 9000:9000 -v "$(pwd)/data:/data" \
   ghcr.io/jdillenkofer/pithos:latest
 ```
 
+The same `/data` mount can persist managed certificates. For example, after
+forwarding public ports 80/443 to container ports 9000/9443:
+
+```sh
+docker run -p 9000:9000 -p 9443:9443 \
+  -v $(pwd)/data:/data \
+  -e PITHOS_HTTPS_ENABLED=true \
+  -e PITHOS_ACME_ENABLED=true \
+  -e PITHOS_ACME_DOMAINS=s3.example.com \
+  -e PITHOS_ACME_CACHE_DIR=/data/acme \
+  ghcr.io/jdillenkofer/pithos:latest
+```
+
 The equivalent Docker Hub image is `jdillenkofer/pithos:latest`. To build the
 image locally instead, run `docker build -t pithos .` and substitute `pithos`
-for the published image name in the examples below.
+for the published image name in the examples on this page.
 
 The image uses `/tmp` for temporary spool files by default. For large uploads,
 you can mount a dedicated filesystem and select it with `PITHOS_SPOOL_DIR`.

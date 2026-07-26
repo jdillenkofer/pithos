@@ -24,7 +24,7 @@ RUN adduser -D -u 10001 appuser
 
 # Create runtime directories with correct permissions
 RUN mkdir -m 1777 /tmp-dir
-RUN mkdir -p /data && chown 10001:10001 /data
+RUN mkdir -p /data/acme && chown -R 10001:10001 /data
 
 RUN go build -trimpath -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY} -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}" -buildmode=pie -o /go/bin/pithos ./cmd
 
@@ -51,7 +51,7 @@ COPY --from=app-builder /etc/ssl/certs /etc/ssl/certs
 COPY --from=app-builder --chown=10001:10001 /tmp-dir /tmp
 COPY --from=app-builder --chown=10001:10001 /data /data
 
-EXPOSE 9000
+EXPOSE 9000 9090 9443 9444
 
 # Run as non-root user
 USER 10001

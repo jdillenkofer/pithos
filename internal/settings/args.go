@@ -68,8 +68,22 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	websiteDomainAccessor := registerStringFlag(serveCommand, "websiteDomain", defaultWebsiteDomain, "the domain for s3 website hosting (e.g. s3-website.localhost)")
 	bindAddressAccessor := registerStringFlag(serveCommand, "bindAddress", defaultBindAddress, "the address the s3 socket is bound to")
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
+	httpEnabledAccessor := registerBoolFlag(serveCommand, "httpEnabled", defaultHTTPEnabled, "determines if the HTTP listener for the s3 api is enabled")
+	httpsEnabledAccessor := registerBoolFlag(serveCommand, "httpsEnabled", defaultHTTPSEnabled, "determines if the HTTPS listener for the s3 api is enabled")
+	httpsPortAccessor := registerIntFlag(serveCommand, "httpsPort", defaultHTTPSPort, "the HTTPS port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	monitoringHttpsEnabledAccessor := registerBoolFlag(serveCommand, "monitoringHttpsEnabled", defaultMonitoringHTTPSEnabled, "determines if the HTTPS monitoring port is enabled")
+	monitoringHttpsPortAccessor := registerIntFlag(serveCommand, "monitoringHttpsPort", defaultMonitoringHTTPSPort, "the HTTPS monitoring port of pithos")
+	tlsCertFileAccessor := registerStringFlag(serveCommand, "tlsCertFile", "", "the PEM certificate chain used by HTTPS listeners")
+	tlsKeyFileAccessor := registerStringFlag(serveCommand, "tlsKeyFile", "", "the PEM private key used by HTTPS listeners")
+	acmeEnabledAccessor := registerBoolFlag(serveCommand, "acmeEnabled", defaultACMEEnabled, "enable automatic ACME certificate management")
+	acmeDomainsAccessor := registerStringFlag(serveCommand, "acmeDomains", "", "comma-separated domains included in the managed certificate")
+	acmeEmailAccessor := registerStringFlag(serveCommand, "acmeEmail", "", "optional ACME account email")
+	acmeCacheDirAccessor := registerStringFlag(serveCommand, "acmeCacheDir", "", "persistent directory for ACME certificates and account data")
+	acmeCADirectoryURLAccessor := registerStringFlag(serveCommand, "acmeCADirectoryURL", defaultACMECADirectoryURL, "ACME CA directory URL")
+	acmeChallengeAccessor := registerStringFlag(serveCommand, "acmeChallenge", defaultACMEChallenge, "ACME challenge type (auto, http-01, tls-alpn-01, dns-01)")
+	acmeDNSProviderAccessor := registerStringFlag(serveCommand, "acmeDNSProvider", "", "lego DNS provider used for dns-01")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "authorizer backend: lua or policy")
@@ -102,6 +116,12 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		}
 	}
 
+	var acmeDomains []string
+	acmeDomainsRaw := acmeDomainsAccessor()
+	if acmeDomainsRaw != nil {
+		acmeDomains = splitCommaSeparated(*acmeDomainsRaw)
+	}
+
 	return &Settings{
 		authenticationEnabled:            authenticationEnabledAccessor(),
 		credentialsProvider:              credentialsProviderAccessor(),
@@ -113,8 +133,22 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		websiteDomain:                    websiteDomainAccessor(),
 		bindAddress:                      bindAddressAccessor(),
 		port:                             portAccessor(),
+		httpEnabled:                      httpEnabledAccessor(),
+		httpsEnabled:                     httpsEnabledAccessor(),
+		httpsPort:                        httpsPortAccessor(),
 		monitoringPort:                   monitoringPortAccessor(),
 		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
+		monitoringHttpsEnabled:           monitoringHttpsEnabledAccessor(),
+		monitoringHttpsPort:              monitoringHttpsPortAccessor(),
+		tlsCertFile:                      tlsCertFileAccessor(),
+		tlsKeyFile:                       tlsKeyFileAccessor(),
+		acmeEnabled:                      acmeEnabledAccessor(),
+		acmeDomains:                      acmeDomains,
+		acmeEmail:                        acmeEmailAccessor(),
+		acmeCacheDir:                     acmeCacheDirAccessor(),
+		acmeCADirectoryURL:               acmeCADirectoryURLAccessor(),
+		acmeChallenge:                    acmeChallengeAccessor(),
+		acmeDNSProvider:                  acmeDNSProviderAccessor(),
 		storageJsonPath:                  storageJsonPathAccessor(),
 		authorizerPath:                   authorizerPathAccessor(),
 		authorizerType:                   authorizerTypeAccessor(),
