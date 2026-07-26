@@ -64,6 +64,10 @@ func (ps *cachePartStore) Stop(ctx context.Context) error {
 	return ps.innerPartStore.Stop(ctx)
 }
 
+func (ps *cachePartStore) FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout partstore.ObjectLayout) error {
+	return partstore.FinalizeObjectLayout(ctx, ps.innerPartStore, tx, layout)
+}
+
 func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := ps.tracer.Start(ctx, "cachePartStore.PutPart")
 	defer span.End()

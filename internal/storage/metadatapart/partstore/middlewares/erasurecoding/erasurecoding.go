@@ -133,6 +133,15 @@ func (e *erasureCodingPartStore) Stop(ctx context.Context) error {
 	return nil
 }
 
+func (e *erasureCodingPartStore) FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout partstore.ObjectLayout) error {
+	for _, store := range e.partStores {
+		if err := partstore.FinalizeObjectLayout(ctx, store, tx, layout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *erasureCodingPartStore) healScanLoop(cancelTask *atomic.Bool) {
 	ctx := context.Background()
 	e.healScanOnce(ctx, cancelTask)

@@ -73,8 +73,11 @@ func (f *FilesystemPartStoreConfiguration) Instantiate(diProvider dependencyinje
 type TapePartStoreConfiguration struct {
 	DeviceInstantiator tapeConfig.TapeDeviceInstantiator `json:"-"`
 	RawDevice          json.RawMessage                   `json:"device"`
+	VolumeID           internalConfig.StringProvider     `json:"volumeId,omitempty"`
 	RecordSizeBytes    internalConfig.Int64Provider      `json:"recordSizeBytes,omitempty"`
 	JournalDirectory   internalConfig.StringProvider     `json:"journalDirectory"`
+	ReadCacheDirectory internalConfig.StringProvider     `json:"readCacheDirectory,omitempty"`
+	ReadCacheMaxBytes  internalConfig.Int64Provider      `json:"readCacheMaxBytes,omitempty"`
 	DurabilityMode     internalConfig.StringProvider     `json:"durabilityMode,omitempty"`
 	GroupCommit        TapeGroupCommitConfiguration      `json:"groupCommit,omitempty"`
 	Packing            TapePackingConfiguration          `json:"packing,omitempty"`
@@ -87,9 +90,11 @@ type TapeGroupCommitConfiguration struct {
 }
 
 type TapePackingConfiguration struct {
-	TargetBytes    internalConfig.Int64Provider `json:"targetBytes,omitempty"`
-	MaxBytes       internalConfig.Int64Provider `json:"maxBytes,omitempty"`
-	MaxWaitSeconds internalConfig.Int64Provider `json:"maxWaitSeconds,omitempty"`
+	TargetBytes      internalConfig.Int64Provider `json:"targetBytes,omitempty"`
+	MaxBytes         internalConfig.Int64Provider `json:"maxBytes,omitempty"`
+	MaxWaitSeconds   internalConfig.Int64Provider `json:"maxWaitSeconds,omitempty"`
+	PreferFullObject *bool                        `json:"preferFullObject,omitempty"`
+	MaxOpenObjects   internalConfig.Int64Provider `json:"maxOpenObjects,omitempty"`
 }
 
 func (t *TapePartStoreConfiguration) UnmarshalJSON(b []byte) error {
@@ -115,6 +120,21 @@ func (t *TapePartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 		return nil, err
 	}
 	opts := []tapePartStore.Option{tapePartStore.WithJournalDir(t.JournalDirectory.Value())}
+	if t.RecordSizeBytes.Value() < 0 || t.ReadCacheMaxBytes.Value() < 0 ||
+		t.GroupCommit.MaxDelayMs.Value() < 0 || t.GroupCommit.MaxBytes.Value() < 0 ||
+		t.Packing.TargetBytes.Value() < 0 || t.Packing.MaxBytes.Value() < 0 ||
+		t.Packing.MaxWaitSeconds.Value() < 0 || t.Packing.MaxOpenObjects.Value() < 0 {
+		return nil, errors.New("tape sizes and durations must be non-negative")
+	}
+	if value := t.VolumeID.Value(); value != "" {
+		opts = append(opts, tapePartStore.WithVolumeID(value))
+	}
+	if value := t.ReadCacheDirectory.Value(); value != "" {
+		opts = append(opts, tapePartStore.WithReadCacheDir(value))
+	}
+	if value := t.ReadCacheMaxBytes.Value(); value > 0 {
+		opts = append(opts, tapePartStore.WithReadCacheMaxBytes(value))
+	}
 	if t.RecordSizeBytes.Value() > 0 {
 		opts = append(opts, tapePartStore.WithRecordSize(int(t.RecordSizeBytes.Value())))
 	}
@@ -139,6 +159,12 @@ func (t *TapePartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 	}
 	if value := t.Packing.MaxWaitSeconds.Value(); value > 0 {
 		packing.MaxWait = time.Duration(value) * time.Second
+	}
+	if t.Packing.PreferFullObject != nil {
+		packing.PreferFullObject = *t.Packing.PreferFullObject
+	}
+	if value := t.Packing.MaxOpenObjects.Value(); value > 0 {
+		packing.MaxOpenObjects = int(value)
 	}
 	opts = append(opts, tapePartStore.WithPackingPolicy(packing))
 	return tapePartStore.New(deviceOpener, opts...)

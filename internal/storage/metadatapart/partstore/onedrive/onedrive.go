@@ -118,7 +118,7 @@ func (s *store) itemURL(name string) string {
 	return s.endpoint + "/me/drive/items/" + url.PathEscape(s.folderID) + ":/" + url.PathEscape(name)
 }
 
-func (s *store) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId, r io.Reader) error {
+func (s *store) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId, _ partstore.PutPartOptions, r io.Reader) error {
 	_, span := s.tracer.Start(ctx, "oneDrivePartStore.PutPart")
 	defer span.End()
 

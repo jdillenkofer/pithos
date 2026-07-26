@@ -8,6 +8,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
+	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
@@ -386,6 +387,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 	return &metadatastore.CompleteMultipartUploadResult{
 		UnreferencedParts: deletedParts,
+		Parts:             sliceutils.Map(partFromEntity, partEntities),
 		ETag:              objectEntity.ETag,
 		VersionID:         objectEntity.VersionID,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,

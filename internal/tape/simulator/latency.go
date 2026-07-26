@@ -56,21 +56,21 @@ func DefaultLTO8Profile() LatencyProfile {
 // vendor model.
 func LTOProfile(generation int) (LatencyProfile, bool) {
 	type generationSpec struct {
-		capacityGB    int64
-		throughputMiB int64
-		loadSeconds   int64
+		capacityGB   int64
+		throughputMB int64
+		loadSeconds  int64
 	}
 	specs := map[int]generationSpec{
-		1:  {capacityGB: 100, throughputMiB: 15, loadSeconds: 20},
-		2:  {capacityGB: 200, throughputMiB: 35, loadSeconds: 18},
-		3:  {capacityGB: 400, throughputMiB: 80, loadSeconds: 15},
-		4:  {capacityGB: 800, throughputMiB: 120, loadSeconds: 15},
-		5:  {capacityGB: 1_500, throughputMiB: 140, loadSeconds: 12},
-		6:  {capacityGB: 2_500, throughputMiB: 160, loadSeconds: 12},
-		7:  {capacityGB: 6_000, throughputMiB: 300, loadSeconds: 15},
-		8:  {capacityGB: 12_000, throughputMiB: 360, loadSeconds: 15},
-		9:  {capacityGB: 18_000, throughputMiB: 400, loadSeconds: 17},
-		10: {capacityGB: 40_000, throughputMiB: 400, loadSeconds: 12},
+		1:  {capacityGB: 100, throughputMB: 15, loadSeconds: 20},
+		2:  {capacityGB: 200, throughputMB: 35, loadSeconds: 18},
+		3:  {capacityGB: 400, throughputMB: 80, loadSeconds: 15},
+		4:  {capacityGB: 800, throughputMB: 120, loadSeconds: 15},
+		5:  {capacityGB: 1_500, throughputMB: 140, loadSeconds: 12},
+		6:  {capacityGB: 2_500, throughputMB: 160, loadSeconds: 12},
+		7:  {capacityGB: 6_000, throughputMB: 300, loadSeconds: 15},
+		8:  {capacityGB: 12_000, throughputMB: 360, loadSeconds: 15},
+		9:  {capacityGB: 18_000, throughputMB: 400, loadSeconds: 17},
+		10: {capacityGB: 40_000, throughputMB: 400, loadSeconds: 12},
 	}
 	spec, ok := specs[generation]
 	if !ok {
@@ -83,8 +83,8 @@ func LTOProfile(generation int) (LatencyProfile, bool) {
 		FullTapeRewind:    90 * time.Second,
 		FullTapeLocate:    110 * time.Second,
 		MinSeek:           2 * time.Second,
-		ReadThroughput:    spec.throughputMiB << 20,
-		WriteThroughput:   spec.throughputMiB << 20,
+		ReadThroughput:    spec.throughputMB * 1_000_000,
+		WriteThroughput:   spec.throughputMB * 1_000_000,
 		FilemarkWriteTime: time.Second,
 	}, true
 }

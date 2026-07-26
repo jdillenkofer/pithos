@@ -473,6 +473,10 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId 
 	return nil
 }
 
+func (obs *outboxPartStore) FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout partstore.ObjectLayout) error {
+	return partstore.FinalizeObjectLayout(ctx, obs.innerPartStore, tx, layout)
+}
+
 // SupportsTxFreeGetPart reports whether GetPart works without an ambient
 // transaction. The outbox lookup itself runs in a short internal transaction
 // when tx is nil (and, in the rare case that the part is still pending in the

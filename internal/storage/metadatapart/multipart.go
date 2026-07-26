@@ -285,6 +285,22 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 		if err != nil {
 			return err
 		}
+		if len(result.Parts) > 0 {
+			store, err := mbs.partStores.ByName(result.Parts[0].StoreName)
+			if err != nil {
+				return err
+			}
+			partIDs := make([]partstore.PartId, len(result.Parts))
+			for index, part := range result.Parts {
+				partIDs[index] = part.Id
+			}
+			if err := partstore.FinalizeObjectLayout(ctx, store, tx, partstore.ObjectLayout{
+				ObjectID: partstore.DeriveObjectId(bucketName.String(), key.String(), uploadId.String()),
+				PartIDs:  partIDs,
+			}); err != nil {
+				return err
+			}
+		}
 		if err := mbs.deleteUnreferencedParts(ctx, tx, result.UnreferencedParts); err != nil {
 			return err
 		}

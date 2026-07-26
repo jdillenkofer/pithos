@@ -18,10 +18,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
@@ -44,6 +46,7 @@ type GroupCommitPolicy struct {
 const (
 	defaultMaxFileBytes int64 = 1 << 30 // 1 GiB per journal segment file
 	dataChunkSize             = 1 << 20 // 1 MiB part-data records
+	minCompactionBytes  int64 = 64 << 20
 	filePrefix                = "journal-"
 	fileSuffix                = ".pj"
 )
@@ -92,20 +95,39 @@ type Journal struct {
 	maxFileBytes int64
 	journalID    [16]byte
 
-	appendMu   sync.Mutex
-	file       *os.File
-	fileIndex  uint64
-	fileOffset int64
-	nextSeq    uint64
-	writtenSeq atomic.Uint64
+	mutationMu   sync.RWMutex
+	appendMu     sync.Mutex
+	file         *os.File
+	fileIndex    uint64
+	fileOffset   int64
+	nextSeq      uint64
+	writtenSeq   atomic.Uint64
+	pendingBytes atomic.Int64
 
 	syncMu    sync.Mutex
 	syncCond  *sync.Cond
 	syncing   bool
 	syncedSeq uint64
 	syncErr   error
+	syncWake  chan struct{}
+
+	stateMu sync.RWMutex
+	state   *RecoveryResult
+	staged  map[GenerationID]stagedPart
+	layouts []stagedObjectLayout
+	pending map[GenerationID]uint64
 
 	closed bool
+}
+
+type stagedPart struct {
+	part      *RecoveredPart
+	commitSeq uint64
+}
+
+type stagedObjectLayout struct {
+	sequence uint64
+	payload  objectLayoutPayload
 }
 
 // Open opens (creating if necessary) a journal directory. Existing segment
@@ -113,6 +135,12 @@ type Journal struct {
 func Open(opts Options) (*Journal, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("journal: Dir is required")
+	}
+	if opts.Durability != DurabilityPerPart && opts.Durability != DurabilityGroupCommit {
+		return nil, fmt.Errorf("journal: invalid durability mode %d", opts.Durability)
+	}
+	if opts.GroupCommit.MaxDelay < 0 || opts.GroupCommit.MaxBytes < 0 {
+		return nil, errors.New("journal: group commit delay and bytes must be non-negative")
 	}
 	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, err
@@ -128,12 +156,16 @@ func Open(opts Options) (*Journal, error) {
 		maxFileBytes: maxFileBytes,
 	}
 	j.syncCond = sync.NewCond(&j.syncMu)
+	j.syncWake = make(chan struct{}, 1)
+	j.staged = make(map[GenerationID]stagedPart)
+	j.pending = make(map[GenerationID]uint64)
 
 	scan, err := Scan(opts.Dir)
 	if err != nil {
 		return nil, err
 	}
 	j.nextSeq = scan.NextSequence
+	j.state = scan
 	if scan.JournalID != ([16]byte{}) {
 		j.journalID = scan.JournalID
 	} else {
@@ -188,8 +220,15 @@ func (j *Journal) appendRecordLocked(kind uint8, flags uint16, payload []byte) e
 		return err
 	}
 	j.fileOffset += int64(len(rec))
+	pending := j.pendingBytes.Add(int64(len(rec)))
 	j.nextSeq++
 	j.writtenSeq.Store(seq)
+	if j.durability == DurabilityGroupCommit && j.groupPolicy.MaxBytes > 0 && pending >= j.groupPolicy.MaxBytes {
+		select {
+		case j.syncWake <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -223,10 +262,23 @@ func (j *Journal) checkOpen() error {
 	return nil
 }
 
-// WritePart stages a part's payload: begin, data records, end (with length and
-// content hash), and commit. It returns a Locator to the data once the part is
-// durable per the configured durability mode.
+// WritePart writes and immediately makes one part durable. TapePartStore uses
+// StagePart instead so the later activation can make both payload and logical
+// commit durable with one sync.
 func (j *Journal) WritePart(ctx context.Context, input PartInput, reader io.Reader) (Locator, error) {
+	return j.writePart(ctx, input, reader, true)
+}
+
+// StagePart appends a complete part without forcing a sync. The next durable
+// journal operation (normally Activate in the database pre-commit hook) makes
+// both the payload and activation durable together.
+func (j *Journal) StagePart(ctx context.Context, input PartInput, reader io.Reader) (Locator, error) {
+	return j.writePart(ctx, input, reader, false)
+}
+
+func (j *Journal) writePart(ctx context.Context, input PartInput, reader io.Reader, syncNow bool) (Locator, error) {
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
 	begin := input.toPayload()
 	j.appendMu.Lock()
 	if err := j.checkOpen(); err != nil {
@@ -279,16 +331,32 @@ func (j *Journal) WritePart(ctx context.Context, input PartInput, reader io.Read
 	commitSeq := j.nextSeq - 1
 	j.appendMu.Unlock()
 
-	if err := j.durable(commitSeq); err != nil {
-		return Locator{}, err
-	}
-	return Locator{
+	locator := Locator{
 		FileIndex:     fileIndex,
 		DataOffset:    dataOffset,
 		DataEndOffset: dataEndOffset,
 		Length:        length,
 		Hash:          hash,
-	}, nil
+	}
+	j.stateMu.Lock()
+	j.staged[input.Generation] = stagedPart{part: &RecoveredPart{
+		Generation: input.Generation,
+		PartID:     input.PartID,
+		Location:   locator,
+		ObjectID:   input.ObjectID,
+		PartNumber: input.PartNumber,
+		PartCount:  input.PartCount,
+		Length:     length,
+		Hash:       hash,
+	}, commitSeq: commitSeq}
+	j.pending[input.Generation] = fileIndex
+	j.stateMu.Unlock()
+	if syncNow {
+		if err := j.durable(commitSeq); err != nil {
+			return Locator{}, err
+		}
+	}
+	return locator, nil
 }
 
 func (j *Journal) appendLogical(kind uint8, payload []byte) (uint64, error) {
@@ -313,48 +381,277 @@ func (j *Journal) appendLogical(kind uint8, payload []byte) (uint64, error) {
 // asserting the currently-active generation. Returns the record's sequence
 // (its position in the global logical order).
 func (j *Journal) Activate(ctx context.Context, partID partstore.PartId, generation GenerationID, expectedPrevious *GenerationID) (uint64, error) {
-	return j.appendLogical(kindActivate, encodeActivate(activatePayload{
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	seq, err := j.appendLogical(kindActivate, encodeActivate(activatePayload{
 		partID:           partID,
 		generation:       generation,
 		expectedPrevious: expectedPrevious,
 	}))
+	if err != nil {
+		return 0, err
+	}
+	j.stateMu.Lock()
+	j.state.Ops = append(j.state.Ops, LogicalOp{
+		Sequence:         seq,
+		Kind:             kindActivate,
+		PartID:           partID,
+		Generation:       generation,
+		ExpectedPrevious: cloneGeneration(expectedPrevious),
+	})
+	j.state.NextSequence = max(j.state.NextSequence, seq+1)
+	delete(j.pending, generation)
+	j.stateMu.Unlock()
+	return seq, nil
 }
 
 // Delete records a logical deletion of partID, optionally asserting which
 // generation is being deleted.
 func (j *Journal) Delete(ctx context.Context, partID partstore.PartId, expectedGeneration *GenerationID) (uint64, error) {
-	return j.appendLogical(kindDelete, encodeDelete(deletePayload{
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	seq, err := j.appendLogical(kindDelete, encodeDelete(deletePayload{
 		partID:             partID,
 		expectedGeneration: expectedGeneration,
 	}))
+	if err != nil {
+		return 0, err
+	}
+	j.stateMu.Lock()
+	j.state.Ops = append(j.state.Ops, LogicalOp{
+		Sequence:           seq,
+		Kind:               kindDelete,
+		PartID:             partID,
+		ExpectedGeneration: cloneGeneration(expectedGeneration),
+	})
+	j.state.NextSequence = max(j.state.NextSequence, seq+1)
+	j.stateMu.Unlock()
+	return seq, nil
 }
 
 // Checkpoint records that generation's payload is now durable on a committed
 // tape segment, making the journal copy reclaimable during compaction.
 func (j *Journal) Checkpoint(ctx context.Context, generation GenerationID, segmentID [16]byte) (uint64, error) {
-	return j.appendLogical(kindCheckpoint, encodeCheckpoint(checkpointPayload{
-		generation: generation,
-		segmentID:  segmentID,
-	}))
+	sequences, err := j.CheckpointBatch(ctx, []Checkpoint{{Generation: generation, SegmentID: segmentID}})
+	if err != nil {
+		return 0, err
+	}
+	return sequences[0], nil
+}
+
+// Checkpoint is one generation-to-segment durability transition.
+type Checkpoint struct {
+	Generation GenerationID
+	SegmentID  [16]byte
+}
+
+// CheckpointBatch appends all checkpoint records and makes them durable with a
+// single sync. Segment migration must use this method: per-part syncs destroy
+// throughput when a segment contains thousands of small parts.
+func (j *Journal) CheckpointBatch(ctx context.Context, checkpoints []Checkpoint) ([]uint64, error) {
+	if len(checkpoints) == 0 {
+		return nil, nil
+	}
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	j.appendMu.Lock()
+	if err := j.checkOpen(); err != nil {
+		j.appendMu.Unlock()
+		return nil, err
+	}
+	if err := j.maybeRollLocked(); err != nil {
+		j.appendMu.Unlock()
+		return nil, err
+	}
+	sequences := make([]uint64, 0, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		if err := j.appendRecordLocked(kindCheckpoint, 0, encodeCheckpoint(checkpointPayload{
+			generation: checkpoint.Generation,
+			segmentID:  checkpoint.SegmentID,
+		})); err != nil {
+			j.appendMu.Unlock()
+			return nil, err
+		}
+		sequences = append(sequences, j.nextSeq-1)
+	}
+	lastSequence := sequences[len(sequences)-1]
+	j.appendMu.Unlock()
+	if err := j.durable(lastSequence); err != nil {
+		return nil, err
+	}
+
+	j.stateMu.Lock()
+	for _, checkpoint := range checkpoints {
+		if part := j.state.Parts[checkpoint.Generation]; part != nil {
+			part.Checkpointed = true
+			part.CheckpointSegment = checkpoint.SegmentID
+		}
+	}
+	j.state.NextSequence = max(j.state.NextSequence, lastSequence+1)
+	j.stateMu.Unlock()
+	return sequences, nil
 }
 
 // durable makes all records up to and including seq durable on disk.
 func (j *Journal) durable(seq uint64) error {
+	var err error
 	if j.durability == DurabilityPerPart {
 		j.syncMu.Lock()
 		if j.syncedSeq >= seq {
 			j.syncMu.Unlock()
+			j.publishDurableStaged()
 			return nil
 		}
 		j.syncMu.Unlock()
-		return j.fsyncAndAdvance()
+		err = j.fsyncAndAdvance()
+	} else {
+		err = j.waitDurable(seq)
 	}
-	return j.waitDurable(seq)
+	if err == nil {
+		j.publishDurableStaged()
+	}
+	return err
+}
+
+func (j *Journal) publishDurableStaged() {
+	j.syncMu.Lock()
+	syncedSeq := j.syncedSeq
+	j.syncMu.Unlock()
+	j.stateMu.Lock()
+	sort.Slice(j.layouts, func(i, k int) bool { return j.layouts[i].sequence < j.layouts[k].sequence })
+	remainingLayouts := j.layouts[:0]
+	for _, staged := range j.layouts {
+		if staged.sequence > syncedSeq {
+			remainingLayouts = append(remainingLayouts, staged)
+			continue
+		}
+		applyObjectLayout(j.state, staged.payload)
+		j.state.NextSequence = max(j.state.NextSequence, staged.sequence+1)
+	}
+	j.layouts = remainingLayouts
+	for generation, staged := range j.staged {
+		if staged.commitSeq > syncedSeq {
+			continue
+		}
+		applyRecoveredPlacement(j.state, staged.part)
+		j.state.Parts[generation] = staged.part
+		j.state.partsByID[staged.part.PartID] = append(j.state.partsByID[staged.part.PartID], generation)
+		j.state.NextSequence = max(j.state.NextSequence, staged.commitSeq+1)
+		j.state.MaxFileIndex = max(j.state.MaxFileIndex, staged.part.Location.FileIndex)
+		delete(j.staged, generation)
+	}
+	j.stateMu.Unlock()
+}
+
+// FinalizeObjectLayout durably records the completed ordered part manifest and
+// enriches pending parts with the now-known PartCount. This is advisory
+// placement metadata: replaying it before or after a database rollback cannot
+// change logical part visibility.
+func (j *Journal) FinalizeObjectLayout(ctx context.Context, objectID partstore.ObjectId, partIDs []partstore.PartId) error {
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	payload, err := validateObjectLayout(objectID, partIDs)
+	if err != nil {
+		return err
+	}
+	seq, err := j.appendLogical(kindObjectLayout, encodeObjectLayout(payload))
+	if err != nil {
+		return err
+	}
+	j.stateMu.Lock()
+	applyObjectLayout(j.state, payload)
+	j.state.NextSequence = max(j.state.NextSequence, seq+1)
+	j.stateMu.Unlock()
+	return nil
+}
+
+// StageObjectLayout appends placement metadata without forcing a sync. The
+// caller must call EnsureDurable before its database transaction commits.
+// When a part activation is already registered as an earlier pre-commit hook,
+// that activation's single sync covers payload, layout, and activation.
+func (j *Journal) StageObjectLayout(objectID partstore.ObjectId, partIDs []partstore.PartId) (uint64, error) {
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	payload, err := validateObjectLayout(objectID, partIDs)
+	if err != nil {
+		return 0, err
+	}
+	j.appendMu.Lock()
+	if err := j.checkOpen(); err != nil {
+		j.appendMu.Unlock()
+		return 0, err
+	}
+	if err := j.appendRecordLocked(kindObjectLayout, 0, encodeObjectLayout(payload)); err != nil {
+		j.appendMu.Unlock()
+		return 0, err
+	}
+	sequence := j.nextSeq - 1
+	j.appendMu.Unlock()
+	j.stateMu.Lock()
+	j.layouts = append(j.layouts, stagedObjectLayout{sequence: sequence, payload: payload})
+	j.stateMu.Unlock()
+	return sequence, nil
+}
+
+// EnsureDurable makes every journal record through sequence durable.
+func (j *Journal) EnsureDurable(sequence uint64) error {
+	j.mutationMu.RLock()
+	defer j.mutationMu.RUnlock()
+	return j.durable(sequence)
+}
+
+// AbandonGeneration releases runtime compaction protection for a staged
+// generation whose database transaction rolled back before activation. Its
+// append-only bytes remain harmless and become reclaimable.
+func (j *Journal) AbandonGeneration(generation GenerationID) {
+	j.stateMu.Lock()
+	delete(j.pending, generation)
+	delete(j.staged, generation)
+	j.stateMu.Unlock()
+}
+
+func validateObjectLayout(objectID partstore.ObjectId, partIDs []partstore.PartId) (objectLayoutPayload, error) {
+	if len(partIDs) == 0 || len(partIDs) > 10_000 {
+		return objectLayoutPayload{}, fmt.Errorf("journal: object layout must contain 1..10000 parts")
+	}
+	return objectLayoutPayload{objectID: objectID, partIDs: append([]partstore.PartId(nil), partIDs...)}, nil
+}
+
+func applyObjectLayout(state *RecoveryResult, payload objectLayoutPayload) {
+	objectID := payload.objectID
+	partIDs := payload.partIDs
+	partCount := uint64(len(partIDs))
+	seen := make(map[partstore.PartId]struct{}, len(partIDs))
+	for index, partID := range partIDs {
+		// Content deduplication can legitimately make multiple object positions
+		// reference one physical part. One payload cannot occupy two tape
+		// positions, so retain its first logical position while preserving the
+		// full PartCount.
+		if _, duplicate := seen[partID]; duplicate {
+			continue
+		}
+		seen[partID] = struct{}{}
+		partNumber := uint64(index + 1)
+		state.layouts[partID] = recoveredPlacement{objectID: objectID, partNumber: partNumber, partCount: partCount}
+		for _, generation := range state.partsByID[partID] {
+			part := state.Parts[generation]
+			if part == nil {
+				continue
+			}
+			id := objectID
+			part.ObjectID = &id
+			part.PartNumber = &partNumber
+			part.PartCount = &partCount
+		}
+	}
 }
 
 // fsyncAndAdvance fsyncs the current file and advances syncedSeq to the
 // highest written sequence at the moment of the sync.
 func (j *Journal) fsyncAndAdvance() error {
+	if j.durability == DurabilityGroupCommit {
+		j.pendingBytes.Store(0)
+	}
 	target := j.writtenSeq.Load()
 	err := j.file.Sync()
 	j.syncMu.Lock()
@@ -383,9 +680,23 @@ func (j *Journal) waitDurable(seq uint64) error {
 			j.syncing = true
 			if j.groupPolicy.MaxDelay > 0 {
 				j.syncMu.Unlock()
-				time.Sleep(j.groupPolicy.MaxDelay)
+				timer := time.NewTimer(j.groupPolicy.MaxDelay)
+				select {
+				case <-timer.C:
+				case <-j.syncWake:
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+				}
 				j.syncMu.Lock()
 			}
+			// Clear the completed batch before taking its sequence boundary.
+			// Appends racing after this point accumulate toward the next
+			// MaxBytes wake instead of being erased after Sync returns.
+			j.pendingBytes.Store(0)
 			target := j.writtenSeq.Load()
 			j.syncMu.Unlock()
 			err := j.file.Sync()
@@ -415,6 +726,8 @@ func (j *Journal) OpenPayload(loc Locator) (io.ReadCloser, error) {
 }
 
 func (j *Journal) Close() error {
+	j.mutationMu.Lock()
+	defer j.mutationMu.Unlock()
 	j.appendMu.Lock()
 	defer j.appendMu.Unlock()
 	if j.closed {
@@ -431,14 +744,189 @@ func (j *Journal) Close() error {
 	return j.file.Close()
 }
 
+// Compact reclaims closed journal files whose payloads are either safely
+// checkpointed on tape or no longer live. Before deleting anything it writes
+// a durable, unconditional activation snapshot for the current live set, so
+// logical state remains reconstructable after the historical files disappear.
+func (j *Journal) Compact(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	j.mutationMu.Lock()
+	defer j.mutationMu.Unlock()
+	j.appendMu.Lock()
+	defer j.appendMu.Unlock()
+	if err := j.checkOpen(); err != nil {
+		return err
+	}
+
+	// mutationMu guarantees all earlier durable operations have published their
+	// incremental state and prevents a database transaction's staged payload
+	// from racing reclamation.
+	if err := j.fsyncAndAdvance(); err != nil {
+		return err
+	}
+	j.publishDurableStaged()
+	j.stateMu.RLock()
+	snapshot := cloneRecoveryResult(j.state)
+	protectedFiles := make(map[uint64]struct{}, len(j.pending))
+	for _, fileIndex := range j.pending {
+		protectedFiles[fileIndex] = struct{}{}
+	}
+	j.stateMu.RUnlock()
+	rebuildLive(snapshot)
+	// Rotate a sizable active file when all of its live payloads have reached
+	// tape. This caps retained staging data even when ingestion becomes idle
+	// immediately after one large migration.
+	if j.fileOffset >= minCompactionBytes && fileReclaimable(snapshot, j.fileIndex, protectedFiles) {
+		if err := j.file.Sync(); err != nil {
+			return err
+		}
+		if err := j.file.Close(); err != nil {
+			return err
+		}
+		j.fileIndex++
+		if err := j.openNewFile(); err != nil {
+			return err
+		}
+	}
+
+	indices, err := sortedFileIndices(j.dir)
+	if err != nil {
+		return err
+	}
+	var reclaim []uint64
+	for _, index := range indices {
+		if index < j.fileIndex && fileReclaimable(snapshot, index, protectedFiles) {
+			reclaim = append(reclaim, index)
+		}
+	}
+	if len(reclaim) == 0 {
+		return nil
+	}
+
+	// Snapshot the complete logical state in the surviving active file.
+	type layoutPart struct {
+		id     partstore.PartId
+		number uint64
+	}
+	layouts := make(map[partstore.ObjectId][]layoutPart)
+	for partID, placement := range snapshot.layouts {
+		layouts[placement.objectID] = append(layouts[placement.objectID], layoutPart{id: partID, number: placement.partNumber})
+	}
+	for objectID, parts := range layouts {
+		sort.Slice(parts, func(i, k int) bool { return parts[i].number < parts[k].number })
+		partIDs := make([]partstore.PartId, len(parts))
+		for index, part := range parts {
+			partIDs[index] = part.id
+		}
+		if err := j.appendRecordLocked(kindObjectLayout, 0, encodeObjectLayout(objectLayoutPayload{
+			objectID: objectID,
+			partIDs:  partIDs,
+		})); err != nil {
+			return err
+		}
+	}
+	for partID, generation := range snapshot.Live {
+		if err := j.appendRecordLocked(kindActivate, 0, encodeActivate(activatePayload{
+			partID:     partID,
+			generation: generation,
+		})); err != nil {
+			return err
+		}
+	}
+	knownParts := make(map[partstore.PartId]struct{})
+	for _, op := range snapshot.Ops {
+		knownParts[op.PartID] = struct{}{}
+	}
+	for partID := range knownParts {
+		if _, live := snapshot.Live[partID]; live {
+			continue
+		}
+		if err := j.appendRecordLocked(kindDelete, 0, encodeDelete(deletePayload{
+			partID: partID,
+		})); err != nil {
+			return err
+		}
+	}
+	if err := j.fsyncAndAdvance(); err != nil {
+		return err
+	}
+
+	for _, index := range reclaim {
+		if err := os.Remove(filepath.Join(j.dir, fileName(index))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := ioutils.SyncDirectory(j.dir); err != nil {
+		return err
+	}
+
+	rebuilt, err := Scan(j.dir)
+	if err != nil {
+		return err
+	}
+	j.stateMu.Lock()
+	j.state = rebuilt
+	j.stateMu.Unlock()
+	return nil
+}
+
+func fileReclaimable(snapshot *RecoveryResult, fileIndex uint64, protectedFiles map[uint64]struct{}) bool {
+	if _, protected := protectedFiles[fileIndex]; protected {
+		return false
+	}
+	live := make(map[GenerationID]struct{}, len(snapshot.Live))
+	for _, generation := range snapshot.Live {
+		live[generation] = struct{}{}
+	}
+	for generation, part := range snapshot.Parts {
+		if part.Location.FileIndex != fileIndex {
+			continue
+		}
+		if _, isLive := live[generation]; isLive && !part.Checkpointed {
+			return false
+		}
+	}
+	return true
+}
+
 // JournalID returns the identifier shared by this journal's segment files.
 func (j *Journal) JournalID() [16]byte { return j.journalID }
 
-// Snapshot rescans the journal directory and returns its durable state. It
-// reflects records that are durable on disk (appended and, per the durability
-// mode, synced); in-flight writes not yet durable are not included.
+// EnsureNextSequence advances the journal's sequence namespace without
+// writing a record. Tape recovery uses it before serving requests when the
+// disk journal was rebuilt, preventing new logical operations from colliding
+// with sequence numbers already preserved on tape.
+func (j *Journal) EnsureNextSequence(minimum uint64) error {
+	j.appendMu.Lock()
+	defer j.appendMu.Unlock()
+	if err := j.checkOpen(); err != nil {
+		return err
+	}
+	if minimum > j.nextSeq {
+		j.nextSeq = minimum
+	}
+	return nil
+}
+
+// Snapshot returns a consistent clone of the incrementally maintained durable
+// state. The journal is scanned only once during Open; migration therefore
+// scales with pending metadata rather than all payload bytes ever staged.
 func (j *Journal) Snapshot() (*RecoveryResult, error) {
-	return Scan(j.dir)
+	j.stateMu.RLock()
+	snapshot := cloneRecoveryResult(j.state)
+	j.stateMu.RUnlock()
+	rebuildLive(snapshot)
+	return snapshot, nil
+}
+
+func cloneGeneration(g *GenerationID) *GenerationID {
+	if g == nil {
+		return nil
+	}
+	copy := *g
+	return &copy
 }
 
 type payloadReader struct {

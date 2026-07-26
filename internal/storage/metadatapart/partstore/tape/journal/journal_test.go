@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +47,8 @@ func readPayload(t *testing.T, j *Journal, loc Locator) []byte {
 }
 
 func TestWriteActivateReadRoundtrip(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -80,6 +84,8 @@ func TestWriteActivateReadRoundtrip(t *testing.T) {
 }
 
 func TestEmptyPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -96,6 +102,8 @@ func TestEmptyPart(t *testing.T) {
 }
 
 func TestOverwriteSupersedesGenerationAndRejectsStale(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -125,6 +133,8 @@ func TestOverwriteSupersedesGenerationAndRejectsStale(t *testing.T) {
 }
 
 func TestDeleteWithExpectedGeneration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -152,6 +162,8 @@ func TestDeleteWithExpectedGeneration(t *testing.T) {
 }
 
 func TestDeleteDoesNotEraseNewerRewrite(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -178,6 +190,8 @@ func TestDeleteDoesNotEraseNewerRewrite(t *testing.T) {
 }
 
 func TestRecoveryIgnoresTornTail(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -209,6 +223,8 @@ func TestRecoveryIgnoresTornTail(t *testing.T) {
 }
 
 func TestRecoveryTruncationAtEveryLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{Dir: dir})
@@ -254,6 +270,8 @@ func TestRecoveryTruncationAtEveryLength(t *testing.T) {
 }
 
 func TestGroupCommitConcurrent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	j, err := Open(Options{
@@ -297,7 +315,189 @@ func TestGroupCommitConcurrent(t *testing.T) {
 	}
 }
 
+func TestGroupCommitMaxBytesWakesWithoutMaxDelay(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	dir := t.TempDir()
+	j, err := Open(Options{
+		Dir:         dir,
+		Durability:  DurabilityGroupCommit,
+		GroupCommit: GroupCommitPolicy{MaxDelay: 5 * time.Second, MaxBytes: 1},
+	})
+	require.NoError(t, err)
+	defer j.Close()
+
+	started := time.Now()
+	partID := mustPartID(t)
+	gen := mustGen(t)
+	writePart(t, j, partID, gen, []byte("threshold wakes the group"))
+	_, err = j.Activate(context.Background(), partID, gen, nil)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 3*time.Second)
+}
+
+func TestSnapshotUsesIncrementalDurableState(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	dir := t.TempDir()
+	j, err := Open(Options{Dir: dir})
+	require.NoError(t, err)
+
+	partID := mustPartID(t)
+	gen := mustGen(t)
+	writePart(t, j, partID, gen, []byte("durable"))
+	_, err = j.Activate(context.Background(), partID, gen, nil)
+	require.NoError(t, err)
+
+	// Destroy the path after publication. Snapshot must not rescan payload
+	// bytes from disk on every migration planning pass.
+	files, err := sortedFileIndices(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName(files[len(files)-1])), []byte("corrupt"), 0o644))
+	snapshot, err := j.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, gen, snapshot.Live[partID])
+	require.Contains(t, snapshot.Parts, gen)
+	_ = j.Close()
+}
+
+func TestObjectLayoutBeforePartEnrichesFutureReplay(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	dir := t.TempDir()
+	j, err := Open(Options{Dir: dir})
+	require.NoError(t, err)
+	defer j.Close()
+
+	objectID := partstore.DeriveObjectId("bucket", "key", "upload")
+	partA, partB := mustPartID(t), mustPartID(t)
+	require.NoError(t, j.FinalizeObjectLayout(context.Background(), objectID, []partstore.PartId{partA, partB}))
+
+	genA, genB := mustGen(t), mustGen(t)
+	writePart(t, j, partA, genA, []byte("a"))
+	_, err = j.Activate(context.Background(), partA, genA, nil)
+	require.NoError(t, err)
+	writePart(t, j, partB, genB, []byte("b"))
+	_, err = j.Activate(context.Background(), partB, genB, nil)
+	require.NoError(t, err)
+
+	snapshot, err := j.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, &objectID, snapshot.Parts[genA].ObjectID)
+	require.Equal(t, uint64(1), *snapshot.Parts[genA].PartNumber)
+	require.Equal(t, uint64(2), *snapshot.Parts[genA].PartCount)
+	require.Equal(t, uint64(2), *snapshot.Parts[genB].PartNumber)
+}
+
+func TestObjectLayoutAllowsDeduplicatedRepeatedPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	j, err := Open(Options{Dir: t.TempDir()})
+	require.NoError(t, err)
+	defer j.Close()
+
+	objectID := partstore.DeriveObjectId("bucket", "repeated", "upload")
+	partID := mustPartID(t)
+	require.NoError(t, j.FinalizeObjectLayout(context.Background(), objectID, []partstore.PartId{partID, partID}))
+	generation := mustGen(t)
+	writePart(t, j, partID, generation, []byte("same bytes used twice"))
+	_, err = j.Activate(context.Background(), partID, generation, nil)
+	require.NoError(t, err)
+
+	snapshot, err := j.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), *snapshot.Parts[generation].PartNumber)
+	require.Equal(t, uint64(2), *snapshot.Parts[generation].PartCount)
+}
+
+func TestScanRejectsCompleteRecordCorruption(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	dir := t.TempDir()
+	j, err := Open(Options{Dir: dir})
+	require.NoError(t, err)
+	partID, gen := mustPartID(t), mustGen(t)
+	writePart(t, j, partID, gen, []byte("payload"))
+	_, err = j.Activate(context.Background(), partID, gen, nil)
+	require.NoError(t, err)
+	require.NoError(t, j.Close())
+
+	files, err := sortedFileIndices(dir)
+	require.NoError(t, err)
+	path := filepath.Join(dir, fileName(files[len(files)-1]))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	data[len(data)-1] ^= 0xff // corrupt a complete payload CRC
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+
+	_, err = Scan(dir)
+	require.ErrorContains(t, err, "corrupt record payload")
+}
+
+func TestCompactionPreservesDeletedState(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	j, err := Open(Options{Dir: dir, MaxFileBytes: 256})
+	require.NoError(t, err)
+	defer j.Close()
+
+	deletedPart, deletedGen := mustPartID(t), mustGen(t)
+	writePart(t, j, deletedPart, deletedGen, bytes.Repeat([]byte("x"), 400))
+	_, err = j.Activate(ctx, deletedPart, deletedGen, nil)
+	require.NoError(t, err)
+	_, err = j.Delete(ctx, deletedPart, &deletedGen)
+	require.NoError(t, err)
+
+	// The next part rolls to another file, making the deleted part's file
+	// reclaimable.
+	writePart(t, j, mustPartID(t), mustGen(t), []byte("roll"))
+	require.NoError(t, j.Compact(ctx))
+
+	snapshot, err := j.Snapshot()
+	require.NoError(t, err)
+	_, live := snapshot.Live[deletedPart]
+	require.False(t, live)
+	foundDelete := false
+	for _, op := range snapshot.Ops {
+		foundDelete = foundDelete || op.IsDelete() && op.PartID.Equal(deletedPart)
+	}
+	require.True(t, foundDelete)
+}
+
+func TestCompactionProtectsTransactionStagedGeneration(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	j, err := Open(Options{Dir: dir, MaxFileBytes: 256})
+	require.NoError(t, err)
+	defer j.Close()
+
+	stagedPart, stagedGen := mustPartID(t), mustGen(t)
+	stagedLoc, err := j.StagePart(ctx, PartInput{Generation: stagedGen, PartID: stagedPart}, bytes.NewReader(bytes.Repeat([]byte("s"), 400)))
+	require.NoError(t, err)
+
+	// An unrelated durable write rolls the file and can make the staged bytes
+	// durable before their owning database transaction reaches pre-commit.
+	otherPart, otherGen := mustPartID(t), mustGen(t)
+	writePart(t, j, otherPart, otherGen, []byte("other"))
+	_, err = j.Activate(ctx, otherPart, otherGen, nil)
+	require.NoError(t, err)
+	require.NoError(t, j.Compact(ctx))
+	require.Equal(t, bytes.Repeat([]byte("s"), 400), readPayload(t, j, stagedLoc))
+
+	_, err = j.Activate(ctx, stagedPart, stagedGen, nil)
+	require.NoError(t, err)
+	snapshot, err := j.Snapshot()
+	require.NoError(t, err)
+	require.Equal(t, stagedGen, snapshot.Live[stagedPart])
+}
+
 func TestFileRollingKeepsPartsRecoverable(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dir := t.TempDir()
 	// Tiny file limit forces a roll between parts.

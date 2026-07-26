@@ -88,7 +88,7 @@ func TestGoogleDrivePartStorePutPartAndDeletePartWorkWithoutTx(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
 
-	err = store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content")))
+	err = store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("content")))
 	assert.Nil(t, err)
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
@@ -132,7 +132,7 @@ func TestGoogleDrivePartStoreDisablesSDKUploadRetries(t *testing.T) {
 
 	// The fake only accepts a single multipart upload. Without ChunkSize(0),
 	// the SDK turns this payload into a resumable upload with chunk retries.
-	assert.NoError(t, store.PutPart(context.Background(), nil, *partId, content))
+	assert.NoError(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, content))
 }
 
 func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
@@ -144,7 +144,7 @@ func TestGoogleDrivePartStoreGetPartIdsIgnoresTempAndBackupFiles(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("content"))))
 
 	partName := store.(*gdrivePartStore).getPartName(*partId)
 	folderId := store.(*gdrivePartStore).folderId
@@ -165,14 +165,14 @@ func TestGoogleDrivePartStorePutPartReusesExistingFile(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("old content"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("old content"))))
 
 	partName := store.(*gdrivePartStore).getPartName(*partId)
 	cached, ok := store.(*gdrivePartStore).fileIdCache.Load(partName)
 	assert.True(t, ok)
 	originalFileID := cached.(string)
 
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("new content"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("new content"))))
 
 	cached, ok = store.(*gdrivePartStore).fileIdCache.Load(partName)
 	assert.True(t, ok)
@@ -224,7 +224,7 @@ func TestGoogleDrivePartStoreDeletesManyParts(t *testing.T) {
 	for range 20 {
 		partId, err := partstore.NewRandomPartId()
 		assert.Nil(t, err)
-		assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
+		assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("content"))))
 		partIds = append(partIds, *partId)
 	}
 
@@ -250,7 +250,7 @@ func TestGoogleDrivePartStorePutThenDeleteSameFlow(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
 
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("content"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("content"))))
 	assert.Nil(t, store.DeletePart(context.Background(), nil, *partId))
 
 	_, err = readPart(t, store, *partId)
@@ -270,8 +270,8 @@ func TestGoogleDrivePartStoreTxFreePutIsIdempotent(t *testing.T) {
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
 
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("first attempt"))))
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("first attempt"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
 
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
@@ -293,13 +293,13 @@ func TestGoogleDrivePartStoreDoesNotRetryAmbiguousUpload(t *testing.T) {
 	// Drive commits the file but returns a transient error. PutPart must not
 	// replay the already-consumed reader internally.
 	fakeServer.failNextUploadAfterCommitOnce()
-	err = store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("first attempt")))
+	err = store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("first attempt")))
 	assert.Error(t, err)
 	assert.Equal(t, 2, fakeServer.fileCount())
 
 	// A caller/outbox retry supplies a fresh reader and updates the committed
 	// file instead of creating a duplicate.
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("second attempt"))))
 	content, err := readPart(t, store, *partId)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("second attempt"), content)
@@ -337,7 +337,7 @@ func TestGoogleDrivePartStoreReaderSeeks(t *testing.T) {
 
 	partId, err := partstore.NewRandomPartId()
 	assert.Nil(t, err)
-	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, ioutils.NewByteReadSeekCloser([]byte("0123456789"))))
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, partstore.PutPartOptions{}, ioutils.NewByteReadSeekCloser([]byte("0123456789"))))
 
 	reader, err := store.GetPart(context.Background(), nil, *partId)
 	assert.Nil(t, err)

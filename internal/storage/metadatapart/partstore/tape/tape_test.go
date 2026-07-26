@@ -7,7 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +25,50 @@ import (
 
 // testRecordSize is tiny so even short test content spans multiple records.
 const testRecordSize = 8
+
+type observedTapeDevice struct {
+	tapedev.Device
+	readDelay   time.Duration
+	locateCalls atomic.Int64
+	readCalls   atomic.Int64
+}
+
+func (d *observedTapeDevice) LocateBlock(ctx context.Context, block uint64) error {
+	d.locateCalls.Add(1)
+	return d.Device.LocateBlock(ctx, block)
+}
+
+func (d *observedTapeDevice) ReadRecord(ctx context.Context, p []byte) (int, error) {
+	if d.readDelay > 0 {
+		timer := time.NewTimer(d.readDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, ctx.Err()
+		}
+	}
+	d.readCalls.Add(1)
+	return d.Device.ReadRecord(ctx, p)
+}
+
+type corruptManifestDevice struct {
+	tapedev.Device
+	corrupted bool
+}
+
+func (d *corruptManifestDevice) ReadRecord(ctx context.Context, p []byte) (int, error) {
+	n, err := d.Device.ReadRecord(ctx, p)
+	if err != nil || d.corrupted {
+		return n, err
+	}
+	record, decodeErr := decodeSegmentRecord(p[:n])
+	if decodeErr == nil && record.kind == segKindIndexChunk {
+		p[n-1] ^= 0xff
+		d.corrupted = true
+	}
+	return n, err
+}
 
 func newTapeStore(t *testing.T, tapePath, journalPath string) *tapePartStore {
 	t.Helper()
@@ -282,14 +329,20 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	require.NoError(t, store.PutPart(ctx, nil, *partA, partstore.PutPartOptions{}, bytes.NewReader(contentA)))
 	store.runMigration(ctx, true)
 	require.Equal(t, locationTape, store.index[*partA].location)
+	previousSegment := store.catalog.PreviousSegment
+	nextSequence := store.catalog.Segments[len(store.catalog.Segments)-1].NextSequence
 	require.NoError(t, store.Stop(ctx))
 
-	// Simulate a crash mid-PutPart: a data segment without its terminating
-	// filemark, appended directly on the device.
+	// Simulate a crash after a valid next-segment header but before its data
+	// filemark and manifest.
 	device, err := simulator.Open(ctx, tapePath, simulator.Options{})
 	require.NoError(t, err)
 	require.NoError(t, device.SeekToEOD(ctx))
-	tornRecord, err := encodeSegmentRecord(segKindHeader, 999, []byte("truncated v2 header"))
+	tornRecord, err := encodeSegmentRecord(segKindHeader, nextSequence, encodeSegmentHeader(segmentHeaderPayload{
+		segmentID:       [16]byte{0x99},
+		previousSegment: previousSegment,
+		sequenceStart:   nextSequence,
+	}))
 	require.NoError(t, err)
 	require.NoError(t, device.WriteRecord(ctx, tornRecord))
 	require.NoError(t, device.Close())
@@ -322,6 +375,248 @@ func TestTapePartStoreTruncatedTailIsSealedOnStart(t *testing.T) {
 	content, err = readPart(t, final, *partB)
 	require.NoError(t, err)
 	require.Equal(t, contentB, content)
+}
+
+func TestTapeCatalogCorruptionRebuildsFromCompactManifests(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := bytes.Repeat([]byte("catalog recovery"), 100)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader(content)))
+	store.runMigration(ctx, true)
+	require.NoError(t, store.Stop(ctx))
+
+	require.NoError(t, os.WriteFile(filepath.Join(journalPath, catalogFileName), []byte("corrupt catalog"), 0o600))
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
+	defer restarted.Stop(ctx)
+	got, err := readPart(t, restarted, *partID)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+}
+
+func TestTapeCatalogRejectsDifferentPhysicalMedia(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+	require.NoError(t, store.Stop(ctx))
+	require.NoError(t, os.Rename(tapePath, filepath.Join(root, "original-tape.sim")))
+
+	restarted := newTapeStore(t, tapePath, journalPath)
+	err := restarted.Start(ctx)
+	require.ErrorIs(t, err, ErrWrongTapeMedia)
+}
+
+func TestTapeManifestCorruptionFailsClosedWithoutSealing(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("payload"))))
+	store.runMigration(ctx, true)
+	require.NoError(t, store.Stop(ctx))
+	require.NoError(t, os.Remove(filepath.Join(journalPath, catalogFileName)))
+	before, err := os.Stat(tapePath)
+	require.NoError(t, err)
+
+	restartedStore, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		device, err := simulator.Open(ctx, tapePath, simulator.Options{})
+		if err != nil {
+			return nil, err
+		}
+		return &corruptManifestDevice{Device: device}, nil
+	}, WithRecordSize(testRecordSize), WithJournalDir(journalPath))
+	require.NoError(t, err)
+	err = restartedStore.Start(ctx)
+	require.ErrorIs(t, err, ErrCorruptTape)
+	after, statErr := os.Stat(tapePath)
+	require.NoError(t, statErr)
+	require.Equal(t, before.Size(), after.Size())
+}
+
+func TestTapeDeleteSurvivesWithoutJournalHistory(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	store := newStartedTapeStore(t, tapePath, journalPath)
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader([]byte("delete me"))))
+	store.runMigration(ctx, true)
+	require.NoError(t, store.DeletePart(ctx, nil, *partID))
+	store.runMigration(ctx, true) // metadata-only segment persists the tombstone
+	require.NoError(t, store.Stop(ctx))
+
+	entries, err := os.ReadDir(journalPath)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == journalFileExtensionForTest {
+			require.NoError(t, os.Remove(filepath.Join(journalPath, entry.Name())))
+		}
+	}
+	require.NoError(t, os.Remove(filepath.Join(journalPath, catalogFileName)))
+	restarted := newStartedTapeStore(t, tapePath, journalPath)
+	_, err = restarted.GetPart(ctx, nil, *partID)
+	require.ErrorIs(t, err, partstore.ErrPartNotFound)
+
+	newPart, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	require.NoError(t, restarted.PutPart(ctx, nil, *newPart, partstore.PutPartOptions{}, bytes.NewReader([]byte("after journal rebuild"))))
+	restarted.runMigration(ctx, true)
+	require.NoError(t, restarted.Stop(ctx))
+
+	again := newStartedTapeStore(t, tapePath, journalPath)
+	defer again.Stop(ctx)
+	_, err = again.GetPart(ctx, nil, *partID)
+	require.ErrorIs(t, err, partstore.ErrPartNotFound)
+	got, err := readPart(t, again, *newPart)
+	require.NoError(t, err)
+	require.Equal(t, []byte("after journal rebuild"), got)
+}
+
+const journalFileExtensionForTest = ".pj"
+
+func TestTapeEndOfMediaKeepsJournalCopyReadable(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "small-tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	storeValue, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		return simulator.Open(ctx, tapePath, simulator.Options{Capacity: 4 << 10})
+	}, WithRecordSize(1024), WithJournalDir(journalPath))
+	require.NoError(t, err)
+	store := storeValue.(*tapePartStore)
+	require.NoError(t, store.Start(ctx))
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := bytes.Repeat([]byte("eot-safe"), 2048)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader(content)))
+
+	store.runMigration(ctx, true)
+	status, err := store.OperationalStatus()
+	require.NoError(t, err)
+	require.True(t, status.EndOfMedia)
+	require.Contains(t, status.LastMigrationError, tapedev.ErrEndOfTape.Error())
+	require.Equal(t, 1, status.JournalBacklogParts)
+	require.Equal(t, uint64(len(content)), status.JournalBacklogBytes)
+	got, err := readPart(t, store, *partID)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+	require.NoError(t, store.Stop(ctx))
+
+	restartedValue, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		return simulator.Open(ctx, tapePath, simulator.Options{})
+	}, WithRecordSize(1024), WithJournalDir(journalPath))
+	require.NoError(t, err)
+	restarted := restartedValue.(*tapePartStore)
+	require.NoError(t, restarted.Start(ctx))
+	defer restarted.Stop(ctx)
+	got, err = readPart(t, restarted, *partID)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+}
+
+func TestTapeReadCacheSingleflightValidationAndBound(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	root := t.TempDir()
+	tapePath := filepath.Join(root, "tape.sim")
+	journalPath := filepath.Join(root, "journal")
+	var observed *observedTapeDevice
+	storeValue, err := New(func(ctx context.Context) (tapedev.Device, error) {
+		device, err := simulator.Open(ctx, tapePath, simulator.Options{})
+		if err != nil {
+			return nil, err
+		}
+		observed = &observedTapeDevice{Device: device, readDelay: time.Millisecond}
+		return observed, nil
+	}, WithRecordSize(1024), WithJournalDir(journalPath), WithReadCacheMaxBytes(30<<10))
+	require.NoError(t, err)
+	store := storeValue.(*tapePartStore)
+	require.NoError(t, store.Start(ctx))
+	defer store.Stop(ctx)
+
+	partID, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	content := bytes.Repeat([]byte("cache-data"), 2048)
+	require.NoError(t, store.PutPart(ctx, nil, *partID, partstore.PutPartOptions{}, bytes.NewReader(content)))
+	store.runMigration(ctx, true)
+	beforeLocates := observed.locateCalls.Load()
+
+	const readers = 12
+	start := make(chan struct{})
+	errs := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			got, err := readPart(t, store, *partID)
+			if err == nil && !bytes.Equal(got, content) {
+				err = fmt.Errorf("cache returned wrong content")
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, int64(1), observed.locateCalls.Load()-beforeLocates)
+
+	entry := store.index[*partID]
+	cachePath := filepath.Join(store.cacheDir, entry.generation.String()+".part")
+	corrupt := bytes.Repeat([]byte{0xff}, len(content))
+	require.NoError(t, os.WriteFile(cachePath, corrupt, 0o600))
+	future := time.Now().Add(time.Second)
+	require.NoError(t, os.Chtimes(cachePath, future, future))
+	beforeLocates = observed.locateCalls.Load()
+	got, err := readPart(t, store, *partID)
+	require.NoError(t, err)
+	require.Equal(t, content, got)
+	require.Equal(t, int64(1), observed.locateCalls.Load()-beforeLocates)
+
+	// An active reader pins its cache entry. A second recall may temporarily
+	// exceed quota, then closing the pinned reader immediately evicts to bound.
+	pinned, err := store.GetPart(ctx, nil, *partID)
+	require.NoError(t, err)
+	partB, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+	contentB := bytes.Repeat([]byte("other-data"), 2048)
+	require.NoError(t, store.PutPart(ctx, nil, *partB, partstore.PutPartOptions{}, bytes.NewReader(contentB)))
+	store.runMigration(ctx, true)
+	got, err = readPart(t, store, *partB)
+	require.NoError(t, err)
+	require.Equal(t, contentB, got)
+	require.NoError(t, pinned.Close())
+	store.mu.Lock()
+	cacheBytes := store.cacheBytes
+	store.mu.Unlock()
+	require.LessOrEqual(t, cacheBytes, store.cacheMaxBytes)
 }
 
 func TestTapePartStoreEmptyPart(t *testing.T) {

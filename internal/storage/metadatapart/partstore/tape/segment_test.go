@@ -11,8 +11,24 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
 	tapedev "github.com/jdillenkofer/pithos/internal/tape"
 	"github.com/jdillenkofer/pithos/internal/tape/simulator"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+type recordKindCountingDevice struct {
+	tapedev.Device
+	readKinds map[uint8]int
+}
+
+func (d *recordKindCountingDevice) ReadRecord(ctx context.Context, p []byte) (int, error) {
+	n, err := d.Device.ReadRecord(ctx, p)
+	if err == nil {
+		if record, decodeErr := decodeSegmentRecord(p[:n]); decodeErr == nil {
+			d.readKinds[record.kind]++
+		}
+	}
+	return n, err
+}
 
 func openSimulator(t *testing.T) tapedev.Device {
 	t.Helper()
@@ -73,6 +89,8 @@ func readPartAt(t *testing.T, dev tapedev.Device, block uint64) []byte {
 }
 
 func TestSegmentWriteAndScanRoundtrip(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dev := openSimulator(t)
 
@@ -130,7 +148,31 @@ func TestSegmentWriteAndScanRoundtrip(t *testing.T) {
 	}
 }
 
+func TestSegmentScanSpacesOverPayloadRecords(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	base := openSimulator(t)
+	w, err := NewSegmentWriter(ctx, base, 1024, [16]byte{}, 1)
+	require.NoError(t, err)
+	data := bytes.Repeat([]byte("bulk"), 2<<20)
+	_, err = w.WritePart(ctx, segPartBeginPayload{generation: segGen(t), partID: segPartID(t)}, bytes.NewReader(data))
+	require.NoError(t, err)
+	_, err = w.Finish(ctx)
+	require.NoError(t, err)
+
+	counting := &recordKindCountingDevice{Device: base, readKinds: make(map[uint8]int)}
+	segments, _, err := scanSegments(ctx, counting)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	require.Zero(t, counting.readKinds[segKindPartData])
+	require.Equal(t, 1, counting.readKinds[segKindHeader])
+	require.Equal(t, 1, counting.readKinds[segKindIndexChunk])
+}
+
 func TestSegmentChainScan(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dev := openSimulator(t)
 
@@ -158,6 +200,8 @@ func TestSegmentChainScan(t *testing.T) {
 }
 
 func TestSegmentScanIgnoresTornTailSegment(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dev := openSimulator(t)
 
@@ -185,6 +229,8 @@ func TestSegmentScanIgnoresTornTailSegment(t *testing.T) {
 }
 
 func TestSegmentScanRejectsFooterWithoutCommit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dev := openSimulator(t)
 
@@ -207,6 +253,8 @@ func TestSegmentScanRejectsFooterWithoutCommit(t *testing.T) {
 }
 
 func TestSegmentScanEmptyTape(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	dev := openSimulator(t)
 	segments, _, err := scanSegments(ctx, dev)

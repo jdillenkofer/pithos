@@ -97,6 +97,12 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if err != nil {
 			return err
 		}
+		if err := partstore.FinalizeObjectLayout(ctx, store, tx, partstore.ObjectLayout{
+			ObjectID: partstore.DeriveObjectId(bucketName.String(), key.String(), ""),
+			PartIDs:  []partstore.PartId{dedupedPartID},
+		}); err != nil {
+			return err
+		}
 		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
@@ -293,6 +299,16 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 			}
 			return err
 		}
+		partIDs := make([]partstore.PartId, len(allParts))
+		for index, part := range allParts {
+			partIDs[index] = part.Id
+		}
+		if err := partstore.FinalizeObjectLayout(ctx, store, tx, partstore.ObjectLayout{
+			ObjectID: partstore.DeriveObjectId(bucketName.String(), key.String(), ""),
+			PartIDs:  partIDs,
+		}); err != nil {
+			return err
+		}
 		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)
 	})
 	if err != nil {
@@ -401,6 +417,16 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 
 		metadataResult, err := mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
 		if err != nil {
+			return err
+		}
+		partIDs := make([]partstore.PartId, len(newParts))
+		for index, part := range newParts {
+			partIDs[index] = part.Id
+		}
+		if err := partstore.FinalizeObjectLayout(ctx, targetStore, tx, partstore.ObjectLayout{
+			ObjectID: partstore.DeriveObjectId(bucketName.String(), key.String(), ""),
+			PartIDs:  partIDs,
+		}); err != nil {
 			return err
 		}
 		return mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts)

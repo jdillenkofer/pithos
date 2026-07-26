@@ -112,7 +112,7 @@ func TestOneDrivePartStoreRoundTripAndSeek(t *testing.T) {
 	id, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 	payload := append(bytes.Repeat([]byte{'x'}, uploadChunkSize+1), []byte("onedrive")...)
-	require.NoError(t, ps.PutPart(context.Background(), nil, *id, bytes.NewReader(payload)))
+	require.NoError(t, ps.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, bytes.NewReader(payload)))
 	assert.Equal(t, 2, uploadRequests)
 	reader, err := ps.GetPart(context.Background(), nil, *id)
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestOneDrivePartStoreDoesNotRetryDataUpload(t *testing.T) {
 	id, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 
-	err = ps.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+	err = ps.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, strings.NewReader("content"))
 
 	require.Error(t, err)
 	assert.Equal(t, 1, uploadRequests)
@@ -210,7 +210,7 @@ func TestOneDrivePartStoreRejectsAcceptedFinalChunk(t *testing.T) {
 	id, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 
-	err = ps.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+	err = ps.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, strings.NewReader("content"))
 
 	require.ErrorContains(t, err, "final upload chunk")
 }
@@ -237,7 +237,7 @@ func TestOneDrivePartStoreValidatesNextExpectedRange(t *testing.T) {
 		uploadChunkSize+1,
 	)
 
-	err = ps.PutPart(context.Background(), nil, *id, content)
+	err = ps.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, content)
 
 	require.ErrorContains(t, err, "expects upload offset 0")
 	assert.Equal(t, 1, uploadRequests)

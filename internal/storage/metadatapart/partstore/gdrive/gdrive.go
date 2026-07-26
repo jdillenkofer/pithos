@@ -359,7 +359,7 @@ func (s *gdrivePartStore) Stop(ctx context.Context) error {
 	return s.ValidatedLifecycle.Stop(ctx)
 }
 
-func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, _ partstore.PutPartOptions, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "gdrivePartStore.PutPart")
 	defer span.End()
 

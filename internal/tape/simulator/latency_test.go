@@ -26,7 +26,7 @@ func (r *sleepRecorder) sleep(_ context.Context, d time.Duration) error {
 func openRecordedDevice(t *testing.T, opts Options) (*Device, *sleepRecorder) {
 	t.Helper()
 	recorder := &sleepRecorder{}
-	dev, err := open(context.Background(), filepath.Join(t.TempDir(), "tape.sim"), opts, recorder.sleep)
+	dev, err := open(context.Background(), filepath.Join(t.TempDir(), "tape.sim"), opts, recorder.sleep, false)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, dev.Close())

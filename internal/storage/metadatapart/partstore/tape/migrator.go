@@ -3,6 +3,7 @@ package tape
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,11 +35,24 @@ type Migrator struct {
 	mu              sync.Mutex
 	previousSegment [16]byte
 	nextSequence    uint64
+	capturedOps     map[partstore.PartId]capturedLogicalState
 }
 
-func NewMigrator(j *journal.Journal, device tapedev.Device, recordSize int, policy SegmentPackingPolicy, previousSegment [16]byte, nextSequence uint64) *Migrator {
+type capturedLogicalState struct {
+	sequence   uint64
+	activate   bool
+	generation journal.GenerationID
+}
+
+func NewMigrator(j *journal.Journal, device tapedev.Device, recordSize int, policy SegmentPackingPolicy, previousSegment [16]byte, nextSequence uint64, captured ...map[partstore.PartId]capturedLogicalState) *Migrator {
 	if recordSize <= 0 {
 		recordSize = defaultRecordSize
+	}
+	capturedOps := make(map[partstore.PartId]capturedLogicalState)
+	if len(captured) > 0 {
+		for partID, state := range captured[0] {
+			capturedOps[partID] = state
+		}
 	}
 	return &Migrator{
 		journal:         j,
@@ -47,6 +61,7 @@ func NewMigrator(j *journal.Journal, device tapedev.Device, recordSize int, poli
 		policy:          policy,
 		previousSegment: previousSegment,
 		nextSequence:    nextSequence,
+		capturedOps:     capturedOps,
 	}
 }
 
@@ -63,6 +78,8 @@ type MigratedPart struct {
 type MigrationResult struct {
 	SegmentID [16]byte
 	Parts     []MigratedPart
+	segment   scannedSegment
+	Committed bool
 }
 
 // PreviousSegment returns the id of the last segment this migrator committed
@@ -86,15 +103,20 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 		return MigrationResult{}, err
 	}
 
-	candidates, byGen, activateSeqByGen := m.buildCandidates(snap)
-	if len(candidates) == 0 {
-		return MigrationResult{}, nil
-	}
+	candidates, byGen := m.buildCandidates(snap)
 	plan := PlanSegment(candidates, m.policy)
-	if len(plan.Parts) == 0 {
+	if len(plan.Parts) > 0 && !plan.Ready && !force {
 		return MigrationResult{}, nil
 	}
-	if !plan.Ready && !force {
+	if len(plan.Parts) == 0 && len(candidates) > 0 && !force {
+		return MigrationResult{}, nil
+	}
+	selected := make(map[journal.GenerationID]struct{}, len(plan.Parts))
+	for _, candidate := range plan.Parts {
+		selected[candidate.Generation] = struct{}{}
+	}
+	manifestOps := m.pendingLogicalState(snap, selected)
+	if len(plan.Parts) == 0 && (len(manifestOps) == 0 || !force) {
 		return MigrationResult{}, nil
 	}
 
@@ -124,11 +146,6 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 		if closeErr != nil {
 			return MigrationResult{}, closeErr
 		}
-		writer.AddActivate(segActivatePayload{
-			partID:     part.PartID,
-			generation: part.Generation,
-			sequence:   activateSeqByGen[part.Generation],
-		})
 		migrated = append(migrated, MigratedPart{
 			PartID:     part.PartID,
 			Generation: part.Generation,
@@ -136,6 +153,22 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 			Length:     part.Length,
 			Hash:       part.Hash,
 		})
+	}
+	for _, op := range manifestOps {
+		if op.IsActivate() {
+			writer.AddActivate(segActivatePayload{
+				partID:           op.PartID,
+				generation:       op.Generation,
+				expectedPrevious: op.ExpectedPrevious,
+				sequence:         op.Sequence,
+			})
+		} else {
+			writer.AddDelete(segDeletePayload{
+				partID:             op.PartID,
+				expectedGeneration: op.ExpectedGeneration,
+				sequence:           op.Sequence,
+			})
+		}
 	}
 
 	segmentID, err := writer.Finish(ctx)
@@ -145,23 +178,22 @@ func (m *Migrator) MigrateOnce(ctx context.Context, force bool) (MigrationResult
 		return MigrationResult{}, fmt.Errorf("committing tape segment: %w", err)
 	}
 
-	// The segment is durable on tape. Checkpoint each part so its journal copy
-	// becomes reclaimable. A crash here leaves both copies, which recovery
-	// deduplicates by generation.
-	for _, p := range migrated {
-		if _, err := m.journal.Checkpoint(ctx, p.Generation, segmentID); err != nil {
-			return MigrationResult{}, fmt.Errorf("checkpointing migrated part: %w", err)
-		}
+	segment, err := writer.CommittedSegment()
+	if err != nil {
+		return MigrationResult{}, err
 	}
 
 	m.previousSegment = segmentID
-	m.nextSequence += uint64(len(plan.Parts))*4 + 8 // rough per-segment record span
-	return MigrationResult{SegmentID: segmentID, Parts: migrated}, nil
+	m.nextSequence = writer.NextSequence()
+	for _, op := range manifestOps {
+		m.capturedOps[op.PartID] = capturedStateFromOp(op)
+	}
+	return MigrationResult{SegmentID: segmentID, Parts: migrated, segment: segment, Committed: true}, nil
 }
 
 // buildCandidates selects live parts whose payload is committed in the journal
 // and not yet checkpointed onto tape.
-func (m *Migrator) buildCandidates(snap *journal.RecoveryResult) ([]PackCandidate, map[journal.GenerationID]*journal.RecoveredPart, map[journal.GenerationID]uint64) {
+func (m *Migrator) buildCandidates(snap *journal.RecoveryResult) ([]PackCandidate, map[journal.GenerationID]*journal.RecoveredPart) {
 	activateSeqByGen := map[journal.GenerationID]uint64{}
 	for _, op := range snap.Ops {
 		if op.IsActivate() {
@@ -189,5 +221,52 @@ func (m *Migrator) buildCandidates(snap *journal.RecoveryResult) ([]PackCandidat
 			Age:        now.Sub(partID.CreatedAt()),
 		})
 	}
-	return candidates, byGen, activateSeqByGen
+	return candidates, byGen
+}
+
+// pendingLogicalState returns the newest uncaptured state for each part. An
+// activation is emitted only when its payload is already on tape or is part of
+// this segment; deletions can always be captured. This makes a tape-only
+// catalog sufficient to prevent deleted parts from being resurrected.
+func (m *Migrator) pendingLogicalState(snap *journal.RecoveryResult, selected map[journal.GenerationID]struct{}) []journal.LogicalOp {
+	latest := make(map[partstore.PartId]journal.LogicalOp)
+	for _, op := range snap.Ops {
+		if current, ok := latest[op.PartID]; !ok || op.Sequence > current.Sequence {
+			latest[op.PartID] = op
+		}
+	}
+	ops := make([]journal.LogicalOp, 0, len(latest))
+	for partID, op := range latest {
+		captured := m.capturedOps[partID]
+		if op.Sequence <= captured.sequence {
+			continue
+		}
+		next := capturedStateFromOp(op)
+		if captured.sequence > 0 && captured.activate == next.activate && (!next.activate || captured.generation == next.generation) {
+			// Journal compaction emits unconditional snapshots with fresh
+			// sequence numbers. If tape already represents the same state,
+			// advance the watermark without spending another pair of filemarks.
+			m.capturedOps[partID] = next
+			continue
+		}
+		if op.IsActivate() {
+			if _, inThisSegment := selected[op.Generation]; !inThisSegment {
+				part := snap.Parts[op.Generation]
+				if part != nil && !part.Checkpointed {
+					continue
+				}
+			}
+		}
+		ops = append(ops, op)
+	}
+	sort.Slice(ops, func(i, k int) bool { return ops[i].Sequence < ops[k].Sequence })
+	return ops
+}
+
+func capturedStateFromOp(op journal.LogicalOp) capturedLogicalState {
+	return capturedLogicalState{
+		sequence:   op.Sequence,
+		activate:   op.IsActivate(),
+		generation: op.Generation,
+	}
 }

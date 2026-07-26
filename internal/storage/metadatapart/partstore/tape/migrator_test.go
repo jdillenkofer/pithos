@@ -9,6 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,8 @@ func migrationTestPolicy() SegmentPackingPolicy {
 }
 
 func TestMigrateOnceHappyPath(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	j := openJournal(t)
 	dev := openSimulator(t)
@@ -54,6 +57,10 @@ func TestMigrateOnceHappyPath(t *testing.T) {
 	res, err := m.MigrateOnce(ctx, true)
 	require.NoError(t, err)
 	require.Len(t, res.Parts, 2)
+	for _, part := range res.Parts {
+		_, err := j.Checkpoint(ctx, part.Generation, res.SegmentID)
+		require.NoError(t, err)
+	}
 
 	// The tape holds one committed segment with both parts.
 	segments, _, err := scanSegments(ctx, dev)
@@ -81,6 +88,8 @@ func TestMigrateOnceHappyPath(t *testing.T) {
 }
 
 func TestMigrateAlreadyCheckpointedNotRemigrated(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	j := openJournal(t)
 	dev := openSimulator(t)
@@ -90,6 +99,10 @@ func TestMigrateAlreadyCheckpointedNotRemigrated(t *testing.T) {
 	res, err := m.MigrateOnce(ctx, true)
 	require.NoError(t, err)
 	require.Len(t, res.Parts, 1)
+	for _, part := range res.Parts {
+		_, err := j.Checkpoint(ctx, part.Generation, res.SegmentID)
+		require.NoError(t, err)
+	}
 
 	// A second run finds nothing left to migrate (the part is checkpointed).
 	res, err = m.MigrateOnce(ctx, true)
@@ -101,10 +114,43 @@ func TestMigrateAlreadyCheckpointedNotRemigrated(t *testing.T) {
 	require.Len(t, segments, 1)
 }
 
+func TestMigrateWritesMetadataOnlyDeletionSegment(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	j := openJournal(t)
+	dev := openSimulator(t)
+	partID, generation := stageActivePart(t, j, []byte("payload"))
+
+	m := NewMigrator(j, dev, 4096, migrationTestPolicy(), [16]byte{}, 1)
+	first, err := m.MigrateOnce(ctx, true)
+	require.NoError(t, err)
+	require.True(t, first.Committed)
+	require.Len(t, first.Parts, 1)
+	_, err = j.Checkpoint(ctx, generation, first.SegmentID)
+	require.NoError(t, err)
+
+	_, err = j.Delete(ctx, partID, &generation)
+	require.NoError(t, err)
+	second, err := m.MigrateOnce(ctx, true)
+	require.NoError(t, err)
+	require.True(t, second.Committed)
+	require.Empty(t, second.Parts)
+
+	segments, _, err := scanSegments(ctx, dev)
+	require.NoError(t, err)
+	require.Len(t, segments, 2)
+	require.Len(t, segments[1].deletes, 1)
+	require.True(t, segments[1].deletes[0].partID.Equal(partID))
+	require.Equal(t, &generation, segments[1].deletes[0].expectedGeneration)
+}
+
 // TestMigrateCrashBeforeSegmentCommit reproduces a crash after part bytes are
 // on tape but before the segment is sealed: the journal copy stays
 // authoritative and the tape shows no trusted segment.
 func TestMigrateCrashBeforeSegmentCommit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	j := openJournal(t)
 	dev := openSimulator(t)
@@ -138,6 +184,8 @@ func TestMigrateCrashBeforeSegmentCommit(t *testing.T) {
 // segment is committed on tape but before the journal checkpoint: both copies
 // exist and can be deduplicated by generation.
 func TestMigrateCrashAfterCommitBeforeCheckpoint(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	ctx := context.Background()
 	j := openJournal(t)
 	dev := openSimulator(t)

@@ -110,6 +110,10 @@ func (mw *PartStoreMiddleware) Stop(ctx context.Context) error {
 	return mw.innerPartStore.Stop(ctx)
 }
 
+func (mw *PartStoreMiddleware) FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout partstore.ObjectLayout) error {
+	return partstore.FinalizeObjectLayout(ctx, mw.innerPartStore, tx, layout)
+}
+
 func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	sample := make([]byte, mw.sampleSize)
 	n, err := io.ReadFull(reader, sample)

@@ -144,7 +144,7 @@ func TestDropboxPartStore(t *testing.T) {
 
 	id, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
-	require.NoError(t, store.PutPart(context.Background(), nil, *id, strings.NewReader("hello world")))
+	require.NoError(t, store.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, strings.NewReader("hello world")))
 
 	reader, err := store.GetPart(context.Background(), nil, *id)
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestDropboxPartStoreUsesUploadSessionForLargeParts(t *testing.T) {
 	require.NoError(t, err)
 	payload := strings.Repeat("x", uploadSessionChunkSize) + "end"
 
-	require.NoError(t, store.PutPart(context.Background(), nil, *id, strings.NewReader(payload)))
+	require.NoError(t, store.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, strings.NewReader(payload)))
 
 	reader, err := store.GetPart(context.Background(), nil, *id)
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestDropboxPartStoreDoesNotRetryDataUpload(t *testing.T) {
 	id, err := partstore.NewRandomPartId()
 	require.NoError(t, err)
 
-	err = store.PutPart(context.Background(), nil, *id, strings.NewReader("content"))
+	err = store.PutPart(context.Background(), nil, *id, partstore.PutPartOptions{}, strings.NewReader("content"))
 
 	require.Error(t, err)
 	require.Equal(t, 1, uploadRequests)

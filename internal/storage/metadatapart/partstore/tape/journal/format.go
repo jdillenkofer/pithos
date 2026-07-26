@@ -42,6 +42,7 @@ const (
 	kindActivate      = 6
 	kindDelete        = 7
 	kindCheckpoint    = 8
+	kindObjectLayout  = 9
 )
 
 var crcTable = crc32.MakeTable(crc32.Castagnoli)

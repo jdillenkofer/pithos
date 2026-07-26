@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -48,6 +49,9 @@ type Device struct {
 	// scaleCapacity is the denominator for distance-based latency scaling.
 	scaleCapacity int64
 	sleep         sleepFunc
+	paceTransfers bool
+	transferMode  byte
+	transferDue   time.Time
 	tracer        trace.Tracer
 	sem           chan struct{}
 }
@@ -59,10 +63,10 @@ var _ tape.Device = (*Device)(nil)
 // positioned at the beginning of the tape, and the profile's load time is
 // charged.
 func Open(ctx context.Context, path string, opts Options) (*Device, error) {
-	return open(ctx, path, opts, contextSleep)
+	return open(ctx, path, opts, contextSleep, true)
 }
 
-func open(ctx context.Context, path string, opts Options, sleep sleepFunc) (*Device, error) {
+func open(ctx context.Context, path string, opts Options, sleep sleepFunc, paceTransfers bool) (*Device, error) {
 	flags := os.O_RDWR | os.O_CREATE
 	if opts.ReadOnly {
 		flags = os.O_RDONLY
@@ -120,6 +124,7 @@ func open(ctx context.Context, path string, opts Options, sleep sleepFunc) (*Dev
 		latency:       opts.Latency,
 		scaleCapacity: scaleCapacity,
 		sleep:         sleep,
+		paceTransfers: paceTransfers,
 		tracer:        otel.Tracer("internal/tape/simulator"),
 		sem:           make(chan struct{}, 1),
 	}
@@ -128,6 +133,40 @@ func open(ctx context.Context, path string, opts Options, sleep sleepFunc) (*Dev
 		return nil, err
 	}
 	return d, nil
+}
+
+// waitTransfer caps a continuous stream at the configured media rate. Using
+// an absolute deadline avoids paying the operating system's timer-rounding
+// overhead once per record. Real tape streams records continuously; record
+// boundaries do not each restart the drive's transfer clock.
+func (d *Device) waitTransfer(ctx context.Context, bytes, throughput int64, mode byte) error {
+	cost := d.latency.transferCost(bytes, throughput)
+	if cost <= 0 {
+		return nil
+	}
+	if !d.paceTransfers {
+		return d.sleep(ctx, cost)
+	}
+	now := time.Now()
+	if d.transferMode != mode || d.transferDue.IsZero() || now.Sub(d.transferDue) > 100*time.Millisecond {
+		d.transferDue = now
+	}
+	d.transferMode = mode
+	d.transferDue = d.transferDue.Add(cost)
+	delay := time.Until(d.transferDue)
+	if delay <= 0 {
+		return nil
+	}
+	if err := d.sleep(ctx, delay); err != nil {
+		d.breakTransferStream()
+		return err
+	}
+	return nil
+}
+
+func (d *Device) breakTransferStream() {
+	d.transferMode = 0
+	d.transferDue = time.Time{}
 }
 
 // lock acquires the device mutex, giving up when ctx is canceled (latency
@@ -226,7 +265,7 @@ func (d *Device) WriteRecord(ctx context.Context, p []byte) error {
 	if d.capacity > 0 && d.payloadBytes-d.erasedPayload()+int64(len(p)) > d.capacity {
 		return tape.ErrEndOfTape
 	}
-	if err := d.sleep(ctx, d.latency.transferCost(int64(len(p)), d.latency.WriteThroughput)); err != nil {
+	if err := d.waitTransfer(ctx, int64(len(p)), d.latency.WriteThroughput, 'w'); err != nil {
 		return err
 	}
 	if err := d.truncateAtCursor(); err != nil {
@@ -266,6 +305,7 @@ func (d *Device) ReadRecord(ctx context.Context, p []byte) (int, error) {
 	}
 	e := d.index[d.cursor]
 	if e.kind == entryFilemark {
+		d.breakTransferStream()
 		d.cursor++
 		return 0, tape.ErrFilemark
 	}
@@ -275,7 +315,7 @@ func (d *Device) ReadRecord(ctx context.Context, p []byte) (int, error) {
 		d.cursor++
 		return 0, io.ErrShortBuffer
 	}
-	if err := d.sleep(ctx, d.latency.transferCost(int64(e.size), d.latency.ReadThroughput)); err != nil {
+	if err := d.waitTransfer(ctx, int64(e.size), d.latency.ReadThroughput, 'r'); err != nil {
 		return 0, err
 	}
 	if _, err := d.f.ReadAt(p[:e.size], e.offset+4); err != nil {
@@ -304,6 +344,7 @@ func (d *Device) WriteFilemarks(ctx context.Context, count int) error {
 	if count == 0 {
 		return nil
 	}
+	d.breakTransferStream()
 	if err := d.sleep(ctx, d.latency.filemarkCost(count)); err != nil {
 		return err
 	}
@@ -339,6 +380,7 @@ func (d *Device) Flush(ctx context.Context) error {
 	if d.readOnly {
 		return nil
 	}
+	d.breakTransferStream()
 	if err := d.f.Sync(); err != nil {
 		return fmt.Errorf("flushing simulated tape: %w", err)
 	}
@@ -355,6 +397,7 @@ func (d *Device) Rewind(ctx context.Context) error {
 	if err := d.checkOpen(); err != nil {
 		return err
 	}
+	d.breakTransferStream()
 	if err := d.sleep(ctx, d.latency.rewindCost(d.distanceFromBOT(), d.scaleCapacity)); err != nil {
 		return err
 	}
@@ -518,6 +561,7 @@ func (d *Device) SeekToEOD(ctx context.Context) error {
 
 // moveTo repositions the head to the given block, charging the seek cost.
 func (d *Device) moveTo(ctx context.Context, block int) error {
+	d.breakTransferStream()
 	cost := d.latency.seekCost(d.offsetOf(d.cursor), d.offsetOf(block), d.scaleCapacity)
 	if err := d.sleep(ctx, cost); err != nil {
 		return err
@@ -529,6 +573,7 @@ func (d *Device) moveTo(ctx context.Context, block int) error {
 // spaceTo advances or backs over records without treating each spacing
 // command as a fresh random seek.
 func (d *Device) spaceTo(ctx context.Context, block int) error {
+	d.breakTransferStream()
 	cost := d.latency.spaceCost(d.offsetOf(d.cursor), d.offsetOf(block), d.scaleCapacity)
 	if err := d.sleep(ctx, cost); err != nil {
 		return err

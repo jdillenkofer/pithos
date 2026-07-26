@@ -632,6 +632,80 @@ If `outboxId` is omitted, Pithos uses `"default"` for backward compatibility.
 }
 ```
 
+## Tape part store
+
+`TapePartStore` uses a local durable journal as the synchronous write path and
+migrates complete, ordered objects into large tape segments in the background.
+Each segment has one bulk-data tape file and one compact checksummed manifest
+tape file. This costs two filemarks per segment—not per S3 part—and lets normal
+startup skip payload files rather than streaming the cartridge.
+
+```json
+{
+  "type": "TapePartStore",
+  "volumeId": "archive-a-0001",
+  "journalDirectory": "/var/lib/pithos/tape/archive-a-0001/journal",
+  "readCacheDirectory": "/var/lib/pithos/tape/archive-a-0001/cache",
+  "readCacheMaxBytes": 107374182400,
+  "recordSizeBytes": 1048576,
+  "durabilityMode": "group-commit",
+  "groupCommit": {
+    "maxDelayMs": 5,
+    "maxBytes": 16777216
+  },
+  "packing": {
+    "targetBytes": 1073741824,
+    "maxBytes": 4294967296,
+    "maxWaitSeconds": 30,
+    "preferFullObject": true,
+    "maxOpenObjects": 10000
+  },
+  "device": {
+    "type": "StTapeDevice",
+    "path": "/dev/nst0"
+  }
+}
+```
+
+Use a non-rewinding Linux tape device (`/dev/nst*`), variable block mode, and a
+record size accepted by both the drive and host HBA. One MiB records are a good
+starting point; the default remains 256 KiB for broader hardware compatibility.
+
+Operational requirements:
+
+- Put the journal and read cache on different failure-domain storage from the
+  tape drive. Size the journal for the largest ingestion burst that can arrive
+  while the drive is busy, offline, or at end of media.
+- Keep `volumeId`, the journal directory, and the physical cartridge together.
+  A permanent BOT label plus random media identity prevents mounting a
+  different cartridge against an existing catalog.
+- Alert on `OperationalStatus().EndOfMedia`,
+  `JournalBacklogBytes`, and `LastMigrationError`. At end of media, acknowledged
+  writes remain readable from the journal; migration stops safely instead of
+  discarding their disk copies.
+- A store instance owns one mounted cartridge. For rollover, provision the next
+  cartridge as a distinct named part store/volume and migrate or route new
+  storage-class writes to it. Automatic tape-library cartridge changes are not
+  performed by this backend.
+- Preserve the small `tape-catalog.pcat` file with normal host backups. It is an
+  acceleration index, not the only copy: if corrupt or missing it is rebuilt
+  from compact on-tape manifests.
+
+Random tape recalls are intrinsically latency-bound. The disk recall cache is
+checksummed, single-flight, LRU bounded, and mandatory before a tape-resident
+part is returned. Sequential/adjacent parts retain streaming throughput;
+uncached random parts pay the drive locate time. Prefer multipart/object sizes
+large enough to amortize the two filemarks per segment.
+
+The `simulator` device accepts `"latency": "lto9"` (and `lto1` through
+`lto10`) for capacity, transfer, locate, rewind, load, and filemark timing
+tests. The end-to-end production benchmark is:
+
+```sh
+go test ./internal/storage/metadatapart/partstore/tape -run '^$' \
+  -bench '^BenchmarkTapeProductionLTO9$' -benchtime=1x
+```
+
 ## Storage Migration
 
 Pithos supports storage migration through the `migrate-storage` subcommand:

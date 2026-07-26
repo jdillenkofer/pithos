@@ -10,23 +10,23 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
 )
 
-// v2 tape segment format. A segment is one physical tape file (a run of
-// records terminated by a single filemark) holding many parts:
+// Tape segment format. A segment uses two physical tape files so recovery can
+// skip bulk data and inspect only compact metadata:
 //
 //	SEGMENT_HEADER
 //	(PART_BEGIN PART_DATA* PART_END PART_COMMIT)*
+//	<filemark>
 //	(ACTIVATE_PART | DELETE_PART)*
 //	INDEX_CHUNK*
 //	SEGMENT_FOOTER
 //	SEGMENT_COMMIT
 //	<filemark>
 //
-// Every record shares a CRC-protected envelope. A segment is trusted only
-// when its header, footer (content hash), and commit (footer hash) all verify
-// and the terminating filemark is present; an interrupted tail segment is
-// ignored. Filemarks delimit whole segments, never individual parts.
+// Every record shares a CRC-protected envelope. The compact manifest is
+// trusted only when its footer content hash, commit footer hash, segment ID,
+// and terminating filemark all verify. An interrupted tail is ignored.
 const (
-	segmentMagic   = "PTS2"
+	segmentMagic   = "PTS3"
 	segmentVersion = 1
 
 	segEnvelopeSize = 24 // magic[4] ver[1] kind[1] flags[2] payloadLen[4] seq[8] headerCRC[4]
@@ -142,23 +142,25 @@ type segmentFooterPayload struct {
 	logicalOpCount   uint64
 	indexStartBlock  uint64
 	segmentByteCount uint64
+	nextSequence     uint64
 	contentHash      [32]byte
 }
 
 func encodeSegmentFooter(p segmentFooterPayload) []byte {
-	buf := make([]byte, 16+8*5+32)
+	buf := make([]byte, 16+8*6+32)
 	copy(buf[0:16], p.segmentID[:])
 	binary.BigEndian.PutUint64(buf[16:24], p.recordCount)
 	binary.BigEndian.PutUint64(buf[24:32], p.partCount)
 	binary.BigEndian.PutUint64(buf[32:40], p.logicalOpCount)
 	binary.BigEndian.PutUint64(buf[40:48], p.indexStartBlock)
 	binary.BigEndian.PutUint64(buf[48:56], p.segmentByteCount)
-	copy(buf[56:88], p.contentHash[:])
+	binary.BigEndian.PutUint64(buf[56:64], p.nextSequence)
+	copy(buf[64:96], p.contentHash[:])
 	return buf
 }
 
 func decodeSegmentFooter(b []byte) (segmentFooterPayload, error) {
-	if len(b) != 88 {
+	if len(b) != 96 {
 		return segmentFooterPayload{}, fmt.Errorf("tape segment: bad footer length %d", len(b))
 	}
 	var p segmentFooterPayload
@@ -168,7 +170,8 @@ func decodeSegmentFooter(b []byte) (segmentFooterPayload, error) {
 	p.logicalOpCount = binary.BigEndian.Uint64(b[32:40])
 	p.indexStartBlock = binary.BigEndian.Uint64(b[40:48])
 	p.segmentByteCount = binary.BigEndian.Uint64(b[48:56])
-	copy(p.contentHash[:], b[56:88])
+	p.nextSequence = binary.BigEndian.Uint64(b[56:64])
+	copy(p.contentHash[:], b[64:96])
 	return p, nil
 }
 
@@ -236,6 +239,9 @@ func decodeSegPartBegin(b []byte) (segPartBeginPayload, error) {
 	}
 	p.partID = *partID
 	flags := b[32]
+	if flags&^byte(3) != 0 {
+		return segPartBeginPayload{}, errors.New("tape segment: unknown part-begin flags")
+	}
 	rest := b[33:]
 	if flags&(1<<0) != 0 {
 		if len(rest) < 16 {
@@ -252,6 +258,10 @@ func decodeSegPartBegin(b []byte) (segPartBeginPayload, error) {
 		}
 		v := binary.BigEndian.Uint64(rest[0:8])
 		p.partNumber = &v
+		rest = rest[8:]
+	}
+	if len(rest) != 0 {
+		return segPartBeginPayload{}, errors.New("tape segment: trailing part-begin payload")
 	}
 	return p, nil
 }
@@ -374,13 +384,18 @@ func decodeSegActivate(b []byte) (segActivatePayload, error) {
 	p.partID = *partID
 	copy(p.generation[:], b[16:32])
 	p.sequence = binary.BigEndian.Uint64(b[32:40])
+	if b[40] > 1 {
+		return segActivatePayload{}, errors.New("tape segment: unknown activate flags")
+	}
 	if b[40] != 0 {
-		if len(b) < 57 {
+		if len(b) != 57 {
 			return segActivatePayload{}, errors.New("tape segment: truncated activate expected-previous")
 		}
 		var prev journal.GenerationID
 		copy(prev[:], b[41:57])
 		p.expectedPrevious = &prev
+	} else if len(b) != 41 {
+		return segActivatePayload{}, errors.New("tape segment: trailing activate payload")
 	}
 	return p, nil
 }
@@ -417,13 +432,18 @@ func decodeSegDelete(b []byte) (segDeletePayload, error) {
 	}
 	p.partID = *partID
 	p.sequence = binary.BigEndian.Uint64(b[16:24])
+	if b[24] > 1 {
+		return segDeletePayload{}, errors.New("tape segment: unknown delete flags")
+	}
 	if b[24] != 0 {
-		if len(b) < 41 {
+		if len(b) != 41 {
 			return segDeletePayload{}, errors.New("tape segment: truncated delete expected-generation")
 		}
 		var g journal.GenerationID
 		copy(g[:], b[25:41])
 		p.expectedGeneration = &g
+	} else if len(b) != 25 {
+		return segDeletePayload{}, errors.New("tape segment: trailing delete payload")
 	}
 	return p, nil
 }

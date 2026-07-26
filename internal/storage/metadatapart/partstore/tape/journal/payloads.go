@@ -4,10 +4,49 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
+
+type objectLayoutPayload struct {
+	objectID partstore.ObjectId
+	partIDs  []partstore.PartId
+}
+
+func encodeObjectLayout(p objectLayoutPayload) []byte {
+	buf := make([]byte, 16+4+16*len(p.partIDs))
+	copy(buf[:16], p.objectID[:])
+	binary.BigEndian.PutUint32(buf[16:20], uint32(len(p.partIDs)))
+	off := 20
+	for _, partID := range p.partIDs {
+		copy(buf[off:off+16], partID.Bytes())
+		off += 16
+	}
+	return buf
+}
+
+func decodeObjectLayout(buf []byte) (objectLayoutPayload, error) {
+	if len(buf) < 20 {
+		return objectLayoutPayload{}, errors.New("journal: truncated object layout")
+	}
+	count := int(binary.BigEndian.Uint32(buf[16:20]))
+	if count <= 0 || len(buf) != 20+16*count {
+		return objectLayoutPayload{}, errors.New("journal: malformed object layout")
+	}
+	var payload objectLayoutPayload
+	copy(payload.objectID[:], buf[:16])
+	payload.partIDs = make([]partstore.PartId, 0, count)
+	for off := 20; off < len(buf); off += 16 {
+		partID, err := partstore.NewPartIdFromBytes(buf[off : off+16])
+		if err != nil {
+			return objectLayoutPayload{}, err
+		}
+		payload.partIDs = append(payload.partIDs, *partID)
+	}
+	return payload, nil
+}
 
 // GenerationID uniquely identifies one physical write of a part. A random id
 // is trivially crash-safe (no counter to lose) and lets duplicate copies of
@@ -107,6 +146,9 @@ func decodePartBegin(b []byte) (partBeginPayload, error) {
 	}
 	p.partID = *partID
 	flags := b[32]
+	if flags&^(byte(hintHasObjectID|hintHasPartNumber|hintHasPartCount|hintHasObjectSize)) != 0 {
+		return partBeginPayload{}, fmt.Errorf("journal: unknown part-begin flags %#x", flags)
+	}
 	rest := b[33:]
 	read16 := func() ([16]byte, error) {
 		var v [16]byte
@@ -153,6 +195,9 @@ func decodePartBegin(b []byte) (partBeginPayload, error) {
 			return partBeginPayload{}, err
 		}
 		p.objectSize = &v
+	}
+	if len(rest) != 0 {
+		return partBeginPayload{}, errors.New("journal: trailing part-begin payload")
 	}
 	return p, nil
 }
@@ -232,13 +277,18 @@ func decodeActivate(b []byte) (activatePayload, error) {
 	}
 	p.partID = *partID
 	copy(p.generation[:], b[16:32])
+	if b[32]&^byte(activateHasExpectedPrev) != 0 {
+		return activatePayload{}, errors.New("journal: unknown activate flags")
+	}
 	if b[32]&activateHasExpectedPrev != 0 {
-		if len(b) < 49 {
+		if len(b) != 49 {
 			return activatePayload{}, fmt.Errorf("journal: truncated activate expected-previous")
 		}
 		var prev GenerationID
 		copy(prev[:], b[33:49])
 		p.expectedPrevious = &prev
+	} else if len(b) != 33 {
+		return activatePayload{}, errors.New("journal: trailing activate payload")
 	}
 	return p, nil
 }
@@ -270,13 +320,18 @@ func decodeDelete(b []byte) (deletePayload, error) {
 		return deletePayload{}, err
 	}
 	p.partID = *partID
+	if b[16]&^byte(deleteHasExpectedGen) != 0 {
+		return deletePayload{}, errors.New("journal: unknown delete flags")
+	}
 	if b[16]&deleteHasExpectedGen != 0 {
-		if len(b) < 33 {
+		if len(b) != 33 {
 			return deletePayload{}, fmt.Errorf("journal: truncated delete expected-generation")
 		}
 		var g GenerationID
 		copy(g[:], b[17:33])
 		p.expectedGeneration = &g
+	} else if len(b) != 17 {
+		return deletePayload{}, errors.New("journal: trailing delete payload")
 	}
 	return p, nil
 }

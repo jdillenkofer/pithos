@@ -25,8 +25,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -39,6 +41,8 @@ import (
 )
 
 const defaultRecordSize = 256 << 10
+const defaultVolumeID = "pithos-volume-0"
+const defaultReadCacheMaxBytes int64 = 100 << 30
 
 // DeviceOpener opens the tape device backing the store; it is called during
 // Start so that slow device operations (cartridge load) happen at lifecycle
@@ -64,20 +68,29 @@ type indexEntry struct {
 
 type tapePartStore struct {
 	*lifecycle.ValidatedLifecycle
-	deviceOpener DeviceOpener
-	journalDir   string
-	cacheDir     string
-	recordSize   int
-	durability   journal.DurabilityMode
-	groupCommit  journal.GroupCommitPolicy
-	policy       SegmentPackingPolicy
-	tracer       trace.Tracer
+	deviceOpener  DeviceOpener
+	journalDir    string
+	cacheDir      string
+	cacheMaxBytes int64
+	volumeID      string
+	recordSize    int
+	durability    journal.DurabilityMode
+	groupCommit   journal.GroupCommitPolicy
+	policy        SegmentPackingPolicy
+	tracer        trace.Tracer
 
-	mu       sync.Mutex // guards device, journal, migrator, index
-	device   tapedev.Device
-	journal  *journal.Journal
-	migrator *Migrator
-	index    map[partstore.PartId]indexEntry
+	mu                 sync.Mutex // guards device, journal, migrator, index
+	device             tapedev.Device
+	journal            *journal.Journal
+	migrator           *Migrator
+	catalog            *tapeCatalog
+	scheduler          *driveScheduler
+	index              map[partstore.PartId]indexEntry
+	cacheEntries       map[journal.GenerationID]*readCacheEntry
+	cacheBytes         int64
+	recalls            map[journal.GenerationID]*recallState
+	lastMigrationError string
+	endOfMedia         bool
 
 	trigger      chan struct{}
 	workerCancel context.CancelFunc
@@ -86,13 +99,31 @@ type tapePartStore struct {
 
 var _ partstore.PartStore = (*tapePartStore)(nil)
 
+// OperationalStatus is a point-in-time view suitable for health endpoints and
+// operator alerts. EndOfMedia means tape migration is blocked but journal
+// copies remain authoritative and readable.
+type OperationalStatus struct {
+	VolumeID            string
+	MediaID             string
+	Segments            int
+	LiveParts           int
+	JournalBacklogParts int
+	JournalBacklogBytes uint64
+	ReadCacheEntries    int
+	ReadCacheBytes      int64
+	DriveQueueDepth     int
+	CurrentTapeBlock    uint64
+	EndOfMedia          bool
+	LastMigrationError  string
+}
+
 type Option func(*tapePartStore) error
 
 // WithRecordSize sets the tape record (block) size used when chunking part
 // content into a segment.
 func WithRecordSize(n int) Option {
 	return func(s *tapePartStore) error {
-		if n <= 0 || n > 1<<30 {
+		if n <= 0 || n > segMaxPayloadSize {
 			return fmt.Errorf("invalid tape record size %d", n)
 		}
 		s.recordSize = n
@@ -123,9 +154,38 @@ func WithReadCacheDir(dir string) Option {
 	}
 }
 
+// WithReadCacheMaxBytes bounds recalled payloads retained on disk. A single
+// part larger than the bound is allowed temporarily so every valid part
+// remains readable; it becomes the first eviction candidate afterward.
+func WithReadCacheMaxBytes(bytes int64) Option {
+	return func(s *tapePartStore) error {
+		if bytes <= 0 {
+			return errors.New("read cache max bytes must be positive")
+		}
+		s.cacheMaxBytes = bytes
+		return nil
+	}
+}
+
+// WithVolumeID sets the operator-facing cartridge identifier. The identifier
+// is written into the permanent BOT label and prevents accidentally mounting a
+// different cartridge under an existing catalog.
+func WithVolumeID(id string) Option {
+	return func(s *tapePartStore) error {
+		if id == "" || id != strings.TrimSpace(id) || !utf8.ValidString(id) || len(id) > maxVolumeIDBytes {
+			return fmt.Errorf("invalid tape volume id %q", id)
+		}
+		s.volumeID = id
+		return nil
+	}
+}
+
 // WithDurability selects the journal durability mode.
 func WithDurability(mode journal.DurabilityMode) Option {
 	return func(s *tapePartStore) error {
+		if mode != journal.DurabilityPerPart && mode != journal.DurabilityGroupCommit {
+			return fmt.Errorf("invalid tape journal durability mode %d", mode)
+		}
 		s.durability = mode
 		return nil
 	}
@@ -134,6 +194,9 @@ func WithDurability(mode journal.DurabilityMode) Option {
 // WithGroupCommit sets the group-commit policy (used with DurabilityGroupCommit).
 func WithGroupCommit(policy journal.GroupCommitPolicy) Option {
 	return func(s *tapePartStore) error {
+		if policy.MaxDelay < 0 || policy.MaxBytes < 0 {
+			return errors.New("group commit delay and bytes must be non-negative")
+		}
 		s.groupCommit = policy
 		return nil
 	}
@@ -142,6 +205,12 @@ func WithGroupCommit(policy journal.GroupCommitPolicy) Option {
 // WithPackingPolicy sets the segment packing policy.
 func WithPackingPolicy(policy SegmentPackingPolicy) Option {
 	return func(s *tapePartStore) error {
+		if policy.TargetBytes <= 0 || policy.MaxBytes <= 0 || policy.TargetBytes > policy.MaxBytes {
+			return errors.New("packing target/max bytes must be positive and target must not exceed max")
+		}
+		if policy.MaxWait < 0 || policy.MaxOpenObjects < 0 {
+			return errors.New("packing max wait/open objects must be non-negative")
+		}
 		s.policy = policy
 		return nil
 	}
@@ -158,6 +227,8 @@ func New(deviceOpener DeviceOpener, opts ...Option) (partstore.PartStore, error)
 	s := &tapePartStore{
 		ValidatedLifecycle: validatedLifecycle,
 		deviceOpener:       deviceOpener,
+		volumeID:           defaultVolumeID,
+		cacheMaxBytes:      defaultReadCacheMaxBytes,
 		recordSize:         defaultRecordSize,
 		policy:             DefaultPackingPolicy(),
 		tracer:             otel.Tracer("internal/storage/metadatapart/partstore/tape"),
@@ -203,16 +274,36 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 		_ = device.Close()
 		return fmt.Errorf("creating tape read cache: %w", err)
 	}
+	if err := s.initializeReadCache(); err != nil {
+		_ = j.Close()
+		_ = device.Close()
+		return fmt.Errorf("initializing tape read cache: %w", err)
+	}
 
 	s.mu.Lock()
 	s.device = device
 	s.journal = j
-	if err := s.recoverLocked(ctx); err != nil {
+	label, dataStart, err := openVolume(ctx, device, s.volumeID)
+	if err != nil {
+		s.mu.Unlock()
+		_ = j.Close()
+		_ = device.Close()
+		return fmt.Errorf("opening tape volume: %w", err)
+	}
+	if err := s.recoverLocked(ctx, label, dataStart); err != nil {
 		s.mu.Unlock()
 		_ = j.Close()
 		_ = device.Close()
 		return fmt.Errorf("recovering tape part store: %w", err)
 	}
+	scheduler, err := newDriveScheduler(device)
+	if err != nil {
+		s.mu.Unlock()
+		_ = j.Close()
+		_ = device.Close()
+		return fmt.Errorf("starting tape drive scheduler: %w", err)
+	}
+	s.scheduler = scheduler
 	s.mu.Unlock()
 
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -227,27 +318,46 @@ func (s *tapePartStore) Start(ctx context.Context) error {
 
 // recoverLocked rebuilds the live index from committed tape segments and the
 // journal, without the database. Must hold s.mu.
-func (s *tapePartStore) recoverLocked(ctx context.Context) error {
+func (s *tapePartStore) recoverLocked(ctx context.Context, label volumeLabel, dataStart uint64) error {
 	started := time.Now()
 	slog.InfoContext(ctx, "Recovering tape part store")
 
-	segments, tailBlock, err := scanSegments(ctx, s.device)
+	catalog, err := loadTapeCatalog(s.journalDir, label)
+	if err != nil {
+		if errors.Is(err, ErrWrongTapeMedia) {
+			return err
+		}
+		slog.WarnContext(ctx, "Tape catalog unavailable; rebuilding from tape manifests", "error", err)
+		catalog = nil
+	}
+	if catalog == nil {
+		catalog = newTapeCatalog(label, dataStart)
+	}
+	segments, err := catalog.scannedSegments()
+	if err != nil {
+		return fmt.Errorf("decoding tape catalog: %w", err)
+	}
+	newSegments, tailBlock, err := scanSegmentsFrom(ctx, s.device, catalog.TailBlock, catalog.PreviousSegment)
 	if err != nil {
 		return fmt.Errorf("scanning tape segments: %w", err)
 	}
+	for _, segment := range newSegments {
+		catalog.appendSegment(segment)
+	}
+	segments = append(segments, newSegments...)
+	if err := saveTapeCatalog(s.journalDir, catalog); err != nil {
+		return fmt.Errorf("saving tape catalog: %w", err)
+	}
+	s.catalog = catalog
 	if err := s.sealTornTailLocked(ctx, tailBlock); err != nil {
 		slog.WarnContext(ctx, "Failed to seal untrusted tape tail", "error", err)
-	}
-
-	snap, err := s.journal.Snapshot()
-	if err != nil {
-		return fmt.Errorf("scanning journal: %w", err)
 	}
 
 	// Tape payload locations by generation, and the tape's logical operations.
 	tapeLoc := map[journal.GenerationID]indexEntry{}
 	var previousSegment [16]byte
 	var nextSequence uint64 = 1
+	capturedOps := make(map[partstore.PartId]capturedLogicalState)
 	type mergedOp struct {
 		sequence           uint64
 		isActivate         bool
@@ -257,6 +367,7 @@ func (s *tapePartStore) recoverLocked(ctx context.Context) error {
 		expectedGeneration *journal.GenerationID
 	}
 	opBySeq := map[uint64]mergedOp{}
+	var maxTapeLogicalSequence uint64
 
 	for _, seg := range segments {
 		for _, e := range seg.index {
@@ -269,15 +380,36 @@ func (s *tapePartStore) recoverLocked(ctx context.Context) error {
 			}
 		}
 		for _, a := range seg.activates {
+			if _, duplicate := opBySeq[a.sequence]; duplicate {
+				return fmt.Errorf("%w: duplicate logical sequence %d", ErrCorruptTape, a.sequence)
+			}
 			opBySeq[a.sequence] = mergedOp{sequence: a.sequence, isActivate: true, partID: a.partID, generation: a.generation, expectedPrevious: a.expectedPrevious}
+			if a.sequence > capturedOps[a.partID].sequence {
+				capturedOps[a.partID] = capturedLogicalState{sequence: a.sequence, activate: true, generation: a.generation}
+			}
+			maxTapeLogicalSequence = max(maxTapeLogicalSequence, a.sequence)
 		}
 		for _, d := range seg.deletes {
+			if _, duplicate := opBySeq[d.sequence]; duplicate {
+				return fmt.Errorf("%w: duplicate logical sequence %d", ErrCorruptTape, d.sequence)
+			}
 			opBySeq[d.sequence] = mergedOp{sequence: d.sequence, isActivate: false, partID: d.partID, expectedGeneration: d.expectedGeneration}
+			if d.sequence > capturedOps[d.partID].sequence {
+				capturedOps[d.partID] = capturedLogicalState{sequence: d.sequence}
+			}
+			maxTapeLogicalSequence = max(maxTapeLogicalSequence, d.sequence)
 		}
 		previousSegment = seg.header.segmentID
-		if end := seg.header.sequenceStart + seg.footer.recordCount + 2; end > nextSequence {
-			nextSequence = end
+		if seg.footer.nextSequence > nextSequence {
+			nextSequence = seg.footer.nextSequence
 		}
+	}
+	if err := s.journal.EnsureNextSequence(maxTapeLogicalSequence + 1); err != nil {
+		return fmt.Errorf("advancing journal sequence: %w", err)
+	}
+	snap, err := s.journal.Snapshot()
+	if err != nil {
+		return fmt.Errorf("scanning journal: %w", err)
 	}
 
 	// Merge in the journal's logical operations (deduplicated by sequence with
@@ -357,7 +489,7 @@ func (s *tapePartStore) recoverLocked(ctx context.Context) error {
 		slog.WarnContext(ctx, "Live part has no recoverable payload", "partId", partID.String(), "generation", gen.String())
 	}
 
-	s.migrator = NewMigrator(s.journal, s.device, s.recordSize, s.policy, previousSegment, nextSequence)
+	s.migrator = NewMigrator(s.journal, s.device, s.recordSize, s.policy, previousSegment, nextSequence, capturedOps)
 
 	slog.InfoContext(ctx, "Tape part store recovered",
 		"elapsed", time.Since(started).Round(time.Millisecond),
@@ -399,7 +531,21 @@ func (s *tapePartStore) Stop(ctx context.Context) error {
 		s.workerCancel()
 	}
 	if s.workerDone != nil {
-		<-s.workerDone
+		select {
+		case <-s.workerDone:
+		case <-ctx.Done():
+			return fmt.Errorf("stopping tape migration worker: %w", ctx.Err())
+		}
+	}
+
+	s.mu.Lock()
+	scheduler := s.scheduler
+	s.scheduler = nil
+	s.mu.Unlock()
+	if scheduler != nil {
+		if err := scheduler.stop(ctx); err != nil {
+			return err
+		}
 	}
 
 	s.mu.Lock()
@@ -432,6 +578,75 @@ func (s *tapePartStore) checkStarted() error {
 
 func (s *tapePartStore) SupportsTxFreeGetPart() bool    { return true }
 func (s *tapePartStore) SupportsTxFreeDeletePart() bool { return true }
+
+func (s *tapePartStore) OperationalStatus() (OperationalStatus, error) {
+	s.mu.Lock()
+	if err := s.checkStarted(); err != nil {
+		s.mu.Unlock()
+		return OperationalStatus{}, err
+	}
+	status := OperationalStatus{
+		VolumeID:           s.catalog.VolumeID,
+		MediaID:            fmt.Sprintf("%x", s.catalog.MediaID),
+		Segments:           len(s.catalog.Segments),
+		LiveParts:          len(s.index),
+		ReadCacheEntries:   len(s.cacheEntries),
+		ReadCacheBytes:     s.cacheBytes,
+		EndOfMedia:         s.endOfMedia,
+		LastMigrationError: s.lastMigrationError,
+	}
+	j := s.journal
+	scheduler := s.scheduler
+	s.mu.Unlock()
+
+	if scheduler != nil {
+		status.DriveQueueDepth, status.CurrentTapeBlock = scheduler.status()
+	}
+	snapshot, err := j.Snapshot()
+	if err != nil {
+		return OperationalStatus{}, err
+	}
+	for generation, part := range snapshot.Parts {
+		if part.Checkpointed {
+			continue
+		}
+		if liveGeneration, live := snapshot.Live[part.PartID]; !live || liveGeneration != generation {
+			continue
+		}
+		status.JournalBacklogParts++
+		status.JournalBacklogBytes += part.Length
+	}
+	return status, nil
+}
+
+func (s *tapePartStore) FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout partstore.ObjectLayout) error {
+	s.mu.Lock()
+	if err := s.checkStarted(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	j := s.journal
+	s.mu.Unlock()
+	if tx == nil {
+		if err := j.FinalizeObjectLayout(ctx, layout.ObjectID, layout.PartIDs); err != nil {
+			return err
+		}
+		s.triggerMigration()
+		return nil
+	}
+	sequence, err := j.StageObjectLayout(layout.ObjectID, layout.PartIDs)
+	if err != nil {
+		return err
+	}
+	tx.OnPreCommit(func(context.Context) error {
+		return j.EnsureDurable(sequence)
+	})
+	tx.OnAfterCommit(func(context.Context) error {
+		s.triggerMigration()
+		return nil
+	})
+	return nil
+}
 
 func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	ctx, span := s.tracer.Start(ctx, "tapePartStore.PutPart")
@@ -466,7 +681,7 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		PartCount:  options.Placement.PartCount,
 		ObjectSize: options.Placement.ObjectSize,
 	}
-	loc, err := j.WritePart(ctx, input, reader)
+	loc, err := j.StagePart(ctx, input, reader)
 	if err != nil {
 		return fmt.Errorf("staging part %s to journal: %w", partId.String(), err)
 	}
@@ -503,6 +718,7 @@ func (s *tapePartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	})
 	tx.OnRollback(func(ctx context.Context) error {
 		if !activated {
+			j.AbandonGeneration(gen)
 			return nil
 		}
 		// The activation was made durable in pre-commit but the transaction
@@ -539,9 +755,9 @@ func (s *tapePartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	return s.openCachedTapePart(ctx, partId, entry)
 }
 
-func (s *tapePartStore) newTapePartReader(ctx context.Context, partId partstore.PartId, entry indexEntry) *tapePartReader {
+func (s *tapePartStore) newTapePartReader(ctx context.Context, device tapedev.Device, partId partstore.PartId, entry indexEntry) *tapePartReader {
 	return &tapePartReader{
-		store:              s,
+		device:             device,
 		ctx:                ctx,
 		partId:             partId,
 		expectedGeneration: entry.generation,
@@ -556,49 +772,6 @@ func (s *tapePartStore) newTapePartReader(ctx context.Context, partId partstore.
 // openCachedTapePart makes disk staging mandatory for tape-resident payloads.
 // A complete immutable generation is written and synced before it becomes
 // visible in the cache, so range readers never need to reposition tape.
-func (s *tapePartStore) openCachedTapePart(ctx context.Context, partID partstore.PartId, entry indexEntry) (io.ReadCloser, error) {
-	path := filepath.Join(s.cacheDir, entry.generation.String()+".part")
-	if info, err := os.Stat(path); err == nil && uint64(info.Size()) == entry.length {
-		return os.Open(path)
-	}
-
-	tmp, err := os.CreateTemp(s.cacheDir, ".staging-*")
-	if err != nil {
-		return nil, err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
-	reader := s.newTapePartReader(ctx, partID, entry)
-	written, copyErr := io.Copy(tmp, reader)
-	closeErr := reader.Close()
-	if copyErr != nil {
-		_ = tmp.Close()
-		return nil, fmt.Errorf("staging tape part %s: %w", partID.String(), copyErr)
-	}
-	if closeErr != nil {
-		_ = tmp.Close()
-		return nil, closeErr
-	}
-	if uint64(written) != entry.length {
-		_ = tmp.Close()
-		return nil, fmt.Errorf("staging tape part %s: short copy %d of %d bytes", partID.String(), written, entry.length)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return nil, err
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		// Another reader may have completed the same immutable generation.
-		if _, statErr := os.Stat(path); statErr != nil {
-			return nil, err
-		}
-	}
-	return os.Open(path)
-}
-
 func (s *tapePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	_, span := s.tracer.Start(ctx, "tapePartStore.GetPartIds")
 	defer span.End()
@@ -640,6 +813,7 @@ func (s *tapePartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 			delete(s.index, partId)
 		}
 		s.mu.Unlock()
+		s.triggerMigration()
 		return nil
 	}
 	if tx == nil {
@@ -680,39 +854,79 @@ func (s *tapePartStore) migrationLoop(ctx context.Context) {
 	}
 }
 
-// runMigration migrates one segment and updates the index for migrated parts.
+// runMigration drains every currently-ready segment before sleeping again.
 func (s *tapePartStore) runMigration(ctx context.Context, force bool) {
 	s.mu.Lock()
 	migrator := s.migrator
+	scheduler := s.scheduler
 	s.mu.Unlock()
-	if migrator == nil {
+	if migrator == nil || scheduler == nil {
 		return
 	}
-	res, err := migrator.MigrateOnce(ctx, force)
-	if err != nil {
-		slog.WarnContext(ctx, "Tape migration failed", "error", err)
-		return
-	}
-	if len(res.Parts) == 0 {
-		return
-	}
-	s.mu.Lock()
-	for _, p := range res.Parts {
-		if entry, ok := s.index[p.PartID]; ok && entry.generation == p.Generation {
-			entry.location = locationTape
-			entry.tapeBlock = p.StartBlock
-			s.index[p.PartID] = entry
+	for {
+		value, err := scheduler.migration(ctx, func(jobCtx context.Context, _ tapedev.Device) (any, error) {
+			return migrator.MigrateOnce(jobCtx, force)
+		})
+		if err != nil {
+			if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+				return
+			}
+			s.mu.Lock()
+			s.lastMigrationError = err.Error()
+			s.endOfMedia = errors.Is(err, tapedev.ErrEndOfTape)
+			s.mu.Unlock()
+			slog.WarnContext(ctx, "Tape migration failed", "error", err)
+			return
 		}
+		res, ok := value.(MigrationResult)
+		if !ok {
+			slog.WarnContext(ctx, "Tape migration returned an invalid result")
+			return
+		}
+		if !res.Committed {
+			return
+		}
+		s.mu.Lock()
+		s.lastMigrationError = ""
+		s.endOfMedia = false
+		s.catalog.appendSegment(res.segment)
+		catalogErr := saveTapeCatalog(s.journalDir, s.catalog)
+		s.mu.Unlock()
+		if catalogErr != nil {
+			slog.WarnContext(ctx, "Tape migration catalog checkpoint failed", "error", catalogErr)
+			return
+		}
+		// The catalog is durable after the tape segment. Only now may journal
+		// payloads become reclaimable.
+		checkpoints := make([]journal.Checkpoint, 0, len(res.Parts))
+		for _, p := range res.Parts {
+			checkpoints = append(checkpoints, journal.Checkpoint{Generation: p.Generation, SegmentID: res.SegmentID})
+		}
+		if _, err := s.journal.CheckpointBatch(ctx, checkpoints); err != nil {
+			slog.WarnContext(ctx, "Tape migration journal checkpoint batch failed", "parts", len(checkpoints), "error", err)
+			return
+		}
+		if err := s.journal.Compact(ctx); err != nil {
+			// Reclamation is an optimization; catalog + journal checkpoints are
+			// already durable, so keep serving and retry on the next migration.
+			slog.WarnContext(ctx, "Tape journal compaction failed", "error", err)
+		}
+		s.mu.Lock()
+		for _, p := range res.Parts {
+			if entry, ok := s.index[p.PartID]; ok && entry.generation == p.Generation {
+				entry.location = locationTape
+				entry.tapeBlock = p.StartBlock
+				s.index[p.PartID] = entry
+			}
+		}
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
 }
 
-// tapePartReader streams a migrated part's data records from tape. It holds no
-// device resources between Reads: each Read acquires the store mutex,
-// repositions the head and reads one record, so multiple open readers can be
-// drained in any order on one goroutine without deadlocking.
+// tapePartReader streams one migrated part while its enclosing scheduler job
+// owns the device exclusively.
 type tapePartReader struct {
-	store              *tapePartStore
+	device             tapedev.Device
 	ctx                context.Context
 	partId             partstore.PartId
 	expectedGeneration journal.GenerationID
@@ -748,17 +962,11 @@ func (r *tapePartReader) Read(p []byte) (int, error) {
 }
 
 func (r *tapePartReader) fill() error {
-	s := r.store
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.device == nil {
-		return tapedev.ErrClosed
-	}
 	if err := r.positionLocked(); err != nil {
 		return err
 	}
 	if !r.headerVerified {
-		n, err := s.device.ReadRecord(r.ctx, r.buf)
+		n, err := r.device.ReadRecord(r.ctx, r.buf)
 		if err != nil {
 			return fmt.Errorf("reading tape part-begin at block %d: %w", r.nextBlock, err)
 		}
@@ -773,7 +981,7 @@ func (r *tapePartReader) fill() error {
 		r.headerVerified = true
 		r.nextBlock++
 	}
-	n, err := s.device.ReadRecord(r.ctx, r.buf)
+	n, err := r.device.ReadRecord(r.ctx, r.buf)
 	if err != nil {
 		return fmt.Errorf("reading tape part data at block %d: %w", r.nextBlock, err)
 	}
@@ -810,7 +1018,7 @@ func (r *tapePartReader) fill() error {
 // before its PART_COMMIT record; consuming that one control record lets the
 // next part begin without a costly LocateBlock. Must hold store.mu.
 func (r *tapePartReader) positionLocked() error {
-	pos, err := r.store.device.Tell(r.ctx)
+	pos, err := r.device.Tell(r.ctx)
 	if err != nil {
 		return err
 	}
@@ -818,7 +1026,7 @@ func (r *tapePartReader) positionLocked() error {
 		return nil
 	}
 	if !r.headerVerified && pos.Block+1 == r.nextBlock {
-		n, err := r.store.device.ReadRecord(r.ctx, r.buf)
+		n, err := r.device.ReadRecord(r.ctx, r.buf)
 		if err != nil {
 			return err
 		}
@@ -828,7 +1036,7 @@ func (r *tapePartReader) positionLocked() error {
 		}
 		return nil
 	}
-	return r.store.device.LocateBlock(r.ctx, r.nextBlock)
+	return r.device.LocateBlock(r.ctx, r.nextBlock)
 }
 
 func (r *tapePartReader) Close() error {

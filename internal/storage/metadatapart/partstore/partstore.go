@@ -38,11 +38,46 @@ func (h PlacementHints) Validate() error {
 	if h.PartNumber != nil && h.ObjectID == nil {
 		return errors.New("placement hints: part number requires object ID")
 	}
+	if h.PartCount != nil && h.ObjectID == nil {
+		return errors.New("placement hints: part count requires object ID")
+	}
+	if h.ObjectSize != nil && h.ObjectID == nil {
+		return errors.New("placement hints: object size requires object ID")
+	}
+	if h.PartNumber != nil && *h.PartNumber == 0 {
+		return errors.New("placement hints: part number must be positive")
+	}
+	if h.PartCount != nil && *h.PartCount == 0 {
+		return errors.New("placement hints: part count must be positive")
+	}
+	if h.PartNumber != nil && h.PartCount != nil && *h.PartNumber > *h.PartCount {
+		return errors.New("placement hints: part number exceeds part count")
+	}
 	return nil
 }
 
 type PutPartOptions struct {
 	Placement PlacementHints
+}
+
+// ObjectLayout is the final ordered manifest of a completed multipart object.
+// Stores may use it to co-locate parts; it never changes part identity or
+// visibility.
+type ObjectLayout struct {
+	ObjectID ObjectId
+	PartIDs  []PartId
+}
+
+type ObjectLayoutFinalizer interface {
+	FinalizeObjectLayout(ctx context.Context, tx database.Tx, layout ObjectLayout) error
+}
+
+// FinalizeObjectLayout supplies optional placement metadata when supported.
+func FinalizeObjectLayout(ctx context.Context, store PartStore, tx database.Tx, layout ObjectLayout) error {
+	if finalizer, ok := store.(ObjectLayoutFinalizer); ok {
+		return finalizer.FinalizeObjectLayout(ctx, tx, layout)
+	}
+	return nil
 }
 
 // PutPartWithoutHints writes a part without any placement hints.

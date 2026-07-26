@@ -6,6 +6,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/tape/journal"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +41,8 @@ func partNumbers(plan SegmentPlan) []uint64 {
 }
 
 func TestPlanCompleteObjectInPartOrder(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	obj := partstore.DeriveObjectId("b", "k", "u")
 	// Arrival order is scrambled; part-number order must win.
 	cands := []PackCandidate{
@@ -53,6 +56,8 @@ func TestPlanCompleteObjectInPartOrder(t *testing.T) {
 }
 
 func TestPlanDefersYoungIncompleteObject(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	obj := partstore.DeriveObjectId("b", "k", "u")
 	cands := []PackCandidate{
 		packCandidate(t, &obj, ptr(uint64(1)), ptr(uint64(3)), 100, 10, time.Second),
@@ -65,6 +70,8 @@ func TestPlanDefersYoungIncompleteObject(t *testing.T) {
 }
 
 func TestPlanPacksAgedIncompleteRun(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	obj := partstore.DeriveObjectId("b", "k", "u")
 	// Parts 1,2 present and aged; part 3 missing. Pack the available run.
 	cands := []PackCandidate{
@@ -78,6 +85,8 @@ func TestPlanPacksAgedIncompleteRun(t *testing.T) {
 }
 
 func TestPlanEagerWhenNotPreferringFullObject(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	obj := partstore.DeriveObjectId("b", "k", "u")
 	cands := []PackCandidate{
 		packCandidate(t, &obj, ptr(uint64(1)), ptr(uint64(3)), 100, 10, time.Second),
@@ -90,6 +99,8 @@ func TestPlanEagerWhenNotPreferringFullObject(t *testing.T) {
 }
 
 func TestPlanUngroupedInArrivalOrder(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	cands := []PackCandidate{
 		packCandidate(t, nil, nil, nil, 10, 30, 0),
 		packCandidate(t, nil, nil, nil, 10, 10, 0),
@@ -103,6 +114,8 @@ func TestPlanUngroupedInArrivalOrder(t *testing.T) {
 }
 
 func TestPlanCompleteObjectsBeforeUngrouped(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	obj := partstore.DeriveObjectId("b", "k", "u")
 	cands := []PackCandidate{
 		packCandidate(t, nil, nil, nil, 10, 5, 0), // ungrouped, earliest arrival
@@ -116,6 +129,8 @@ func TestPlanCompleteObjectsBeforeUngrouped(t *testing.T) {
 }
 
 func TestPlanRespectsMaxBytes(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	policy := DefaultPackingPolicy()
 	policy.MaxBytes = 250
 	policy.TargetBytes = 1000
@@ -130,6 +145,8 @@ func TestPlanRespectsMaxBytes(t *testing.T) {
 }
 
 func TestPlanOversizedSinglePartMakesProgress(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	policy := DefaultPackingPolicy()
 	policy.MaxBytes = 100
 	cands := []PackCandidate{
@@ -142,6 +159,8 @@ func TestPlanOversizedSinglePartMakesProgress(t *testing.T) {
 }
 
 func TestPlanReadyWhenTargetReached(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	policy := DefaultPackingPolicy()
 	policy.TargetBytes = 150
 	cands := []PackCandidate{
@@ -153,6 +172,8 @@ func TestPlanReadyWhenTargetReached(t *testing.T) {
 }
 
 func TestPlanForcesOldestBeyondMaxOpenObjects(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	policy := DefaultPackingPolicy()
 	policy.MaxOpenObjects = 1
 	objA := partstore.DeriveObjectId("b", "k", "a")

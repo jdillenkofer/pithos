@@ -154,6 +154,9 @@ type InitiateMultipartUploadResult struct {
 
 type CompleteMultipartUploadResult struct {
 	UnreferencedParts []Part
+	// Parts is the final ordered physical manifest. It is used internally for
+	// advisory placement finalization and is not exposed in the S3 response.
+	Parts             []Part
 	Location          string
 	VersionID         *string
 	ETag              string

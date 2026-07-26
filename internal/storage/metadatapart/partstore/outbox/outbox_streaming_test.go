@@ -33,9 +33,9 @@ type txFreeRecordingPartStore struct {
 	putSawTransaction atomic.Bool
 }
 
-func (s *txFreeRecordingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+func (s *txFreeRecordingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, options partstore.PutPartOptions, reader io.Reader) error {
 	s.putSawTransaction.Store(tx != nil)
-	return s.PartStore.PutPart(ctx, tx, partId, reader)
+	return s.PartStore.PutPart(ctx, tx, partId, options, reader)
 }
 
 func (s *txFreeRecordingPartStore) SupportsTxFreePutPart() bool { return true }

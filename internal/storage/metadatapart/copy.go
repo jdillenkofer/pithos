@@ -227,6 +227,16 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 		if err != nil {
 			return err
 		}
+		partIDs := make([]partstore.PartId, len(dstObject.Parts))
+		for index, part := range dstObject.Parts {
+			partIDs[index] = part.Id
+		}
+		if err := partstore.FinalizeObjectLayout(ctx, dstStore, tx, partstore.ObjectLayout{
+			ObjectID: partstore.DeriveObjectId(dstBucket.String(), dstKey.String(), ""),
+			PartIDs:  partIDs,
+		}); err != nil {
+			return err
+		}
 		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 			return err
 		}

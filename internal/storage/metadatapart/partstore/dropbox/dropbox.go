@@ -117,7 +117,7 @@ func parsePartName(name string) (*partstore.PartId, bool) {
 	return id, err == nil
 }
 
-func (s *dropboxPartStore) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId, reader io.Reader) error {
+func (s *dropboxPartStore) PutPart(ctx context.Context, tx database.Tx, id partstore.PartId, _ partstore.PutPartOptions, reader io.Reader) error {
 	_, span := s.tracer.Start(ctx, "dropboxPartStore.PutPart")
 	defer span.End()
 
