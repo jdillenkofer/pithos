@@ -1,6 +1,9 @@
 FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS app-builder
 
 ARG SKIP_TESTS=false
+ARG VERSION=devel
+ARG COMMIT=unknown
+ARG DIRTY=unknown
 
 RUN apk add --no-cache build-base
 
@@ -21,7 +24,7 @@ RUN adduser -D -u 10001 appuser
 RUN mkdir -m 1777 /tmp-dir
 RUN mkdir -p /data && chown 10001:10001 /data
 
-RUN go install -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie cmd/pithos.go
+RUN go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY}" -buildmode=pie -o /go/bin/pithos ./cmd
 
 # Change ownership of the binary to appuser
 RUN chown 10001:10001 /go/bin/pithos

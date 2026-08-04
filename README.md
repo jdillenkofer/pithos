@@ -24,7 +24,7 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 ```sh
 git clone https://github.com/jdillenkofer/pithos.git
 cd pithos
-go build -o pithos ./cmd/pithos.go
+go build -o pithos ./cmd
 ./pithos serve
 ```
 

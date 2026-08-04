@@ -106,8 +106,10 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 1
+          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-linux-amd64 cmd/pithos.go
+          go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-linux-amd64 ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -136,8 +138,10 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 1
           CC: aarch64-linux-gnu-gcc
+          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-linux-arm64 cmd/pithos.go
+          go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-linux-arm64 ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -168,8 +172,10 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 1
+          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags='-linkmode external -s -w -extldflags "-static-pie"' -buildmode=pie -o pithos-${{ matrix.os }}-${{ matrix.arch }} cmd/pithos.go
+          go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-${{ matrix.os }}-${{ matrix.arch }} ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -193,8 +199,10 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 1
+          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags="-s -w" -o pithos-windows-amd64.exe cmd/pithos.go
+          go build -ldflags="-s -w -X github.com/jdillenkofer/pithos/internal/buildinfo.version=$env:VERSION -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=$env:COMMIT -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -o pithos-windows-amd64.exe ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -224,8 +232,10 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 1
           CC: zig cc -target aarch64-windows-gnu
+          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags="-s -w" -o pithos-windows-arm64.exe cmd/pithos.go
+          go build -ldflags="-s -w -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -o pithos-windows-arm64.exe ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -274,6 +284,9 @@ jobs:
             jdillenkofer/pithos:latest
           build-args: |
             SKIP_TESTS=true
+            VERSION=${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DIRTY=false
       - name: Sign and verify the published Docker image
         if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
