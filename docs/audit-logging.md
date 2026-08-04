@@ -85,6 +85,12 @@ pithos audit-log keygen [-f <filename>]
 
 The **private keys** must be kept secret and added to your `storage.json`. The **public keys** are used with the `verify` command.
 
+### Migrating to Go 1.27 ML-DSA keys
+
+Go 1.27 replaces the CIRCL ML-DSA implementation with the standard library's `crypto/mldsa` package. Existing ML-DSA-87 public keys and signatures retain their standard FIPS 204 encodings and remain verifiable, but the private-key encoding changes from CIRCL's expanded key to Go's 32-byte seed.
+
+Before upgrading, rotate the audit log to a new file and generate a new ML-DSA-87 key pair with `pithos audit-log keygen`. Retain the old log and public key together for historical verification. A legacy CIRCL private key cannot be converted to the seed required by Go 1.27.
+
 ## Verification
 
 Verify the cryptographic integrity of audit logs:

@@ -126,7 +126,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
-          go-version: '1.26.5'
+          go-version: '1.27.0'
       - name: Build Binary
         env:
           GOOS: linux
@@ -158,7 +158,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
-          go-version: '1.26.5'
+          go-version: '1.27.0'
       - name: Install Cross-Compilation Tools
         run: |
           sudo apt-get update
@@ -202,7 +202,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
-          go-version: '1.26.5'
+          go-version: '1.27.0'
       - name: Build Binary
         env:
           GOOS: ${{ matrix.os }}
@@ -235,7 +235,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
-          go-version: '1.26.5'
+          go-version: '1.27.0'
       - name: Build Binary
         env:
           GOOS: windows
@@ -267,7 +267,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           cache: false
-          go-version: '1.26.5'
+          go-version: '1.27.0'
       - name: Install Zig
         run: |
           wget https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -46,7 +46,7 @@ func TestAuditLogMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestAuditLogMiddlewareCopyResources(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, mlPriv, err := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	if err != nil {
 		t.Fatal(err)
 	}

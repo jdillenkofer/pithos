@@ -3,12 +3,12 @@ package auditlog
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/sha512"
 	"encoding/binary"
 	"io"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 )
 
@@ -188,7 +188,7 @@ func (e *Entry) CalculateHash() []byte {
 			panic("invalid Ed25519 signature length")
 		}
 		buf.Write(d.SignatureEd25519)
-		if len(d.SignatureMlDsa87) != mldsa87.SignatureSize {
+		if len(d.SignatureMlDsa87) != mldsa.MLDSA87SignatureSize {
 			panic("invalid ML-DSA-87 signature length")
 		}
 		buf.Write(d.SignatureMlDsa87)

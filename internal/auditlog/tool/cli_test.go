@@ -2,6 +2,7 @@ package tool
 
 import (
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha512"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
@@ -19,7 +19,8 @@ import (
 
 func TestRunAuditLogTool(t *testing.T) {
 	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
-	mlPub, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
+	mlPriv, _ := mldsa.GenerateKey(mldsa.MLDSA87())
+	mlPub := mlPriv.PublicKey()
 
 	edSigner := signing.NewEd25519Signer(edPriv)
 	edVerifier := signing.NewEd25519Verifier(edPub)
