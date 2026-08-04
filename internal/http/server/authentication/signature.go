@@ -5,16 +5,20 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/url"
 	"slices"
@@ -32,8 +36,12 @@ const contentSHA256StreamingUnsignedPayload = "STREAMING-UNSIGNED-PAYLOAD"
 const contentSHA256StreamingUnsignedPayloadTrailing = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 const contentSHA256StreamingPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
 const contentSHA256StreamingPayloadTrailing = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+const contentSHA256StreamingECDSAPayload = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD"
+const contentSHA256StreamingECDSAPayloadTrailing = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER"
 
-const signatureAlgorithm = "AWS4-HMAC-SHA256"
+const signatureAlgorithmV4 = "AWS4-HMAC-SHA256"
+const signatureAlgorithmV4a = "AWS4-ECDSA-P256-SHA256"
+const sigV4aSecretKeyPrefix = "AWS4A"
 const expectedService = "s3"
 const expectedRequest = "aws4_request"
 
@@ -63,26 +71,242 @@ type AuthTypeContextKey struct{}
 type RequestIDContextKey struct{}
 type ClientIPContextKey struct{}
 
+type signatureAlgorithm string
+
+type credentialScope struct {
+	date    string
+	region  string
+	service string
+	request string
+	value   string
+}
+
+type signatureVerifier struct {
+	algorithm       signatureAlgorithm
+	verifySignature func(stringToSign string, signature string) bool
+}
+
+func parseSignatureAlgorithm(value string) (signatureAlgorithm, bool) {
+	algorithm := signatureAlgorithm(value)
+	return algorithm, algorithm == signatureAlgorithmV4 || algorithm == signatureAlgorithmV4a
+}
+
+func (a signatureAlgorithm) parseCredentialScope(parts []string, expectedRegion string, regionSet string) (credentialScope, error) {
+	switch a {
+	case signatureAlgorithmV4:
+		if len(parts) != 5 {
+			return credentialScope{}, fmt.Errorf("SigV4 credential field must contain exactly 5 parts")
+		}
+		if parts[2] != expectedRegion {
+			return credentialScope{}, fmt.Errorf("region in credential does not match expected region")
+		}
+		return credentialScope{date: parts[1], region: parts[2], service: parts[3], request: parts[4], value: strings.Join(parts[1:], "/")}, nil
+	case signatureAlgorithmV4a:
+		if len(parts) != 4 {
+			return credentialScope{}, fmt.Errorf("SigV4a credential field must contain exactly 4 parts")
+		}
+		if !regionSetIncludes(regionSet, expectedRegion) {
+			return credentialScope{}, fmt.Errorf("expected region is not included in X-Amz-Region-Set")
+		}
+		return credentialScope{date: parts[1], service: parts[2], request: parts[3], value: strings.Join(parts[1:], "/")}, nil
+	default:
+		return credentialScope{}, fmt.Errorf("unsupported signature algorithm")
+	}
+}
+
+func (a signatureAlgorithm) newVerifier(accessKeyID string, secretAccessKey string, scope credentialScope) (signatureVerifier, error) {
+	if a == signatureAlgorithmV4 {
+		return newSigV4Verifier(createSigningKey(secretAccessKey, scope.date, scope.region, scope.service, scope.request)), nil
+	}
+	publicKey, err := deriveSigV4aPublicKey(accessKeyID, secretAccessKey)
+	if err != nil {
+		return signatureVerifier{}, err
+	}
+	return newSigV4aVerifier(publicKey), nil
+}
+
+func (a signatureAlgorithm) validateSignedHeaders(signedHeaders []string, isPresigned bool) error {
+	if a == signatureAlgorithmV4a && !isPresigned && !slices.Contains(signedHeaders, "x-amz-region-set") {
+		return fmt.Errorf("SigV4a signed headers do not include x-amz-region-set")
+	}
+	return nil
+}
+
+func (v signatureVerifier) verify(stringToSign string, signature string) bool {
+	return v.verifySignature(stringToSign, signature)
+}
+
+func (v signatureVerifier) normalizeStreamingSignature(signature string) string {
+	if v.algorithm == signatureAlgorithmV4a {
+		return strings.TrimRight(signature, "*")
+	}
+	return signature
+}
+
+func (v signatureVerifier) acceptsStreamingPayload(contentSHA256 string) bool {
+	if v.algorithm == signatureAlgorithmV4a {
+		return contentSHA256 != contentSHA256StreamingPayload && contentSHA256 != contentSHA256StreamingPayloadTrailing
+	}
+	return contentSHA256 != contentSHA256StreamingECDSAPayload && contentSHA256 != contentSHA256StreamingECDSAPayloadTrailing
+}
+
+func newSigV4Verifier(signingKey []byte) signatureVerifier {
+	return signatureVerifier{
+		algorithm: signatureAlgorithmV4,
+		verifySignature: func(stringToSign string, signature string) bool {
+			calculatedSignature := createSignature(signingKey, stringToSign)
+			return subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
+		},
+	}
+}
+
 func hmacSha256(secret []byte, data []byte) []byte {
 	hmac := hmac.New(sha256.New, secret)
-	hmac.Write([]byte(data))
-	dataHmac := hmac.Sum(nil)
-
-	return dataHmac
+	hmac.Write(data)
+	return hmac.Sum(nil)
 }
 
 func createSigningKey(secretAccessKey string, date string, region string, service string, request string) []byte {
 	dateKey := hmacSha256([]byte("AWS4"+secretAccessKey), []byte(date))
 	dateRegionKey := hmacSha256(dateKey, []byte(region))
 	dateRegionServiceKey := hmacSha256(dateRegionKey, []byte(service))
-	signingKey := hmacSha256(dateRegionServiceKey, []byte(request))
-	return signingKey
+	return hmacSha256(dateRegionServiceKey, []byte(request))
 }
 
 func createSignature(signingKey []byte, stringToSign string) string {
-	data := hmacSha256(signingKey, []byte(stringToSign))
-	hexData := hex.EncodeToString(data)
-	return hexData
+	return hex.EncodeToString(hmacSha256(signingKey, []byte(stringToSign)))
+}
+
+func createScope(date string, region string, service string, request string) string {
+	return date + "/" + region + "/" + service + "/" + request
+}
+
+func newSigV4aVerifier(publicKey *ecdsa.PublicKey) signatureVerifier {
+	return signatureVerifier{
+		algorithm: signatureAlgorithmV4a,
+		verifySignature: func(stringToSign string, signature string) bool {
+			return verifySigV4aSignature(publicKey, stringToSign, signature)
+		},
+	}
+}
+
+// deriveSigV4aPrivateKey deterministically derives the P-256 key pair used by
+// SigV4a from an AWS access-key pair. The construction follows NIST SP 800-108
+// counter-mode KDF and FIPS 186-4 Appendix B.4.2, as used by the AWS SDKs.
+func deriveSigV4aPrivateKey(accessKeyID string, secretAccessKey string) (*ecdsa.PrivateKey, error) {
+	curve := elliptic.P256()
+	nMinusTwo := new(big.Int).Sub(curve.Params().N, big.NewInt(2))
+	nMinusTwoBytes := nMinusTwo.FillBytes(make([]byte, sha256.Size))
+	inputKey := []byte(sigV4aSecretKeyPrefix + secretAccessKey)
+
+	for counter := 1; counter <= 0xff; counter++ {
+		context := make([]byte, 0, len(accessKeyID)+1)
+		context = append(context, accessKeyID...)
+		context = append(context, byte(counter))
+
+		candidate := sigV4aKDF(inputKey, []byte(signatureAlgorithmV4a), context)
+		if constantTimeByteCompare(candidate, nMinusTwoBytes) >= 0 {
+			continue
+		}
+
+		d := new(big.Int).SetBytes(candidate)
+		d.Add(d, big.NewInt(1))
+		x, y := curve.ScalarBaseMult(d.Bytes())
+		return &ecdsa.PrivateKey{
+			PublicKey: ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+			D:         d,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("failed to derive SigV4a key after 255 attempts")
+}
+
+func deriveSigV4aPublicKey(accessKeyID string, secretAccessKey string) (*ecdsa.PublicKey, error) {
+	privateKey, err := deriveSigV4aPrivateKey(accessKeyID, secretAccessKey)
+	if err != nil {
+		return nil, err
+	}
+	return &privateKey.PublicKey, nil
+}
+
+// sigV4aKDF is the single-block NIST SP 800-108 HMAC-SHA256 counter-mode KDF
+// used to produce a 256-bit P-256 private-key candidate.
+func sigV4aKDF(key []byte, label []byte, context []byte) []byte {
+	fixedInput := make([]byte, 0, 4+len(label)+1+len(context)+4)
+	fixedInput = binary.BigEndian.AppendUint32(fixedInput, 1)
+	fixedInput = append(fixedInput, label...)
+	fixedInput = append(fixedInput, 0)
+	fixedInput = append(fixedInput, context...)
+	fixedInput = binary.BigEndian.AppendUint32(fixedInput, 256)
+	return hmacSha256(key, fixedInput)
+}
+
+// constantTimeByteCompare compares equal-length, big-endian unsigned integers.
+func constantTimeByteCompare(x []byte, y []byte) int {
+	xLarger, yLarger := 0, 0
+	for i := range x {
+		xByte, yByte := int(x[i]), int(y[i])
+		xGreater := ((yByte - xByte) >> 8) & 1
+		yGreater := ((xByte - yByte) >> 8) & 1
+		xLarger |= xGreater &^ yLarger
+		yLarger |= yGreater &^ xLarger
+	}
+	return xLarger - yLarger
+}
+
+func verifySigV4aSignature(publicKey *ecdsa.PublicKey, stringToSign string, signature string) bool {
+	decodedSignature, err := hex.DecodeString(signature)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256([]byte(stringToSign))
+	return ecdsa.VerifyASN1(publicKey, digest[:], decodedSignature)
+}
+
+func regionSetIncludes(regionSet string, expectedRegion string) bool {
+	for regionPattern := range strings.SplitSeq(regionSet, ",") {
+		regionPattern = strings.TrimSpace(regionPattern)
+		if regionPattern != "" && wildcardMatch(regionPattern, expectedRegion) {
+			return true
+		}
+	}
+	return false
+}
+
+func createSigV4aScope(date string, service string, request string) string {
+	return date + "/" + service + "/" + request
+}
+
+// wildcardMatch implements the '*' wildcard supported by X-Amz-Region-Set.
+func wildcardMatch(pattern string, value string) bool {
+	patternIndex, valueIndex := 0, 0
+	starIndex, starValueIndex := -1, 0
+
+	for valueIndex < len(value) {
+		if patternIndex < len(pattern) && pattern[patternIndex] == value[valueIndex] {
+			patternIndex++
+			valueIndex++
+			continue
+		}
+		if patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+			starIndex = patternIndex
+			patternIndex++
+			starValueIndex = valueIndex
+			continue
+		}
+		if starIndex >= 0 {
+			patternIndex = starIndex + 1
+			starValueIndex++
+			valueIndex = starValueIndex
+			continue
+		}
+		return false
+	}
+
+	for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+		patternIndex++
+	}
+	return patternIndex == len(pattern)
 }
 
 type pair struct {
@@ -287,27 +511,30 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
 
 	contentSHA256 := r.Header.Get(contentSHA256Header)
-	if isPresigned || contentSHA256 == contentSHA256UnsignedPayload {
+	if isPresigned {
 		canonicalRequest += contentSHA256UnsignedPayload
-	} else if contentSHA256 == contentSHA256StreamingUnsignedPayload {
-		canonicalRequest += contentSHA256StreamingUnsignedPayload
-	} else if contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing {
-		canonicalRequest += contentSHA256StreamingUnsignedPayloadTrailing
-	} else if contentSHA256 == contentSHA256StreamingPayload {
-		canonicalRequest += contentSHA256StreamingPayload
-	} else if contentSHA256 == contentSHA256StreamingPayloadTrailing {
-		canonicalRequest += contentSHA256StreamingPayloadTrailing
 	} else {
-		hashedPayload, err := generateHashedPayload(r)
-		if err != nil {
-			return nil, err
+		switch contentSHA256 {
+		case contentSHA256UnsignedPayload,
+			contentSHA256StreamingUnsignedPayload,
+			contentSHA256StreamingUnsignedPayloadTrailing,
+			contentSHA256StreamingPayload,
+			contentSHA256StreamingPayloadTrailing,
+			contentSHA256StreamingECDSAPayload,
+			contentSHA256StreamingECDSAPayloadTrailing:
+			canonicalRequest += contentSHA256
+		default:
+			hashedPayload, err := generateHashedPayload(r)
+			if err != nil {
+				return nil, err
+			}
+			canonicalRequest += *hashedPayload
 		}
-		canonicalRequest += *hashedPayload
 	}
 	return &canonicalRequest, nil
 }
 
-func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string, isPresigned bool) (*string, error) {
+func generateStringToSign(r *http.Request, timestamp string, scope string, headersToInclude []string, isPresigned bool, algorithm signatureAlgorithm) (*string, error) {
 	canonicalRequest, err := generateCanonicalRequest(r, headersToInclude, isPresigned)
 	if err != nil {
 		return nil, err
@@ -317,29 +544,25 @@ func generateStringToSign(r *http.Request, timestamp string, scope string, heade
 	dataSha256 := sha256Hash.Sum(nil)
 	canonicalRequestHexSha256 := hex.EncodeToString(dataSha256)
 
-	stringToSign := signatureAlgorithm + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
+	stringToSign := string(algorithm) + "\n" + timestamp + "\n" + scope + "\n" + canonicalRequestHexSha256
 	return &stringToSign, nil
 }
 
-func generateStringToSignForChunk(timestamp string, scope string, previousSignature string, chunkHasher hash.Hash) string {
+func generateStringToSignForChunk(algorithm signatureAlgorithm, timestamp string, scope string, previousSignature string, chunkHasher hash.Hash) string {
 	sha256Hash := sha256.New()
 	sha256Hash.Write([]byte(""))
 	dataSha256 := sha256Hash.Sum(nil)
 	emptyHashHex := hex.EncodeToString(dataSha256)
 
-	return signatureAlgorithm + "-PAYLOAD" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + emptyHashHex + "\n" + hex.EncodeToString(chunkHasher.Sum(nil))
+	return string(algorithm) + "-PAYLOAD" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + emptyHashHex + "\n" + hex.EncodeToString(chunkHasher.Sum(nil))
 }
 
-func generateStringToSignForTrailerChunk(timestamp string, scope string, previousSignature string, trailingChecksumHeader string) string {
+func generateStringToSignForTrailerChunk(algorithm signatureAlgorithm, timestamp string, scope string, previousSignature string, trailingChecksumHeader string) string {
 	sha256Hash := sha256.New()
 	sha256Hash.Write([]byte(trailingChecksumHeader + "\n"))
 	dataSha256 := sha256Hash.Sum(nil)
 	hexHash := hex.EncodeToString(dataSha256)
-	return signatureAlgorithm + "-TRAILER" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + hexHash
-}
-
-func createScope(date string, region string, service string, request string) string {
-	return date + "/" + region + "/" + service + "/" + request
+	return string(algorithm) + "-TRAILER" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + hexHash
 }
 
 func hasAwsChunkedContentEncoding(contentEncodingHeader string) bool {
@@ -363,93 +586,110 @@ func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
 	return strings.Join(remainingEncodings, ", ")
 }
 
-func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
-	now := time.Now().UTC()
+type signatureParameters struct {
+	algorithm          signatureAlgorithm
+	credential         string
+	timestamp          string
+	expirationDuration time.Duration
+	signedHeaders      string
+	signature          string
+	isPresigned        bool
+}
 
-	var credential string
-	var timestamp string
-	var expirationDuration time.Duration
-	var signedHeaders string
-	var signature string
-	var isPresigned bool
-
-	isAwsChunked := false
-	contentEncodingHeader := r.Header.Get("Content-Encoding")
-	if hasAwsChunkedContentEncoding(contentEncodingHeader) {
-		isAwsChunked = true
-	}
-
+func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
 		slog.DebugContext(r.Context(), "Authorization header is missing checking for query parameters")
-		isPresigned = true
 		query := r.URL.Query()
-		credential = query.Get("X-Amz-Credential")
-		timestamp = query.Get("X-Amz-Date")
-		expires := query.Get("X-Amz-Expires")
-		slog.DebugContext(r.Context(), "Using presigned auth query parameters")
-		parsedExpired, err := strconv.ParseInt(expires, 10, 32)
+		algorithm, found := parseSignatureAlgorithm(query.Get("X-Amz-Algorithm"))
+		if !found {
+			return signatureParameters{}, fmt.Errorf("X-Amz-Algorithm is not supported")
+		}
+
+		expires, err := strconv.ParseInt(query.Get("X-Amz-Expires"), 10, 32)
 		if err != nil {
-			slog.DebugContext(r.Context(), "Failed to parse X-Amz-Expires: "+err.Error())
-			return nil, false
+			return signatureParameters{}, fmt.Errorf("failed to parse X-Amz-Expires: %w", err)
 		}
-		if parsedExpired < 1 || parsedExpired > 604800 {
-			slog.DebugContext(r.Context(), "X-Amz-Expires must be between 1 and 604800 seconds")
-			return nil, false
-		}
-		expirationDuration = time.Duration(parsedExpired) * time.Second
-		signedHeaders = query.Get("X-Amz-SignedHeaders")
-		signature = query.Get("X-Amz-Signature")
-	} else {
-		slog.DebugContext(r.Context(), "Authorization header is present")
-		isPresigned = false
-		authorizationHeader, found := strings.CutPrefix(authorizationHeader, signatureAlgorithm)
-		if !found {
-			slog.DebugContext(r.Context(), "Authorization header does not start with "+signatureAlgorithm)
-			return nil, false
-		}
-		authFields := strings.Split(authorizationHeader, ",")
-		if len(authFields) != 3 {
-			slog.DebugContext(r.Context(), "Authorization header does not contain exactly 3 fields")
-			return nil, false
+		if expires < 1 || expires > 604800 {
+			return signatureParameters{}, fmt.Errorf("X-Amz-Expires must be between 1 and 604800 seconds")
 		}
 
-		credential = strings.TrimSpace(authFields[0])
-		credential, found = strings.CutPrefix(credential, "Credential=")
-		if !found {
-			slog.DebugContext(r.Context(), "Authorization header does not contain Credential field")
-			return nil, false
-		}
-
-		// Use Date header (https://developer.mozilla.org/de/docs/Web/HTTP/Headers/Date), if x-amz-date is not specified
-		timestamp = r.Header.Get("x-amz-date")
-		if timestamp == "" {
-			timestamp = r.Header.Get("Date")
-		}
-
-		// Default expiration for non presigned urls
-		expirationDuration = 5 * time.Minute
-
-		signedHeaders = strings.TrimSpace(authFields[1])
-		signedHeaders, found = strings.CutPrefix(signedHeaders, "SignedHeaders=")
-		if !found {
-			slog.DebugContext(r.Context(), "Authorization header does not contain SignedHeaders field")
-			return nil, false
-		}
-
-		signature = strings.TrimSpace(authFields[2])
-		signature, found = strings.CutPrefix(signature, "Signature=")
-		if !found {
-			slog.DebugContext(r.Context(), "Authorization header does not contain Signature field")
-			return nil, false
-		}
+		slog.DebugContext(r.Context(), "Using presigned auth query parameters")
+		return signatureParameters{
+			algorithm:          algorithm,
+			credential:         query.Get("X-Amz-Credential"),
+			timestamp:          query.Get("X-Amz-Date"),
+			expirationDuration: time.Duration(expires) * time.Second,
+			signedHeaders:      query.Get("X-Amz-SignedHeaders"),
+			signature:          query.Get("X-Amz-Signature"),
+			isPresigned:        true,
+		}, nil
 	}
 
-	accessKeyIdAndScope := strings.Split(credential, "/")
-	if len(accessKeyIdAndScope) != 5 {
-		slog.DebugContext(r.Context(), "Credential field does not contain exactly 5 parts")
+	slog.DebugContext(r.Context(), "Authorization header is present")
+	algorithm, fields, found := strings.Cut(authorizationHeader, " ")
+	if !found {
+		return signatureParameters{}, fmt.Errorf("Authorization header does not contain signature fields")
+	}
+	signatureAlgorithm, found := parseSignatureAlgorithm(algorithm)
+	if !found {
+		return signatureParameters{}, fmt.Errorf("Authorization header uses an unsupported signature algorithm")
+	}
+
+	authFields := strings.Split(fields, ",")
+	if len(authFields) != 3 {
+		return signatureParameters{}, fmt.Errorf("Authorization header does not contain exactly 3 fields")
+	}
+	credential, found := strings.CutPrefix(strings.TrimSpace(authFields[0]), "Credential=")
+	if !found {
+		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Credential field")
+	}
+	signedHeaders, found := strings.CutPrefix(strings.TrimSpace(authFields[1]), "SignedHeaders=")
+	if !found {
+		return signatureParameters{}, fmt.Errorf("Authorization header does not contain SignedHeaders field")
+	}
+	signature, found := strings.CutPrefix(strings.TrimSpace(authFields[2]), "Signature=")
+	if !found {
+		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Signature field")
+	}
+
+	timestamp := r.Header.Get("x-amz-date")
+	if timestamp == "" {
+		// Use the standard Date header if x-amz-date is not specified.
+		timestamp = r.Header.Get("Date")
+	}
+	return signatureParameters{
+		algorithm:          signatureAlgorithm,
+		credential:         credential,
+		timestamp:          timestamp,
+		expirationDuration: 5 * time.Minute,
+		signedHeaders:      signedHeaders,
+		signature:          signature,
+	}, nil
+}
+
+func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
+	now := time.Now().UTC()
+	contentEncodingHeader := r.Header.Get("Content-Encoding")
+	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
+
+	parameters, err := parseSignatureParameters(r)
+	if err != nil {
+		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+err.Error())
 		return nil, false
 	}
+
+	accessKeyIdAndScope := strings.Split(parameters.credential, "/")
+	regionSet := r.Header.Get("x-amz-region-set")
+	if parameters.isPresigned {
+		regionSet = r.URL.Query().Get("X-Amz-Region-Set")
+	}
+	scope, err := parameters.algorithm.parseCredentialScope(accessKeyIdAndScope, expectedRegion, regionSet)
+	if err != nil {
+		slog.DebugContext(r.Context(), "Invalid credential scope: "+err.Error())
+		return nil, false
+	}
+
 	accessKeyId := accessKeyIdAndScope[0]
 	foundIndex := slices.IndexFunc(validCredentials, func(c Credentials) bool {
 		return c.AccessKeyId == accessKeyId
@@ -459,44 +699,33 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		return nil, false
 	}
 	expectedCredentials := validCredentials[foundIndex]
-	date := accessKeyIdAndScope[1]
-	region := accessKeyIdAndScope[2]
-	if region != expectedRegion {
-		slog.DebugContext(r.Context(), "Region in credential does not match expected region")
-		return nil, false
-	}
-
-	service := accessKeyIdAndScope[3]
-	if service != expectedService {
+	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
 		return nil, false
 	}
-
-	request := accessKeyIdAndScope[4]
-	if request != expectedRequest {
+	if scope.request != expectedRequest {
 		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
 		return nil, false
 	}
 
-	parsedTimestamp, err := time.Parse("20060102T150405Z", timestamp)
+	parsedTimestamp, err := time.Parse("20060102T150405Z", parameters.timestamp)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
 		return nil, false
 	}
-	if date != parsedTimestamp.Format("20060102") {
+	if scope.date != parsedTimestamp.Format("20060102") {
 		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
 		return nil, false
 	}
-	scope := createScope(date, region, service, request)
 
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
-	expiredTimestamp := parsedTimestamp.Add(expirationDuration)
+	expiredTimestamp := parsedTimestamp.Add(parameters.expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
 		return nil, false
 	}
 
-	rawSignedHeadersArray := strings.Split(signedHeaders, ";")
+	rawSignedHeadersArray := strings.Split(parameters.signedHeaders, ";")
 	signedHeadersArray := make([]string, 0, len(rawSignedHeadersArray))
 	for _, signedHeader := range rawSignedHeadersArray {
 		signedHeader = strings.ToLower(strings.TrimSpace(signedHeader))
@@ -508,6 +737,10 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		slog.DebugContext(r.Context(), "Signed headers do not include host")
 		return nil, false
 	}
+	if err := parameters.algorithm.validateSignedHeaders(signedHeadersArray, parameters.isPresigned); err != nil {
+		slog.DebugContext(r.Context(), "Invalid signed headers: "+err.Error())
+		return nil, false
+	}
 	for headerKey := range r.Header {
 		headerKey = strings.ToLower(headerKey)
 		if mustBeSignedHeader(headerKey) && !slices.Contains(signedHeadersArray, headerKey) {
@@ -516,14 +749,17 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		}
 	}
 
-	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeadersArray, isPresigned)
+	stringToSign, err := generateStringToSign(r, parameters.timestamp, scope.value, signedHeadersArray, parameters.isPresigned, parameters.algorithm)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
 		return nil, false
 	}
-	signingKey := createSigningKey(expectedCredentials.SecretAccessKey, date, region, expectedService, expectedRequest)
-	calculatedSignature := createSignature(signingKey, *stringToSign)
-	isSignatureValid := subtle.ConstantTimeCompare([]byte(signature), []byte(calculatedSignature)) == 1
+	verifier, err := parameters.algorithm.newVerifier(accessKeyId, expectedCredentials.SecretAccessKey, scope)
+	if err != nil {
+		slog.DebugContext(r.Context(), "Failed to create signature verifier: "+err.Error())
+		return nil, false
+	}
+	isSignatureValid := verifier.verify(*stringToSign, parameters.signature)
 	if !isSignatureValid {
 		slog.DebugContext(r.Context(), "Signature does not match calculated signature")
 		return nil, false
@@ -531,6 +767,11 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 
 	if isAwsChunked {
 		slog.DebugContext(r.Context(), "Request is using AWS Chunked Transfer Encoding")
+		contentSHA256 := r.Header.Get(contentSHA256Header)
+		if !verifier.acceptsStreamingPayload(contentSHA256) {
+			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
+			return nil, false
+		}
 		// aws-chunked is a transport encoding, not object metadata: strip it
 		// whether it is the only encoding or the first of several.
 		contentEncodingHeader = stripAwsChunkedContentEncoding(contentEncodingHeader)
@@ -541,12 +782,11 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		}
 		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
 		r.Header.Del("x-amz-decoded-content-length")
-		contentSHA256 := r.Header.Get(contentSHA256Header)
-		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing
-		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing
+		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
+		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
 		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
-		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, calculatedSignature, signingKey, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
+		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
 	return &accessKeyId, isSignatureValid
@@ -562,7 +802,7 @@ type awsChunkReadCloser struct {
 	scope                          string
 	previousSignature              string
 	chunkHasher                    hash.Hash
-	signingKey                     []byte
+	verifier                       signatureVerifier
 	hasTrailingHeader              bool
 	hasTrailingHeaderWithSignature bool
 	skipChunkValidation            bool
@@ -570,7 +810,7 @@ type awsChunkReadCloser struct {
 	trailerHasher                  hash.Hash
 }
 
-func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, signingKey []byte, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
+func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
 	var trailerHasher hash.Hash
 	if hasTrailingHeader {
 		trailerHasher, _ = checksumutils.NewChecksumTrailerHash(trailerChecksumName)
@@ -585,7 +825,7 @@ func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp s
 		scope:                          scope,
 		previousSignature:              previousSignature,
 		chunkHasher:                    sha256.New(),
-		signingKey:                     signingKey,
+		verifier:                       verifier,
 		hasTrailingHeader:              hasTrailingHeader,
 		hasTrailingHeaderWithSignature: hasTrailingHeaderWithSignature,
 		skipChunkValidation:            skipChunkValidation,
@@ -595,16 +835,16 @@ func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp s
 }
 
 func (r *awsChunkReadCloser) validateSignature() error {
-	stringToSign := generateStringToSignForChunk(r.timestamp, r.scope, r.previousSignature, r.chunkHasher)
-	calculatedSignature := createSignature(r.signingKey, stringToSign)
-	isSignatureValid := subtle.ConstantTimeCompare([]byte(r.chunkSignature), []byte(calculatedSignature)) == 1
+	stringToSign := generateStringToSignForChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, r.chunkHasher)
+	normalizedSignature := r.verifier.normalizeStreamingSignature(r.chunkSignature)
+	isSignatureValid := r.verifier.verify(stringToSign, normalizedSignature)
 	if !isSignatureValid {
 		slog.DebugContext(r.ctx, "Chunk signature does not match calculated chunk signature")
 		return ErrChunkSignatureMismatch
 	}
 
 	r.chunkHasher.Reset()
-	r.previousSignature = r.chunkSignature
+	r.previousSignature = normalizedSignature
 	return nil
 }
 
@@ -700,9 +940,9 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				slog.DebugContext(r.ctx, "Validating trailing headers")
 
 				if r.hasTrailingHeaderWithSignature {
-					stringToSign := generateStringToSignForTrailerChunk(r.timestamp, r.scope, r.previousSignature, checksumHeader)
-					calculatedSignature := createSignature(r.signingKey, stringToSign)
-					isSignatureValid := subtle.ConstantTimeCompare([]byte(trailerSignature), []byte(calculatedSignature)) == 1
+					stringToSign := generateStringToSignForTrailerChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, checksumHeader)
+					trailerSignature = r.verifier.normalizeStreamingSignature(trailerSignature)
+					isSignatureValid := r.verifier.verify(stringToSign, trailerSignature)
 					if !isSignatureValid {
 						slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
 						return 0, ErrChunkSignatureMismatch

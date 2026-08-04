@@ -19,7 +19,7 @@ func BenchmarkGenerateStringToSign(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		_, err := generateStringToSign(r, "20130524T000000Z", "20130524/us-east-1/s3/aws4_request", headersToInclude, false)
+		_, err := generateStringToSign(r, "20130524T000000Z", "20130524/us-east-1/s3/aws4_request", headersToInclude, false, signatureAlgorithmV4)
 		if err != nil {
 			b.Fatal(err)
 		}
