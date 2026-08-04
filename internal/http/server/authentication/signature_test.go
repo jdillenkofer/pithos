@@ -3,6 +3,13 @@ package authentication
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,6 +19,12 @@ import (
 
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	sigV4aTestAccessKey = "AKISORANDOMAASORANDOM"
+	sigV4aTestSecretKey = "q+jcrXGc+0zWN6uzclKVhvMmUsIfRPa4rlRandom"
 )
 
 func TestCreateSignature(t *testing.T) {
@@ -49,7 +62,7 @@ func TestCreateSignatureFromRequest(t *testing.T) {
 
 	isPresigned := false
 
-	stringToSign, err := generateStringToSign(r, date+"T000000Z", scope, []string{"host", "range", "x-amz-content-sha256", "x-amz-date"}, isPresigned)
+	stringToSign, err := generateStringToSign(r, date+"T000000Z", scope, []string{"host", "range", "x-amz-content-sha256", "x-amz-date"}, isPresigned, signatureAlgorithmV4)
 	assert.NoError(t, err)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n7344ae5b7ee6c3e7e6b0fe0640412a37625d1fbfff95c48bbb2dc43964946972", *stringToSign)
 
@@ -94,7 +107,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	isPresigned := false
 
 	timestamp := date + "T000000Z"
-	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "content-length", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class"}, isPresigned)
+	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "content-length", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class"}, isPresigned, signatureAlgorithmV4)
 	assert.NoError(t, err)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\ncee3fed04b70f867d036f722359b0b1f2f0e5dc0efadbc082b76c4c60e316455", *stringToSign)
 
@@ -104,7 +117,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	hasTrailingHeader := false
 	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "")
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -154,7 +167,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	isPresigned := false
 
 	timestamp := date + "T000000Z"
-	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class", "x-amz-trailer"}, isPresigned)
+	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"content-encoding", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-storage-class", "x-amz-trailer"}, isPresigned, signatureAlgorithmV4)
 	assert.NoError(t, err)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n44d48b8c2f70eae815a0198cc73d7a546a73a93359c070abbaa5e6c7de112559", *stringToSign)
 
@@ -164,7 +177,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	hasTrailingHeader := true
 	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, signingKey, hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c")
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -197,7 +210,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeaderWithoutBlankLin
 	signingKey := createSigningKey(secretAccessKey, "20130524", "us-east-1", "s3", "aws4_request")
 	seedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, signingKey, true, true, false, "x-amz-checksum-crc32c")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, newSigV4Verifier(signingKey), true, true, false, "x-amz-checksum-crc32c")
 
 	data, err := io.ReadAll(body)
 	assert.NoError(t, err)
@@ -235,7 +248,7 @@ func TestAwsChunkedContentEncodingHelpers(t *testing.T) {
 // STREAMING-UNSIGNED-PAYLOAD-TRAILER format, where chunks carry no signatures
 // and only the trailer checksum is validated.
 func newUnsignedTrailerChunkReader(content string, trailerName string) io.ReadCloser {
-	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", nil, true, false, true, trailerName)
+	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, trailerName)
 }
 
 func TestAwsChunkReaderValidatesUnsignedTrailerChecksum(t *testing.T) {
@@ -314,7 +327,7 @@ func TestCreateSignatureFromPresignedRequest(t *testing.T) {
 
 	isPresigned := true
 
-	stringToSign, err := generateStringToSign(r, date+"T000000Z", scope, []string{"host"}, isPresigned)
+	stringToSign, err := generateStringToSign(r, date+"T000000Z", scope, []string{"host"}, isPresigned, signatureAlgorithmV4)
 	assert.NoError(t, err)
 	assert.Equal(t, "AWS4-HMAC-SHA256\n20130524T000000Z\n20130524/us-east-1/s3/aws4_request\n3bfa292879f6447bbcda7001decf97f4a54dc650c8942174ae0a9121cf58ad04", *stringToSign)
 
@@ -338,14 +351,14 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	r, err := http.NewRequest(http.MethodGet, "http://examplebucket.s3.amazonaws.com/test.txt", nil)
 	assert.NoError(t, err)
 	query := r.URL.Query()
-	query.Set("X-Amz-Algorithm", signatureAlgorithm)
+	query.Set("X-Amz-Algorithm", signatureAlgorithmV4)
 	query.Set("X-Amz-Credential", accessKeyID+"/"+scope)
 	query.Set("X-Amz-Date", timestamp)
 	query.Set("X-Amz-Expires", "604800")
 	query.Set("X-Amz-SignedHeaders", "host")
 	r.URL.RawQuery = query.Encode()
 
-	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"host"}, true)
+	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"host"}, true, signatureAlgorithmV4)
 	assert.NoError(t, err)
 	signingKey := createSigningKey(secretAccessKey, date, region, expectedService, expectedRequest)
 	query.Set("X-Amz-Signature", createSignature(signingKey, *stringToSign))
@@ -485,4 +498,219 @@ func TestGenerateCanonicalURIEncodesInvalidPercentSequences(t *testing.T) {
 
 	canonicalURI := generateCanonicalURI(r)
 	assert.Equal(t, "/photos/%25zz/sample", canonicalURI)
+}
+
+func TestDeriveSigV4aPrivateKeyMatchesAWSSDK(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	privateKey, err := deriveSigV4aPrivateKey(sigV4aTestAccessKey, sigV4aTestSecretKey)
+	require.NoError(t, err)
+
+	assert.Equal(t, "15d242ceebf8d8169fd6a8b5a746c41140414c3b07579038da06af89190fffcb", privateKey.X.Text(16))
+	assert.Equal(t, "515242cedd82e94799482e4c0514b505afccf2c0c98d6a553bf539f424c5ec0", privateKey.Y.Text(16))
+}
+
+func TestVerifySigV4aRequestSignedByAWSSDK(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r, err := http.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?foo=bar", nil)
+	require.NoError(t, err)
+	r.Body = io.NopCloser(strings.NewReader(""))
+	r.Header.Set(contentSHA256Header, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	r.Header.Set("x-amz-date", "20250102T030405Z")
+	r.Header.Set("x-amz-region-set", "eu-central-1,us-west-*")
+
+	scope := createSigV4aScope("20250102", expectedService, expectedRequest)
+	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date", "x-amz-region-set"}
+	stringToSign, err := generateStringToSign(r, "20250102T030405Z", scope, signedHeaders, false, signatureAlgorithmV4a)
+	require.NoError(t, err)
+
+	publicKey, err := deriveSigV4aPublicKey(sigV4aTestAccessKey, sigV4aTestSecretKey)
+	require.NoError(t, err)
+	// Generated by github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.32.
+	signature := "3045022077ba5b0d7900c35abf41256f3c7030dee504231989f0bb1ffa0ff074d543c9d9022100f67c433ff715e91d3ee04c3244cd1e339b3479eb8522a9fdf9c45f82918a5dbe"
+	assert.True(t, verifySigV4aSignature(publicKey, *stringToSign, signature))
+	assert.False(t, verifySigV4aSignature(publicKey, *stringToSign+"tampered", signature))
+	assert.False(t, verifySigV4aSignature(publicKey, *stringToSign, signature+"**"))
+}
+
+func TestVerifyPresignedSigV4aRequestSignedByAWSSDK(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	signedURL := "https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-ECDSA-P256-SHA256&X-Amz-Credential=AKISORANDOMAASORANDOM%2F20250102%2Fs3%2Faws4_request&X-Amz-Date=20250102T030405Z&X-Amz-Expires=3600&X-Amz-Region-Set=eu-central-1%2Cus-west-%2A&X-Amz-SignedHeaders=host&foo=bar&X-Amz-Signature=3046022100f391173626ef340486cb9b03eb8390f32227eda713fb2a37e6d24ce8512e25120221009da4aa5214cbc05f4ec8eb3b8195af6cf747db16e7d590dd2b0428c214c2986e"
+	r, err := http.NewRequest(http.MethodGet, signedURL, nil)
+	require.NoError(t, err)
+
+	scope := createSigV4aScope("20250102", expectedService, expectedRequest)
+	stringToSign, err := generateStringToSign(r, "20250102T030405Z", scope, []string{"host"}, true, signatureAlgorithmV4a)
+	require.NoError(t, err)
+	publicKey, err := deriveSigV4aPublicKey(sigV4aTestAccessKey, sigV4aTestSecretKey)
+	require.NoError(t, err)
+
+	assert.True(t, verifySigV4aSignature(publicKey, *stringToSign, r.URL.Query().Get("X-Amz-Signature")))
+}
+
+func TestRegionSetIncludes(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name           string
+		regionSet      string
+		expectedRegion string
+		want           bool
+	}{
+		{name: "exact", regionSet: "eu-central-1", expectedRegion: "eu-central-1", want: true},
+		{name: "list", regionSet: "us-east-1, eu-central-1", expectedRegion: "eu-central-1", want: true},
+		{name: "wildcard suffix", regionSet: "eu-*", expectedRegion: "eu-central-1", want: true},
+		{name: "all regions", regionSet: "*", expectedRegion: "eu-central-1", want: true},
+		{name: "wrong region", regionSet: "us-east-1,us-west-*", expectedRegion: "eu-central-1", want: false},
+		{name: "empty", regionSet: "", expectedRegion: "eu-central-1", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, regionSetIncludes(tt.regionSet, tt.expectedRegion))
+		})
+	}
+}
+
+func TestCheckAuthenticationAcceptsSigV4aHeader(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r := newSignedSigV4aHeaderRequest(t, "eu-central-1,us-west-*")
+	usedAccessKeyID, authenticated := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+
+	assert.True(t, authenticated)
+	if assert.NotNil(t, usedAccessKeyID) {
+		assert.Equal(t, sigV4aTestAccessKey, *usedAccessKeyID)
+	}
+}
+
+func TestCheckAuthenticationRejectsSigV4aHeaderOutsideRegionSet(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r := newSignedSigV4aHeaderRequest(t, "us-east-1,us-west-*")
+	_, authenticated := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	assert.False(t, authenticated)
+}
+
+func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	signingTime := time.Now().UTC().Truncate(time.Second)
+	timestamp := signingTime.Format("20060102T150405Z")
+	scope := createSigV4aScope(signingTime.Format("20060102"), expectedService, expectedRequest)
+	r, err := http.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt?foo=bar", nil)
+	require.NoError(t, err)
+
+	query := r.URL.Query()
+	query.Set("X-Amz-Algorithm", signatureAlgorithmV4a)
+	query.Set("X-Amz-Credential", sigV4aTestAccessKey+"/"+scope)
+	query.Set("X-Amz-Date", timestamp)
+	query.Set("X-Amz-Expires", "3600")
+	query.Set("X-Amz-Region-Set", "eu-central-1,us-west-*")
+	query.Set("X-Amz-SignedHeaders", "host")
+	r.URL.RawQuery = query.Encode()
+
+	stringToSign, err := generateStringToSign(r, timestamp, scope, []string{"host"}, true, signatureAlgorithmV4a)
+	require.NoError(t, err)
+	query.Set("X-Amz-Signature", signSigV4aString(t, *stringToSign))
+	r.URL.RawQuery = query.Encode()
+
+	usedAccessKeyID, authenticated := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	assert.True(t, authenticated)
+	if assert.NotNil(t, usedAccessKeyID) {
+		assert.Equal(t, sigV4aTestAccessKey, *usedAccessKeyID)
+	}
+}
+
+func TestCheckAuthenticationValidatesSigV4aStreamingPayloadAndTrailer(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	payload := []byte("hello")
+	signingTime := time.Now().UTC().Truncate(time.Second)
+	timestamp := signingTime.Format("20060102T150405Z")
+	scope := createSigV4aScope(signingTime.Format("20060102"), expectedService, expectedRequest)
+	r, err := http.NewRequest(http.MethodPut, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
+	require.NoError(t, err)
+	r.Header.Set("Content-Encoding", contentEncodingAwsChunked)
+	r.Header.Set(contentSHA256Header, contentSHA256StreamingECDSAPayloadTrailing)
+	r.Header.Set("x-amz-date", timestamp)
+	r.Header.Set("x-amz-decoded-content-length", "5")
+	r.Header.Set("x-amz-region-set", "eu-*")
+	r.Header.Set(trailerHeader, "x-amz-checksum-crc32")
+
+	signedHeaders := []string{"content-encoding", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length", "x-amz-region-set", "x-amz-trailer"}
+	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeaders, false, signatureAlgorithmV4a)
+	require.NoError(t, err)
+	seedSignature := signSigV4aString(t, *stringToSign)
+	r.Header.Set("Authorization", signatureAlgorithmV4a+" Credential="+sigV4aTestAccessKey+"/"+scope+",SignedHeaders="+strings.Join(signedHeaders, ";")+",Signature="+seedSignature)
+
+	chunkHasher := sha256.New()
+	_, err = chunkHasher.Write(payload)
+	require.NoError(t, err)
+	chunkStringToSign := generateStringToSignForChunk(signatureAlgorithmV4a, timestamp, scope, seedSignature, chunkHasher)
+	chunkSignature := signPaddedSigV4aString(t, chunkStringToSign)
+
+	emptyHasher := sha256.New()
+	verifier := signatureVerifier{algorithm: signatureAlgorithmV4a}
+	zeroChunkStringToSign := generateStringToSignForChunk(signatureAlgorithmV4a, timestamp, scope, verifier.normalizeStreamingSignature(chunkSignature), emptyHasher)
+	zeroChunkSignature := signPaddedSigV4aString(t, zeroChunkStringToSign)
+
+	checksumBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBytes, crc32.ChecksumIEEE(payload))
+	checksumHeader := "x-amz-checksum-crc32:" + base64.StdEncoding.EncodeToString(checksumBytes)
+	trailerStringToSign := generateStringToSignForTrailerChunk(signatureAlgorithmV4a, timestamp, scope, verifier.normalizeStreamingSignature(zeroChunkSignature), checksumHeader)
+	trailerSignature := signPaddedSigV4aString(t, trailerStringToSign)
+
+	encodedBody := "5;chunk-signature=" + chunkSignature + "\r\n" + string(payload) + "\r\n" +
+		"0;chunk-signature=" + zeroChunkSignature + "\r\n" + checksumHeader + "\r\n" +
+		"x-amz-trailer-signature:" + trailerSignature + "\r\n\r\n"
+	r.Body = io.NopCloser(strings.NewReader(encodedBody))
+
+	_, authenticated := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	require.True(t, authenticated)
+	decodedPayload, err := io.ReadAll(r.Body)
+	require.NoError(t, err)
+	assert.Equal(t, payload, decodedPayload)
+}
+
+func newSignedSigV4aHeaderRequest(t *testing.T, regionSet string) *http.Request {
+	t.Helper()
+
+	signingTime := time.Now().UTC().Truncate(time.Second)
+	timestamp := signingTime.Format("20060102T150405Z")
+	scope := createSigV4aScope(signingTime.Format("20060102"), expectedService, expectedRequest)
+	r, err := http.NewRequest(http.MethodGet, "https://examplebucket.s3.amazonaws.com/test.txt", nil)
+	require.NoError(t, err)
+	r.Body = io.NopCloser(strings.NewReader(""))
+	r.Header.Set(contentSHA256Header, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	r.Header.Set("x-amz-date", timestamp)
+	r.Header.Set("x-amz-region-set", regionSet)
+	signedHeaders := []string{"host", "x-amz-content-sha256", "x-amz-date", "x-amz-region-set"}
+	stringToSign, err := generateStringToSign(r, timestamp, scope, signedHeaders, false, signatureAlgorithmV4a)
+	require.NoError(t, err)
+	r.Header.Set("Authorization", signatureAlgorithmV4a+" Credential="+sigV4aTestAccessKey+"/"+scope+",SignedHeaders="+strings.Join(signedHeaders, ";")+",Signature="+signSigV4aString(t, *stringToSign))
+	return r
+}
+
+func signSigV4aString(t *testing.T, stringToSign string) string {
+	t.Helper()
+	privateKey, err := deriveSigV4aPrivateKey(sigV4aTestAccessKey, sigV4aTestSecretKey)
+	require.NoError(t, err)
+	digest := sha256.Sum256([]byte(stringToSign))
+	signature, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	require.NoError(t, err)
+	return hex.EncodeToString(signature)
+}
+
+func signPaddedSigV4aString(t *testing.T, stringToSign string) string {
+	t.Helper()
+	signature := signSigV4aString(t, stringToSign)
+	require.LessOrEqual(t, len(signature), 144)
+	return signature + strings.Repeat("*", 144-len(signature))
+}
+
+func sigV4aTestCredentials() []Credentials {
+	return []Credentials{{AccessKeyId: sigV4aTestAccessKey, SecretAccessKey: sigV4aTestSecretKey}}
 }
