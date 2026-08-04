@@ -3,12 +3,11 @@ package signing
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"os"
-
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 )
 
 func LoadEd25519PublicKey(input string) (ed25519.PublicKey, error) {
@@ -37,28 +36,28 @@ func LoadEd25519PrivateKey(input string) (ed25519.PrivateKey, error) {
 	return ed25519.PrivateKey(data), nil
 }
 
-func LoadMlDsa87PublicKey(input string) (*mldsa87.PublicKey, error) {
+func LoadMlDsa87PublicKey(input string) (*mldsa.PublicKey, error) {
 	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
 
-	pub := &mldsa87.PublicKey{}
-	if err := pub.UnmarshalBinary(data); err != nil {
+	pub, err := mldsa.NewPublicKey(mldsa.MLDSA87(), data)
+	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ML-DSA public key: %w", err)
 	}
 	return pub, nil
 }
 
-func LoadMlDsa87PrivateKey(input string) (*mldsa87.PrivateKey, error) {
+func LoadMlDsa87PrivateKey(input string) (*mldsa.PrivateKey, error) {
 	data, err := loadKeyData(input)
 	if err != nil {
 		return nil, err
 	}
 
-	priv := &mldsa87.PrivateKey{}
-	if err := priv.UnmarshalBinary(data); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ML-DSA private key: %w", err)
+	priv, err := mldsa.NewPrivateKey(mldsa.MLDSA87(), data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal ML-DSA private key: %w; Go 1.27 requires a 32-byte seed, so legacy CIRCL keys must be regenerated", err)
 	}
 	return priv, nil
 }
@@ -100,11 +99,9 @@ func GenerateEd25519KeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 }
 
 func GenerateMlDsa87KeyPair() ([]byte, []byte, error) {
-	pub, priv, err := mldsa87.GenerateKey(nil)
+	priv, err := mldsa.GenerateKey(mldsa.MLDSA87())
 	if err != nil {
 		return nil, nil, err
 	}
-	pubBytes, _ := pub.MarshalBinary()
-	privBytes, _ := priv.MarshalBinary()
-	return pubBytes, privBytes, nil
+	return priv.PublicKey().Bytes(), priv.Bytes(), nil
 }
