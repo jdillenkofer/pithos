@@ -39,7 +39,20 @@ Build and run Pithos using Docker:
 
 ```sh
 docker build -t pithos .
-docker run -p 9000:9000 -v $(pwd)/data:/data pithos
+docker run -p 9000:9000 -p 9090:9090 -v $(pwd)/data:/data pithos
+```
+
+The same `/data` mount can persist managed certificates. For example, after
+forwarding public ports 80/443 to container ports 9000/9443:
+
+```sh
+docker run -p 9000:9000 -p 9443:9443 \
+  -v $(pwd)/data:/data \
+  -e PITHOS_HTTPS_ENABLED=true \
+  -e PITHOS_ACME_ENABLED=true \
+  -e PITHOS_ACME_DOMAINS=s3.example.com \
+  -e PITHOS_ACME_CACHE_DIR=/data/acme \
+  pithos
 ```
 
 The image uses `/tmp` for temporary spool files by default. For large uploads,

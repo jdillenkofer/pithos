@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +38,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
+	"github.com/jdillenkofer/pithos/internal/tlsmanager"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -149,6 +151,9 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	if err != nil {
 		return fmt.Errorf("load settings: %w", err)
 	}
+	if err := settings.Validate(); err != nil {
+		return fmt.Errorf("validate settings: %w", err)
+	}
 	ioutils.SetSpoolDir(settings.SpoolDir())
 
 	// Set up OpenTelemetry.
@@ -168,6 +173,14 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 
 	logLevel := settings.LogLevel()
 	logLevelVar.Set(logLevel)
+
+	certificateManager, err := tlsmanager.New(settings)
+	if err != nil {
+		return fmt.Errorf("set up TLS: %w", err)
+	}
+	if certificateManager != nil {
+		defer certificateManager.Close()
+	}
 
 	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath(), prometheus.DefaultRegisterer)
 
@@ -204,51 +217,123 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	}
 
 	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
-	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
-	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
-	// storage.MaxEntitySize, and a global timeout would impose that deadline on
-	// the entire request body and abort otherwise healthy large or slow uploads.
-	httpServer := &http.Server{
-		BaseContext:       func(net.Listener) context.Context { return ctx },
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
+	monitoringHandler := server.SetupMonitoringServer(dbs)
+	type serverBinding struct {
+		name     string
+		scheme   string
+		server   *http.Server
+		listener net.Listener
 	}
-
-	var httpMonitoringServer *http.Server
-	if settings.MonitoringPortEnabled() {
-		monitoringHandler := server.SetupMonitoringServer(dbs)
-		monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
-		httpMonitoringServer = &http.Server{
+	newServer := func(addr string, serverHandler http.Handler, monitoring bool) *http.Server {
+		// S3 listeners intentionally have no ReadTimeout: a global deadline
+		// would abort otherwise healthy large or slow object uploads.
+		readTimeout := time.Duration(0)
+		if monitoring {
+			readTimeout = monitoringReadTimeout
+		}
+		return &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
-			Addr:              monitoringAddr,
-			Handler:           monitoringHandler,
+			Addr:              addr,
+			Handler:           serverHandler,
 			ReadHeaderTimeout: readHeaderTimeout,
-			ReadTimeout:       monitoringReadTimeout,
+			ReadTimeout:       readTimeout,
 			WriteTimeout:      writeTimeout,
 			IdleTimeout:       idleTimeout,
 			MaxHeaderBytes:    maxHeaderBytes,
 		}
 	}
+	address := func(port int) string {
+		return net.JoinHostPort(settings.BindAddress(), strconv.Itoa(port))
+	}
 
-	serverErrors := make(chan error, 2)
-	startServer := func(name string, httpServer *http.Server) {
+	var bindings []*serverBinding
+	addBinding := func(name, scheme string, port int, serverHandler http.Handler, monitoring bool) {
+		if scheme == "http" && certificateManager != nil {
+			serverHandler = certificateManager.HTTPChallengeHandler(serverHandler)
+		}
+		bindings = append(bindings, &serverBinding{
+			name:   name,
+			scheme: scheme,
+			server: newServer(address(port), serverHandler, monitoring),
+		})
+	}
+	if settings.HTTPEnabled() {
+		addBinding("s3 api", "http", settings.Port(), handler, false)
+	}
+	if settings.HTTPSEnabled() {
+		addBinding("s3 api", "https", settings.HTTPSPort(), handler, false)
+	}
+	if settings.MonitoringPortEnabled() {
+		addBinding("monitoring api", "http", settings.MonitoringPort(), monitoringHandler, true)
+	}
+	if settings.MonitoringHTTPSEnabled() {
+		addBinding("monitoring api", "https", settings.MonitoringHTTPSPort(), monitoringHandler, true)
+	}
+
+	// Bind every configured socket before any server begins accepting requests.
+	// This makes duplicate/in-use addresses a synchronous startup error.
+	for _, binding := range bindings {
+		listener, listenErr := net.Listen("tcp", binding.server.Addr)
+		if listenErr != nil {
+			for _, opened := range bindings {
+				if opened.listener != nil {
+					_ = opened.listener.Close()
+				}
+			}
+			return fmt.Errorf("bind %s %s listener at %s: %w", binding.name, binding.scheme, binding.server.Addr, listenErr)
+		}
+		binding.listener = listener
+		binding.server.Addr = listener.Addr().String()
+	}
+
+	serverErrors := make(chan error, len(bindings))
+	for _, binding := range bindings {
+		binding := binding
 		go func() {
-			slog.Info("Listening", "server", name, "address", "http://"+httpServer.Addr)
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverErrors <- fmt.Errorf("%s server: %w", name, err)
+			slog.Info("Listening", "server", binding.name, "address", binding.scheme+"://"+binding.server.Addr)
+			var serveErr error
+			if binding.scheme == "https" {
+				binding.server.TLSConfig = certificateManager.TLSConfig()
+				// ServeTLS configures HTTP/2 and accepts the already-bound
+				// listener. Certificate selection comes from TLSConfig.
+				serveErr = binding.server.ServeTLS(binding.listener, "", "")
+			} else {
+				serveErr = binding.server.Serve(binding.listener)
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				serverErrors <- fmt.Errorf("%s %s server: %w", binding.name, binding.scheme, serveErr)
 			}
 		}()
 	}
 
-	startServer("s3 api", httpServer)
-	servers := []*http.Server{httpServer}
-	if httpMonitoringServer != nil {
-		startServer("monitoring api", httpMonitoringServer)
-		servers = append(servers, httpMonitoringServer)
+	// Challenge-capable listeners must be live while initial ACME issuance runs.
+	// ManageSync guarantees that every configured name has a usable certificate
+	// (newly issued or loaded from the persistent cache) before startup succeeds.
+	if certificateManager != nil {
+		manageCtx, cancelManage := context.WithCancel(ctx)
+		manageResult := make(chan error, 1)
+		go func() {
+			manageResult <- certificateManager.ManageSync(manageCtx)
+		}()
+		var manageErr error
+		select {
+		case manageErr = <-manageResult:
+		case serverErr := <-serverErrors:
+			cancelManage()
+			manageErr = errors.Join(serverErr, <-manageResult)
+		}
+		cancelManage()
+		if manageErr != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+			defer cancel()
+			var cleanupErrors []error
+			for _, binding := range bindings {
+				if shutdownErr := binding.server.Shutdown(shutdownCtx); shutdownErr != nil {
+					cleanupErrors = append(cleanupErrors, shutdownErr)
+				}
+			}
+			return errors.Join(append([]error{manageErr}, cleanupErrors...)...)
+		}
 	}
 
 	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -265,11 +350,11 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 	defer cancelShutdown()
 	var shutdownErrors []error
-	for _, srv := range servers {
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("shut down %s: %w", srv.Addr, err))
-			if closeErr := srv.Close(); closeErr != nil {
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("close %s: %w", srv.Addr, closeErr))
+	for _, binding := range bindings {
+		if err := binding.server.Shutdown(shutdownCtx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("shut down %s: %w", binding.server.Addr, err))
+			if closeErr := binding.server.Close(); closeErr != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("close %s: %w", binding.server.Addr, closeErr))
 			}
 		}
 	}

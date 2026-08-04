@@ -12,8 +12,16 @@ const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
+const defaultHTTPEnabled = true
+const defaultHTTPSEnabled = false
+const defaultHTTPSPort = 9443
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
+const defaultMonitoringHTTPSEnabled = false
+const defaultMonitoringHTTPSPort = 9444
+const defaultACMEEnabled = false
+const defaultACMECADirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
+const defaultACMEChallenge = "auto"
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultSpoolDir = ""
@@ -31,24 +39,38 @@ type Credentials struct {
 }
 
 type Settings struct {
-	authenticationEnabled *bool         `mergable:""`
-	credentials           []Credentials `mergable:""`
-	region                *string       `mergable:""`
-	domain                *string       `mergable:""`
-	websiteDomain         *string       `mergable:""`
-	bindAddress           *string       `mergable:""`
-	port                  *int          `mergable:""`
-	monitoringPort        *int          `mergable:""`
-	monitoringPortEnabled *bool         `mergable:""`
-	storageJsonPath       *string       `mergable:""`
-	authorizerPath        *string       `mergable:""`
-	spoolDir              *string       `mergable:""`
-	trustForwardedHeaders *bool         `mergable:""`
-	trustedProxyCIDRs     []string      `mergable:""`
-	logLevel              *string       `mergable:""`
-	otelEnabled           *bool         `mergable:""`
-	otelExporter          *string       `mergable:""`
-	otelEndpoint          *string       `mergable:""`
+	authenticationEnabled  *bool         `mergable:""`
+	credentials            []Credentials `mergable:""`
+	region                 *string       `mergable:""`
+	domain                 *string       `mergable:""`
+	websiteDomain          *string       `mergable:""`
+	bindAddress            *string       `mergable:""`
+	port                   *int          `mergable:""`
+	httpEnabled            *bool         `mergable:""`
+	httpsEnabled           *bool         `mergable:""`
+	httpsPort              *int          `mergable:""`
+	monitoringPort         *int          `mergable:""`
+	monitoringPortEnabled  *bool         `mergable:""`
+	monitoringHttpsEnabled *bool         `mergable:""`
+	monitoringHttpsPort    *int          `mergable:""`
+	tlsCertFile            *string       `mergable:""`
+	tlsKeyFile             *string       `mergable:""`
+	acmeEnabled            *bool         `mergable:""`
+	acmeDomains            []string      `mergable:""`
+	acmeEmail              *string       `mergable:""`
+	acmeCacheDir           *string       `mergable:""`
+	acmeCADirectoryURL     *string       `mergable:""`
+	acmeChallenge          *string       `mergable:""`
+	acmeDNSProvider        *string       `mergable:""`
+	storageJsonPath        *string       `mergable:""`
+	authorizerPath         *string       `mergable:""`
+	spoolDir               *string       `mergable:""`
+	trustForwardedHeaders  *bool         `mergable:""`
+	trustedProxyCIDRs      []string      `mergable:""`
+	logLevel               *string       `mergable:""`
+	otelEnabled            *bool         `mergable:""`
+	otelExporter           *string       `mergable:""`
+	otelEndpoint           *string       `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -92,12 +114,71 @@ func (s *Settings) Port() int {
 	return valueOrDefault(s.port, defaultPort)
 }
 
+func (s *Settings) HTTPEnabled() bool {
+	return valueOrDefault(s.httpEnabled, defaultHTTPEnabled)
+}
+
+func (s *Settings) HTTPSEnabled() bool {
+	return valueOrDefault(s.httpsEnabled, defaultHTTPSEnabled)
+}
+
+func (s *Settings) HTTPSPort() int {
+	return valueOrDefault(s.httpsPort, defaultHTTPSPort)
+}
+
 func (s *Settings) MonitoringPort() int {
 	return valueOrDefault(s.monitoringPort, defaultMonitoringPort)
 }
 
 func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
+}
+
+func (s *Settings) MonitoringHTTPSEnabled() bool {
+	return valueOrDefault(s.monitoringHttpsEnabled, defaultMonitoringHTTPSEnabled)
+}
+
+func (s *Settings) MonitoringHTTPSPort() int {
+	return valueOrDefault(s.monitoringHttpsPort, defaultMonitoringHTTPSPort)
+}
+
+func (s *Settings) TLSCertFile() string {
+	return valueOrDefault(s.tlsCertFile, "")
+}
+
+func (s *Settings) TLSKeyFile() string {
+	return valueOrDefault(s.tlsKeyFile, "")
+}
+
+func (s *Settings) ACMEEnabled() bool {
+	return valueOrDefault(s.acmeEnabled, defaultACMEEnabled)
+}
+
+func (s *Settings) ACMEDomains() []string {
+	if s.acmeDomains == nil {
+		return []string{}
+	}
+	return s.acmeDomains
+}
+
+func (s *Settings) ACMEEmail() string {
+	return valueOrDefault(s.acmeEmail, "")
+}
+
+func (s *Settings) ACMECacheDir() string {
+	return valueOrDefault(s.acmeCacheDir, "")
+}
+
+func (s *Settings) ACMECADirectoryURL() string {
+	return valueOrDefault(s.acmeCADirectoryURL, defaultACMECADirectoryURL)
+}
+
+func (s *Settings) ACMEChallenge() string {
+	return strings.ToLower(strings.TrimSpace(valueOrDefault(s.acmeChallenge, defaultACMEChallenge)))
+}
+
+func (s *Settings) ACMEDNSProvider() string {
+	return strings.ToLower(strings.TrimSpace(valueOrDefault(s.acmeDNSProvider, "")))
 }
 
 func (s *Settings) StorageJsonPath() string {
@@ -187,7 +268,7 @@ func (s *Settings) merge(other *Settings) {
 		sField := sStruct.FieldByName(field.Name)
 		otherField := otherStruct.FieldByName(field.Name)
 
-		if field.Type.Kind() == reflect.Pointer {
+		if field.Type.Kind() == reflect.Pointer || field.Type.Kind() == reflect.Slice {
 			otherFieldValue := getUnexportedField(otherField)
 			if !isNilish(otherFieldValue) {
 				setUnexportedField(sField, otherFieldValue)
