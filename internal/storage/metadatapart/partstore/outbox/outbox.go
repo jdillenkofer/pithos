@@ -312,7 +312,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 // any database transaction. Stores that cannot write tx-free retain the
 // transactional fallback for compatibility.
 func (obs *outboxPartStore) replayPutPart(ctx context.Context, entry *partOutboxEntry.Entity) error {
-	if !partstore.SupportsTxFreePutPart(obs.innerPartStore) {
+	if !partstore.CapabilitiesOf(obs.innerPartStore).Has(partstore.CapabilityTxFreePutPart) {
 		return database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			return obs.innerPartStore.PutPart(ctx, tx, entry.PartId, &lazyOutboxChunkReadCloser{
 				ctx: ctx, tx: tx, repo: obs.partOutboxEntryRepository, outboxId: obs.outboxId, entryId: *entry.Id,
@@ -339,7 +339,7 @@ func (obs *outboxPartStore) replayPutPart(ctx context.Context, entry *partOutbox
 }
 
 func (obs *outboxPartStore) replayDeletePart(ctx context.Context, entry *partOutboxEntry.Entity) error {
-	if partstore.SupportsTxFreeDeletePart(obs.innerPartStore) {
+	if partstore.CapabilitiesOf(obs.innerPartStore).Has(partstore.CapabilityTxFreeDeletePart) {
 		return obs.innerPartStore.DeletePart(ctx, nil, entry.PartId)
 	}
 	return database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -469,13 +469,11 @@ func (obs *outboxPartStore) PutPart(ctx context.Context, tx database.Tx, partId 
 	return nil
 }
 
-// SupportsTxFreeGetPart reports whether GetPart works without an ambient
-// transaction. The outbox lookup itself runs in a short internal transaction
-// when tx is nil (and, in the rare case that the part is still pending in the
-// outbox, that transaction is bound to the returned reader), so support only
-// depends on the inner store.
-func (obs *outboxPartStore) SupportsTxFreeGetPart() bool {
-	return partstore.SupportsTxFreeGetPart(obs.innerPartStore)
+// Capabilities advertises tx-free reads when the inner store supports them.
+// Outbox writes and deletes still require an ambient transaction.
+func (obs *outboxPartStore) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(obs.innerPartStore) &
+		partstore.NewCapabilities(partstore.CapabilityTxFreeGetPart)
 }
 
 func (obs *outboxPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {

@@ -372,12 +372,13 @@ func (s *gdrivePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	return nil
 }
 
-// SupportsTxFreeGetPart reports that GetPart never uses the transaction.
-func (s *gdrivePartStore) SupportsTxFreeGetPart() bool {
-	return true
+func (s *gdrivePartStore) Capabilities() partstore.Capabilities {
+	return partstore.NewCapabilities(
+		partstore.CapabilityTxFreeGetPart,
+		partstore.CapabilityTxFreePutPart,
+		partstore.CapabilityTxFreeDeletePart,
+	)
 }
-
-func (s *gdrivePartStore) SupportsTxFreePutPart() bool { return true }
 
 func (s *gdrivePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "gdrivePartStore.GetPart")
@@ -560,8 +561,6 @@ func (s *gdrivePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 	partName := s.getPartName(partId)
 	return s.deleteAllFilesByName(ctx, partName)
 }
-
-func (s *gdrivePartStore) SupportsTxFreeDeletePart() bool { return true }
 
 func isNotFoundError(err error) bool {
 	var apiErr *googleapi.Error

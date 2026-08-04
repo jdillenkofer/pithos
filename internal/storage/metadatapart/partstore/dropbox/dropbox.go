@@ -241,9 +241,13 @@ func dropboxResponseError(resp *http.Response) error {
 	return apiError(resp.StatusCode, data)
 }
 
-func (s *dropboxPartStore) SupportsTxFreePutPart() bool    { return true }
-func (s *dropboxPartStore) SupportsTxFreeGetPart() bool    { return true }
-func (s *dropboxPartStore) SupportsTxFreeDeletePart() bool { return true }
+func (s *dropboxPartStore) Capabilities() partstore.Capabilities {
+	return partstore.NewCapabilities(
+		partstore.CapabilityTxFreeGetPart,
+		partstore.CapabilityTxFreePutPart,
+		partstore.CapabilityTxFreeDeletePart,
+	)
+}
 
 func (s *dropboxPartStore) GetPart(ctx context.Context, tx database.Tx, id partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "dropboxPartStore.GetPart")

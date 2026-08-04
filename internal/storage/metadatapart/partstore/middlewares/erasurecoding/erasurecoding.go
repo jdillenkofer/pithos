@@ -310,25 +310,15 @@ func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, pa
 	return nil
 }
 
-// SupportsTxFreeGetPart reports true only when every shard store supports
-// tx-free reads (healing may also write, which the shard stores handle via
-// their non-transactional paths when tx is nil).
-func (e *erasureCodingPartStore) SupportsTxFreeGetPart() bool {
-	for _, ps := range e.partStores {
-		if !partstore.SupportsTxFreeGetPart(ps) {
-			return false
-		}
+func (e *erasureCodingPartStore) Capabilities() partstore.Capabilities {
+	if len(e.partStores) == 0 {
+		return 0
 	}
-	return true
-}
-
-func (e *erasureCodingPartStore) SupportsTxFreePutPart() bool {
-	for _, ps := range e.partStores {
-		if !partstore.SupportsTxFreePutPart(ps) {
-			return false
-		}
+	capabilities := partstore.CapabilitiesOf(e.partStores[0])
+	for _, store := range e.partStores[1:] {
+		capabilities &= partstore.CapabilitiesOf(store)
 	}
-	return true
+	return capabilities
 }
 
 func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
@@ -620,13 +610,4 @@ func (e *erasureCodingPartStore) DeletePart(ctx context.Context, tx database.Tx,
 		}
 	}
 	return nil
-}
-
-func (e *erasureCodingPartStore) SupportsTxFreeDeletePart() bool {
-	for _, store := range e.partStores {
-		if !partstore.SupportsTxFreeDeletePart(store) {
-			return false
-		}
-	}
-	return true
 }

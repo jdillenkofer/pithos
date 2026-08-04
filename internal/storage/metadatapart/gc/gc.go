@@ -269,7 +269,7 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) error {
 					if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{id}); err != nil {
 						return err
 					}
-					if partstore.SupportsTxFreeDeletePart(store) {
+					if partstore.CapabilitiesOf(store).Has(partstore.CapabilityTxFreeDeletePart) {
 						external = append(external, id)
 					} else if err = store.DeletePart(ctx, tx, id); err != nil {
 						return err

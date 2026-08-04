@@ -86,17 +86,21 @@ func (n *NamedPartStores) All() map[string]PartStore {
 	return maps.Clone(n.stores)
 }
 
-// SupportsTxFreeGetPart reports whether every configured store allows GetPart
-// with a nil transaction. A single tx-bound store (e.g. the SQL part store)
-// disables tx-free streaming for the whole set, because an object's parts may
-// live in any of the stores.
-func (n *NamedPartStores) SupportsTxFreeGetPart() bool {
+// Capabilities returns the capabilities shared by every configured store. A
+// capability is unavailable for the set if any store does not advertise it,
+// because an object's parts may live in any configured store.
+func (n *NamedPartStores) Capabilities() Capabilities {
+	var capabilities Capabilities
+	first := true
 	for _, store := range n.stores {
-		if !SupportsTxFreeGetPart(store) {
-			return false
+		if first {
+			capabilities = CapabilitiesOf(store)
+			first = false
+			continue
 		}
+		capabilities &= CapabilitiesOf(store)
 	}
-	return true
+	return capabilities
 }
 
 // Start starts every configured store.

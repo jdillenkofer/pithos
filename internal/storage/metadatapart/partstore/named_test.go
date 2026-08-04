@@ -16,6 +16,8 @@ type fakePartStore struct {
 	txFree bool
 }
 
+type capabilitylessPartStore struct{ PartStore }
+
 func (f *fakePartStore) Start(ctx context.Context) error { return nil }
 func (f *fakePartStore) Stop(ctx context.Context) error  { return nil }
 func (f *fakePartStore) PutPart(ctx context.Context, tx database.Tx, partId PartId, reader io.Reader) error {
@@ -30,7 +32,24 @@ func (f *fakePartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]PartI
 func (f *fakePartStore) DeletePart(ctx context.Context, tx database.Tx, partId PartId) error {
 	return nil
 }
-func (f *fakePartStore) SupportsTxFreeGetPart() bool { return f.txFree }
+func (f *fakePartStore) Capabilities() Capabilities {
+	if f.txFree {
+		return NewCapabilities(CapabilityTxFreeGetPart)
+	}
+	return 0
+}
+
+func TestCapabilities(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	capabilities := NewCapabilities(CapabilityTxFreeGetPart, CapabilityTxFreeDeletePart)
+	assert.True(t, capabilities.Has(CapabilityTxFreeGetPart))
+	assert.False(t, capabilities.Has(CapabilityTxFreePutPart))
+	assert.True(t, capabilities.Has(CapabilityTxFreeDeletePart))
+	assert.True(t, capabilities.Has(CapabilityTxFreeGetPart|CapabilityTxFreeDeletePart))
+	assert.False(t, capabilities.Has(CapabilityTxFreeGetPart|CapabilityTxFreePutPart))
+	assert.Zero(t, CapabilitiesOf(&capabilitylessPartStore{}))
+}
 
 func TestNamedPartStoresRoutesClassesToMappedStores(t *testing.T) {
 	testutils.SkipIfIntegration(t)
@@ -97,14 +116,14 @@ func TestNamedPartStoresRejectsInvalidConfigurations(t *testing.T) {
 	assert.ErrorContains(t, err, "unknown part store")
 }
 
-func TestNamedPartStoresSupportsTxFreeGetPartOnlyWhenAllStoresDo(t *testing.T) {
+func TestNamedPartStoresCapabilitiesOnlyIncludesCapabilitiesSharedByAllStores(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	stores, err := NewNamedPartStores(&fakePartStore{txFree: true}, map[string]PartStore{"cold": &fakePartStore{txFree: true}}, nil)
 	require.NoError(t, err)
-	assert.True(t, stores.SupportsTxFreeGetPart())
+	assert.True(t, stores.Capabilities().Has(CapabilityTxFreeGetPart))
 
 	stores, err = NewNamedPartStores(&fakePartStore{txFree: true}, map[string]PartStore{"cold": &fakePartStore{txFree: false}}, nil)
 	require.NoError(t, err)
-	assert.False(t, stores.SupportsTxFreeGetPart())
+	assert.False(t, stores.Capabilities().Has(CapabilityTxFreeGetPart))
 }

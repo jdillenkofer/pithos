@@ -38,7 +38,10 @@ func (s *txFreeRecordingPartStore) PutPart(ctx context.Context, tx database.Tx, 
 	return s.PartStore.PutPart(ctx, tx, partId, reader)
 }
 
-func (s *txFreeRecordingPartStore) SupportsTxFreePutPart() bool { return true }
+func (s *txFreeRecordingPartStore) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(s.PartStore) |
+		partstore.NewCapabilities(partstore.CapabilityTxFreePutPart)
+}
 
 func (r *countingChunkRepository) FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*partOutboxEntry.ContentChunk, error) {
 	r.bulkReads.Add(1)

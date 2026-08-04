@@ -194,9 +194,10 @@ func TestDropboxPartStoreSupportsTxFreeOperations(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	store, err := New("parts", Options{})
 	require.NoError(t, err)
-	require.True(t, partstore.SupportsTxFreeGetPart(store))
-	require.True(t, partstore.SupportsTxFreePutPart(store))
-	require.True(t, partstore.SupportsTxFreeDeletePart(store))
+	capabilities := partstore.CapabilitiesOf(store)
+	require.True(t, capabilities.Has(partstore.CapabilityTxFreeGetPart))
+	require.True(t, capabilities.Has(partstore.CapabilityTxFreePutPart))
+	require.True(t, capabilities.Has(partstore.CapabilityTxFreeDeletePart))
 }
 
 func TestDropboxPartStoreDoesNotRetryDataUpload(t *testing.T) {
