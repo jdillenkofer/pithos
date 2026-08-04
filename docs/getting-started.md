@@ -17,7 +17,7 @@ cd pithos
 ## Build and Run
 
 ```sh
-go build -o pithos ./cmd/pithos.go
+go build -o pithos ./cmd
 ./pithos serve
 ```
 

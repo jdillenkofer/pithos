@@ -2,6 +2,21 @@
 
 Pithos provides several subcommands for managing and maintaining the storage server.
 
+## `version`
+
+Prints the version, source commit, and whether the source tree contained
+uncommitted changes when the binary was built. Dirty builds have `+dirty`
+appended to their version.
+
+```sh
+pithos version
+```
+
+Release binaries contain the release version and full commit hash. Local Go
+builds use Go's embedded module and VCS metadata. If version or VCS metadata
+was unavailable at build time, the corresponding values are reported as
+`devel` or `unknown`.
+
 ## `serve`
 
 Starts the S3-compatible object storage server.

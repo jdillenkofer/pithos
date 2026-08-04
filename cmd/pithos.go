@@ -19,6 +19,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/tool"
+	"github.com/jdillenkofer/pithos/internal/buildinfo"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
@@ -89,6 +90,7 @@ const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
 const subcommandGdriveAuth = "gdrive-auth"
 const subcommandOnedriveAuth = "onedrive-auth"
+const subcommandVersion = "version"
 
 const readHeaderTimeout = 10 * time.Second
 const monitoringReadTimeout = 30 * time.Second
@@ -100,7 +102,7 @@ const gracefulShutdownTimeout = 30 * time.Second
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion))
 		os.Exit(1)
 	}
 
@@ -127,10 +129,37 @@ func main() {
 		gdriveAuthFlow(ctx)
 	case subcommandOnedriveAuth:
 		onedriveAuthFlow(ctx)
+	case subcommandVersion:
+		printVersion(os.Stdout, buildinfo.Current())
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion))
 		os.Exit(1)
 	}
+}
+
+func printVersion(w io.Writer, info buildinfo.Info) {
+	version := info.Version
+	if info.DirtyKnown && info.Dirty {
+		version = versionWithDirtySuffix(version)
+	}
+	fmt.Fprintf(w, "pithos %s\ncommit: %s\n", version, info.Commit)
+}
+
+func versionWithDirtySuffix(version string) string {
+	if strings.HasSuffix(version, "-dirty") {
+		return version
+	}
+
+	if metadataStart := strings.IndexByte(version, '+'); metadataStart >= 0 {
+		for _, identifier := range strings.Split(version[metadataStart+1:], ".") {
+			if identifier == "dirty" {
+				return version
+			}
+		}
+		return version + ".dirty"
+	}
+
+	return version + "+dirty"
 }
 
 func setupLogging() *slog.LevelVar {
