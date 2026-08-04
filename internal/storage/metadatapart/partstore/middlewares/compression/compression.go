@@ -190,14 +190,8 @@ func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (fl
 	return float64(compressed.Len()) / float64(len(sample)), nil
 }
 
-// SupportsTxFreeGetPart delegates to the inner store; the middleware itself
-// never touches the transaction on reads.
-func (mw *PartStoreMiddleware) SupportsTxFreeGetPart() bool {
-	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
-}
-
-func (mw *PartStoreMiddleware) SupportsTxFreePutPart() bool {
-	return partstore.SupportsTxFreePutPart(mw.innerPartStore)
+func (mw *PartStoreMiddleware) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(mw.innerPartStore)
 }
 
 func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
@@ -283,10 +277,6 @@ func (mw *PartStoreMiddleware) GetPartIds(ctx context.Context, tx database.Tx) (
 
 func (mw *PartStoreMiddleware) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
-}
-
-func (mw *PartStoreMiddleware) SupportsTxFreeDeletePart() bool {
-	return partstore.SupportsTxFreeDeletePart(mw.innerPartStore)
 }
 
 func algorithmToId(algorithm Algorithm) byte {

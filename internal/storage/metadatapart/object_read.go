@@ -12,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 )
 
 func convertObject(mObject metadatastore.Object) storage.Object {
@@ -296,7 +297,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// keeps the transaction open until every reader is closed (an object's
 	// parts may live in any store), preserving snapshot semantics for the part
 	// content itself.
-	txFreeStreaming := mbs.partStores.SupportsTxFreeGetPart()
+	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
 
 	// The context handed to WithTx carries the (short-lived) transaction;
 	// BeginTx reuses a transaction found in the context, so tx-free readers

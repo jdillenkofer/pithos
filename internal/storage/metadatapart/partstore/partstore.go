@@ -31,39 +31,52 @@ type PartStore interface {
 	PartManager
 }
 
-// TxFreeGetPartSupporter is implemented by part stores whose GetPart can be
-// called with a nil transaction. Streaming reads from such stores do not need
-// to hold a database transaction (and therefore a pooled connection) open for
-// the lifetime of the download. Middlewares delegate to their inner store(s).
-type TxFreeGetPartSupporter interface {
-	SupportsTxFreeGetPart() bool
-}
+// Capability describes an optional behavior supported by a part store.
+type Capability uint64
 
-type TxFreeDeletePartSupporter interface{ SupportsTxFreeDeletePart() bool }
+const (
+	// CapabilityTxFreeGetPart allows GetPart to be called with a nil
+	// transaction. Streaming reads from such stores do not need to hold a
+	// database connection for the lifetime of the download.
+	CapabilityTxFreeGetPart Capability = 1 << iota
+	// CapabilityTxFreePutPart allows PutPart to be called with a nil
+	// transaction. Outbox workers use this when writing to external stores.
+	CapabilityTxFreePutPart
+	// CapabilityTxFreeDeletePart allows DeletePart to be called with a nil
+	// transaction.
+	CapabilityTxFreeDeletePart
+)
 
-// TxFreePutPartSupporter is implemented by part stores whose PutPart can be
-// called with a nil transaction. Outbox workers use this to avoid holding a
-// database write transaction open while an external store receives a part.
-type TxFreePutPartSupporter interface{ SupportsTxFreePutPart() bool }
+// Capabilities is a set of part-store capabilities.
+type Capabilities uint64
 
-func SupportsTxFreePutPart(ps PartStore) bool {
-	s, ok := ps.(TxFreePutPartSupporter)
-	return ok && s.SupportsTxFreePutPart()
-}
-
-func SupportsTxFreeDeletePart(ps PartStore) bool {
-	s, ok := ps.(TxFreeDeletePartSupporter)
-	return ok && s.SupportsTxFreeDeletePart()
-}
-
-// SupportsTxFreeGetPart reports whether ps allows GetPart with a nil
-// transaction. Stores that don't implement TxFreeGetPartSupporter are assumed
-// to require one.
-func SupportsTxFreeGetPart(ps PartStore) bool {
-	if s, ok := ps.(TxFreeGetPartSupporter); ok {
-		return s.SupportsTxFreeGetPart()
+// NewCapabilities creates a capability set.
+func NewCapabilities(capabilities ...Capability) Capabilities {
+	var result Capabilities
+	for _, capability := range capabilities {
+		result |= Capabilities(capability)
 	}
-	return false
+	return result
+}
+
+// Has reports whether the set contains capability.
+func (c Capabilities) Has(capability Capability) bool {
+	return capability != 0 && c&Capabilities(capability) == Capabilities(capability)
+}
+
+// CapabilityProvider is implemented by part stores that support optional
+// behavior. Stores that don't implement it have no capabilities.
+type CapabilityProvider interface {
+	Capabilities() Capabilities
+}
+
+// CapabilitiesOf returns the capabilities advertised by ps.
+func CapabilitiesOf(ps PartStore) Capabilities {
+	provider, ok := ps.(CapabilityProvider)
+	if !ok {
+		return 0
+	}
+	return provider.Capabilities()
 }
 
 func Tester(partStore PartStore, db database.Database, content []byte) error {

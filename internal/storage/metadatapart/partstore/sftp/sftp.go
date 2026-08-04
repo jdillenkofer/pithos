@@ -277,12 +277,13 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	return nil
 }
 
-// SupportsTxFreeGetPart reports that GetPart never uses the transaction.
-func (s *sftpPartStore) SupportsTxFreeGetPart() bool {
-	return true
+func (s *sftpPartStore) Capabilities() partstore.Capabilities {
+	return partstore.NewCapabilities(
+		partstore.CapabilityTxFreeGetPart,
+		partstore.CapabilityTxFreePutPart,
+		partstore.CapabilityTxFreeDeletePart,
+	)
 }
-
-func (s *sftpPartStore) SupportsTxFreePutPart() bool { return true }
 
 func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPart")
@@ -378,8 +379,6 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 	}
 	return nil
 }
-
-func (s *sftpPartStore) SupportsTxFreeDeletePart() bool { return true }
 
 func isNotFoundError(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)

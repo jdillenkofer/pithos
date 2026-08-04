@@ -494,14 +494,8 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx dat
 	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
 }
 
-// SupportsTxFreeGetPart delegates to the inner store; the middleware itself
-// never touches the transaction on reads.
-func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreeGetPart() bool {
-	return partstore.SupportsTxFreeGetPart(mw.innerPartStore)
-}
-
-func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreePutPart() bool {
-	return partstore.SupportsTxFreePutPart(mw.innerPartStore)
+func (mw *TinkEncryptionPartStoreMiddleware) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(mw.innerPartStore)
 }
 
 func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
@@ -679,8 +673,4 @@ func (mw *TinkEncryptionPartStoreMiddleware) DeletePart(ctx context.Context, tx 
 	defer span.End()
 
 	return mw.innerPartStore.DeletePart(ctx, tx, partId)
-}
-
-func (mw *TinkEncryptionPartStoreMiddleware) SupportsTxFreeDeletePart() bool {
-	return partstore.SupportsTxFreeDeletePart(mw.innerPartStore)
 }

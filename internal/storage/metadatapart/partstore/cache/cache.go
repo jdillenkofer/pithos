@@ -112,14 +112,8 @@ func (ps *cachePartStore) PutPart(ctx context.Context, tx database.Tx, partId pa
 	return nil
 }
 
-// SupportsTxFreeGetPart delegates to the inner store; the cache itself never
-// touches the transaction on reads.
-func (ps *cachePartStore) SupportsTxFreeGetPart() bool {
-	return partstore.SupportsTxFreeGetPart(ps.innerPartStore)
-}
-
-func (ps *cachePartStore) SupportsTxFreePutPart() bool {
-	return partstore.SupportsTxFreePutPart(ps.innerPartStore)
+func (ps *cachePartStore) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(ps.innerPartStore)
 }
 
 func (ps *cachePartStore) GetPart(ctx context.Context, tx database.Tx, partId partstore.PartId) (io.ReadCloser, error) {
@@ -207,10 +201,6 @@ func (ps *cachePartStore) DeletePart(ctx context.Context, tx database.Tx, partId
 		slog.DebugContext(ctx, "Failed to remove part from cache on delete", "cacheKey", cacheKey, "error", err)
 	}
 	return nil
-}
-
-func (ps *cachePartStore) SupportsTxFreeDeletePart() bool {
-	return partstore.SupportsTxFreeDeletePart(ps.innerPartStore)
 }
 
 func (ps *cachePartStore) hasOversizedHint(cacheKey string) bool {

@@ -39,7 +39,10 @@ func TestOutboxGetPartTxFree(t *testing.T) {
 	outboxStore, err := New(db, "default", inner, partOutboxEntryRepository, prometheus.NewRegistry(), 30*time.Second)
 	require.NoError(t, err)
 
-	assert.True(t, partstore.SupportsTxFreeGetPart(outboxStore))
+	capabilities := partstore.CapabilitiesOf(outboxStore)
+	assert.True(t, capabilities.Has(partstore.CapabilityTxFreeGetPart))
+	assert.False(t, capabilities.Has(partstore.CapabilityTxFreePutPart))
+	assert.False(t, capabilities.Has(partstore.CapabilityTxFreeDeletePart))
 
 	content := []byte("tx-free outbox part content")
 	partId, err := partstore.NewRandomPartId()

@@ -272,15 +272,19 @@ func unauthenticatedClient(client *http.Client) *http.Client {
 	return &copy
 }
 
-func (s *store) SupportsTxFreePutPart() bool { return true }
+func (s *store) Capabilities() partstore.Capabilities {
+	return partstore.NewCapabilities(
+		partstore.CapabilityTxFreeGetPart,
+		partstore.CapabilityTxFreePutPart,
+		partstore.CapabilityTxFreeDeletePart,
+	)
+}
 
 func (s *store) GetPart(ctx context.Context, tx database.Tx, id partstore.PartId) (io.ReadCloser, error) {
 	_, span := s.tracer.Start(ctx, "oneDrivePartStore.GetPart")
 	defer span.End()
 	return s.openAt(ctx, s.name(id), 0)
 }
-func (s *store) SupportsTxFreeGetPart() bool { return true }
-
 func (s *store) openAt(ctx context.Context, name string, offset int64) (io.ReadCloser, error) {
 	body, err := s.openBodyAt(ctx, name, offset)
 	if err != nil {
@@ -467,8 +471,6 @@ func (s *store) DeletePart(ctx context.Context, tx database.Tx, id partstore.Par
 	}
 	return nil
 }
-func (s *store) SupportsTxFreeDeletePart() bool { return true }
-
 func (s *store) doJSON(ctx context.Context, method, target string, input, output any) error {
 	var data []byte
 	var e error
