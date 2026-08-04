@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -732,8 +732,8 @@ func TestCanCreateAuditStorageMiddlewareFromJson(t *testing.T) {
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
 
-	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
-	mlPrivBytes, _ := mlPriv.MarshalBinary()
+	mlPriv, _ := mldsa.GenerateKey(mldsa.MLDSA87())
+	mlPrivBytes := mlPriv.Bytes()
 	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)
 
 	jsonData := fmt.Sprintf(`{
@@ -800,8 +800,8 @@ func TestCanCreateAuditStorageMiddlewareWithMultipleSinksFromJson(t *testing.T) 
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 	edPrivEncoded := base64.StdEncoding.EncodeToString(edPriv)
 
-	_, mlPriv, _ := mldsa87.GenerateKey(rand.Reader)
-	mlPrivBytes, _ := mlPriv.MarshalBinary()
+	mlPriv, _ := mldsa.GenerateKey(mldsa.MLDSA87())
+	mlPrivBytes := mlPriv.Bytes()
 	mlPrivEncoded := base64.StdEncoding.EncodeToString(mlPrivBytes)
 
 	jsonData := fmt.Sprintf(`{

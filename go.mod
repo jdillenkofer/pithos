@@ -1,6 +1,6 @@
 module github.com/jdillenkofer/pithos
 
-go 1.26.5
+go 1.27.0
 
 require (
 	github.com/Shopify/go-lua v0.0.0-20250718183320-1e37f32ad7d0
@@ -15,7 +15,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sns v1.42.5
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.46.5
 	github.com/aws/smithy-go v1.27.7
-	github.com/cloudflare/circl v1.6.5
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/go-tpm v0.9.8
 	github.com/google/tink/go v1.7.0
