@@ -17,17 +17,27 @@ on:
         default: 'false'
         type: boolean
 
+permissions: {}
+
 jobs:
   validate-version:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Validate version format and check if greater than latest
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dryrun != 'true'
+        id: version
+        env:
+          DRY_RUN: ${{ inputs.dryrun }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           # Function to compare two semver versions
           # Returns: 1 if version1 > version2, 0 if equal, -1 if version1 < version2
@@ -57,37 +67,48 @@ jobs:
             fi
           }
 
-          new_version="${{ github.event.inputs.version }}"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            new_version="$INPUT_VERSION"
+          elif [[ "$REF_NAME" == v* ]]; then
+            new_version="${REF_NAME#v}"
+          else
+            echo "Error: Release tag must start with v"
+            exit 1
+          fi
 
           # Validate version format
-          if ! echo "$new_version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if [[ ! "$new_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Error: Version must be in format X.Y.Z (e.g. 1.0.0)"
             exit 1
           fi
 
-          latest_version="0.0.0"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$DRY_RUN" != "true" ]]; then
+            latest_version="0.0.0"
 
-          # Find the latest version by comparing all tags
-          for tag in $(git tag); do
-            if [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              version=${tag#v}
-              if [ "$(compare_versions "$version" "$latest_version")" = "1" ]; then
-                latest_version="$version"
+            # Find the latest version by comparing all tags
+            while IFS= read -r tag; do
+              if [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                version=${tag#v}
+                if [[ "$(compare_versions "$version" "$latest_version")" == "1" ]]; then
+                  latest_version="$version"
+                fi
               fi
-            fi
-          done
+            done < <(git tag --list)
 
-          # Compare new version with latest version
-          comparison_result=$(compare_versions "$new_version" "$latest_version")
-          if [ "$comparison_result" != "1" ]; then
-            echo "Error: New version ($new_version) must be greater than latest version ($latest_version)"
-            exit 1
+            # Compare new version with latest version
+            comparison_result=$(compare_versions "$new_version" "$latest_version")
+            if [[ "$comparison_result" != "1" ]]; then
+              echo "Error: New version ($new_version) must be greater than latest version ($latest_version)"
+              exit 1
+            fi
           fi
+
+          printf 'version=v%s\n' "$new_version" >> "$GITHUB_OUTPUT"
   run-tests:
     name: Run All Tests
+    permissions:
+      contents: read
     uses: ./.github/workflows/test.yml
-    with: {}
-    secrets: inherit
 
   build-linux-amd64:
     name: Build Linux AMD64 Binary
@@ -95,18 +116,23 @@ jobs:
       - validate-version
       - run-tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          cache: false
           go-version: '1.26.5'
       - name: Build Binary
         env:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 1
-          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: |
           go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-linux-amd64 ./cmd
@@ -122,11 +148,16 @@ jobs:
       - validate-version
       - run-tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          cache: false
           go-version: '1.26.5'
       - name: Install Cross-Compilation Tools
         run: |
@@ -138,7 +169,7 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 1
           CC: aarch64-linux-gnu-gcc
-          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: |
           go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-linux-arm64 ./cmd
@@ -154,6 +185,8 @@ jobs:
       - validate-version
       - run-tests
     runs-on: macos-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -163,19 +196,23 @@ jobs:
             arch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          cache: false
           go-version: '1.26.5'
       - name: Build Binary
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 1
-          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          BINARY_NAME: pithos-${{ matrix.os }}-${{ matrix.arch }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: |
-          go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o pithos-${{ matrix.os }}-${{ matrix.arch }} ./cmd
+          go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -buildmode=pie -o "$BINARY_NAME" ./cmd
       - name: Upload Binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -188,18 +225,23 @@ jobs:
       - validate-version
       - run-tests
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          cache: false
           go-version: '1.26.5'
       - name: Build Binary
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 1
-          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: |
           go build -ldflags="-s -w -X github.com/jdillenkofer/pithos/internal/buildinfo.version=$env:VERSION -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=$env:COMMIT -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -o pithos-windows-amd64.exe ./cmd
@@ -215,11 +257,16 @@ jobs:
       - validate-version
       - run-tests
     runs-on: ubuntu-24.04-arm  # Use Linux ARM64 runner
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          cache: false
           go-version: '1.26.5'
       - name: Install Zig
         run: |
@@ -232,7 +279,7 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 1
           CC: zig cc -target aarch64-windows-gnu
-          VERSION: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
           COMMIT: ${{ github.sha }}
         run: |
           go build -ldflags="-s -w -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=false" -o pithos-windows-arm64.exe ./cmd
@@ -250,10 +297,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
       id-token: write # Needed for keyless signing with Cosign
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Cosign
         # Pinned to Cosign v2 for Docker image signing. Cosign v3 signs through
         # a sigstore signing config that mandates the new OCI 1.1 bundle format,
@@ -280,11 +328,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event.inputs.dryrun != 'true' }}
           tags: |
-            jdillenkofer/pithos:${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+            jdillenkofer/pithos:${{ needs.validate-version.outputs.version }}
             jdillenkofer/pithos:latest
           build-args: |
             SKIP_TESTS=true
-            VERSION=${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+            VERSION=${{ needs.validate-version.outputs.version }}
             COMMIT=${{ github.sha }}
             DIRTY=false
       - name: Sign and verify the published Docker image
@@ -292,6 +340,11 @@ jobs:
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Error: Unexpected image digest format"
+            exit 1
+          fi
+
           # Sign by immutable digest rather than mutable tags. Both tags
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
           # one signature covers them; signing by tag also fails on Docker Hub
@@ -300,27 +353,28 @@ jobs:
           # Cosign v2 (pinned above) writes the signature as a legacy
           # sha256-<digest>.sig tag, which Docker Hub's Referrers API serves
           # correctly so `cosign verify` can discover it.
-          cosign sign --yes jdillenkofer/pithos@${DIGEST}
+          cosign sign --yes "jdillenkofer/pithos@${DIGEST}"
           # Verify the signature we just produced before publishing the
           # release, asserting it was issued to this repo's release workflow
           # via keyless OIDC (Fulcio identity + GitHub Actions issuer).
           cosign verify \
             --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            jdillenkofer/pithos@${DIGEST}
+            "jdillenkofer/pithos@${DIGEST}"
 
   release:
     name: Create Release
-    needs: [build-linux-amd64, build-linux-arm64, build-darwin, build-windows-amd64, build-windows-arm64, build-and-push-docker]
+    needs: [validate-version, build-linux-amd64, build-linux-arm64, build-darwin, build-windows-amd64, build-windows-arm64, build-and-push-docker]
     if: github.event.inputs.dryrun != 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Required to create the tag and GitHub release
       id-token: write # Needed for keyless signing with Cosign
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -358,18 +412,21 @@ jobs:
             checksums.txt
       - name: Create Tag
         if: github.event_name == 'workflow_dispatch'
+        env:
+          COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate-version.outputs.version }}
         run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git tag "v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --field "ref=refs/tags/${VERSION}" \
+            --field "sha=${COMMIT}"
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
-          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          name: ${{ needs.validate-version.outputs.version }}
+          tag_name: ${{ needs.validate-version.outputs.version }}
           generate_release_notes: true
           draft: false
           prerelease: false
