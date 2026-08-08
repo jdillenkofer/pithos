@@ -18,10 +18,18 @@ on:
       - 'Dockerfile'
       - '.github/workflows/docker-image.yml'
 
+permissions: {}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --build-arg COMMIT=${{ github.sha }} --build-arg DIRTY=false --tag pithos:$(date +%s)
+      env:
+        COMMIT: ${{ github.sha }}
+      run: docker build . --file Dockerfile --build-arg "COMMIT=${COMMIT}" --build-arg DIRTY=false --tag "pithos:$(date +%s)"
