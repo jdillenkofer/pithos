@@ -31,6 +31,12 @@ RUN chown 10001:10001 /go/bin/pithos
 
 FROM scratch
 
+LABEL org.opencontainers.image.title="Pithos" \
+      org.opencontainers.image.description="An S3-compatible object storage server for self-hosters" \
+      org.opencontainers.image.documentation="https://github.com/jdillenkofer/pithos/tree/main/docs" \
+      org.opencontainers.image.source="https://github.com/jdillenkofer/pithos" \
+      org.opencontainers.image.licenses="MIT"
+
 WORKDIR /app
 
 # Used when neither -spoolDir nor PITHOS_SPOOL_DIR is set.

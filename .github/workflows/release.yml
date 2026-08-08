@@ -296,8 +296,10 @@ jobs:
       - run-tests
     runs-on: ubuntu-latest
     permissions:
+      attestations: write # Required to publish GitHub provenance attestations
       contents: read
       id-token: write # Needed for keyless signing with Cosign
+      packages: write # Required to publish images to GHCR
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -319,6 +321,13 @@ jobs:
         with:
           username: jdillenkofer
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to GitHub Container Registry
+        if: github.event.inputs.dryrun != 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and (optionally) Push Docker Image (multi-arch)
         id: build-and-push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -330,12 +339,18 @@ jobs:
           tags: |
             jdillenkofer/pithos:${{ needs.validate-version.outputs.version }}
             jdillenkofer/pithos:latest
+            ghcr.io/jdillenkofer/pithos:${{ needs.validate-version.outputs.version }}
+            ghcr.io/jdillenkofer/pithos:latest
+          labels: |
+            org.opencontainers.image.version=${{ needs.validate-version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
             SKIP_TESTS=true
             VERSION=${{ needs.validate-version.outputs.version }}
             COMMIT=${{ github.sha }}
             DIRTY=false
-      - name: Sign and verify the published Docker image
+      - name: Validate published image digest
+        id: image
         if: ${{ github.event.inputs.dryrun != 'true' }}
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
@@ -345,22 +360,41 @@ jobs:
             exit 1
           fi
 
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Attest GHCR image provenance
+        if: ${{ github.event.inputs.dryrun != 'true' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/jdillenkofer/pithos
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          # Artifact metadata storage records are only available to
+          # organization-owned repositories; the attestation is still stored
+          # with the repository and pushed to GHCR.
+          create-storage-record: false
+      - name: Sign and verify the published Docker images
+        if: ${{ github.event.inputs.dryrun != 'true' }}
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
           # Sign by immutable digest rather than mutable tags. Both tags
           # (vX.Y.Z and latest) resolve to this single multi-arch digest, so
-          # one signature covers them; signing by tag also fails on Docker Hub
-          # with a 404 during the recursive tag->digest resolution.
+          # one signature covers them at each registry. Each registry needs its
+          # own signature attachment.
           #
           # Cosign v2 (pinned above) writes the signature as a legacy
           # sha256-<digest>.sig tag, which Docker Hub's Referrers API serves
           # correctly so `cosign verify` can discover it.
-          cosign sign --yes "jdillenkofer/pithos@${DIGEST}"
-          # Verify the signature we just produced before publishing the
-          # release, asserting it was issued to this repo's release workflow
-          # via keyless OIDC (Fulcio identity + GitHub Actions issuer).
-          cosign verify \
-            --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
-            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-            "jdillenkofer/pithos@${DIGEST}"
+          for image in "docker.io/jdillenkofer/pithos" "ghcr.io/jdillenkofer/pithos"; do
+            cosign sign --yes "${image}@${DIGEST}"
+            # Verify the signature we just produced before publishing the
+            # release, asserting it was issued to this repo's release workflow
+            # via keyless OIDC (Fulcio identity + GitHub Actions issuer).
+            cosign verify \
+              --certificate-identity-regexp '^https://github.com/jdillenkofer/pithos/\.github/workflows/release\.yml@.*$' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              "${image}@${DIGEST}"
+          done
 
   release:
     name: Create Release

@@ -10,7 +10,7 @@ Welcome to the Pithos documentation! Pithos is an S3-compatible object storage s
 - [S3 API Behavior](s3-api.md) – Object metadata, bucket versioning, delete markers, and SDK-facing semantics
 - [Storage Backends](storage-backends.md) – Storage types, middleware, and configuration examples
 - [Audit Logging](audit-logging.md) – Audit middleware, key management, and verification
-- [Verifying Releases](verifying-releases.md) – Cosign verification for Docker images and binaries
+- [Verifying Releases](verifying-releases.md) – Cosign and provenance verification for container images and binaries
 
 ## Quick Links
 

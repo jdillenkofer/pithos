@@ -28,12 +28,15 @@ go build -o pithos ./cmd
 ./pithos serve
 ```
 
-Or with Docker:
+Or run the published multi-architecture image from GitHub Container Registry:
 
 ```sh
-docker build -t pithos .
-docker run -p 9000:9000 -v $(pwd)/data:/data pithos
+docker run -p 9000:9000 -v "$(pwd)/data:/data" ghcr.io/jdillenkofer/pithos:latest
 ```
+
+The same release image is also published as `jdillenkofer/pithos:latest` on
+Docker Hub. See [Verifying Releases](docs/verifying-releases.md) for its Cosign
+signature and GitHub provenance verification instructions.
 
 ## Documentation
 
