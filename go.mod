@@ -23,7 +23,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.19.2
-	github.com/klauspost/reedsolomon v1.14.1
+	github.com/klauspost/reedsolomon v1.14.2
 	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pkg/sftp v1.13.11
