@@ -107,6 +107,8 @@ func main() {
 	}
 
 	logLevelVar := setupLogging()
+	currentBuildInfo := buildinfo.Current()
+	logBuildInfo(currentBuildInfo)
 
 	subcommand := os.Args[1]
 	switch subcommand {
@@ -130,19 +132,27 @@ func main() {
 	case subcommandOnedriveAuth:
 		onedriveAuthFlow(ctx)
 	case subcommandVersion:
-		printVersion(os.Stdout, buildinfo.Current())
+		printVersion(os.Stdout, currentBuildInfo)
 	default:
 		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion))
 		os.Exit(1)
 	}
 }
 
+func logBuildInfo(info buildinfo.Info) {
+	slog.Info("Starting pithos", "version", versionString(info), "commit", info.Commit)
+}
+
 func printVersion(w io.Writer, info buildinfo.Info) {
+	fmt.Fprintf(w, "pithos %s\ncommit: %s\n", versionString(info), info.Commit)
+}
+
+func versionString(info buildinfo.Info) string {
 	version := info.Version
 	if info.DirtyKnown && info.Dirty {
-		version = versionWithDirtySuffix(version)
+		return versionWithDirtySuffix(version)
 	}
-	fmt.Fprintf(w, "pithos %s\ncommit: %s\n", version, info.Commit)
+	return version
 }
 
 func versionWithDirtySuffix(version string) string {
