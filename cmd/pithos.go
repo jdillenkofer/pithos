@@ -108,11 +108,11 @@ func main() {
 
 	logLevelVar := setupLogging()
 	currentBuildInfo := buildinfo.Current()
-	logBuildInfo(currentBuildInfo)
 
 	subcommand := os.Args[1]
 	switch subcommand {
 	case subcommandServe:
+		logBuildInfo(currentBuildInfo)
 		if err := serve(ctx, logLevelVar); err != nil {
 			slog.Error("Server stopped with an error", "err", err)
 			os.Exit(1)
@@ -140,11 +140,11 @@ func main() {
 }
 
 func logBuildInfo(info buildinfo.Info) {
-	slog.Info("Starting pithos", "version", versionString(info), "commit", info.Commit)
+	slog.Info("Starting pithos", "version", versionString(info), "commit", info.Commit, "goVersion", info.GoVersion, "buildDate", info.Date)
 }
 
 func printVersion(w io.Writer, info buildinfo.Info) {
-	fmt.Fprintf(w, "pithos %s\ncommit: %s\n", versionString(info), info.Commit)
+	fmt.Fprintf(w, "pithos %s\ncommit: %s\nbuild date: %s\n%s\n", versionString(info), info.Commit, info.Date, info.GoVersion)
 }
 
 func versionString(info buildinfo.Info) string {

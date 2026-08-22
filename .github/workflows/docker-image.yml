@@ -32,4 +32,6 @@ jobs:
     - name: Build the Docker image
       env:
         COMMIT: ${{ github.sha }}
-      run: docker build . --file Dockerfile --build-arg "COMMIT=${COMMIT}" --build-arg DIRTY=false --tag "pithos:$(date +%s)"
+      run: |
+        DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        docker build . --file Dockerfile --build-arg "COMMIT=${COMMIT}" --build-arg DIRTY=false --build-arg "DATE=${DATE}" --tag "pithos:$(date +%s)"

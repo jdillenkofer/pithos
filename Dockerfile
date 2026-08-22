@@ -4,6 +4,7 @@ ARG SKIP_TESTS=false
 ARG VERSION=devel
 ARG COMMIT=unknown
 ARG DIRTY=unknown
+ARG DATE=unknown
 
 RUN apk add --no-cache build-base
 
@@ -24,7 +25,7 @@ RUN adduser -D -u 10001 appuser
 RUN mkdir -m 1777 /tmp-dir
 RUN mkdir -p /data && chown 10001:10001 /data
 
-RUN go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY}" -buildmode=pie -o /go/bin/pithos ./cmd
+RUN go build -ldflags="-linkmode external -s -w -extldflags=-static-pie -X github.com/jdillenkofer/pithos/internal/buildinfo.version=${VERSION} -X github.com/jdillenkofer/pithos/internal/buildinfo.commit=${COMMIT} -X github.com/jdillenkofer/pithos/internal/buildinfo.dirty=${DIRTY} -X github.com/jdillenkofer/pithos/internal/buildinfo.date=${DATE}" -buildmode=pie -o /go/bin/pithos ./cmd
 
 # Change ownership of the binary to appuser
 RUN chown 10001:10001 /go/bin/pithos

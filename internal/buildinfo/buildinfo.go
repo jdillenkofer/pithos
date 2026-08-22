@@ -1,6 +1,7 @@
 package buildinfo
 
 import (
+	"runtime"
 	"runtime/debug"
 	"strconv"
 )
@@ -12,6 +13,7 @@ var (
 	version string
 	commit  string
 	dirty   string
+	date    string
 )
 
 // Info describes the source used to build the running binary.
@@ -20,24 +22,32 @@ type Info struct {
 	Commit     string
 	Dirty      bool
 	DirtyKnown bool
+	Date       string
+	GoVersion  string
 }
 
 // Current returns the build metadata embedded in the running binary.
 func Current() Info {
 	goBuildInfo, _ := debug.ReadBuildInfo()
-	return resolve(goBuildInfo, version, commit, dirty)
+	return resolve(goBuildInfo, version, commit, dirty, date)
 }
 
-func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embeddedDirty string) Info {
+func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embeddedDirty, embeddedDate string) Info {
 	info := Info{
 		Version: embeddedVersion,
 		Commit:  embeddedCommit,
+		Date:    embeddedDate,
 	}
 
 	var vcsModified string
+	var vcsTime string
 	if goBuildInfo != nil {
 		if info.Version == "" && goBuildInfo.Main.Version != "" && goBuildInfo.Main.Version != "(devel)" {
 			info.Version = goBuildInfo.Main.Version
+		}
+
+		if goBuildInfo.GoVersion != "" {
+			info.GoVersion = goBuildInfo.GoVersion
 		}
 
 		for _, setting := range goBuildInfo.Settings {
@@ -48,6 +58,8 @@ func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embe
 				}
 			case "vcs.modified":
 				vcsModified = setting.Value
+			case "vcs.time":
+				vcsTime = setting.Value
 			}
 		}
 	}
@@ -57,6 +69,15 @@ func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embe
 	}
 	if info.Commit == "" {
 		info.Commit = "unknown"
+	}
+	if info.Date == "" {
+		info.Date = vcsTime
+	}
+	if info.Date == "" {
+		info.Date = "unknown"
+	}
+	if info.GoVersion == "" {
+		info.GoVersion = runtime.Version()
 	}
 
 	dirtyValue := embeddedDirty

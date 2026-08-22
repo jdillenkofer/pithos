@@ -16,9 +16,11 @@ func TestPrintVersion(t *testing.T) {
 		Commit:     "0123456789abcdef",
 		Dirty:      true,
 		DirtyKnown: true,
+		Date:       "2024-05-01T12:00:00Z",
+		GoVersion:  "go1.22.1",
 	})
 
-	assert.Equal(t, "pithos v1.2.3+dirty\ncommit: 0123456789abcdef\n", output.String())
+	assert.Equal(t, "pithos v1.2.3+dirty\ncommit: 0123456789abcdef\nbuild date: 2024-05-01T12:00:00Z\ngo1.22.1\n", output.String())
 }
 
 func TestPrintVersionDoesNotDuplicateDirtySuffix(t *testing.T) {
@@ -29,9 +31,11 @@ func TestPrintVersionDoesNotDuplicateDirtySuffix(t *testing.T) {
 		Commit:     "0123456789abcdef",
 		Dirty:      true,
 		DirtyKnown: true,
+		Date:       "2024-05-01T12:00:00Z",
+		GoVersion:  "go1.22.1",
 	})
 
-	assert.Equal(t, "pithos v1.2.3+dirty\ncommit: 0123456789abcdef\n", output.String())
+	assert.Equal(t, "pithos v1.2.3+dirty\ncommit: 0123456789abcdef\nbuild date: 2024-05-01T12:00:00Z\ngo1.22.1\n", output.String())
 }
 
 func TestVersionWithDirtySuffix(t *testing.T) {
