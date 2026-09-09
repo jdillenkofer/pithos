@@ -453,9 +453,13 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var appendObjectOptions *storage.AppendObjectOptions
-	if writeOffsetStr := r.Header.Get(writeOffsetBytesHeader); writeOffsetStr != "" {
-		writeOffset, parseErr := strconv.ParseInt(writeOffsetStr, 10, 64)
-		if parseErr != nil {
+	if values, present := r.Header[http.CanonicalHeaderKey(writeOffsetBytesHeader)]; present {
+		if len(values) != 1 || values[0] == "" {
+			handleError(ErrInvalidRequest, w, r)
+			return
+		}
+		writeOffset, parseErr := strconv.ParseInt(values[0], 10, 64)
+		if parseErr != nil || writeOffset < 0 {
 			handleError(ErrInvalidRequest, w, r)
 			return
 		}
@@ -512,7 +516,7 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// AppendObject
-	if query.Has(appendQuery) {
+	if _, hasOffset := r.Header[http.CanonicalHeaderKey(writeOffsetBytesHeader)]; hasOffset {
 		s.appendObjectHandler(w, r)
 		return
 	}
