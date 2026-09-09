@@ -220,7 +220,7 @@ func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName stora
 		if err != nil {
 			return nil, err
 		}
-		_, err = secondaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, nil)
+		_, err = secondaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, opts)
 		if err != nil {
 			return nil, err
 		}

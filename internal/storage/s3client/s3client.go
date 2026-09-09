@@ -715,8 +715,50 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 	return result, nil
 }
 
-func (rs *s3ClientStorage) AppendObject(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, _ io.Reader, _ *storage.ChecksumInput, _ *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
-	return nil, storage.ErrNotImplemented
+func (rs *s3ClientStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
+	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.AppendObject")
+	defer span.End()
+	var offset int64
+	if opts != nil && opts.WriteOffset != nil {
+		offset = *opts.WriteOffset
+	} else {
+		// The legacy ?append API permits omitting the offset. Resolve it before
+		// writing so a concurrent change is rejected by the upstream offset check.
+		head, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucketName.String()), Key: aws.String(key.String())})
+		if err != nil {
+			var api smithy.APIError
+			if !errors.As(err, &api) || (api.ErrorCode() != "NotFound" && api.ErrorCode() != "NoSuchKey") {
+				return nil, err
+			}
+		} else {
+			offset = aws.ToInt64(head.ContentLength)
+		}
+	}
+	if offset < 0 {
+		return nil, storage.ErrInvalidWriteOffset
+	}
+	input := &s3.PutObjectInput{Bucket: aws.String(bucketName.String()), Key: aws.String(key.String()), Body: reader, WriteOffsetBytes: &offset}
+	if checksumInput != nil {
+		input.ChecksumAlgorithm = checksumAlgorithmFromInput(checksumInput)
+		input.ContentMD5 = contentMD5FromETag(checksumInput.ETag)
+		input.ChecksumCRC32 = checksumInput.ChecksumCRC32
+		input.ChecksumCRC32C = checksumInput.ChecksumCRC32C
+		input.ChecksumCRC64NVME = checksumInput.ChecksumCRC64NVME
+		input.ChecksumSHA1 = checksumInput.ChecksumSHA1
+		input.ChecksumSHA256 = checksumInput.ChecksumSHA256
+	}
+	result, err := rs.s3Client.PutObject(ctx, input)
+	if err != nil {
+		var api smithy.APIError
+		if errors.As(err, &api) && api.ErrorCode() == "InvalidWriteOffset" {
+			return nil, storage.ErrInvalidWriteOffset
+		}
+		return nil, err
+	}
+	if result.ETag == nil || result.Size == nil {
+		return nil, errors.New("append response omitted ETag or object size")
+	}
+	return &storage.AppendObjectResult{ETag: *result.ETag, Size: *result.Size}, nil
 }
 
 func (rs *s3ClientStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
