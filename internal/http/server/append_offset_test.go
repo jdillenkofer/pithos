@@ -35,7 +35,6 @@ func TestAppendOffsetRouting(t *testing.T) {
 	}{
 		{"header", "/bucket/key", []string{"3"}, 200, int64Pointer(3)},
 		{"zero", "/bucket/key", []string{"0"}, 200, int64Pointer(0)},
-		{"legacy query", "/bucket/key?append", nil, 200, nil},
 		{"empty", "/bucket/key", []string{""}, 400, nil},
 		{"negative", "/bucket/key", []string{"-1"}, 400, nil},
 		{"invalid", "/bucket/key", []string{"bad"}, 400, nil},

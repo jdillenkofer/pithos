@@ -516,7 +516,7 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// AppendObject
-	if _, hasOffset := r.Header[http.CanonicalHeaderKey(writeOffsetBytesHeader)]; query.Has(appendQuery) || hasOffset {
+	if _, hasOffset := r.Header[http.CanonicalHeaderKey(writeOffsetBytesHeader)]; hasOffset {
 		s.appendObjectHandler(w, r)
 		return
 	}

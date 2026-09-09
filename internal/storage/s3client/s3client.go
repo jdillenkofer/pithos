@@ -722,7 +722,7 @@ func (rs *s3ClientStorage) AppendObject(ctx context.Context, bucketName storage.
 	if opts != nil && opts.WriteOffset != nil {
 		offset = *opts.WriteOffset
 	} else {
-		// The legacy ?append API permits omitting the offset. Resolve it before
+		// Callers that omit the offset append at the current size. Resolve it before
 		// writing so a concurrent change is rejected by the upstream offset check.
 		head, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucketName.String()), Key: aws.String(key.String())})
 		if err != nil {

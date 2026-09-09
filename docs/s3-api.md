@@ -146,6 +146,6 @@ See [Configuration](configuration.md#available-operations) for the complete oper
 
 A PUT carrying `x-amz-write-offset-bytes` selects AppendObject, including offset
 `0`. The offset must be a nonnegative integer and match the existing object's
-size. Invalid offsets fail without replacing the object. The existing `?append`
-query remains supported. Pithos evaluates its `AppendObject` Lua permission.
+size. Invalid offsets fail without replacing the object. Pithos evaluates its
+`AppendObject` Lua permission.
 The header matches the [AWS append request](https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-buckets-objects-append.html); AWS limits that capability to directory buckets.
