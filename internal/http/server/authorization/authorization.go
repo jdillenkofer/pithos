@@ -22,6 +22,14 @@ type HTTPRequest struct {
 }
 
 const (
+	OperationGetObjectLockConfiguration = "GetObjectLockConfiguration"
+	OperationPutObjectLockConfiguration = "PutObjectLockConfiguration"
+	OperationGetObjectRetention         = "GetObjectRetention"
+	OperationPutObjectRetention         = "PutObjectRetention"
+	OperationGetObjectLegalHold         = "GetObjectLegalHold"
+	OperationPutObjectLegalHold         = "PutObjectLegalHold"
+	OperationBypassGovernanceRetention  = "BypassGovernanceRetention"
+
 	OperationListBuckets                = "ListBuckets"
 	OperationHeadBucket                 = "HeadBucket"
 	OperationListMultipartUploads       = "ListMultipartUploads"
@@ -67,6 +75,15 @@ const (
 )
 
 type Request struct {
+	VersionID                          *string
+	ObjectLockEnabled                  *string
+	ObjectLockMode                     *string
+	ObjectLockRetainUntilDate          *string
+	ObjectLockLegalHold                *string
+	ObjectLockDays                     *int32
+	ObjectLockYears                    *int32
+	BypassGovernanceRetentionRequested bool
+
 	Operation     string
 	Authorization Authorization
 	Bucket        *string

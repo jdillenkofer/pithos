@@ -16,3 +16,5 @@ Welcome to the Pithos documentation! Pithos is an S3-compatible object storage s
 
 - [GitHub Repository](https://github.com/jdillenkofer/pithos)
 - [License](../LICENSE)
+
+- [Object Lock](object-lock.md): retention, legal hold, replication recovery and audit.

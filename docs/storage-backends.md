@@ -641,3 +641,39 @@ pithos migrate-storage ./storage_source.json ./storage_target.json
 ```
 
 The migration is performed bucket by bucket. If the target storage bucket is not empty, it will not overwrite existing objects to prevent accidental data loss.
+
+## Object Lock and replication journals
+
+MetadataPartStorage persists bucket lock configuration and version protection in
+relational tables. SQLite and PostgreSQL use separate repositories and migrations;
+PostgreSQL locks buckets before objects, and SQLite serializes writers. Protection
+checks and mutations share a transaction. S3ClientStorage forwards the six lock
+APIs and explicit lock values, including the absolute retention timestamp.
+
+ReplicationStorage accepts these additional configuration fields:
+
+| Field | Meaning |
+| --- | --- |
+| `replicationId` | Durable topology identity; defaults to `default` for existing configurations |
+| `secondaryIds` | Stable IDs aligned with `secondaryStorages`; omitted IDs derive from canonical secondary configuration |
+| `journalDatabase` | Database configuration required for a nonlocal primary; a local primary uses its own database transaction |
+
+Set IDs explicitly before first use so credential or endpoint configuration
+changes do not change an inferred identity. A registered topology rejects a
+changed set of replica IDs. Keep the journal database with the topology's data.
+An explicit journal database uses the normal database configuration, for example:
+
+```json
+"journalDatabase": { "type": "SqliteDatabase", "dbPath": "./data/replication.sqlite" }
+```
+
+The journal stores pending operation data until every destination confirms.
+Successful calls confirm all replicas, including any storage outbox barrier.
+Failures are retained and retried. The coordinator serializes mutations and
+recovery; deploy a single writer coordinator per topology. Metrics are
+`pithos_replication_pending_operations`, `pithos_replication_retries_total` and
+`pithos_replication_failures_total`, labeled by `replication_id`.
+
+[Reconcile existing replicas](object-lock.md#synchronous-replication-and-old-versions)
+before changing protection on unmapped historical versions. Retention changes
+invalidate cached object metadata, including after a partial replication failure.

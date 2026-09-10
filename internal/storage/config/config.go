@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	internalConfig "github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	databaseConfig "github.com/jdillenkofer/pithos/internal/storage/database/config"
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart"
@@ -665,6 +667,11 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 }
 
 type ReplicationStorageConfiguration struct {
+	ReplicationID               string                              `json:"replicationId,omitempty"`
+	SecondaryIDs                []string                            `json:"secondaryIds,omitempty"`
+	RawJournalDatabase          json.RawMessage                     `json:"journalDatabase,omitempty"`
+	JournalDatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
+
 	PrimaryStorageInstantiator    StorageInstantiator   `json:"-"`
 	RawPrimaryStorage             json.RawMessage       `json:"primaryStorage"`
 	SecondaryStorageInstantiators []StorageInstantiator `json:"-"`
@@ -677,6 +684,12 @@ func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, (*replicationStorageConfiguration)(r))
 	if err != nil {
 		return err
+	}
+	if len(r.RawJournalDatabase) > 0 {
+		r.JournalDatabaseInstantiator, err = databaseConfig.CreateDatabaseInstantiatorFromJson(r.RawJournalDatabase)
+		if err != nil {
+			return err
+		}
 	}
 	r.PrimaryStorageInstantiator, err = CreateStorageInstantiatorFromJson(r.RawPrimaryStorage)
 	if err != nil {
@@ -693,6 +706,11 @@ func (r *ReplicationStorageConfiguration) UnmarshalJSON(b []byte) error {
 }
 
 func (r *ReplicationStorageConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
+	if r.JournalDatabaseInstantiator != nil {
+		if err := r.JournalDatabaseInstantiator.RegisterReferences(diCollection); err != nil {
+			return err
+		}
+	}
 	err := r.PrimaryStorageInstantiator.RegisterReferences(diCollection)
 	if err != nil {
 		return err
@@ -719,7 +737,37 @@ func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjec
 		}
 		secondaryStorages = append(secondaryStorages, secondaryStorage)
 	}
-	return replication.NewStorage(primaryStorage, secondaryStorages...)
+	var journalDB database.Database
+	if r.JournalDatabaseInstantiator != nil {
+		journalDB, err = r.JournalDatabaseInstantiator.Instantiate(diProvider)
+		if err != nil {
+			return nil, err
+		}
+	}
+	replicationID := r.ReplicationID
+	if replicationID == "" {
+		replicationID = "default"
+	}
+	ids := append([]string(nil), r.SecondaryIDs...)
+	if len(ids) == 0 {
+		for _, raw := range r.RawSecondaryStorages {
+			var parsed any
+			if err := json.Unmarshal(raw, &parsed); err != nil {
+				return nil, err
+			}
+			canonical, err := json.Marshal(parsed)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(canonical)
+			ids = append(ids, fmt.Sprintf("secondary-%x", sum[:16]))
+		}
+	}
+	var registerer prometheus.Registerer
+	if value, err := diProvider.LookupByType(reflect.TypeOf((*prometheus.Registerer)(nil))); err == nil {
+		registerer, _ = value.(prometheus.Registerer)
+	}
+	return replication.NewStorageWithOptions(primaryStorage, secondaryStorages, replication.Options{Registerer: registerer, ReplicationID: replicationID, SecondaryIDs: ids, JournalDatabase: journalDB})
 }
 
 type S3ClientStorageConfiguration struct {

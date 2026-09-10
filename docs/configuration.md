@@ -230,3 +230,12 @@ function authorizeRequest(request)
   return request.authorization.accessKeyId == "my-access-key-id"
 end
 ```
+
+### Object Lock authorization fields
+
+Lock requests expose `request.versionID`, `objectLockEnabled`, `objectLockMode`,
+`objectLockRetainUntilDate`, `objectLockLegalHold`, `objectLockDays`,
+`objectLockYears`, and `bypassGovernanceRetentionRequested`. The six lock APIs
+have independent operation names. Governance bypass requires both the normal
+operation and `BypassGovernanceRetention` to be allowed, per version for
+Multi-Delete. See the [Lua example](object-lock.md#authorization).

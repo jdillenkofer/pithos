@@ -3,6 +3,7 @@ package conditional
 import (
 	"context"
 	"database/sql"
+	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"io"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -84,12 +86,12 @@ func (csm *conditionalStorageMiddleware) lookupStorage(bucketName storage.Bucket
 	return csm.Next
 }
 
-func (csm *conditionalStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (csm *conditionalStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.CreateBucket")
 	defer span.End()
 
 	storage := csm.lookupStorage(bucketName)
-	return storage.CreateBucket(ctx, bucketName)
+	return storage.CreateBucket(ctx, bucketName, options...)
 }
 
 func (csm *conditionalStorageMiddleware) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -297,7 +299,26 @@ func (csm *conditionalStorageMiddleware) CopyObject(ctx context.Context, srcBuck
 	}
 	defer body.Close()
 
-	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, body, nil, nil)
+	putOpts := &storage.PutObjectOptions{Metadata: &srcObject.Metadata, Tags: srcObject.Tags}
+	if opts != nil {
+		putOpts.ObjectLock = opts.ObjectLock
+		putOpts.StorageClass = opts.StorageClass
+		if opts.ReplaceMetadata {
+			putOpts.Metadata = opts.Metadata
+		}
+		if opts.ReplaceTags {
+			putOpts.Tags = opts.Tags
+		}
+	}
+	_, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, body, func(reader io.Reader) error { _, err := io.Copy(io.Discard, reader); return err })
+	if err != nil {
+		return nil, err
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	algorithm := "SHA256"
+	putResult, err := dstStorage.PutObject(ctx, dstBucket, dstKey, contentType, body, &storage.ChecksumInput{ChecksumAlgorithm: &algorithm, ChecksumSHA256: checksums.ChecksumSHA256}, putOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -534,4 +555,22 @@ func (csm *conditionalStorageMiddleware) PutBucketNotificationConfiguration(ctx 
 
 	storage := csm.lookupStorage(bucketName)
 	return storage.PutBucketNotificationConfiguration(ctx, bucketName, config)
+}
+
+func (csm *conditionalStorageMiddleware) StorageChildren() []storage.Storage {
+	result := []storage.Storage{csm.Next}
+	for _, child := range csm.bucketToStorageMap {
+		result = append(result, child)
+	}
+	return result
+}
+
+func (csm *conditionalStorageMiddleware) RecordAuthorizationDenied(ctx context.Context, operation auditlog.Operation, resource auditlog.ResourceDetails, lock *auditlog.ObjectLockDetails) {
+	target := csm.Next
+	if bucket, err := storage.NewBucketName(resource.Bucket); err == nil {
+		target = csm.lookupStorage(bucket)
+	}
+	if recorder, ok := target.(auditlog.AuthorizationDenialRecorder); ok {
+		recorder.RecordAuthorizationDenied(ctx, operation, resource, lock)
+	}
 }

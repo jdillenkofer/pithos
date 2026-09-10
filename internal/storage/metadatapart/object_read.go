@@ -16,7 +16,11 @@ import (
 )
 
 func convertObject(mObject metadatastore.Object) storage.Object {
-	return storage.Object{
+	sizes := make([]int64, len(mObject.Parts))
+	for i, part := range mObject.Parts {
+		sizes[i] = part.Size
+	}
+	return storage.Object{PartSizes: sizes,
 		Key:               mObject.Key,
 		ContentType:       mObject.ContentType,
 		LastModified:      mObject.LastModified,
@@ -33,6 +37,7 @@ func convertObject(mObject metadatastore.Object) storage.Object {
 		StorageClass:      mObject.StorageClass,
 		Tags:              mObject.Tags,
 		Metadata:          mObject.Metadata,
+		ObjectLock:        mObject.ObjectLock,
 	}
 }
 

@@ -140,3 +140,20 @@ The permission mode is required and must match the `permissionMode` in the
 The tenant defaults to `consumers` for personal Microsoft accounts. See the
 [OneDrive setup guide](storage-backends.md#onedrive-part-store) for
 app-registration and permission steps.
+
+## `reconcile-replication`
+
+Reconcile existing primary versions with a selected replication topology:
+
+```sh
+pithos reconcile-replication --storage-config storage.json \
+  --replication-id backups --bucket backups,documents --dry-run
+```
+
+`--storage-config` and `--replication-id` are required. Omit `--bucket` for all
+primary buckets. Omit `--dry-run` to execute. Stop external writers and lifecycle
+processing before execution and keep them stopped until completion. Work and
+source data are journaled before replica mutations and resume after interruption;
+existing destination versions remain. Dry-run does not dispatch writes, but
+normal database schema migrations still run on startup. See
+[reconciliation details](object-lock.md#synchronous-replication-and-old-versions).

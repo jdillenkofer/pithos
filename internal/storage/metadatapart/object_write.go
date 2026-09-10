@@ -20,6 +20,9 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	defer span.End()
 	var object metadatastore.Object
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
+			return err
+		}
 		ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 		partId, err := partstore.NewRandomPartId()
@@ -77,6 +80,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			},
 		}
 		if opts != nil {
+			object.ObjectLock = opts.ObjectLock
 			object.Tags = opts.Tags
 			if opts.Metadata != nil {
 				object.Metadata = *opts.Metadata
@@ -116,6 +120,9 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	var combinedChecksums checksumutils.ChecksumValues
 	var totalSize int64
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
+			return err
+		}
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		if err != nil {
 			return err
@@ -268,6 +275,9 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 
 		metaOpts := &metadatastore.AppendObjectOptions{}
+		if opts != nil {
+			metaOpts.ObjectLock = opts.ObjectLock
+		}
 		metadataResult, err := mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts)
 		if err != nil {
 			// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a
@@ -308,6 +318,9 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
+			return err
+		}
 		var object *metadatastore.Object
 		var err error
 		var versionID *string

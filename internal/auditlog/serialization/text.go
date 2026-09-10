@@ -3,6 +3,7 @@ package serialization
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -72,6 +73,14 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		}
 		if d.Outcome.DurationMs != 0 {
 			base += fmt.Sprintf(" | DurationMs: %d", d.Outcome.DurationMs)
+		}
+		if e.Version >= 4 {
+			base += fmt.Sprintf(" | VersionID: %s", escape(d.Resource.VersionID))
+			encoded, err := json.Marshal(d.ObjectLock)
+			if err != nil {
+				return err
+			}
+			base += fmt.Sprintf(" | ObjectLock: %s", escape(string(encoded)))
 		}
 	case *auditlog.GroundingDetails:
 		base += fmt.Sprintf(" | MerkleRoot: %x | Ed25519: %x | ML-DSA-87: %x", d.MerkleRootHash, d.SignatureEd25519, d.SignatureMlDsa87)
@@ -163,6 +172,12 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 				dls.Resource.PartNumber = int32(p)
 			case "SourceBucket":
 				dls.Resource.SourceBucket = unescape(val)
+			case "VersionID":
+				dls.Resource.VersionID = unescape(val)
+			case "ObjectLock":
+				if err := json.Unmarshal([]byte(unescape(val)), &dls.ObjectLock); err != nil {
+					return nil, err
+				}
 			case "SourceKey":
 				dls.Resource.SourceKey = unescape(val)
 			case "Actor", "CredentialID":

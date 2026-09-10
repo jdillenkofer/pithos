@@ -20,6 +20,9 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 
 	var result storage.CopyObjectResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), srcBucket, dstBucket); err != nil {
+			return err
+		}
 		var srcObject *metadatastore.Object
 		var err error
 		if opts != nil && opts.SourceVersionID != nil {
@@ -59,6 +62,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			// The destination class comes from the copy request only; the
 			// source's class is never carried over (matching AWS).
 			dstObject.StorageClass = opts.StorageClass
+			dstObject.ObjectLock = opts.ObjectLock
 		}
 		dstStoreName, dstStore := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(dstObject.StorageClass))
 

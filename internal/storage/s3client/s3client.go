@@ -42,7 +42,7 @@ func NewStorage(s3Client *s3.Client) (storage.Storage, error) {
 
 	return &s3ClientStorage{
 		ValidatedLifecycle: lifecycle,
-		s3Client:           s3Client,
+		s3Client:           s3.New(s3Client.Options(), func(options *s3.Options) { options.APIOptions = append(options.APIOptions, preserveRetentionPrecision) }),
 		tracer:             otel.Tracer("internal/storage/s3client"),
 	}, nil
 }
@@ -55,12 +55,16 @@ func (rs *s3ClientStorage) Stop(ctx context.Context) error {
 	return rs.ValidatedLifecycle.Stop(ctx)
 }
 
-func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateBucket")
 	defer span.End()
 
+	if len(options) > 1 {
+		return storage.ErrInvalidObjectLockConfiguration
+	}
 	_, err := rs.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucketName.String()),
+		ObjectLockEnabledForBucket: aws.Bool(len(options) == 1 && options[0].ObjectLockEnabled),
+		Bucket:                     aws.String(bucketName.String()),
 	})
 	var bucketAlreadyExistsError *types.BucketAlreadyExists
 	if err != nil && errors.As(err, &bucketAlreadyExistsError) {
@@ -386,7 +390,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 	})
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
-		return nil, storage.ErrNoSuchBucket
+		return nil, storage.ErrNoSuchKey
 	}
 	if err != nil {
 		return nil, err
@@ -396,6 +400,7 @@ func (rs *s3ClientStorage) HeadObject(ctx context.Context, bucketName storage.Bu
 		userMetadata = headObjectResult.Metadata
 	}
 	return &storage.Object{
+		ObjectLock:        lockFromAWS(headObjectResult.ObjectLockMode, headObjectResult.ObjectLockRetainUntilDate, headObjectResult.ObjectLockLegalHoldStatus),
 		Key:               key,
 		ContentType:       headObjectResult.ContentType,
 		LastModified:      *headObjectResult.LastModified,
@@ -432,11 +437,41 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	}
 
 	// First, get object metadata
-	object, err := rs.HeadObject(ctx, bucketName, key, nil)
+	headOpts := &storage.HeadObjectOptions{}
+	if opts != nil {
+		headOpts.VersionID = opts.VersionID
+	}
+	object, err := rs.HeadObject(ctx, bucketName, key, headOpts)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// Pin all subsequent reads to the selected version, including metadata.
+	tags, err := rs.GetObjectTagging(ctx, bucketName, key, &storage.ObjectTaggingOptions{VersionID: object.VersionID})
+	if err != nil {
+		return nil, nil, err
+	}
+	object.Tags = tags
+	if strings.Contains(object.ETag, "-") {
+		var total int64
+		for number := int32(1); ; number++ {
+			part, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucketName.String()), Key: aws.String(key.String()), VersionId: object.VersionID, PartNumber: &number})
+			if err != nil {
+				return nil, nil, err
+			}
+			if part.PartsCount == nil || *part.PartsCount < number || *part.PartsCount > 10000 || part.ContentLength == nil {
+				return nil, nil, errors.New("backend omitted multipart boundaries")
+			}
+			object.PartSizes = append(object.PartSizes, *part.ContentLength)
+			total += *part.ContentLength
+			if number == *part.PartsCount {
+				break
+			}
+		}
+		if total != object.Size {
+			return nil, nil, errors.New("backend multipart sizes do not match selected object")
+		}
+	}
 	// Get each range
 	readers := []io.ReadCloser{}
 	for _, byteRange := range ranges {
@@ -449,15 +484,10 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			awsRange = &r
 		}
 		getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(bucketName.String()),
-			Key:    aws.String(key.String()),
-			Range:  awsRange,
-			VersionId: func() *string {
-				if opts != nil {
-					return opts.VersionID
-				}
-				return nil
-			}(),
+			Bucket:    aws.String(bucketName.String()),
+			Key:       aws.String(key.String()),
+			Range:     awsRange,
+			VersionId: object.VersionID,
 		})
 		var notFoundError *types.NotFound
 		if err != nil && errors.As(err, &notFoundError) {
@@ -465,7 +495,7 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			for _, r := range readers {
 				r.Close()
 			}
-			return nil, nil, storage.ErrNoSuchBucket
+			return nil, nil, storage.ErrNoSuchKey
 		}
 		if err != nil {
 			// Close any readers we've already opened
@@ -583,6 +613,16 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 	if opts != nil && opts.StorageClass != nil {
 		input.StorageClass = types.StorageClass(*opts.StorageClass)
 	}
+	if opts != nil {
+		if rt := opts.ObjectLock.Retention; rt != nil {
+			input.ObjectLockMode = types.ObjectLockMode(rt.Mode)
+			until := rt.RetainUntilDate.UTC()
+			input.ObjectLockRetainUntilDate = &until
+		}
+		if hold := opts.ObjectLock.LegalHold; hold != nil {
+			input.ObjectLockLegalHoldStatus = types.ObjectLockLegalHoldStatus(*hold)
+		}
+	}
 	putObjectResult, err := rs.s3Client.PutObject(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
@@ -597,6 +637,7 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 	}
 
 	return &storage.PutObjectResult{
+		VersionID:         putObjectResult.VersionId,
 		ETag:              putObjectResult.ETag,
 		ChecksumCRC32:     putObjectResult.ChecksumCRC32,
 		ChecksumCRC32C:    putObjectResult.ChecksumCRC32C,
@@ -696,12 +737,22 @@ func (rs *s3ClientStorage) CopyObject(ctx context.Context, srcBucket storage.Buc
 		input.CopySourceIfUnmodifiedSince = opts.CopySourceConditions.IfUnmodifiedSince
 	}
 
+	if opts != nil {
+		if rt := opts.ObjectLock.Retention; rt != nil {
+			input.ObjectLockMode = types.ObjectLockMode(rt.Mode)
+			until := rt.RetainUntilDate.UTC()
+			input.ObjectLockRetainUntilDate = &until
+		}
+		if hold := opts.ObjectLock.LegalHold; hold != nil {
+			input.ObjectLockLegalHoldStatus = types.ObjectLockLegalHoldStatus(*hold)
+		}
+	}
 	copyObjectResult, err := rs.s3Client.CopyObject(ctx, input)
 	if err != nil {
 		return nil, translateS3CopyError(err)
 	}
 
-	result := &storage.CopyObjectResult{}
+	result := &storage.CopyObjectResult{VersionID: copyObjectResult.VersionId, SourceVersionID: copyObjectResult.CopySourceVersionId}
 	result.VersionID = copyObjectResult.VersionId
 	result.SourceVersionID = copyObjectResult.CopySourceVersionId
 	if copyObjectResult.CopyObjectResult != nil {
@@ -801,13 +852,16 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 	if opts != nil && opts.VersionID != nil {
 		input.VersionId = opts.VersionID
 	}
+	if opts != nil {
+		input.BypassGovernanceRetention = aws.Bool(opts.BypassGovernanceRetention)
+	}
 	result, err := rs.s3Client.DeleteObject(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {
 		return nil, storage.ErrNoSuchBucket
 	}
 	if err != nil {
-		return nil, err
+		return nil, objectLockError(err)
 	}
 	return &storage.DeleteObjectResult{VersionID: result.VersionId, IsDeleteMarker: aws.ToBool(result.DeleteMarker)}, nil
 }
@@ -815,6 +869,36 @@ func (rs *s3ClientStorage) DeleteObject(ctx context.Context, bucketName storage.
 func (rs *s3ClientStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.DeleteObjects")
 	defer span.End()
+
+	for _, entry := range entries {
+		if entry.BypassGovernanceRetention {
+			result := &storage.DeleteObjectsResult{}
+			for _, e := range entries {
+				deleted, err := rs.DeleteObject(ctx, bucketName, e.Key, &storage.DeleteObjectOptions{VersionID: e.VersionID, IfMatchETag: e.IfMatchETag, BypassGovernanceRetention: e.BypassGovernanceRetention})
+				row := storage.DeleteObjectsEntry{Key: e.Key, VersionID: e.VersionID}
+				if err != nil {
+					row.ErrCode = "InternalError"
+					var api smithy.APIError
+					if errors.As(err, &api) {
+						row.ErrCode = api.ErrorCode()
+					}
+					if errors.Is(objectLockError(err), storage.ErrObjectLockAccessDenied) {
+						row.ErrCode = "AccessDenied"
+					}
+					row.ErrMsg = err.Error()
+				} else {
+					row.Deleted = true
+					row.VersionID = deleted.VersionID
+					row.DeleteMarker = &deleted.IsDeleteMarker
+					if deleted.IsDeleteMarker && e.VersionID == nil {
+						row.DeleteMarkerVersionID = deleted.VersionID
+					}
+				}
+				result.Entries = append(result.Entries, row)
+			}
+			return result, nil
+		}
+	}
 
 	identifiers := make([]types.ObjectIdentifier, len(entries))
 	for i, entry := range entries {
@@ -899,6 +983,16 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 	}
 	if opts != nil && opts.StorageClass != nil {
 		input.StorageClass = types.StorageClass(*opts.StorageClass)
+	}
+	if opts != nil {
+		if rt := opts.ObjectLock.Retention; rt != nil {
+			input.ObjectLockMode = types.ObjectLockMode(rt.Mode)
+			until := rt.RetainUntilDate.UTC()
+			input.ObjectLockRetainUntilDate = &until
+		}
+		if hold := opts.ObjectLock.LegalHold; hold != nil {
+			input.ObjectLockLegalHoldStatus = types.ObjectLockLegalHoldStatus(*hold)
+		}
 	}
 	initiateMultipartUploadResult, err := rs.s3Client.CreateMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound

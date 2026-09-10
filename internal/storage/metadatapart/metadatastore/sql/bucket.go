@@ -10,9 +10,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
-func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, options ...metadatastore.CreateBucketOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateBucket")
 	defer span.End()
+
+	if len(options) > 1 {
+		return metadatastore.ErrInvalidObjectLockConfiguration
+	}
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -29,12 +33,20 @@ func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 		return err
 	}
 
+	if len(options) == 1 && options[0].ObjectLockEnabled {
+		return sms.PutObjectLockConfiguration(ctx, tx, bucketName, &metadatastore.ObjectLockConfiguration{ObjectLockEnabled: "Enabled"})
+	}
+
 	return nil
 }
 
 func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucket")
 	defer span.End()
+
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -139,6 +151,10 @@ func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, 
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketWebsiteConfiguration")
 	defer span.End()
 
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
+
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -175,6 +191,10 @@ func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, 
 func (sms *sqlMetadataStore) DeleteBucketWebsiteConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketWebsiteConfiguration")
 	defer span.End()
+
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -217,12 +237,24 @@ func (sms *sqlMetadataStore) PutBucketVersioningConfiguration(ctx context.Contex
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketVersioningConfiguration")
 	defer span.End()
 
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
+
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
 	if bucketEntity == nil {
 		return metadatastore.ErrNoSuchBucket
+	}
+
+	lockConfig, err := sms.loadLockConfiguration(ctx, tx, bucketName)
+	if err != nil {
+		return err
+	}
+	if lockConfig != nil && (config == nil || config.Status == nil || *config.Status != metadatastore.BucketVersioningStatusEnabled) {
+		return metadatastore.ErrInvalidObjectLockConfiguration
 	}
 
 	if config == nil || config.Status == nil {
@@ -265,6 +297,10 @@ func (sms *sqlMetadataStore) PutBucketCORSConfiguration(ctx context.Context, tx 
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketCORSConfiguration")
 	defer span.End()
 
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
+
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -286,6 +322,10 @@ func (sms *sqlMetadataStore) PutBucketCORSConfiguration(ctx context.Context, tx 
 func (sms *sqlMetadataStore) DeleteBucketCORSConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketCORSConfiguration")
 	defer span.End()
+
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -330,6 +370,10 @@ func (sms *sqlMetadataStore) PutBucketLifecycleConfiguration(ctx context.Context
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketLifecycleConfiguration")
 	defer span.End()
 
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
+
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return err
@@ -351,6 +395,10 @@ func (sms *sqlMetadataStore) PutBucketLifecycleConfiguration(ctx context.Context
 func (sms *sqlMetadataStore) DeleteBucketLifecycleConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucketLifecycleConfiguration")
 	defer span.End()
+
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -400,6 +448,10 @@ func (sms *sqlMetadataStore) GetBucketNotificationConfiguration(ctx context.Cont
 func (sms *sqlMetadataStore) PutBucketNotificationConfiguration(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, config *metadatastore.BucketNotificationConfiguration) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketNotificationConfiguration")
 	defer span.End()
+
+	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
+		return err
+	}
 
 	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"crypto/mldsa"
 	"crypto/sha512"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 type Operation string
 
 const (
+	OpGetObjectLockConfiguration Operation = "GetObjectLockConfiguration"
+	OpPutObjectLockConfiguration Operation = "PutObjectLockConfiguration"
+	OpGetObjectRetention         Operation = "GetObjectRetention"
+	OpPutObjectRetention         Operation = "PutObjectRetention"
+	OpGetObjectLegalHold         Operation = "GetObjectLegalHold"
+	OpPutObjectLegalHold         Operation = "PutObjectLegalHold"
+	OpBypassGovernanceRetention  Operation = "BypassGovernanceRetention"
+
 	OpCreateBucket            Operation = "CreateBucket"
 	OpDeleteBucket            Operation = "DeleteBucket"
 	OpListBuckets             Operation = "ListBuckets"
@@ -58,7 +67,7 @@ const (
 // CurrentVersion is the audit log entry format version.
 //   - v2 added actor/request/outcome detail fields.
 //   - v3 added ResourceDetails.SourceBucket/SourceKey for server-side copy operations.
-const CurrentVersion uint16 = 3
+const CurrentVersion uint16 = 4
 
 type EntryType string
 
@@ -90,6 +99,7 @@ const (
 )
 
 type ResourceDetails struct {
+	VersionID  string
 	Bucket     string
 	Key        string
 	UploadID   string
@@ -120,12 +130,30 @@ type OutcomeDetails struct {
 }
 
 type LogDetails struct {
-	Operation Operation
-	Phase     Phase
-	Resource  ResourceDetails
-	Actor     ActorDetails
-	Request   RequestDetails
-	Outcome   OutcomeDetails
+	ObjectLock *ObjectLockDetails
+	Operation  Operation
+	Phase      Phase
+	Resource   ResourceDetails
+	Actor      ActorDetails
+	Request    RequestDetails
+	Outcome    OutcomeDetails
+}
+
+// ObjectLockValues records UTC timestamps as canonical RFC3339Nano strings.
+type ObjectLockValues struct {
+	Enabled         string `json:"enabled,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	RetainUntilDate string `json:"retain_until_date,omitempty"`
+	LegalHold       string `json:"legal_hold,omitempty"`
+	Days            *int32 `json:"days,omitempty"`
+	Years           *int32 `json:"years,omitempty"`
+}
+type ObjectLockDetails struct {
+	Requested        ObjectLockValues `json:"requested"`
+	Effective        ObjectLockValues `json:"effective"`
+	BypassRequested  bool             `json:"bypass_requested"`
+	BypassAuthorized bool             `json:"bypass_authorized"`
+	BypassUsed       bool             `json:"bypass_used"`
 }
 
 type GroundingDetails struct {
@@ -182,6 +210,16 @@ func (e *Entry) CalculateHash() []byte {
 		writeString(buf, d.Outcome.ErrorCode)
 		writeString(buf, d.Outcome.Error)
 		binary.Write(buf, binary.BigEndian, d.Outcome.DurationMs)
+		if e.Version >= 4 {
+			// v3 source fields were serialized but not hashed. Keep historical hash
+			// calculation unchanged and authenticate them from v4 onward.
+			writeString(buf, d.Resource.SourceBucket)
+			writeString(buf, d.Resource.SourceKey)
+			writeString(buf, d.Resource.VersionID)
+			lockJSON, _ := json.Marshal(d.ObjectLock)
+			writeBytes(buf, lockJSON)
+		}
+
 	case *GroundingDetails:
 		writeBytes(buf, d.MerkleRootHash)
 		if len(d.SignatureEd25519) != ed25519.SignatureSize {

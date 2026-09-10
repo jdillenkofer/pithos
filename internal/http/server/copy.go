@@ -180,7 +180,11 @@ func (s *Server) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := &storage.CopyObjectOptions{
+	objectLock, stop := s.prepareUploadLock(w, r, dstBucketName.String(), dstKey.String())
+	if stop {
+		return
+	}
+	opts := &storage.CopyObjectOptions{ObjectLock: objectLock,
 		SourceVersionID:      sourceVersionID,
 		ReplaceMetadata:      metadataDirective == metadataDirectiveReplace,
 		Range:                copyRange,

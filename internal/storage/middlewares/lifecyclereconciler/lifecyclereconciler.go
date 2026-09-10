@@ -13,6 +13,7 @@ package lifecyclereconciler
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"sort"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
@@ -84,7 +86,7 @@ func (m *lifecycleReconcilerStorageMiddleware) Start(ctx context.Context) error 
 	if err := m.Next.Start(ctx); err != nil {
 		return err
 	}
-	if m.reconcileEvery > 0 {
+	if m.reconcileEvery > 0 && !lifecycle.IsMaintenance(ctx) {
 		m.reconcileTask = task.Start(func(cancelTask *atomic.Bool) {
 			m.reconcileLoop(cancelTask)
 		})
@@ -263,7 +265,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectDeleteMarkerIfDue(ctx
 			continue
 		}
 		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, deleteMarker.Key, &storage.DeleteObjectOptions{VersionID: &deleteMarker.VersionID})
-		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+		if errors.Is(err, storage.ErrObjectLockAccessDenied) || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 			return
 		}
 		if err != nil {
@@ -479,7 +481,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireNoncurrentObjectVersionIfDu
 			continue
 		}
 		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, version.Key, &storage.DeleteObjectOptions{VersionID: &version.VersionID})
-		if err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+		if errors.Is(err, storage.ErrObjectLockAccessDenied) || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 			return
 		}
 		if err != nil {
@@ -546,7 +548,7 @@ func (m *lifecycleReconcilerStorageMiddleware) expireObjectIfDue(ctx context.Con
 		_, err := m.Next.DeleteObject(storage.WithNotificationEventOverride(ctx, "s3:LifecycleExpiration:Delete"), bucketName, object.Key, &storage.DeleteObjectOptions{
 			IfMatchETag: ptrutils.ToPtr(object.ETag),
 		})
-		if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+		if errors.Is(err, storage.ErrObjectLockAccessDenied) || err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 			return
 		}
 		if err != nil {
@@ -643,7 +645,7 @@ func (m *lifecycleReconcilerStorageMiddleware) transitionObjectIfDue(ctx context
 	err := m.Next.TransitionObjectStorageClass(storage.WithNotificationEventOverride(ctx, "s3:LifecycleTransition"), bucketName, object.Key, chosenTarget, &storage.TransitionObjectStorageClassOptions{
 		IfMatchETag: ptrutils.ToPtr(object.ETag),
 	})
-	if err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
+	if errors.Is(err, storage.ErrObjectLockAccessDenied) || err == storage.ErrPreconditionFailed || err == storage.ErrNoSuchKey || err == storage.ErrNoSuchBucket {
 		return
 	}
 	if err != nil {

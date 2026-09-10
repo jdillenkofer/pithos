@@ -418,6 +418,9 @@ func (obs *outboxPartStore) Start(ctx context.Context) error {
 	if err := obs.innerPartStore.Start(ctx); err != nil {
 		return err
 	}
+	if lifecycle.IsDryRun(ctx) {
+		return nil
+	}
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	obs.workerCancel = cancel
 	obs.workerDone = make(chan struct{})

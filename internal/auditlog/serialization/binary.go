@@ -5,6 +5,7 @@ import (
 	"crypto/mldsa"
 	"crypto/sha512"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -95,6 +96,18 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		}
 		if err := binary.Write(w, binary.BigEndian, d.Outcome.DurationMs); err != nil {
 			return err
+		}
+		if e.Version >= 4 {
+			if err := writeString(w, d.Resource.VersionID); err != nil {
+				return err
+			}
+			encoded, err := json.Marshal(d.ObjectLock)
+			if err != nil {
+				return err
+			}
+			if err := writeBytes(w, encoded); err != nil {
+				return err
+			}
 		}
 	case *auditlog.GroundingDetails:
 		if err := writeBytes(w, d.MerkleRootHash); err != nil {
@@ -252,6 +265,18 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 				return nil, err
 			}
 			if err := binary.Read(d.r, binary.BigEndian, &dls.Outcome.DurationMs); err != nil {
+				return nil, err
+			}
+		}
+		if e.Version >= 4 {
+			if dls.Resource.VersionID, err = readString(d.r); err != nil {
+				return nil, err
+			}
+			encoded, err := readBytes(d.r)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(encoded, &dls.ObjectLock); err != nil {
 				return nil, err
 			}
 		}

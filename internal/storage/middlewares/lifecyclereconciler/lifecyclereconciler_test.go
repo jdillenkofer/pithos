@@ -2,6 +2,7 @@ package lifecyclereconciler
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -834,4 +835,25 @@ func TestReconcileExpiredDeleteMarkerHonorsFilter(t *testing.T) {
 	reconcile(f, now)
 
 	assert.Empty(t, f.deletedVersions)
+}
+
+type lockedLifecycleStorage struct{ *fakeStorage }
+
+func (f *lockedLifecycleStorage) DeleteObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+	if opts != nil && opts.VersionID != nil && *opts.VersionID == "protected" {
+		return nil, fmt.Errorf("retention: %w", storage.ErrObjectLockAccessDenied)
+	}
+	return f.fakeStorage.DeleteObject(ctx, bucket, key, opts)
+}
+func TestLifecycleSkipsProtectedVersionAndContinues(t *testing.T) {
+	f := newFakeStorage()
+	bucket := f.addBucket("locked")
+	now := time.Date(2030, 1, 10, 0, 0, 0, 0, time.UTC)
+	f.addVersion(bucket.String(), "key", "latest", true, false, 10, now.AddDate(0, 0, -3), nil)
+	f.addVersion(bucket.String(), "key", "protected", false, false, 10, now.AddDate(0, 0, -5), nil)
+	f.addVersion(bucket.String(), "key", "unprotected", false, false, 10, now.AddDate(0, 0, -8), nil)
+	f.lifecycleConfig[bucket.String()] = &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{{Status: storage.LifecycleRuleStatusEnabled, NoncurrentVersionExpiration: &storage.LifecycleNoncurrentVersionExpiration{NoncurrentDays: ptrutils.ToPtr(int32(1))}}}}
+	middleware := NewStorageMiddleware(&lockedLifecycleStorage{f}, WithNow(func() time.Time { return now })).(*lifecycleReconcilerStorageMiddleware)
+	middleware.ReconcileOnce(t.Context(), nil)
+	require.Equal(t, []string{"key\x00unprotected"}, f.deletedVersions)
 }

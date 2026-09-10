@@ -1,0 +1,312 @@
+package metadatapart
+
+import (
+	"context"
+	"errors"
+	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
+	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
+	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
+	"io"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// The backend lifecycles are owned by newTestStorage. Restart only the
+// replication coordinator to ensure it reconstructs all state from SQL.
+type replicaFaultStorage struct {
+	delegator.DelegatingStorage
+	blocked atomic.Bool
+	writes  atomic.Int32
+}
+
+func (s *replicaFaultStorage) Start(context.Context) error { return nil }
+func (s *replicaFaultStorage) Stop(context.Context) error  { return nil }
+func (s *replicaFaultStorage) PutObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksum *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
+	if s.blocked.Load() {
+		return nil, errors.New("replica unavailable")
+	}
+	s.writes.Add(1)
+	return s.Next.PutObject(ctx, bucket, key, contentType, data, checksum, opts)
+}
+func (s *replicaFaultStorage) PutObjectRetention(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, retention *storage.ObjectRetention, opts *storage.ObjectLockOptions) error {
+	if s.blocked.Load() {
+		return errors.New("replica unavailable")
+	}
+	return s.Next.PutObjectRetention(ctx, bucket, key, retention, opts)
+}
+
+func TestReplicationObjectLockRecoveryAndStableIDs(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	first, done1 := newTestStorage(t)
+	defer done1()
+	second, done2 := newTestStorage(t)
+	defer done2()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	a := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(first)}
+	b := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(second)}
+	ctx := t.Context()
+	registry := prometheus.NewRegistry()
+	opts := replication.Options{ReplicationID: "test", SecondaryIDs: []string{"a", "b"}, Registerer: registry}
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{a, b}, opts)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	bucket := storage.MustNewBucketName("locked")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
+	days := int32(1)
+	require.NoError(t, coordinator.PutObjectLockConfiguration(ctx, bucket, &storage.ObjectLockConfiguration{ObjectLockEnabled: "Enabled", DefaultRetention: &storage.DefaultRetention{Mode: storage.RetentionModeGovernance, Days: &days}}))
+	b.blocked.Store(true)
+	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("retained journal data"), nil, nil)
+	require.Error(t, err)
+	primaryObject, err := primary.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	firstObject, err := first.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, *primaryObject.VersionID, *firstObject.VersionID)
+	require.True(t, primaryObject.ObjectLock.Retention.RetainUntilDate.Equal(firstObject.ObjectLock.Retention.RetainUntilDate))
+	require.EqualValues(t, 1, a.writes.Load())
+	require.EqualValues(t, 0, b.writes.Load())
+	require.NoError(t, coordinator.Stop(ctx))
+	// Reordering configuration must not reorder durable version mappings.
+	b.blocked.Store(false)
+	opts.SecondaryIDs = []string{"b", "a"}
+	coordinator, err = replication.NewStorageWithOptions(p, []storage.Storage{b, a}, opts)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	require.EqualValues(t, 1, a.writes.Load())
+	require.EqualValues(t, 1, b.writes.Load())
+	secondObject, err := second.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, *primaryObject.VersionID, *secondObject.VersionID)
+	require.True(t, primaryObject.ObjectLock.Retention.RetainUntilDate.Equal(secondObject.ObjectLock.Retention.RetainUntilDate))
+	originalVersionID := *primaryObject.VersionID
+	offset := primaryObject.Size
+	_, err = coordinator.AppendObject(ctx, bucket, key, strings.NewReader(" appended"), nil, &storage.AppendObjectOptions{WriteOffset: &offset})
+	require.NoError(t, err)
+	primaryObject, err = primary.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	for _, store := range []*metadataPartStorage{first, second} {
+		obj, err := store.HeadObject(ctx, bucket, key, nil)
+		require.NoError(t, err)
+		require.Equal(t, primaryObject.Size, obj.Size)
+		require.True(t, primaryObject.ObjectLock.Retention.RetainUntilDate.Equal(obj.ObjectLock.Retention.RetainUntilDate))
+	}
+	lockOpts := &storage.ObjectLockOptions{VersionID: primaryObject.VersionID}
+	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, lockOpts))
+	for _, store := range []*metadataPartStorage{primary, first, second} {
+		obj, err := store.HeadObject(ctx, bucket, key, nil)
+		require.NoError(t, err)
+		require.Equal(t, storage.LegalHoldOn, *obj.ObjectLock.LegalHold)
+	}
+	_, err = coordinator.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: primaryObject.VersionID, BypassGovernanceRetention: true})
+	require.ErrorIs(t, err, storage.ErrObjectLockAccessDenied)
+	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOff, lockOpts))
+	shorter := &storage.ObjectRetention{Mode: storage.RetentionModeGovernance, RetainUntilDate: time.Now().UTC().Add(time.Hour)}
+	require.NoError(t, coordinator.PutObjectRetention(ctx, bucket, key, shorter, &storage.ObjectLockOptions{VersionID: primaryObject.VersionID, BypassGovernanceRetention: true}))
+	for _, store := range []*metadataPartStorage{primary, first, second} {
+		obj, err := store.HeadObject(ctx, bucket, key, nil)
+		require.NoError(t, err)
+		require.True(t, obj.ObjectLock.Retention.RetainUntilDate.Equal(shorter.RetainUntilDate.Truncate(time.Microsecond)))
+	}
+	_, err = coordinator.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: primaryObject.VersionID, BypassGovernanceRetention: true})
+	require.NoError(t, err)
+	_, err = coordinator.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: &originalVersionID, BypassGovernanceRetention: true})
+	require.NoError(t, err)
+	for _, store := range []*metadataPartStorage{primary, first, second} {
+		require.Empty(t, physicalPartIDs(t, store))
+	}
+}
+
+func TestReplicationMapsUnversionedNullVersion(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, doneSecondary := newTestStorage(t)
+	defer doneSecondary()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	coordinator, err := replication.NewStorage(p, s)
+	require.NoError(t, err)
+	ctx := t.Context()
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	bucket := storage.MustNewBucketName("unversioned")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
+	put, err := coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("content"), nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, put.VersionID)
+	require.Equal(t, "null", *put.VersionID)
+	require.NoError(t, coordinator.PutObjectTagging(ctx, bucket, key, map[string]string{"state": "mapped"}, nil))
+	tags, err := secondary.GetObjectTagging(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"state": "mapped"}, tags)
+}
+
+func TestReplicationReturnsDeleteMarker(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, doneSecondary := newTestStorage(t)
+	defer doneSecondary()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	coordinator, err := replication.NewStorage(p, s)
+	require.NoError(t, err)
+	ctx := t.Context()
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	bucket := storage.MustNewBucketName("versioned")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
+	status := storage.BucketVersioningStatusEnabled
+	require.NoError(t, coordinator.PutBucketVersioningConfiguration(ctx, bucket, &storage.BucketVersioningConfiguration{Status: &status}))
+	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("content"), nil, nil)
+	require.NoError(t, err)
+	deleted, err := coordinator.DeleteObjects(ctx, bucket, []storage.DeleteObjectsInputEntry{{Key: key}})
+	require.NoError(t, err)
+	require.Len(t, deleted.Entries, 1)
+	require.True(t, *deleted.Entries[0].DeleteMarker)
+	require.Nil(t, deleted.Entries[0].VersionID)
+	require.NotNil(t, deleted.Entries[0].DeleteMarkerVersionID)
+}
+
+func TestReplicationReconcilePreservesHistoryAndResumes(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, done2 := newTestStorage(t)
+	defer done2()
+	ctx := t.Context()
+	bucket := storage.MustNewBucketName("history")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, primary.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
+	old, err := primary.PutObject(ctx, bucket, key, nil, strings.NewReader("old unprotected"), nil, nil)
+	require.NoError(t, err)
+	days := int32(1)
+	config := &storage.ObjectLockConfiguration{ObjectLockEnabled: "Enabled", DefaultRetention: &storage.DefaultRetention{Mode: storage.RetentionModeCompliance, Days: &days}}
+	require.NoError(t, primary.PutObjectLockConfiguration(ctx, bucket, config))
+	retained, err := primary.PutObject(ctx, bucket, key, nil, strings.NewReader("retained"), nil, nil)
+	require.NoError(t, err)
+	_, err = primary.DeleteObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, secondary.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
+	require.NoError(t, secondary.PutObjectLockConfiguration(ctx, bucket, config))
+	existing, err := secondary.PutObject(ctx, bucket, key, nil, strings.NewReader("existing replica"), nil, nil)
+	require.NoError(t, err)
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	options := replication.Options{ReplicationID: "history", SecondaryIDs: []string{"replica"}, Registerer: prometheus.NewRegistry()}
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	// Dry-run cannot create mappings or alter the destination configuration.
+	require.NoError(t, replication.ReconcileStorage(ctx, coordinator, "history", []storage.BucketName{bucket}, true))
+	require.EqualValues(t, 0, s.writes.Load())
+	err = coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, &storage.ObjectLockOptions{VersionID: old.VersionID})
+	require.ErrorIs(t, err, replication.ErrMissingMapping)
+	s.blocked.Store(true)
+	require.Error(t, replication.ReconcileStorage(ctx, coordinator, "history", []storage.BucketName{bucket}, false))
+	require.NoError(t, coordinator.Stop(ctx))
+	s.blocked.Store(false)
+	coordinator, err = replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	// Recovery completes all copies, restores defaults, and leaves the marker latest.
+	versions, err := secondary.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 1000})
+	require.NoError(t, err)
+	require.Len(t, versions.Versions, 4)
+	require.True(t, versions.Versions[0].IsLatest)
+	require.True(t, versions.Versions[0].IsDeleteMarker)
+	_, err = secondary.HeadObject(ctx, bucket, key, &storage.HeadObjectOptions{VersionID: existing.VersionID})
+	require.NoError(t, err)
+	configAfter, err := secondary.GetObjectLockConfiguration(ctx, bucket)
+	require.NoError(t, err)
+	require.Equal(t, config, configAfter)
+	var oldReplica *storage.Object
+	for _, v := range versions.Versions {
+		if v.IsDeleteMarker {
+			continue
+		}
+		obj, readers, err := secondary.GetObject(ctx, bucket, key, nil, &storage.GetObjectOptions{VersionID: &v.VersionID})
+		require.NoError(t, err)
+		data, err := io.ReadAll(readers[0])
+		readers[0].Close()
+		require.NoError(t, err)
+		if string(data) == "old unprotected" {
+			oldReplica = obj
+			require.Nil(t, obj.ObjectLock.Retention)
+		}
+	}
+	require.NotNil(t, oldReplica)
+	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, &storage.ObjectLockOptions{VersionID: old.VersionID}))
+	hold, err := secondary.GetObjectLegalHold(ctx, bucket, key, &storage.ObjectLockOptions{VersionID: oldReplica.VersionID})
+	require.NoError(t, err)
+	require.Equal(t, storage.LegalHoldOn, *hold)
+	_, err = coordinator.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: retained.VersionID, BypassGovernanceRetention: true})
+	require.ErrorIs(t, err, storage.ErrObjectLockAccessDenied)
+	require.NoError(t, replication.ReconcileStorage(ctx, coordinator, "history", []storage.BucketName{bucket}, false))
+	versionsAgain, err := secondary.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 1000})
+	require.NoError(t, err)
+	require.Len(t, versionsAgain.Versions, 4)
+}
+
+type remotePrimaryStorage struct {
+	replicaFaultStorage
+	ambiguous atomic.Bool
+}
+
+func (s *remotePrimaryStorage) Database() database.Database { return nil }
+func (s *remotePrimaryStorage) PutObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksum *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
+	result, err := s.replicaFaultStorage.PutObject(ctx, bucket, key, contentType, data, checksum, opts)
+	if err == nil && s.ambiguous.Load() {
+		return nil, errors.New("connection lost after accepting write")
+	}
+	return result, err
+}
+func TestReplicationRemotePrimaryAmbiguity(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, done2 := newTestStorage(t)
+	defer done2()
+	journal, done3 := newTestStorage(t)
+	defer done3()
+	p := &remotePrimaryStorage{replicaFaultStorage: replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	options := replication.Options{ReplicationID: "remote", SecondaryIDs: []string{"replica"}, JournalDatabase: journal.db, Registerer: prometheus.NewRegistry()}
+	ctx := t.Context()
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	bucket, key := storage.MustNewBucketName("remote"), storage.MustNewObjectKey("key")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
+	p.ambiguous.Store(true)
+	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("retained input"), nil, nil)
+	require.Error(t, err)
+	require.NoError(t, coordinator.Stop(ctx))
+	p.ambiguous.Store(false)
+	coordinator, err = replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	versions, err := primary.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 100})
+	require.NoError(t, err)
+	require.Len(t, versions.Versions, 2)
+	target, err := secondary.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	latest := versions.Versions[0].VersionID
+	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, &storage.ObjectLockOptions{VersionID: &latest}))
+	hold, err := secondary.GetObjectLegalHold(ctx, bucket, key, &storage.ObjectLockOptions{VersionID: target.VersionID})
+	require.NoError(t, err)
+	require.Equal(t, storage.LegalHoldOn, *hold)
+	// A definite rejection must not leave the entire topology blocked forever.
+	require.ErrorIs(t, coordinator.PutObjectLockConfiguration(ctx, bucket, &storage.ObjectLockConfiguration{}), storage.ErrInvalidObjectLockConfiguration)
+	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOff, &storage.ObjectLockOptions{VersionID: &latest}))
+	old := versions.Versions[1].VersionID
+	require.ErrorIs(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, &storage.ObjectLockOptions{VersionID: &old}), replication.ErrMissingMapping)
+}

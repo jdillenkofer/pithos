@@ -6,10 +6,20 @@ import (
 	"io"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 )
 
 type DelegatingStorage struct {
 	Next storage.Storage
+}
+
+// Database exposes a local primary's transaction domain through middleware.
+// Remote backends return nil and require an explicit replication journal DB.
+func (d *DelegatingStorage) Database() database.Database {
+	if provider, ok := d.Next.(interface{ Database() database.Database }); ok {
+		return provider.Database()
+	}
+	return nil
 }
 
 func Wrap(next storage.Storage) DelegatingStorage {
@@ -41,8 +51,8 @@ func (d *DelegatingStorage) Stop(ctx context.Context) error {
 	return d.Next.Stop(ctx)
 }
 
-func (d *DelegatingStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	return d.Next.CreateBucket(ctx, bucketName)
+func (d *DelegatingStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
+	return d.Next.CreateBucket(ctx, bucketName, options...)
 }
 
 func (d *DelegatingStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -188,3 +198,5 @@ func (d *DelegatingStorage) ListMultipartUploads(ctx context.Context, bucketName
 func (d *DelegatingStorage) ListParts(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
 	return d.Next.ListParts(ctx, bucketName, key, uploadId, opts)
 }
+
+func (d *DelegatingStorage) Unwrap() storage.Storage { return d.Next }
