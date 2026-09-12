@@ -31,6 +31,10 @@ each signed request. Credential changes therefore take effect without a server
 restart. Indices may begin at `0` or `1`, must be contiguous, and lookup stops
 at the first missing or incomplete pair after the initial index.
 
+Access Key IDs are limited to 128 bytes, secret access keys to 256 bytes, and
+principal IDs to 256 bytes. Access Key IDs and secret access keys must be
+non-empty; an empty principal ID means that no principal is configured.
+
 Principal IDs are optional, opaque, and case-sensitive. To rotate a credential
 without changing policy, configure the old and new entries with the same ID:
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -133,6 +134,31 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 	})
 }
 
+func TestValidateCredentialLengths(t *testing.T) {
+	valid := Credential{
+		AccessKeyID:     strings.Repeat("a", MaxAccessKeyIDLength),
+		SecretAccessKey: strings.Repeat("s", MaxSecretAccessKeyLength),
+		PrincipalID:     strings.Repeat("p", MaxPrincipalIDLength),
+	}
+	require.NoError(t, validateCredential(valid))
+
+	tests := map[string]Credential{
+		"empty access key ID":     {SecretAccessKey: "secret"},
+		"long access key ID":      {AccessKeyID: strings.Repeat("a", MaxAccessKeyIDLength+1), SecretAccessKey: "secret"},
+		"empty secret access key": {AccessKeyID: "key"},
+		"long secret access key":  {AccessKeyID: "key", SecretAccessKey: strings.Repeat("s", MaxSecretAccessKeyLength+1)},
+		"long principal ID":       {AccessKeyID: "key", SecretAccessKey: "secret", PrincipalID: strings.Repeat("p", MaxPrincipalIDLength+1)},
+	}
+	for name, credential := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Error(t, validateCredential(credential))
+		})
+	}
+
+	valid.PrincipalID = ""
+	require.NoError(t, validateCredential(valid))
+}
+
 type recordingCredentialProvider struct {
 	calls int
 	err   error
@@ -161,6 +187,16 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 		MakeSignatureMiddleware(provider, "eu-central-1", next).ServeHTTP(recorder, request)
 		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 		assert.Equal(t, 1, provider.calls)
+	})
+
+	t.Run("overlong access key is unauthorized without provider lookup", func(t *testing.T) {
+		provider := &recordingCredentialProvider{}
+		recorder := httptest.NewRecorder()
+		request := signedLookingRequest()
+		request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+strings.Repeat("a", MaxAccessKeyIDLength+1)+"/20260912/eu-central-1/s3/aws4_request,SignedHeaders=host,Signature=invalid")
+		MakeSignatureMiddleware(provider, "eu-central-1", next).ServeHTTP(recorder, request)
+		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		assert.Zero(t, provider.calls)
 	})
 
 	t.Run("provider error is internal server error", func(t *testing.T) {

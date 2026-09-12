@@ -2,11 +2,18 @@ package authentication
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 )
 
 const credentialEnvPrefix = "PITHOS_CREDENTIALS_"
+
+const (
+	MaxAccessKeyIDLength     = 128
+	MaxSecretAccessKeyLength = 256
+	MaxPrincipalIDLength     = 256
+)
 
 type Credential struct {
 	AccessKeyID     string
@@ -21,6 +28,25 @@ type AuthenticatedIdentity struct {
 
 type CredentialProvider interface {
 	Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error)
+}
+
+func validateCredential(credential Credential) error {
+	if len(credential.AccessKeyID) == 0 {
+		return fmt.Errorf("access key ID must not be empty")
+	}
+	if len(credential.AccessKeyID) > MaxAccessKeyIDLength {
+		return fmt.Errorf("access key ID exceeds maximum length of %d bytes", MaxAccessKeyIDLength)
+	}
+	if len(credential.SecretAccessKey) == 0 {
+		return fmt.Errorf("secret access key must not be empty")
+	}
+	if len(credential.SecretAccessKey) > MaxSecretAccessKeyLength {
+		return fmt.Errorf("secret access key exceeds maximum length of %d bytes", MaxSecretAccessKeyLength)
+	}
+	if len(credential.PrincipalID) > MaxPrincipalIDLength {
+		return fmt.Errorf("principal ID exceeds maximum length of %d bytes", MaxPrincipalIDLength)
+	}
+	return nil
 }
 
 // EnvCredentialProvider resolves credentials from the process environment on

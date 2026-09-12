@@ -692,6 +692,10 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 
 	accessKeyID := accessKeyIdAndScope[0]
+	if len(accessKeyID) == 0 || len(accessKeyID) > MaxAccessKeyIDLength {
+		slog.DebugContext(r.Context(), "Access key ID has an invalid length")
+		return nil, false, nil
+	}
 	expectedCredential, found, err := credentialProvider.Lookup(r.Context(), accessKeyID)
 	if err != nil {
 		return nil, false, err
@@ -699,6 +703,9 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	if !found {
 		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
 		return nil, false, nil
+	}
+	if err := validateCredential(expectedCredential); err != nil {
+		return nil, false, fmt.Errorf("credential provider returned an invalid credential: %w", err)
 	}
 	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
