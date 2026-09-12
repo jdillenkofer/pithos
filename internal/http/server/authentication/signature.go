@@ -67,6 +67,7 @@ var ErrTrailerChecksumMismatch = errors.New("BadDigest")
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
 type AccessKeyIdContextKey struct{}
+type AuthenticatedIdentityContextKey struct{}
 type AuthTypeContextKey struct{}
 type RequestIDContextKey struct{}
 type ClientIPContextKey struct{}
@@ -668,7 +669,7 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	}, nil
 }
 
-func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (usedAccessKeyID *string, authenticated bool, providerErr error) {
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *AuthenticatedIdentity, authenticated bool, providerErr error) {
 	now := time.Now().UTC()
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
 	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
@@ -789,7 +790,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
-	return &accessKeyID, isSignatureValid, nil
+	return &AuthenticatedIdentity{AccessKeyID: accessKeyID, PrincipalID: expectedCredential.PrincipalID}, isSignatureValid, nil
 }
 
 type awsChunkReadCloser struct {
@@ -1038,14 +1039,15 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			return
 		}
 
-		usedAccessKeyId, isAuthenticated, err := checkAuthentication(credentialProvider, region, r)
+		identity, isAuthenticated, err := checkAuthentication(credentialProvider, region, r)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 		if isAuthenticated {
-			ctx := context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId)
+			ctx := context.WithValue(r.Context(), AuthenticatedIdentityContextKey{}, *identity)
+			ctx = context.WithValue(ctx, AccessKeyIdContextKey{}, identity.AccessKeyID)
 			ctx = context.WithValue(ctx, IsAuthenticatedContextKey{}, true)
 			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
 			r = r.Clone(ctx)

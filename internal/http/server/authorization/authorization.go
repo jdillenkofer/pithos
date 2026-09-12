@@ -4,6 +4,7 @@ import "context"
 
 type Authorization struct {
 	AccessKeyId *string
+	PrincipalId *string
 }
 
 type HTTPRequest struct {

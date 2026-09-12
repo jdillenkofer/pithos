@@ -17,12 +17,18 @@ func setCredential(t *testing.T, index, accessKeyID, secretAccessKey string) {
 	t.Setenv(credentialEnvPrefix+index+"_SECRET_ACCESS_KEY", secretAccessKey)
 }
 
+func setPrincipal(t *testing.T, index, principalID string) {
+	t.Helper()
+	t.Setenv(credentialEnvPrefix+index+"_PRINCIPAL_ID", principalID)
+}
+
 func clearCredentials(t *testing.T) {
 	t.Helper()
 	for i := 0; i <= 3; i++ {
 		index := string(rune('0' + i))
 		t.Setenv(credentialEnvPrefix+index+"_ACCESS_KEY_ID", "")
 		t.Setenv(credentialEnvPrefix+index+"_SECRET_ACCESS_KEY", "")
+		t.Setenv(credentialEnvPrefix+index+"_PRINCIPAL_ID", "")
 	}
 }
 
@@ -94,6 +100,36 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, "new-secret", credential.SecretAccessKey)
+	})
+
+	t.Run("explicit and shared principal", func(t *testing.T) {
+		clearCredentials(t)
+		setCredential(t, "0", "old-key", "old-secret")
+		setPrincipal(t, "0", "client")
+		setCredential(t, "1", "new-key", "new-secret")
+		setPrincipal(t, "1", "client")
+		provider := NewEnvCredentialProvider()
+		for _, key := range []string{"old-key", "new-key"} {
+			credential, found, err := provider.Lookup(context.Background(), key)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, "client", credential.PrincipalID)
+		}
+	})
+
+	t.Run("missing principal stays empty and changes dynamically", func(t *testing.T) {
+		clearCredentials(t)
+		setCredential(t, "0", "key", "secret")
+		provider := NewEnvCredentialProvider()
+		credential, found, err := provider.Lookup(context.Background(), "key")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Empty(t, credential.PrincipalID)
+		setPrincipal(t, "0", "new-principal")
+		credential, found, err = provider.Lookup(context.Background(), "key")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "new-principal", credential.PrincipalID)
 	})
 }
 

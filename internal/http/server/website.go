@@ -392,15 +392,19 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 
 	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
 	var accessKeyId *string
+	var principalId *string
 	if isAuthenticated {
-		keyIdStr, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
-		accessKeyId = &keyIdStr
+		identity, _ := ctx.Value(authentication.AuthenticatedIdentityContextKey{}).(authentication.AuthenticatedIdentity)
+		accessKeyId = &identity.AccessKeyID
+		if identity.PrincipalID != "" {
+			principalId = &identity.PrincipalID
+		}
 	}
 
 	bucketStr := bucketName.String()
 	authRequest := &authorization.Request{
 		Operation:     operation,
-		Authorization: authorization.Authorization{AccessKeyId: accessKeyId},
+		Authorization: authorization.Authorization{AccessKeyId: accessKeyId, PrincipalId: principalId},
 		Bucket:        &bucketStr,
 		Key:           keyStr,
 		HttpRequest:   makeAuthorizationHTTPRequest(r),

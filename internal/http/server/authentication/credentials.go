@@ -11,6 +11,12 @@ const credentialEnvPrefix = "PITHOS_CREDENTIALS_"
 type Credential struct {
 	AccessKeyID     string
 	SecretAccessKey string
+	PrincipalID     string
+}
+
+type AuthenticatedIdentity struct {
+	AccessKeyID string
+	PrincipalID string
 }
 
 type CredentialProvider interface {
@@ -34,6 +40,7 @@ func (p *EnvCredentialProvider) Lookup(ctx context.Context, accessKeyID string) 
 		prefix := credentialEnvPrefix + strconv.Itoa(i)
 		configuredAccessKeyID := os.Getenv(prefix + "_ACCESS_KEY_ID")
 		secretAccessKey := os.Getenv(prefix + "_SECRET_ACCESS_KEY")
+		principalID := os.Getenv(prefix + "_PRINCIPAL_ID")
 		if configuredAccessKeyID == "" || secretAccessKey == "" {
 			// Preserve compatibility with configurations whose first index is 1.
 			if i == 0 {
@@ -42,7 +49,7 @@ func (p *EnvCredentialProvider) Lookup(ctx context.Context, accessKeyID string) 
 			return Credential{}, false, nil
 		}
 		if configuredAccessKeyID == accessKeyID {
-			return Credential{AccessKeyID: configuredAccessKeyID, SecretAccessKey: secretAccessKey}, true, nil
+			return Credential{AccessKeyID: configuredAccessKeyID, SecretAccessKey: secretAccessKey, PrincipalID: principalID}, true, nil
 		}
 	}
 }

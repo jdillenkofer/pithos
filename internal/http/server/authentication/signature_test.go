@@ -364,13 +364,13 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	query.Set("X-Amz-Signature", createSignature(signingKey, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	usedAccessKeyID, authenticated, providerErr := checkAuthentication(staticCredentialProvider{
-		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey},
+	identity, authenticated, providerErr := checkAuthentication(staticCredentialProvider{
+		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, PrincipalID: "client"},
 	}, region, r)
 	assert.NoError(t, providerErr)
 	assert.True(t, authenticated)
-	if assert.NotNil(t, usedAccessKeyID) {
-		assert.Equal(t, accessKeyID, *usedAccessKeyID)
+	if assert.NotNil(t, identity) {
+		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, PrincipalID: "client"}, *identity)
 	}
 }
 
@@ -578,12 +578,12 @@ func TestCheckAuthenticationAcceptsSigV4aHeader(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	r := newSignedSigV4aHeaderRequest(t, "eu-central-1,us-west-*")
-	usedAccessKeyID, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
 
 	assert.True(t, authenticated)
-	if assert.NotNil(t, usedAccessKeyID) {
-		assert.Equal(t, sigV4aTestAccessKey, *usedAccessKeyID)
+	if assert.NotNil(t, identity) {
+		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 	}
 }
 
@@ -619,11 +619,11 @@ func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
 	query.Set("X-Amz-Signature", signSigV4aString(t, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	usedAccessKeyID, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
 	assert.True(t, authenticated)
-	if assert.NotNil(t, usedAccessKeyID) {
-		assert.Equal(t, sigV4aTestAccessKey, *usedAccessKeyID)
+	if assert.NotNil(t, identity) {
+		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 	}
 }
 

@@ -419,9 +419,13 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
 
 	var accessKeyId *string
+	var principalId *string
 	if isAuthenticated {
-		keyStr, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
-		accessKeyId = &keyStr
+		identity, _ := ctx.Value(authentication.AuthenticatedIdentityContextKey{}).(authentication.AuthenticatedIdentity)
+		accessKeyId = &identity.AccessKeyID
+		if identity.PrincipalID != "" {
+			principalId = &identity.PrincipalID
+		}
 	}
 
 	// Expose tags supplied via the x-amz-tagging header as request tags
@@ -443,6 +447,7 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		Operation: operation,
 		Authorization: authorization.Authorization{
 			AccessKeyId: accessKeyId,
+			PrincipalId: principalId,
 		},
 		Bucket:            bucket,
 		Key:               key,

@@ -19,6 +19,7 @@
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
+| `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Optional stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
@@ -29,6 +30,26 @@ Pithos reads these variables through its environment credential provider for
 each signed request. Credential changes therefore take effect without a server
 restart. Indices may begin at `0` or `1`, must be contiguous, and lookup stops
 at the first missing or incomplete pair after the initial index.
+
+Principal IDs are optional, opaque, and case-sensitive. To rotate a credential
+without changing policy, configure the old and new entries with the same ID:
+
+```shell
+PITHOS_CREDENTIALS_0_ACCESS_KEY_ID=old-key
+PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY=old-secret
+PITHOS_CREDENTIALS_0_PRINCIPAL_ID=storage-client
+PITHOS_CREDENTIALS_1_ACCESS_KEY_ID=new-key
+PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY=new-secret
+PITHOS_CREDENTIALS_1_PRINCIPAL_ID=storage-client
+```
+
+The corresponding policy can remain unchanged during the rotation:
+
+```lua
+function authorizeRequest(request)
+  return request:principalIdEquals("storage-client")
+end
+```
 
 ### Storage
 
@@ -95,6 +116,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 |-------|------|-------------|
 | `request.operation` | `string` | The S3 operation being performed (e.g. `"GetObject"`, `"PutObject"`) |
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
+| `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` when absent or anonymous |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
 | `request.sourceBucket` | `string\|nil` | The copy source bucket for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
@@ -135,6 +157,9 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request:hasAccessKeyId()` | `boolean` | Returns `true` if `request.authorization.accessKeyId` is present |
 | `request:accessKeyIdEquals(value)` | `boolean` | Returns `true` if `accessKeyId` exactly matches `value` |
 | `request:accessKeyIdIn(values)` | `boolean` | Returns `true` if `accessKeyId` matches any value in `values` |
+| `request:hasPrincipalId()` | `boolean` | Returns `true` if `request.authorization.principalId` is present |
+| `request:principalIdEquals(value)` | `boolean` | Returns `true` if `principalId` exactly matches `value` |
+| `request:principalIdIn(values)` | `boolean` | Returns `true` if `principalId` matches any value in `values` |
 | `request:bucketEquals(bucket)` | `boolean` | Returns `true` if request bucket exactly matches `bucket` |
 | `request:keyHasPrefix(prefix)` | `boolean` | Returns `true` if request key starts with `prefix` |
 | `request:keyHasSuffix(suffix)` | `boolean` | Returns `true` if request key ends with `suffix` |
