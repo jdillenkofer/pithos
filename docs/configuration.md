@@ -35,10 +35,11 @@ The provider settings may also be set with the `-credentialsProvider`,
 `-credentialsDatabaseIndex` command-line flags.
 The credential values themselves are never accepted as arguments.
 
-Pithos reads these variables through its environment credential provider for
-each signed request. Credential changes therefore take effect without a server
-restart. Indices may begin at `0` or `1`, must be contiguous, and lookup stops
-at the first missing or incomplete pair after the initial index.
+Pithos reads these variables once when the environment credential provider is
+created at startup and caches the resulting credential set. Environment
+credential changes require restarting Pithos. Indices may begin at `0` or `1`,
+must be contiguous, and loading stops at the first missing or incomplete pair
+after the initial index.
 
 Access Key IDs are limited to 128 bytes, secret access keys to 256 bytes, and
 principal IDs to 256 bytes. Access Key IDs and secret access keys must be

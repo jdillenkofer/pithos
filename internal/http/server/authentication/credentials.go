@@ -186,33 +186,44 @@ func validateCredential(credential Credential) error {
 	return ValidateCredential(credential)
 }
 
-// EnvCredentialProvider resolves credentials from the process environment on
-// every lookup, allowing credentials to be changed without restarting Pithos.
-type EnvCredentialProvider struct{}
-
-func NewEnvCredentialProvider() *EnvCredentialProvider {
-	return &EnvCredentialProvider{}
+// EnvCredentialProvider resolves credentials from an immutable snapshot of the
+// process environment captured when the provider is created. Environment
+// credential changes require restarting Pithos.
+type EnvCredentialProvider struct {
+	credentials map[string]Credential
 }
 
-func (p *EnvCredentialProvider) Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error) {
+func NewEnvCredentialProvider() *EnvCredentialProvider {
+	credentials := make(map[string]Credential)
 	for i := 0; ; i++ {
-		if err := ctx.Err(); err != nil {
-			return Credential{}, false, err
-		}
-
 		prefix := credentialEnvPrefix + strconv.Itoa(i)
-		configuredAccessKeyID := os.Getenv(prefix + "_ACCESS_KEY_ID")
+		accessKeyID := os.Getenv(prefix + "_ACCESS_KEY_ID")
 		secretAccessKey := os.Getenv(prefix + "_SECRET_ACCESS_KEY")
 		principalID := os.Getenv(prefix + "_PRINCIPAL_ID")
-		if configuredAccessKeyID == "" || secretAccessKey == "" {
+		if accessKeyID == "" || secretAccessKey == "" {
 			// Preserve compatibility with configurations whose first index is 1.
 			if i == 0 {
 				continue
 			}
-			return Credential{}, false, nil
+			break
 		}
-		if configuredAccessKeyID == accessKeyID {
-			return Credential{AccessKeyID: configuredAccessKeyID, SecretAccessKey: secretAccessKey, PrincipalID: principalID}, true, nil
+		// Preserve the previous lookup behavior when an access key is listed
+		// more than once: the lowest configured index wins.
+		if _, exists := credentials[accessKeyID]; !exists {
+			credentials[accessKeyID] = Credential{
+				AccessKeyID:     accessKeyID,
+				SecretAccessKey: secretAccessKey,
+				PrincipalID:     principalID,
+			}
 		}
 	}
+	return &EnvCredentialProvider{credentials: credentials}
+}
+
+func (p *EnvCredentialProvider) Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return Credential{}, false, err
+	}
+	credential, found := p.credentials[accessKeyID]
+	return credential, found, nil
 }
