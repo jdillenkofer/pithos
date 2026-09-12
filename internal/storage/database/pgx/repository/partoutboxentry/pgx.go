@@ -42,6 +42,10 @@ func (bor *pgxRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string
 	return count, nil
 }
 
+func (bor *pgxRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+	return convertRowToPartOutboxEntryEntity(tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId))
+}
+
 func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry.Entity, error) {
 	var id string
 	var operation string

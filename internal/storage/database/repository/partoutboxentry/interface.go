@@ -11,6 +11,7 @@ import (
 
 type Repository interface {
 	Count(ctx context.Context, tx *sql.Tx, outboxId string) (int, error)
+	FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*Entity, error)
 	FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*Entity, error)
 	FindLastPartOutboxEntryGroupedByPartId(ctx context.Context, tx *sql.Tx, outboxId string) ([]Entity, error)
 	FindPartOutboxEntryChunksById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) ([]*ContentChunk, error)

@@ -21,14 +21,14 @@ const (
 	findPartOutboxEntryChunksByIdStmt          = "SELECT c.outbox_entry_id, c.chunk_index, c.content FROM part_outbox_contents c INNER JOIN part_outbox_entries e ON e.id = c.outbox_entry_id WHERE c.outbox_entry_id = $1 AND e.outbox_id = $2 ORDER BY c.chunk_index ASC"
 	// Parameters are numbered in text order: sqlite assigns $N parameter
 	// indexes by first occurrence, not by the number itself.
-	findPartOutboxEntryChunkByIndexStmt        = "SELECT c.chunk_index, c.content FROM part_outbox_entries e LEFT JOIN part_outbox_contents c ON c.outbox_entry_id = e.id AND c.chunk_index = $1 WHERE e.id = $2 AND e.outbox_id = $3"
-	insertPartOutboxEntryStmt                  = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
-	updatePartOutboxEntryByIdStmt              = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
-	upsertPartOutboxContentChunkStmt           = "INSERT OR REPLACE INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
-	claimPartOutboxEntryStmt                   = "UPDATE part_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
-	deletePartOutboxEntryByClaimOwnerStmt      = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
-	releasePartOutboxEntryClaimStmt            = "UPDATE part_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
-	extendPartOutboxEntryClaimStmt             = "UPDATE part_outbox_entries SET claim_until = $1, version = version + 1, updated_at = $2 WHERE id = $3 AND outbox_id = $4 AND claim_owner = $5"
+	findPartOutboxEntryChunkByIndexStmt   = "SELECT c.chunk_index, c.content FROM part_outbox_entries e LEFT JOIN part_outbox_contents c ON c.outbox_entry_id = e.id AND c.chunk_index = $1 WHERE e.id = $2 AND e.outbox_id = $3"
+	insertPartOutboxEntryStmt             = "INSERT INTO part_outbox_entries (id, outbox_id, operation, part_id, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6)"
+	updatePartOutboxEntryByIdStmt         = "UPDATE part_outbox_entries SET operation = $1, part_id = $2, updated_at = $3 WHERE id = $4 AND outbox_id = $5"
+	upsertPartOutboxContentChunkStmt      = "INSERT OR REPLACE INTO part_outbox_contents (outbox_entry_id, chunk_index, content) VALUES($1, $2, $3)"
+	claimPartOutboxEntryStmt              = "UPDATE part_outbox_entries SET claim_owner = $1, claim_until = $2, version = version + 1, updated_at = $3 WHERE id = $4 AND outbox_id = $5 AND version = $6 AND (claim_owner IS NULL OR claim_until <= $7)"
+	deletePartOutboxEntryByClaimOwnerStmt = "DELETE FROM part_outbox_entries WHERE id = $1 AND outbox_id = $2 AND claim_owner = $3"
+	releasePartOutboxEntryClaimStmt       = "UPDATE part_outbox_entries SET claim_owner = NULL, claim_until = NULL, version = version + 1, updated_at = $1 WHERE id = $2 AND outbox_id = $3 AND claim_owner = $4"
+	extendPartOutboxEntryClaimStmt        = "UPDATE part_outbox_entries SET claim_until = $1, version = version + 1, updated_at = $2 WHERE id = $3 AND outbox_id = $4 AND claim_owner = $5"
 )
 
 func NewRepository() (partoutboxentry.Repository, error) {
@@ -42,6 +42,10 @@ func (bor *sqliteRepository) Count(ctx context.Context, tx *sql.Tx, outboxId str
 		return 0, err
 	}
 	return count, nil
+}
+
+func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*partoutboxentry.Entity, error) {
+	return convertRowToPartOutboxEntryEntity(tx.QueryRowContext(ctx, findFirstPartOutboxEntryStmt, outboxId))
 }
 
 func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry.Entity, error) {

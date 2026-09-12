@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -30,6 +31,11 @@ type partOutboxMetrics struct {
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
 	claimLostCounter   prometheus.Counter
+	retryCounter       prometheus.Counter
+	inFlightEntries    prometheus.Gauge
+	oldestPendingAge   prometheus.Gauge
+	processingRate     *prometheus.GaugeVec
+	estimatedDrainTime *prometheus.GaugeVec
 }
 
 var partOutboxMetricsOnce sync.Once
@@ -63,11 +69,16 @@ func newPartOutboxMetrics() *partOutboxMetrics {
 				Name:      "errors_total",
 				Help:      "Total number of part outbox processing errors",
 			}),
-			claimLostCounter: prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "claim_lost_total", Help: "Total number of part outbox claims lost during processing"}),
+			claimLostCounter:   prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "claim_lost_total", Help: "Total number of part outbox claims lost during processing"}),
+			retryCounter:       prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "retries_total", Help: "Total number of part outbox entries scheduled for retry"}),
+			inFlightEntries:    prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "entries_in_flight", Help: "Number of part outbox entries currently being processed"}),
+			oldestPendingAge:   prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending part outbox entry"}),
+			processingRate:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "processing_rate_entries_per_second", Help: "Smoothed part outbox processing throughput"}, []string{"outbox_id"}),
+			estimatedDrainTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "estimated_drain_time_seconds", Help: "Estimated time to drain the current part outbox backlog at the observed processing rate"}, []string{"outbox_id"}),
 		}
 	})
 
-	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter, sharedPartOutboxMetrics.claimLostCounter)
+	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter, sharedPartOutboxMetrics.claimLostCounter, sharedPartOutboxMetrics.retryCounter, sharedPartOutboxMetrics.inFlightEntries, sharedPartOutboxMetrics.oldestPendingAge, sharedPartOutboxMetrics.processingRate, sharedPartOutboxMetrics.estimatedDrainTime)
 
 	return sharedPartOutboxMetrics
 }
@@ -87,6 +98,7 @@ type outboxPartStore struct {
 	partOutboxEntryRepository partOutboxEntry.Repository
 	tracer                    trace.Tracer
 	metrics                   *partOutboxMetrics
+	processingRate            float64
 }
 
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
@@ -228,22 +240,48 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 	startTime := time.Now()
 	processedOutboxEntryCount := 0
+	pendingCount := 0
 	defer func() {
-		obs.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
+		elapsed := time.Since(startTime).Seconds()
+		obs.metrics.processingDuration.Observe(elapsed)
 		if processedOutboxEntryCount > 0 {
 			obs.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
+			instantaneousRate := float64(processedOutboxEntryCount) / elapsed
+			if obs.processingRate == 0 {
+				obs.processingRate = instantaneousRate
+			} else {
+				obs.processingRate = 0.2*instantaneousRate + 0.8*obs.processingRate
+			}
+			obs.metrics.processingRate.WithLabelValues(obs.outboxId).Set(obs.processingRate)
+		}
+		remaining := max(0, pendingCount-processedOutboxEntryCount)
+		if obs.processingRate > 0 {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(float64(remaining) / obs.processingRate)
+		} else if remaining > 0 {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(math.NaN())
+		} else {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(0)
 		}
 	}()
 
-	var pendingCount int
+	var oldestEntry *partOutboxEntry.Entity
 	if err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		pendingCount, err = obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
+		if err != nil {
+			return err
+		}
+		oldestEntry, err = obs.partOutboxEntryRepository.FindFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId)
 		return err
 	}); err != nil {
 		return
 	}
 	obs.metrics.pendingEntries.Set(float64(pendingCount))
+	if oldestEntry == nil {
+		obs.metrics.oldestPendingAge.Set(0)
+	} else {
+		obs.metrics.oldestPendingAge.Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
+	}
 
 	for {
 		var entry *partOutboxEntry.Entity
@@ -251,12 +289,14 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
 		if entry == nil || !claimed {
 			break
 		}
+		obs.metrics.inFlightEntries.Inc()
 
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
@@ -269,9 +309,11 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			err = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
 		}
 		stopHeartbeat()
+		obs.metrics.inFlightEntries.Dec()
 		if err != nil {
 			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
@@ -282,6 +324,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
