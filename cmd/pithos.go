@@ -266,6 +266,13 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		if err != nil {
 			return err
 		}
+		if closer, ok := credentialProvider.(io.Closer); ok {
+			defer func() {
+				if err := closer.Close(); err != nil {
+					slog.Error("Couldn't stop credential provider", "err", err)
+				}
+			}()
+		}
 	}
 	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())

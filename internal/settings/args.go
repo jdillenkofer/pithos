@@ -61,7 +61,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
 	credentialsProviderAccessor := registerStringFlag(serveCommand, "credentialsProvider", defaultCredentialsProvider, "credential provider: auto, environment, file, or sql")
 	credentialsPathAccessor := registerStringFlag(serveCommand, "credentialsPath", defaultCredentialsPath, "path to the reloadable credentials JSON file")
-	credentialsReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "credentialsReloadIntervalSeconds", defaultCredentialsReloadIntervalSeconds, "interval in seconds between credentials file reload checks; zero checks every lookup")
+	credentialsReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "credentialsReloadIntervalSeconds", defaultCredentialsReloadIntervalSeconds, "interval in seconds between background credential refreshes; zero disables refresh after startup")
 	credentialsDatabaseIndexAccessor := registerIntFlag(serveCommand, "credentialsDatabaseIndex", defaultCredentialsDatabaseIndex, "zero-based configured database index used by the SQL credential provider")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")

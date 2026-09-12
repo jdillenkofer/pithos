@@ -10,8 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -44,32 +42,29 @@ type credentialSnapshot struct {
 	digest      [sha256.Size]byte
 }
 
-// FileCredentialProvider loads credentials from a JSON file and periodically
-// checks it for changes during lookups. A new snapshot becomes visible only
-// after the complete file has been read and validated successfully.
+// FileCredentialProvider loads credentials from a JSON file into an immutable
+// snapshot. A new snapshot becomes visible only after background refresh has
+// read and validated the complete file successfully.
 type FileCredentialProvider struct {
-	path           string
-	reloadInterval time.Duration
-	lastCheck      time.Time
-	reloadMu       sync.Mutex
-	snapshot       atomic.Pointer[credentialSnapshot]
+	coordinator *SnapshotCoordinator[credentialSnapshot]
 }
 
 func NewFileCredentialProvider(path string, reloadInterval time.Duration) (*FileCredentialProvider, error) {
 	if path == "" {
 		return nil, fmt.Errorf("credentials path must not be empty")
 	}
-	if reloadInterval < 0 {
-		return nil, fmt.Errorf("credentials reload interval must not be negative")
-	}
-
-	provider := &FileCredentialProvider{path: path, reloadInterval: reloadInterval}
-	snapshot, err := loadCredentialSnapshot(path)
+	provider := &FileCredentialProvider{}
+	coordinator, err := NewSnapshotCoordinator(context.Background(), "file", reloadInterval,
+		func(context.Context) (*credentialSnapshot, error) { return loadCredentialSnapshot(path) },
+		func(current, next *credentialSnapshot) bool { return current.digest == next.digest },
+		func(next *credentialSnapshot) {
+			slog.Info("Reloaded credentials file", "path", path, "credentialCount", len(next.credentials))
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	provider.snapshot.Store(snapshot)
-	provider.lastCheck = time.Now()
+	provider.coordinator = coordinator
 	return provider, nil
 }
 
@@ -126,37 +121,16 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func (p *FileCredentialProvider) reloadIfDue() {
-	p.reloadMu.Lock()
-	defer p.reloadMu.Unlock()
-
-	if p.reloadInterval > 0 && time.Since(p.lastCheck) < p.reloadInterval {
-		return
-	}
-	p.lastCheck = time.Now()
-
-	next, err := loadCredentialSnapshot(p.path)
-	if err != nil {
-		slog.Error("Failed to reload credentials file; retaining last-known-good credentials", "path", p.path, "error", err)
-		return
-	}
-	current := p.snapshot.Load()
-	if current != nil && current.digest == next.digest {
-		return
-	}
-	p.snapshot.Store(next)
-	slog.Info("Reloaded credentials file", "path", p.path, "credentialCount", len(next.credentials))
-}
-
 func (p *FileCredentialProvider) Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Credential{}, false, err
 	}
-	p.reloadIfDue()
-	snapshot := p.snapshot.Load()
+	snapshot := p.coordinator.Snapshot()
 	credential, found := snapshot.credentials[accessKeyID]
 	return credential, found, nil
 }
+
+func (p *FileCredentialProvider) Close() error { return p.coordinator.Close() }
 
 func ValidateCredential(credential Credential) error {
 	if len(credential.AccessKeyID) == 0 {

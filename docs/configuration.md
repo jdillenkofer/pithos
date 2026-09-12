@@ -19,7 +19,7 @@
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
 | `PITHOS_CREDENTIALS_PROVIDER` | Credential source: `auto`, `environment`, `file`, or `sql`; `auto` selects `file` when a credentials path is set and `environment` otherwise | `auto` |
 | `PITHOS_CREDENTIALS_PATH` | Optional path to a reloadable credentials JSON file; when set, environment credentials are ignored | - |
-| `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between credentials file reload checks; `0` checks on every authenticated request | `5` |
+| `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between background file or SQL credential refreshes; `0` loads only at startup | `5` |
 | `PITHOS_CREDENTIALS_DATABASE_INDEX` | Zero-based configured database index used by the SQL provider | `0` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
@@ -87,13 +87,16 @@ indexed environment variables:
 }
 ```
 
-Pithos checks the file during authenticated requests at the configured
-interval. Valid updates replace the complete credential set atomically.
-Malformed, incomplete, oversized, or duplicate-key updates are rejected and
-the last valid set remains active. An empty `credentials` array intentionally
-revokes every credential. Publish changes using an atomic file replacement;
-when using Kubernetes, mount the Secret as a volume rather than with
-`subPath`, which does not receive automatic updates.
+Pithos validates the file before startup succeeds, then refreshes it in the
+background at the configured interval. Authenticated requests always read the
+most recently valid in-memory snapshot and never wait for file I/O. Valid
+updates replace the complete credential set atomically. Malformed, incomplete,
+oversized, or duplicate-key updates are rejected and the last valid set remains
+active. An empty `credentials` array intentionally revokes every credential.
+Set the interval to `0` to keep the startup snapshot for the process lifetime.
+Publish changes using an atomic file replacement; when using Kubernetes, mount
+the Secret as a volume rather than with `subPath`, which does not receive
+automatic updates.
 
 #### SQL credentials
 
@@ -102,7 +105,9 @@ Set `PITHOS_CREDENTIALS_PROVIDER=sql` to read credentials from the
 `storage.json`. Database index `0` is the default and is the database used by
 the default storage configuration. Enabled rows are periodically loaded into
 an in-memory snapshot, so normal authentication does not perform a database
-query and transient reload failures retain the last valid set.
+query. Pithos requires a valid initial query result to start; later transient
+refresh failures retain the last valid set. Set the reload interval to `0` to
+keep the initial snapshot for the process lifetime.
 
 Credentials can initially be provisioned with SQL:
 

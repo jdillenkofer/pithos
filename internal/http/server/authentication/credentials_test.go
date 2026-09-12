@@ -29,8 +29,9 @@ func TestFileCredentialProvider(t *testing.T) {
 		]
 	}`)
 
-	provider, err := NewFileCredentialProvider(path, 0)
+	provider, err := NewFileCredentialProvider(path, 10*time.Millisecond)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
 
 	credential, found, err := provider.Lookup(context.Background(), "old-key")
 	require.NoError(t, err)
@@ -43,16 +44,17 @@ func TestFileCredentialProvider(t *testing.T) {
 	assert.Empty(t, credential.PrincipalID)
 
 	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"new-key","secretAccessKey":"new-secret","principalId":"client"}]}`)
+	require.Eventually(t, func() bool {
+		credential, found, err = provider.Lookup(context.Background(), "new-key")
+		return err == nil && found && credential.PrincipalID == "client"
+	}, time.Second, 5*time.Millisecond)
 	_, found, err = provider.Lookup(context.Background(), "old-key")
 	require.NoError(t, err)
 	assert.False(t, found)
-	credential, found, err = provider.Lookup(context.Background(), "new-key")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "client", credential.PrincipalID)
 
 	// A partial or malformed update must not replace the active snapshot.
 	writeCredentialsFile(t, path, `{"credentials":[`)
+	time.Sleep(25 * time.Millisecond)
 	credential, found, err = provider.Lookup(context.Background(), "new-key")
 	require.NoError(t, err)
 	require.True(t, found)
@@ -60,9 +62,10 @@ func TestFileCredentialProvider(t *testing.T) {
 
 	// An explicit empty set is valid and revokes all credentials.
 	writeCredentialsFile(t, path, `{"credentials":[]}`)
-	_, found, err = provider.Lookup(context.Background(), "new-key")
-	require.NoError(t, err)
-	assert.False(t, found)
+	require.Eventually(t, func() bool {
+		_, found, err = provider.Lookup(context.Background(), "new-key")
+		return err == nil && !found
+	}, time.Second, 5*time.Millisecond)
 }
 
 func TestFileCredentialProviderReloadInterval(t *testing.T) {
@@ -72,6 +75,21 @@ func TestFileCredentialProviderReloadInterval(t *testing.T) {
 	require.NoError(t, err)
 
 	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new"}]}`)
+	credential, found, err := provider.Lookup(context.Background(), "key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "old", credential.SecretAccessKey)
+}
+
+func TestFileCredentialProviderZeroReloadIntervalKeepsStartupSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old"}]}`)
+	provider, err := NewFileCredentialProvider(path, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new"}]}`)
+	time.Sleep(25 * time.Millisecond)
 	credential, found, err := provider.Lookup(context.Background(), "key")
 	require.NoError(t, err)
 	require.True(t, found)
