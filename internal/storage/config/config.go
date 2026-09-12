@@ -763,11 +763,7 @@ func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjec
 			ids = append(ids, fmt.Sprintf("secondary-%x", sum[:16]))
 		}
 	}
-	var registerer prometheus.Registerer
-	if value, err := diProvider.LookupByType(reflect.TypeOf((*prometheus.Registerer)(nil))); err == nil {
-		registerer, _ = value.(prometheus.Registerer)
-	}
-	return replication.NewStorageWithOptions(primaryStorage, secondaryStorages, replication.Options{Registerer: registerer, ReplicationID: replicationID, SecondaryIDs: ids, JournalDatabase: journalDB})
+	return replication.NewStorageWithOptions(primaryStorage, secondaryStorages, replication.Options{ReplicationID: replicationID, SecondaryIDs: ids, JournalDatabase: journalDB})
 }
 
 type S3ClientStorageConfiguration struct {

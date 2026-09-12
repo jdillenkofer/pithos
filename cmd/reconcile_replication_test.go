@@ -9,7 +9,6 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +29,7 @@ func TestReconcileReplicationCLI(t *testing.T) {
 	primary, secondary := config("primary"), config("secondary")
 	primaryPath, secondaryPath := write("primary", primary), write("secondary", secondary)
 	topology := write("replication", map[string]any{"type": "ReplicationStorage", "replicationId": "cli", "secondaryIds": []string{"secondary"}, "primaryStorage": primary, "secondaryStorages": []any{secondary}})
-	dbs, source := loadStorageConfiguration(primaryPath, prometheus.NewRegistry())
+	dbs, source := loadStorageConfiguration(primaryPath)
 	require.NoError(t, source.Start(ctx))
 	bucket, key := storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key")
 	require.NoError(t, source.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
@@ -42,7 +41,7 @@ func TestReconcileReplicationCLI(t *testing.T) {
 	}
 	args := []string{"--storage-config", topology, "--replication-id", "cli", "--bucket", "bucket"}
 	require.NoError(t, reconcileReplication(t.Context(), append(args, "--dry-run")))
-	dbs, target := loadStorageConfiguration(secondaryPath, prometheus.NewRegistry())
+	dbs, target := loadStorageConfiguration(secondaryPath)
 	require.NoError(t, target.Start(ctx))
 	_, err = target.HeadBucket(ctx, bucket)
 	require.ErrorIs(t, err, storage.ErrNoSuchBucket)
@@ -53,7 +52,7 @@ func TestReconcileReplicationCLI(t *testing.T) {
 	require.NoError(t, reconcileReplication(t.Context(), args))
 	// Running the command again resumes from durable mappings without duplicates.
 	require.NoError(t, reconcileReplication(t.Context(), args))
-	dbs, target = loadStorageConfiguration(secondaryPath, prometheus.NewRegistry())
+	dbs, target = loadStorageConfiguration(secondaryPath)
 	require.NoError(t, target.Start(ctx))
 	versions, err := target.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 100})
 	require.NoError(t, err)

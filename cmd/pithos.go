@@ -362,7 +362,6 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 		slog.Error(fmt.Sprint("Error while registering dbContainer in diContainer: ", err))
 		os.Exit(1)
 	}
-
 	storageJsonConfig, err := os.ReadFile(storageJsonPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))

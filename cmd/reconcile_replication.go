@@ -12,7 +12,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func reconcileReplication(ctx context.Context, args []string) (resultErr error) {
@@ -40,7 +39,7 @@ func reconcileReplication(ctx context.Context, args []string) (resultErr error) 
 			buckets = append(buckets, bucket)
 		}
 	}
-	dbs, store := loadStorageConfiguration(*configPath, prometheus.NewRegistry())
+	dbs, store := loadStorageConfiguration(*configPath)
 	defer func() {
 		for _, db := range dbs.Dbs() {
 			resultErr = errors.Join(resultErr, db.Close())
