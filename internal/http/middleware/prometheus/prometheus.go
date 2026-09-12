@@ -44,15 +44,80 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 
 func operation(r *http.Request) string {
 	path := strings.Trim(r.URL.Path, "/")
-	pattern := "/"
-	if path != "" {
-		if strings.Contains(path, "/") {
-			pattern = "/{bucket}/{key...}"
-		} else {
-			pattern = "/{bucket}"
+	if path == "" && r.Method == http.MethodGet {
+		return "ListBuckets"
+	}
+	isObject := strings.Contains(path, "/")
+	query := r.URL.Query()
+	has := func(key string) bool { _, ok := query[key]; return ok }
+	if !isObject {
+		switch r.Method {
+		case http.MethodHead:
+			return "HeadBucket"
+		case http.MethodGet:
+			for key, op := range map[string]string{"website": "GetBucketWebsite", "cors": "GetBucketCORS", "lifecycle": "GetBucketLifecycle", "notification": "GetBucketNotification", "versioning": "GetBucketVersioning", "versions": "ListObjectVersions", "uploads": "ListMultipartUploads"} {
+				if has(key) {
+					return op
+				}
+			}
+			return "ListObjects"
+		case http.MethodPut:
+			for key, op := range map[string]string{"website": "PutBucketWebsite", "cors": "PutBucketCORS", "lifecycle": "PutBucketLifecycle", "notification": "PutBucketNotification", "versioning": "PutBucketVersioning"} {
+				if has(key) {
+					return op
+				}
+			}
+			return "CreateBucket"
+		case http.MethodDelete:
+			for key, op := range map[string]string{"website": "DeleteBucketWebsite", "cors": "DeleteBucketCORS", "lifecycle": "DeleteBucketLifecycle"} {
+				if has(key) {
+					return op
+				}
+			}
+			return "DeleteBucket"
+		case http.MethodPost:
+			if has("delete") {
+				return "DeleteObjects"
+			}
+		}
+	} else {
+		switch r.Method {
+		case http.MethodHead:
+			return "HeadObject"
+		case http.MethodGet:
+			if has("uploadId") {
+				return "ListParts"
+			}
+			return "GetObject"
+		case http.MethodPut:
+			if has("uploadId") {
+				if r.Header.Get("x-amz-copy-source") != "" {
+					return "UploadPartCopy"
+				}
+				return "UploadPart"
+			}
+			if r.Header.Get("x-amz-copy-source") != "" {
+				return "CopyObject"
+			}
+			if r.Header.Get("x-amz-write-offset-bytes") != "" {
+				return "AppendObject"
+			}
+			return "PutObject"
+		case http.MethodPost:
+			if has("uploads") {
+				return "CreateMultipartUpload"
+			}
+			if has("uploadId") {
+				return "CompleteMultipartUpload"
+			}
+		case http.MethodDelete:
+			if has("uploadId") {
+				return "AbortMultipartUpload"
+			}
+			return "DeleteObject"
 		}
 	}
-	return r.Method + " " + pattern
+	return r.Method + " unknown"
 }
 
 func New(next http.Handler) http.Handler {

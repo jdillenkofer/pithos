@@ -16,7 +16,7 @@ func TestMiddlewareCapturesOperationAndStatus(t *testing.T) {
 		handler := New(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }))
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/bucket/key", nil))
 		metric := &dto.Metric{}
-		require.NoError(t, requests.WithLabelValues("GET /{bucket}/{key...}", "404").Write(metric))
+		require.NoError(t, requests.WithLabelValues("GetObject", "404").Write(metric))
 		require.Equal(t, float64(1), metric.GetCounter().GetValue())
 	})
 }
