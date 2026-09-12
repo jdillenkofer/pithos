@@ -13,8 +13,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
-	"github.com/jdillenkofer/pithos/internal/settings"
-	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/corscache"
@@ -31,7 +29,7 @@ type Server struct {
 	tracer            trace.Tracer
 }
 
-func SetupServer(credentials []settings.Credentials, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
+func SetupServer(credentialProvider authentication.CredentialProvider, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
 		requestAuthorizer: requestAuthorizer,
 		// CORS configuration is resolved on every Origin-bearing request, so wrap
@@ -90,16 +88,9 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	rootHandler := httpmiddleware.MakeHostnameRoutingHandler(apiEndpoint, apiHandler, websiteEndpoint, websiteHandler, fallbackHandler)
 	rootHandler = makeAuditRequestContextMiddleware(rootHandler)
 
-	var authCreds []authentication.Credentials
-	if credentials != nil {
+	if credentialProvider != nil {
 		slog.Info("Authentication is enabled")
-		authCreds = sliceutils.Map(func(cred settings.Credentials) authentication.Credentials {
-			return authentication.Credentials{
-				AccessKeyId:     cred.AccessKeyId,
-				SecretAccessKey: cred.SecretAccessKey,
-			}
-		}, credentials)
-		rootHandler = authentication.MakeSignatureMiddleware(authCreds, region, rootHandler)
+		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, rootHandler)
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
 	}

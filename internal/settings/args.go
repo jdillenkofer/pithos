@@ -96,7 +96,6 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 
 	return &Settings{
 		authenticationEnabled: authenticationEnabledAccessor(),
-		credentials:           nil, // Credentials are not set via command line args
 		region:                regionAccessor(),
 		domain:                domainAccessor(),
 		websiteDomain:         websiteDomainAccessor(),

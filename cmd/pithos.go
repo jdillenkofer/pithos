@@ -23,6 +23,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/logging"
@@ -251,13 +252,17 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}()
 
-	hasCredentials := len(settings.Credentials()) > 0
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
+	authenticationEnabled := settings.AuthenticationEnabled()
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), authenticationEnabled, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
 		return fmt.Errorf("create Lua authorizer: %w", err)
 	}
 
-	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
+	var credentialProvider authentication.CredentialProvider
+	if authenticationEnabled {
+		credentialProvider = authentication.NewEnvCredentialProvider()
+	}
+	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
 	// storage.MaxEntitySize, and a global timeout would impose that deadline on
@@ -331,15 +336,15 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	return errors.Join(append([]error{serveErr}, shutdownErrors...)...)
 }
 
-func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
+func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
-		if hasCredentials {
-			slog.Warn("No authorizer.lua found but credentials are configured — using default authorizer (anonymous requests will be denied)")
+		if authenticationEnabled {
+			slog.Warn("No authorizer.lua found and authentication is enabled — using default authorizer (anonymous requests will be denied)")
 			authorizerCode = []byte(defaultAuthorizationCodeWithCredentials)
 		} else {
-			slog.Warn("No authorizer.lua found and no credentials configured — using permissive default authorizer (all requests will be allowed)")
+			slog.Warn("No authorizer.lua found and authentication is disabled — using permissive default authorizer (all requests will be allowed)")
 			authorizerCode = []byte(defaultAuthorizationCode)
 		}
 	}

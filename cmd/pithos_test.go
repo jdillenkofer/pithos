@@ -12,9 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
-	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
@@ -25,6 +25,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"log/slog"
 	"net"
@@ -57,6 +59,34 @@ var (
 func TestMain(m *testing.M) {
 	flag.Parse()
 	os.Exit(m.Run())
+}
+
+func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-authorizer.lua")
+
+	t.Run("enabled denies anonymous even with no credentials", func(t *testing.T) {
+		authorizer, err := loadRequestAuthorizer(missingPath, true, false, nil)
+		require.NoError(t, err)
+
+		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		assert.False(t, allowed)
+
+		accessKeyID := "key"
+		allowed, err = authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
+			Authorization: authorization.Authorization{AccessKeyId: &accessKeyID},
+		})
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	})
+
+	t.Run("disabled remains permissive", func(t *testing.T) {
+		authorizer, err := loadRequestAuthorizer(missingPath, false, false, nil)
+		require.NoError(t, err)
+		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	})
 }
 
 func customDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -153,13 +183,15 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
-	credentials := []settings.Credentials{
-		{
-			AccessKeyId:     accessKeyId,
-			SecretAccessKey: secretAccessKey,
-		},
-	}
-	return httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
+	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey}}
+	return httptest.NewServer(server.SetupServer(provider, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
+}
+
+type staticCredentialProvider map[string]authentication.Credential
+
+func (p staticCredentialProvider) Lookup(_ context.Context, accessKeyID string) (authentication.Credential, bool, error) {
+	credential, ok := p[accessKeyID]
+	return credential, ok, nil
 }
 
 func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, error) {

@@ -25,6 +25,11 @@
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
 
+Pithos reads these variables through its environment credential provider for
+each signed request. Credential changes therefore take effect without a server
+restart. Indices may begin at `0` or `1`, must be contiguous, and lookup stops
+at the first missing or incomplete pair after the initial index.
+
 ### Storage
 
 | Variable | Description | Default |
@@ -71,12 +76,16 @@ The Lua authorizer script controls access to all operations, including anonymous
 
 ### Default Behaviour (no authorizer.lua)
 
-When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether credentials are configured:
+When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether authentication is enabled:
 
-| Credentials configured | Default behaviour |
-|------------------------|-------------------|
-| No | All requests are allowed (permissive mode, suitable for local development) |
-| Yes | Anonymous requests are denied; authenticated requests are allowed |
+| Authentication | Default behaviour |
+|----------------|-------------------|
+| Disabled | All requests are allowed (permissive mode, suitable for local development) |
+| Enabled | Anonymous requests are denied; authenticated requests are allowed |
+
+The enabled fallback remains deny-anonymous even when the environment provider
+contains no credentials. This prevents an accidentally empty credential
+configuration from enabling anonymous access.
 
 To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
 
