@@ -16,6 +16,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosMetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -30,57 +31,43 @@ type partOutboxMetrics struct {
 	errorsCounter      prometheus.Counter
 }
 
-func newPartOutboxMetrics(registerer prometheus.Registerer) *partOutboxMetrics {
-	m := &partOutboxMetrics{
-		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "pending_entries",
-			Help:      "Number of pending part outbox entries",
-		}),
-		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "processed_entries_total",
-			Help:      "Total number of processed part outbox entries",
-		}),
-		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "processing_duration_seconds",
-			Help:      "Duration of part outbox processing in seconds",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}),
-		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "errors_total",
-			Help:      "Total number of part outbox processing errors",
-		}),
-	}
+var partOutboxMetricsOnce sync.Once
+var sharedPartOutboxMetrics *partOutboxMetrics
 
-	if err := registerer.Register(m.pendingEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register pendingEntries metric", "error", err)
+func newPartOutboxMetrics() *partOutboxMetrics {
+	partOutboxMetricsOnce.Do(func() {
+		sharedPartOutboxMetrics = &partOutboxMetrics{
+			pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "pending_entries",
+				Help:      "Number of pending part outbox entries",
+			}),
+			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "processed_entries_total",
+				Help:      "Total number of processed part outbox entries",
+			}),
+			processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "processing_duration_seconds",
+				Help:      "Duration of part outbox processing in seconds",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			}),
+			errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "errors_total",
+				Help:      "Total number of part outbox processing errors",
+			}),
 		}
-	}
-	if err := registerer.Register(m.processedEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processedEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processingDuration); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processingDuration metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.errorsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register errorsCounter metric", "error", err)
-		}
-	}
+	})
 
-	return m
+	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter)
+
+	return sharedPartOutboxMetrics
 }
 
 type outboxPartStore struct {
@@ -113,7 +100,7 @@ var errPartOutboxEntryVanished = errors.New("part outbox entry deleted while it 
 // something is wrong; failing is better than livelocking the request.
 const maxGetPartRaceRetries = 8
 
-func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
+func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("outboxPartStore")
 	if err != nil {
 		return nil, err
@@ -133,7 +120,7 @@ func New(db database.Database, outboxId string, innerPartStore partstore.PartSto
 		innerPartStore:            innerPartStore,
 		partOutboxEntryRepository: partOutboxEntryRepository,
 		tracer:                    otel.Tracer("internal/storage/metadatapart/partstore/outbox"),
-		metrics:                   newPartOutboxMetrics(registerer),
+		metrics:                   newPartOutboxMetrics(),
 	}
 	return obs, nil
 }

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
@@ -23,24 +25,37 @@ import (
 type prometheusStorageMiddleware struct {
 	*lifecycle.ValidatedLifecycle
 	delegator.DelegatingStorage
-	registerer                   prometheus.Registerer
 	failedApiOpsCounter          *prometheus.CounterVec
 	successfulApiOpsCounter      *prometheus.CounterVec
 	apiOpsCounter                *prometheus.CounterVec
 	totalSizeByBucket            *prometheus.GaugeVec
+	objectCountByBucket          *prometheus.GaugeVec
+	apiOpDuration                *prometheus.HistogramVec
+	apiOpsInFlight               *prometheus.GaugeVec
 	totalBytesUploadedByBucket   *prometheus.CounterVec
 	totalBytesDownloadedByBucket *prometheus.CounterVec
 	metricsMeasuringTaskHandle   *task.TaskHandle
 	tracer                       trace.Tracer
+	gaugesInterval               time.Duration
 }
 
 func (psm *prometheusStorageMiddleware) run(ctx context.Context, spanName string, opType string, fn func(context.Context) error) error {
 	ctx, span := psm.tracer.Start(ctx, spanName)
 	defer span.End()
-
+	finish := psm.startOperation(opType)
 	err := fn(ctx)
-	psm.observeOperation(opType, err)
+	finish(err)
 	return err
+}
+
+func (psm *prometheusStorageMiddleware) startOperation(opType string) func(error) {
+	started := time.Now()
+	psm.apiOpsInFlight.WithLabelValues(opType).Inc()
+	return func(err error) {
+		psm.apiOpsInFlight.WithLabelValues(opType).Dec()
+		psm.apiOpDuration.WithLabelValues(opType).Observe(time.Since(started).Seconds())
+		psm.observeOperation(opType, err)
+	}
 }
 
 func operationOutcome(err error) string {
@@ -78,65 +93,84 @@ func (psm *prometheusStorageMiddleware) WithTransaction(ctx context.Context, opt
 	return delegator.WithTransaction(ctx, opts, psm.Next, psm, fn)
 }
 
-func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Registerer) (storage.Storage, error) {
-	failedApiOpsCounter := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "failed_api_ops_total",
-			Help:      "No of failed api operations handled by Pithos partitioned by type",
-		},
-		[]string{"type"},
-	)
+var storageMetricsOnce sync.Once
+var storageMetrics struct {
+	failed, successful, ops *prometheus.CounterVec
+	totalSize, objectCount  *prometheus.GaugeVec
+	uploaded, downloaded    *prometheus.CounterVec
+	duration                *prometheus.HistogramVec
+	inFlight                *prometheus.GaugeVec
+}
 
-	successfulApiOpsCounter := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "successful_api_ops_total",
-			Help:      "No of successful api operations handled by Pithos partitioned by type",
-		},
-		[]string{"type"},
-	)
-	apiOpsCounter := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "api_ops_total",
-			Help:      "Number of storage API operations partitioned by type and outcome",
-		},
-		[]string{"type", "outcome"},
-	)
+func NewStorageMiddleware(innerStorage storage.Storage, gaugesInterval time.Duration) (storage.Storage, error) {
+	storageMetricsOnce.Do(func() {
+		failedApiOpsCounter := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "failed_api_ops_total",
+				Help:      "No of failed api operations handled by Pithos partitioned by type",
+			},
+			[]string{"type"},
+		)
 
-	totalSizeByBucket := prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "total_size",
-			Help:      "Total size by bucket",
-		},
-		[]string{"bucket"},
-	)
+		successfulApiOpsCounter := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "successful_api_ops_total",
+				Help:      "No of successful api operations handled by Pithos partitioned by type",
+			},
+			[]string{"type"},
+		)
+		apiOpsCounter := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "api_ops_total",
+				Help:      "Number of storage API operations partitioned by type and outcome",
+			},
+			[]string{"type", "outcome"},
+		)
 
-	totalBytesUploadedByBucket := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "bytes_uploaded_total",
-			Help:      "Total bytes uploaded by bucket",
-		},
-		[]string{"bucket"},
-	)
+		totalSizeByBucket := prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "total_size",
+				Help:      "Total size by bucket",
+			},
+			[]string{"bucket"},
+		)
 
-	totalBytesDownloadedByBucket := prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "storage",
-			Name:      "bytes_downloaded_total",
-			Help:      "Total bytes downloaded by bucket",
-		},
-		[]string{"bucket"},
-	)
+		totalBytesUploadedByBucket := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "bytes_uploaded_total",
+				Help:      "Total bytes uploaded by bucket",
+			},
+			[]string{"bucket"},
+		)
+
+		totalBytesDownloadedByBucket := prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "storage",
+				Name:      "bytes_downloaded_total",
+				Help:      "Total bytes downloaded by bucket",
+			},
+			[]string{"bucket"},
+		)
+		objectCountByBucket := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage", Name: "object_count", Help: "Number of objects by bucket"}, []string{"bucket"})
+		apiOpDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: "pithos", Subsystem: "storage", Name: "api_op_duration_seconds", Help: "Duration of storage API operations partitioned by type"}, []string{"type"})
+		apiOpsInFlight := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage", Name: "api_ops_in_flight", Help: "Number of storage API operations currently in flight partitioned by type"}, []string{"type"})
+		storageMetrics.failed, storageMetrics.successful, storageMetrics.ops = failedApiOpsCounter, successfulApiOpsCounter, apiOpsCounter
+		storageMetrics.totalSize, storageMetrics.objectCount = totalSizeByBucket, objectCountByBucket
+		storageMetrics.uploaded, storageMetrics.downloaded = totalBytesUploadedByBucket, totalBytesDownloadedByBucket
+		storageMetrics.duration, storageMetrics.inFlight = apiOpDuration, apiOpsInFlight
+	})
+	pithosmetrics.Register(storageMetrics.failed, storageMetrics.successful, storageMetrics.ops, storageMetrics.totalSize, storageMetrics.objectCount, storageMetrics.uploaded, storageMetrics.downloaded, storageMetrics.duration, storageMetrics.inFlight)
 
 	lifecycle, err := lifecycle.NewValidatedLifecycle("PrometheusStorageMiddleware")
 	if err != nil {
@@ -144,16 +178,14 @@ func NewStorageMiddleware(innerStorage storage.Storage, registerer prometheus.Re
 	}
 
 	return &prometheusStorageMiddleware{
-		ValidatedLifecycle:           lifecycle,
-		DelegatingStorage:            delegator.Wrap(innerStorage),
-		registerer:                   registerer,
-		failedApiOpsCounter:          failedApiOpsCounter,
-		successfulApiOpsCounter:      successfulApiOpsCounter,
-		apiOpsCounter:                apiOpsCounter,
-		totalSizeByBucket:            totalSizeByBucket,
-		totalBytesUploadedByBucket:   totalBytesUploadedByBucket,
-		totalBytesDownloadedByBucket: totalBytesDownloadedByBucket,
-		tracer:                       otel.Tracer("internal/storage/middlewares/prometheus"),
+		ValidatedLifecycle:  lifecycle,
+		DelegatingStorage:   delegator.Wrap(innerStorage),
+		failedApiOpsCounter: storageMetrics.failed, successfulApiOpsCounter: storageMetrics.successful,
+		apiOpsCounter: storageMetrics.ops, totalSizeByBucket: storageMetrics.totalSize,
+		objectCountByBucket: storageMetrics.objectCount, apiOpDuration: storageMetrics.duration,
+		apiOpsInFlight: storageMetrics.inFlight, totalBytesUploadedByBucket: storageMetrics.uploaded,
+		totalBytesDownloadedByBucket: storageMetrics.downloaded, gaugesInterval: gaugesInterval,
+		tracer: otel.Tracer("internal/storage/middlewares/prometheus"),
 	}, nil
 }
 
@@ -163,16 +195,18 @@ func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) {
 		return
 	}
 	for _, bucket := range buckets {
-		totalSize, err := psm.getTotalSizeByBucket(ctx, bucket)
+		totalSize, objectCount, err := psm.getBucketMetrics(ctx, bucket)
 		if err != nil {
 			return
 		}
 		psm.totalSizeByBucket.With(prometheus.Labels{"bucket": bucket.Name.String()}).Set(float64(*totalSize))
+		psm.objectCountByBucket.WithLabelValues(bucket.Name.String()).Set(float64(objectCount))
 	}
 }
 
-func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context, bucket storage.Bucket) (*int64, error) {
+func (psm *prometheusStorageMiddleware) getBucketMetrics(ctx context.Context, bucket storage.Bucket) (*int64, int64, error) {
 	var totalSize int64 = 0
+	var objectCount int64
 	var startAfter *string
 	truncated := true
 
@@ -182,24 +216,29 @@ func (psm *prometheusStorageMiddleware) getTotalSizeByBucket(ctx context.Context
 			MaxKeys:    1000,
 		})
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, object := range listBucketResult.Objects {
 			totalSize += object.Size
+			objectCount++
 		}
 		truncated = listBucketResult.IsTruncated
 		if len(listBucketResult.Objects) > 0 {
 			startAfter = ptrutils.ToPtr(listBucketResult.Objects[len(listBucketResult.Objects)-1].Key.String())
 		}
 	}
-	return &totalSize, nil
+	return &totalSize, objectCount, nil
 }
 
 func (psm *prometheusStorageMiddleware) measureMetricsLoop(cancelMetricsMeasuring *atomic.Bool) {
 	ctx := context.Background()
 	for {
 		psm.measureMetrics(ctx)
-		for range 30 * 4 {
+		interval := psm.gaugesInterval
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		for range max(1, int(interval/(250*time.Millisecond))) {
 			time.Sleep(250 * time.Millisecond)
 			if cancelMetricsMeasuring.Load() {
 				return
@@ -212,37 +251,6 @@ func (psm *prometheusStorageMiddleware) Start(ctx context.Context) error {
 	if err := psm.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	if err := psm.registerer.Register(psm.failedApiOpsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register failedApiOpsCounter metric", "error", err)
-		}
-	}
-	if err := psm.registerer.Register(psm.successfulApiOpsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register successfulApiOpsCounter metric", "error", err)
-		}
-	}
-	if err := psm.registerer.Register(psm.apiOpsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register apiOpsCounter metric", "error", err)
-		}
-	}
-	if err := psm.registerer.Register(psm.totalSizeByBucket); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register totalSizeByBucket metric", "error", err)
-		}
-	}
-	if err := psm.registerer.Register(psm.totalBytesUploadedByBucket); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register totalBytesUploadedByBucket metric", "error", err)
-		}
-	}
-	if err := psm.registerer.Register(psm.totalBytesDownloadedByBucket); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register totalBytesDownloadedByBucket metric", "error", err)
-		}
-	}
-
 	psm.metricsMeasuringTaskHandle = task.Start(func(cancelTask *atomic.Bool) {
 		psm.measureMetricsLoop(cancelTask)
 	})
@@ -254,13 +262,6 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 	if err := psm.ValidatedLifecycle.Stop(ctx); err != nil {
 		return err
 	}
-
-	psm.registerer.Unregister(psm.totalBytesDownloadedByBucket)
-	psm.registerer.Unregister(psm.totalBytesUploadedByBucket)
-	psm.registerer.Unregister(psm.totalSizeByBucket)
-	psm.registerer.Unregister(psm.successfulApiOpsCounter)
-	psm.registerer.Unregister(psm.apiOpsCounter)
-	psm.registerer.Unregister(psm.failedApiOpsCounter)
 
 	if psm.metricsMeasuringTaskHandle != nil && !psm.metricsMeasuringTaskHandle.IsCancelled() {
 		psm.metricsMeasuringTaskHandle.Cancel()
@@ -423,8 +424,9 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.GetObject")
 	defer span.End()
 
+	finish := psm.startOperation("GetObject")
 	object, readers, err := psm.Next.GetObject(ctx, bucketName, key, ranges, opts)
-	psm.observeOperation("GetObject", err)
+	finish(err)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -447,8 +449,9 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
+	finish := psm.startOperation("PutObject")
 	putObjectResult, err := psm.Next.PutObject(ctx, bucketName, key, contentType, reader, checksumInput, opts)
-	psm.observeOperation("PutObject", err)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
@@ -464,8 +467,9 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
 	})
 
+	finish := psm.startOperation("AppendObject")
 	appendObjectResult, err := psm.Next.AppendObject(ctx, bucketName, key, reader, checksumInput, opts)
-	psm.observeOperation("AppendObject", err)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
@@ -507,8 +511,9 @@ func (psm *prometheusStorageMiddleware) CopyObject(ctx context.Context, srcBucke
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.CopyObject")
 	defer span.End()
 
+	finish := psm.startOperation("CopyObject")
 	result, err := psm.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
-	psm.observeOperation("CopyObject", err)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
@@ -519,8 +524,9 @@ func (psm *prometheusStorageMiddleware) UploadPartCopy(ctx context.Context, srcB
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.UploadPartCopy")
 	defer span.End()
 
+	finish := psm.startOperation("UploadPartCopy")
 	result, err := psm.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
-	psm.observeOperation("UploadPartCopy", err)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
@@ -536,8 +542,9 @@ func (psm *prometheusStorageMiddleware) UploadPart(ctx context.Context, bucketNa
 		bytesUploaded += n
 	})
 
+	finish := psm.startOperation("UploadPart")
 	uploadPartResult, err := psm.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, data, checksumInput)
-	psm.observeOperation("UploadPart", err)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
@@ -580,4 +587,10 @@ func (psm *prometheusStorageMiddleware) ListParts(ctx context.Context, bucketNam
 		return err
 	})
 	return result, err
+}
+
+func (psm *prometheusStorageMiddleware) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
+	return psm.run(ctx, "PrometheusStorageMiddleware.TransitionObjectStorageClass", "TransitionObjectStorageClass", func(ctx context.Context) error {
+		return psm.Next.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts)
+	})
 }

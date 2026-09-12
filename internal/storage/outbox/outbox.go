@@ -14,6 +14,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosMetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
@@ -31,57 +32,43 @@ type outboxMetrics struct {
 	errorsCounter      prometheus.Counter
 }
 
-func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
-	m := &outboxMetrics{
-		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "pending_entries",
-			Help:      "Number of pending outbox entries",
-		}),
-		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processed_entries_total",
-			Help:      "Total number of processed outbox entries",
-		}),
-		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processing_duration_seconds",
-			Help:      "Duration of outbox processing in seconds",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}),
-		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "errors_total",
-			Help:      "Total number of outbox processing errors",
-		}),
-	}
+var outboxMetricsOnce sync.Once
+var sharedOutboxMetrics *outboxMetrics
 
-	if err := registerer.Register(m.pendingEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register pendingEntries metric", "error", err)
+func newOutboxMetrics() *outboxMetrics {
+	outboxMetricsOnce.Do(func() {
+		sharedOutboxMetrics = &outboxMetrics{
+			pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "pending_entries",
+				Help:      "Number of pending outbox entries",
+			}),
+			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "processed_entries_total",
+				Help:      "Total number of processed outbox entries",
+			}),
+			processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "processing_duration_seconds",
+				Help:      "Duration of outbox processing in seconds",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			}),
+			errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "errors_total",
+				Help:      "Total number of outbox processing errors",
+			}),
 		}
-	}
-	if err := registerer.Register(m.processedEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processedEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processingDuration); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processingDuration metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.errorsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register errorsCounter metric", "error", err)
-		}
-	}
+	})
 
-	return m
+	pithosMetrics.Register(sharedOutboxMetrics.pendingEntries, sharedOutboxMetrics.processedEntries, sharedOutboxMetrics.processingDuration, sharedOutboxMetrics.errorsCounter)
+
+	return sharedOutboxMetrics
 }
 
 type outboxStorage struct {
@@ -111,7 +98,7 @@ const defaultClaimLeaseDuration = 30 * time.Second
 // in memory before spilling to a temp file when wrapping it in a seekable reader.
 const maxReplayMemoryCacheSize = 10 * 1000 * 1000 // 10MB
 
-func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (storage.Storage, error) {
+func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, claimLeaseDuration time.Duration) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
@@ -131,7 +118,7 @@ func NewStorage(db database.Database, outboxId string, innerStorage storage.Stor
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		tracer:                       otel.Tracer("internal/storage/outbox"),
-		metrics:                      newOutboxMetrics(registerer),
+		metrics:                      newOutboxMetrics(),
 	}
 	return os, nil
 }

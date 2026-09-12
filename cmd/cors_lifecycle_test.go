@@ -14,7 +14,6 @@ import (
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"net"
@@ -405,7 +404,7 @@ func TestBucketLifecycle(t *testing.T) {
 			if encryptionType != storageFactory.EncryptionTypeNone {
 				encryptionPassword = partStoreEncryptionPassword
 			}
-			innerStore := storageFactory.CreateStorage(storagePath, db, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, prometheus.NewRegistry())
+			innerStore := storageFactory.CreateStorage(storagePath, db, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
 			// Pretend the sweep runs ten days in the future so day-based rules
 			// are due without waiting.

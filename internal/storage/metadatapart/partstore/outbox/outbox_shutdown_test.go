@@ -15,7 +15,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +68,7 @@ func TestStopCancelsInFlightReplayBeforeStoppingInnerStore(t *testing.T) {
 	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
 	inner := newCancelAwarePartStore()
-	store, err := New(db, "default", inner, repo, prometheus.NewRegistry(), 30*time.Second)
+	store, err := New(db, "default", inner, repo, 30*time.Second)
 	require.NoError(t, err)
 
 	partId, err := partstore.NewRandomPartId()

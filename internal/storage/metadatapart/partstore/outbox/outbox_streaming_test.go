@@ -18,7 +18,6 @@ import (
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,7 +70,7 @@ func TestReplayStreamsOutboxChunks(t *testing.T) {
 	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
 	countingRepo := &countingChunkRepository{Repository: repo}
-	store, err := New(db, "default", inner, countingRepo, prometheus.NewRegistry(), 30*time.Second)
+	store, err := New(db, "default", inner, countingRepo, 30*time.Second)
 	require.NoError(t, err)
 	obs := store.(*outboxPartStore)
 
@@ -117,7 +116,7 @@ func TestGetPartReaderFallsBackToInnerStoreWhenEntryFlushedMidRead(t *testing.T)
 
 	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
-	store, err := New(db, "default", inner, repo, prometheus.NewRegistry(), 30*time.Second)
+	store, err := New(db, "default", inner, repo, 30*time.Second)
 	require.NoError(t, err)
 	obs := store.(*outboxPartStore)
 

@@ -21,12 +21,10 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
-	prometheusStorageMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"log/slog"
 	"net"
@@ -504,8 +502,8 @@ func setupTestDatabases(ctx context.Context, dbType database.DatabaseType, useRe
 	return result, nil
 }
 
-func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (storage.Storage, error) {
-	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
+func setupReplicatedStorage(ctx context.Context, baseEndpoint string, primaryListenerAddr string, usePathStyle bool, db2 database.Database, storagePath2 string, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, encryptionPassword string, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (storage.Storage, error) {
+	localStore := storageFactory.CreateStorage(storagePath2, db2, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
 	primaryS3Client := setupS3Client(baseEndpoint, primaryListenerAddr, usePathStyle)
 	s3ClientStorage, err := s3client.NewStorage(primaryS3Client)
@@ -518,17 +516,12 @@ func setupReplicatedStorage(ctx context.Context, registry *prometheus.Registry, 
 		return nil, err
 	}
 
-	outboxStorage, err := outbox.NewStorage(db2, "default", s3ClientStorage, storageOutboxEntryRepository, registry, 30*time.Second)
+	outboxStorage, err := outbox.NewStorage(db2, "default", s3ClientStorage, storageOutboxEntryRepository, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}
 
 	store2, err := replication.NewStorage(localStore, outboxStorage)
-	if err != nil {
-		return nil, err
-	}
-
-	store2, err = prometheusStorageMiddleware.NewStorageMiddleware(store2, registry)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +540,6 @@ func setupTestServer(dbType database.DatabaseType, usePathStyle bool, useReplica
 
 func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthorizer, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) (s3Client *s3.Client, listenerAddr string, cleanup func()) {
 	ctx := context.Background()
-	registry := prometheus.NewRegistry()
 	cleanups := make([]func(), 0, 8)
 	addCleanup := func(fn func()) {
 		cleanups = append(cleanups, fn)
@@ -571,12 +563,7 @@ func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthor
 	if encryptionType != storageFactory.EncryptionTypeNone {
 		encryptionPassword = partStoreEncryptionPassword
 	}
-	store := storageFactory.CreateStorage(storagePath, dbs.primary, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, registry)
-
-	if !useReplication {
-		store, err = prometheusStorageMiddleware.NewStorageMiddleware(store, registry)
-		mustNoErr(err, "Could not create prometheusStorageMiddleware")
-	}
+	store := storageFactory.CreateStorage(storagePath, dbs.primary, useFilesystemPartStore, usePartStoreCompression, encryptionType, encryptionPassword, wrapPartStoreWithOutbox)
 
 	err = store.Start(ctx)
 	mustNoErr(err, "Couldn't start storage")
@@ -595,7 +582,7 @@ func setupTestServerWithAuthorizer(requestAuthorizer authorization.RequestAuthor
 
 		addDatabaseCleanup(addCleanup, dbs.secondary, dbs.secondaryCleanup, "Couldn't close secondary database")
 
-		store2, err := setupReplicatedStorage(ctx, registry, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, dbs.secondary, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, usePartStoreCompression)
+		store2, err := setupReplicatedStorage(ctx, baseEndpoint, primaryTS.Listener.Addr().String(), usePathStyle, dbs.secondary, storagePath2, useFilesystemPartStore, encryptionType, encryptionPassword, wrapPartStoreWithOutbox, usePartStoreCompression)
 		mustNoErr(err, "Couldn't set up replicated storage")
 		addCleanup(func() {
 			err := store2.Stop(ctx)

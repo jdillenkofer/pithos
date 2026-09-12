@@ -18,7 +18,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/oklog/ulid/v2"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -85,7 +84,7 @@ type databaseWrapper interface {
 	UnwrapDatabase() database.Database
 }
 
-func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration, dispatcher DispatcherConfig, registerer prometheus.Registerer) (*StorageMiddleware, error) {
+func NewStorageMiddleware(inner storage.Storage, db database.Database, repository Repository, publisher Publisher, outboxID string, claimLeaseDuration time.Duration, dispatcher DispatcherConfig) (*StorageMiddleware, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("NotificationStorageMiddleware")
 	if err != nil {
 		return nil, err
@@ -112,7 +111,7 @@ func NewStorageMiddleware(inner storage.Storage, db database.Database, repositor
 		claimOwner:         outboxID + ":notification:" + ulid.Make().String(),
 		claimLeaseDuration: claimLeaseDuration,
 		dispatcher:         dispatcher.withDefaults(),
-		metrics:            newNotificationMetrics(registerer),
+		metrics:            newNotificationMetrics(),
 		trigger:            make(chan struct{}, 16),
 		tracer:             otel.Tracer("internal/storage/notification"),
 	}, nil

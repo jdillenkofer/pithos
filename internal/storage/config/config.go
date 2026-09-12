@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"time"
 
 	"crypto/sha512"
@@ -31,19 +30,16 @@ import (
 	auditMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/audit"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/conditional"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/objectcache"
-	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/notification"
 	"github.com/jdillenkofer/pithos/internal/storage/outbox"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
 	defaultOutboxId                  = "default"
 	metadataPartStorageType          = "MetadataPartStorage"
 	conditionalStorageMiddlewareType = "ConditionalStorageMiddleware"
-	prometheusStorageMiddlewareType  = "PrometheusStorageMiddleware"
 	auditStorageMiddlewareType       = "AuditStorageMiddleware"
 	outboxStorageType                = "OutboxStorage"
 	replicationStorageType           = "ReplicationStorage"
@@ -375,14 +371,7 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 	if err != nil {
 		return nil, err
 	}
-	// The prometheus registerer is optional; entry points that do not register
-	// one (e.g. some tooling and tests) still get a working, unregistered set of
-	// collectors. Sharing db keeps notification enqueue atomic with the mutation.
-	var registerer prometheus.Registerer
-	if value, err := diProvider.LookupByType(reflect.TypeOf((*prometheus.Registerer)(nil))); err == nil {
-		registerer, _ = value.(prometheus.Registerer)
-	}
-	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, m.Notifications.outboxID(), claimLeaseDuration, dispatcher, registerer)
+	return notification.NewStorageMiddleware(innerStorage, db, notification.NewSQLRepository(), publisher, m.Notifications.outboxID(), claimLeaseDuration, dispatcher)
 }
 
 type ConditionalStorageMiddlewareConfiguration struct {
@@ -443,46 +432,6 @@ func (c *ConditionalStorageMiddlewareConfiguration) Instantiate(diProvider depen
 		return nil, err
 	}
 	return conditional.NewStorageMiddleware(bucketToStorageMap, defaultStorage)
-}
-
-type PrometheusStorageMiddlewareConfiguration struct {
-	InnerStorageInstantiator StorageInstantiator `json:"-"`
-	RawInnerStorage          json.RawMessage     `json:"innerStorage"`
-	internalConfig.DynamicJsonType
-}
-
-func (p *PrometheusStorageMiddlewareConfiguration) UnmarshalJSON(b []byte) error {
-	type prometheusStorageMiddlewareConfiguration PrometheusStorageMiddlewareConfiguration
-	err := json.Unmarshal(b, (*prometheusStorageMiddlewareConfiguration)(p))
-	if err != nil {
-		return err
-	}
-	p.InnerStorageInstantiator, err = CreateStorageInstantiatorFromJson(p.RawInnerStorage)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (p *PrometheusStorageMiddlewareConfiguration) RegisterReferences(diCollection dependencyinjection.DICollection) error {
-	err := p.InnerStorageInstantiator.RegisterReferences(diCollection)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (p *PrometheusStorageMiddlewareConfiguration) Instantiate(diProvider dependencyinjection.DIProvider) (storage.Storage, error) {
-	innerStorage, err := p.InnerStorageInstantiator.Instantiate(diProvider)
-	if err != nil {
-		return nil, err
-	}
-	t := reflect.TypeOf((*prometheus.Registerer)(nil))
-	prometheusRegisterer, err := diProvider.LookupByType(t)
-	if err != nil {
-		return nil, err
-	}
-	return prometheusMiddleware.NewStorageMiddleware(innerStorage, prometheusRegisterer.(prometheus.Registerer))
 }
 
 type VaultSigningConfiguration struct {
@@ -712,12 +661,7 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	t := reflect.TypeOf((*prometheus.Registerer)(nil))
-	prometheusRegisterer, err := diProvider.LookupByType(t)
-	if err != nil {
-		return nil, err
-	}
-	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
+	return outbox.NewStorage(db, outboxId, innerStorage, storageOutboxEntryRepository, claimLeaseDuration)
 }
 
 type ReplicationStorageConfiguration struct {
@@ -874,8 +818,6 @@ func CreateStorageInstantiatorFromJson(b []byte) (StorageInstantiator, error) {
 		si = &MetadataPartStorageConfiguration{}
 	case conditionalStorageMiddlewareType:
 		si = &ConditionalStorageMiddlewareConfiguration{}
-	case prometheusStorageMiddlewareType:
-		si = &PrometheusStorageMiddlewareConfiguration{}
 	case auditStorageMiddlewareType:
 		si = &AuditStorageMiddlewareConfiguration{}
 	case outboxStorageType:

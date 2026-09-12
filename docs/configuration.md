@@ -44,6 +44,7 @@ by an interrupted process may need to be cleaned up separately.
 |----------|-------------|---------|
 | `PITHOS_MONITORING_PORT` | Port for monitoring endpoints | `9090` |
 | `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `true` |
+| `PITHOS_METRICS_GAUGES_INTERVAL_SECONDS` | Interval in seconds for periodically sampled storage gauges | `30` |
 
 ### Logging
 

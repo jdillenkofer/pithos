@@ -1,9 +1,10 @@
 package notification
 
 import (
-	"log/slog"
+	"sync"
 	"time"
 
+	pithosMetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -26,60 +27,48 @@ const (
 )
 
 var (
-	gaugeLabels   = []string{"outbox_id"}
-	counterLabels = []string{"outbox_id", "destination_type", "payload_format"}
+	gaugeLabels               = []string{"outbox_id"}
+	counterLabels             = []string{"outbox_id", "destination_type", "payload_format"}
+	notificationMetricsOnce   sync.Once
+	sharedNotificationMetrics *notificationMetrics
 )
 
-func newNotificationMetrics(registerer prometheus.Registerer) *notificationMetrics {
-	m := &notificationMetrics{
-		pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "pending_entries", Help: "Number of notification outbox entries awaiting delivery",
-		}, gaugeLabels),
-		deadLetteredEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "dead_lettered_entries", Help: "Number of dead-lettered notification outbox entries",
-		}, gaugeLabels),
-		claimedEntries: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "claimed_entries_total", Help: "Total number of notification outbox entries claimed for delivery",
-		}, counterLabels),
-		publishedEntries: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "published_entries_total", Help: "Total number of successfully published notifications",
-		}, counterLabels),
-		failedPublishes: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "failed_publishes_total", Help: "Total number of failed notification publish attempts",
-		}, counterLabels),
-		retryAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "retry_attempts_total", Help: "Total number of notification delivery retries scheduled",
-		}, counterLabels),
-		publishLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: metricsNamespace, Subsystem: metricsSubsystem,
-			Name: "publish_latency_seconds", Help: "Latency of notification publish attempts in seconds",
-			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
-		}, counterLabels),
-	}
-	if registerer != nil {
-		for name, collector := range map[string]prometheus.Collector{
-			"pendingEntries":      m.pendingEntries,
-			"deadLetteredEntries": m.deadLetteredEntries,
-			"claimedEntries":      m.claimedEntries,
-			"publishedEntries":    m.publishedEntries,
-			"failedPublishes":     m.failedPublishes,
-			"retryAttempts":       m.retryAttempts,
-			"publishLatency":      m.publishLatency,
-		} {
-			if err := registerer.Register(collector); err != nil {
-				if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-					slog.Error("Failed to register notification metric", "metric", name, "error", err)
-				}
-			}
+func newNotificationMetrics() *notificationMetrics {
+	notificationMetricsOnce.Do(func() {
+		sharedNotificationMetrics = &notificationMetrics{
+			pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "pending_entries", Help: "Number of notification outbox entries awaiting delivery",
+			}, gaugeLabels),
+			deadLetteredEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "dead_lettered_entries", Help: "Number of dead-lettered notification outbox entries",
+			}, gaugeLabels),
+			claimedEntries: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "claimed_entries_total", Help: "Total number of notification outbox entries claimed for delivery",
+			}, counterLabels),
+			publishedEntries: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "published_entries_total", Help: "Total number of successfully published notifications",
+			}, counterLabels),
+			failedPublishes: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "failed_publishes_total", Help: "Total number of failed notification publish attempts",
+			}, counterLabels),
+			retryAttempts: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "retry_attempts_total", Help: "Total number of notification delivery retries scheduled",
+			}, counterLabels),
+			publishLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+				Namespace: metricsNamespace, Subsystem: metricsSubsystem,
+				Name: "publish_latency_seconds", Help: "Latency of notification publish attempts in seconds",
+				Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+			}, counterLabels),
 		}
-	}
-	return m
+	})
+	pithosMetrics.Register(sharedNotificationMetrics.pendingEntries, sharedNotificationMetrics.deadLetteredEntries, sharedNotificationMetrics.claimedEntries, sharedNotificationMetrics.publishedEntries, sharedNotificationMetrics.failedPublishes, sharedNotificationMetrics.retryAttempts, sharedNotificationMetrics.publishLatency)
+	return sharedNotificationMetrics
 }
 
 func payloadFormatLabel(format PayloadFormat) string {

@@ -19,7 +19,6 @@ import (
 	tinkEncryptionPartStoreMiddleware "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
 	outboxPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/outbox"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // EncryptionType represents the type of encryption to use for part storage
@@ -30,7 +29,7 @@ const (
 	EncryptionTypeTink EncryptionType = "tink"
 )
 
-func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, enablePartStoreCompression bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool, registerer prometheus.Registerer) storage.Storage {
+func CreateStorage(storagePath string, db database.Database, useFilesystemPartStore bool, enablePartStoreCompression bool, encryptionType EncryptionType, partStoreEncryptionPassword string, wrapPartStoreWithOutbox bool) storage.Storage {
 	var metadataStore metadatastore.MetadataStore
 	bucketRepository, err := repositoryFactory.NewBucketRepository(db)
 	if err != nil {
@@ -116,7 +115,7 @@ func CreateStorage(storagePath string, db database.Database, useFilesystemPartSt
 			slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 			os.Exit(1)
 		}
-		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, registerer, 30*time.Second)
+		partStore, err = outboxPartStore.New(db, "default", partStore, partOutboxEntryRepository, 30*time.Second)
 		if err != nil {
 			slog.Error(fmt.Sprint("Error during NewOutboxPartStore: ", err))
 			os.Exit(1)
