@@ -194,6 +194,8 @@ func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
+	psm.totalSizeByBucket.Reset()
+	psm.objectCountByBucket.Reset()
 	for _, bucket := range buckets {
 		totalSize, objectCount, err := psm.getBucketMetrics(ctx, bucket)
 		if err != nil {
