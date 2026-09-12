@@ -87,10 +87,12 @@ func (rs *replicationStorage) Start(ctx context.Context) error {
 	if err := rs.Next.Start(ctx); err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		if err := secondaryStorage.Start(ctx); err != nil {
+			observeSecondary(i, "Start", err)
 			return err
 		}
+		observeSecondary(i, "Start", nil)
 	}
 	return nil
 }
@@ -102,10 +104,12 @@ func (rs *replicationStorage) Stop(ctx context.Context) error {
 	if err := rs.Next.Stop(ctx); err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		if err := secondaryStorage.Stop(ctx); err != nil {
+			observeSecondary(i, "Stop", err)
 			return err
 		}
+		observeSecondary(i, "Stop", nil)
 	}
 	return nil
 }
@@ -323,8 +327,9 @@ func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName stor
 	if err != nil {
 		return nil, err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err = secondaryStorage.DeleteObjects(ctx, bucketName, entries)
+		observeSecondary(i, "DeleteObjects", err)
 		if err != nil {
 			return nil, err
 		}
@@ -341,8 +346,9 @@ func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketN
 		return nil, err
 	}
 	secondaryUploadIDs := make([]storage.UploadId, 0, len(rs.secondaryStorages))
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		secondaryResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
+		observeSecondary(i, "CreateMultipartUpload", err)
 		if err != nil {
 			return nil, err
 		}
@@ -381,6 +387,7 @@ func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage
 			return nil, err
 		}
 		_, err = secondaryStorage.UploadPart(ctx, bucketName, key, secondaryUploadIds[i], partNumber, readSeekCloser, checksumInput)
+		observeSecondary(i, "UploadPart", err)
 		if err != nil {
 			return nil, err
 		}
@@ -402,7 +409,9 @@ func (rs *replicationStorage) UploadPartCopy(ctx context.Context, srcBucket stor
 	rs.mapMutex.Unlock()
 
 	for i, secondaryStorage := range rs.secondaryStorages {
-		if _, err = secondaryStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, secondaryUploadIds[i], partNumber, opts); err != nil {
+		_, err = secondaryStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, secondaryUploadIds[i], partNumber, opts)
+		observeSecondary(i, "UploadPartCopy", err)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -434,6 +443,7 @@ func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucke
 	secondaryOpts := completeMultipartUploadPartsOnlyOptions(opts)
 	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, secondaryOpts)
+		observeSecondary(i, "CompleteMultipartUpload", err)
 		if err != nil {
 			return nil, err
 		}
@@ -460,6 +470,7 @@ func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketNa
 
 	for i, secondaryStorage := range rs.secondaryStorages {
 		err := secondaryStorage.AbortMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i])
+		observeSecondary(i, "AbortMultipartUpload", err)
 		if err != nil {
 			return err
 		}
@@ -479,8 +490,9 @@ func (rs *replicationStorage) PutBucketWebsiteConfiguration(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
+		observeSecondary(i, "PutBucketWebsite", err)
 		if err != nil {
 			return err
 		}
@@ -496,8 +508,9 @@ func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
+		observeSecondary(i, "DeleteBucketWebsite", err)
 		if err != nil {
 			return err
 		}
@@ -520,8 +533,9 @@ func (rs *replicationStorage) PutBucketCORSConfiguration(ctx context.Context, bu
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
+		observeSecondary(i, "PutBucketCORS", err)
 		if err != nil {
 			return err
 		}
@@ -537,8 +551,9 @@ func (rs *replicationStorage) DeleteBucketCORSConfiguration(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
+		observeSecondary(i, "DeleteBucketCORS", err)
 		if err != nil {
 			return err
 		}
@@ -561,8 +576,9 @@ func (rs *replicationStorage) PutBucketLifecycleConfiguration(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
+		observeSecondary(i, "PutBucketLifecycle", err)
 		if err != nil {
 			return err
 		}
@@ -578,8 +594,9 @@ func (rs *replicationStorage) DeleteBucketLifecycleConfiguration(ctx context.Con
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
+		observeSecondary(i, "DeleteBucketLifecycle", err)
 		if err != nil {
 			return err
 		}
