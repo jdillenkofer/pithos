@@ -2,19 +2,24 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
+	prometheusmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware/prometheus"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/corscache"
 	"github.com/oklog/ulid/v2"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -100,7 +105,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	}
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
-	return rootHandler
+	return prometheusmiddleware.New(rootHandler)
 }
 
 func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
@@ -129,6 +134,21 @@ func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {
 }
 
 func SetupMonitoringServer(dbs []database.Database) http.Handler {
+	for i, db := range dbs {
+		for {
+			if provider, ok := db.(interface{ SQLDBs() []*sql.DB }); ok {
+				for poolIndex, sqlDB := range provider.SQLDBs() {
+					pithosmetrics.Register(collectors.NewDBStatsCollector(sqlDB, strconv.Itoa(i)+"_"+strconv.Itoa(poolIndex)))
+				}
+				break
+			}
+			unwrapper, ok := db.(interface{ UnwrapDatabase() database.Database })
+			if !ok {
+				break
+			}
+			db = unwrapper.UnwrapDatabase()
+		}
+	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /health", makeHealthCheckHandler(dbs))

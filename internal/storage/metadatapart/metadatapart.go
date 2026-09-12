@@ -19,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	partstoreprometheus "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/task"
 )
 
@@ -192,7 +193,12 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 			return nil, fmt.Errorf("storage class %q in part store mapping is not a recognized storage class", storageClass)
 		}
 	}
-	partStores, err := partstore.NewNamedPartStores(defaultPartStore, extraPartStores, storageClassToPartStore)
+	defaultPartStore = partstoreprometheus.New(defaultPartStore, db, partstore.DefaultPartStoreName, 30*time.Second)
+	wrappedExtraPartStores := make(map[string]partstore.PartStore, len(extraPartStores))
+	for name, store := range extraPartStores {
+		wrappedExtraPartStores[name] = partstoreprometheus.New(store, db, name, 30*time.Second)
+	}
+	partStores, err := partstore.NewNamedPartStores(defaultPartStore, wrappedExtraPartStores, storageClassToPartStore)
 	if err != nil {
 		return nil, err
 	}

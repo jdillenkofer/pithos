@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosMetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/storageoutboxentry"
@@ -25,63 +27,61 @@ import (
 )
 
 type outboxMetrics struct {
-	pendingEntries     prometheus.Gauge
+	pendingEntries     *prometheus.GaugeVec
 	processedEntries   prometheus.Counter
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
+	claimLostCounter   prometheus.Counter
+	retryCounter       prometheus.Counter
+	inFlightEntries    prometheus.Gauge
+	oldestPendingAge   *prometheus.GaugeVec
+	processingRate     *prometheus.GaugeVec
+	estimatedDrainTime *prometheus.GaugeVec
 }
 
-func newOutboxMetrics(registerer prometheus.Registerer) *outboxMetrics {
-	m := &outboxMetrics{
-		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "pending_entries",
-			Help:      "Number of pending outbox entries",
-		}),
-		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processed_entries_total",
-			Help:      "Total number of processed outbox entries",
-		}),
-		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "processing_duration_seconds",
-			Help:      "Duration of outbox processing in seconds",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}),
-		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "outbox",
-			Name:      "errors_total",
-			Help:      "Total number of outbox processing errors",
-		}),
-	}
+var outboxMetricsOnce sync.Once
+var sharedOutboxMetrics *outboxMetrics
 
-	if err := registerer.Register(m.pendingEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register pendingEntries metric", "error", err)
+func newOutboxMetrics() *outboxMetrics {
+	outboxMetricsOnce.Do(func() {
+		sharedOutboxMetrics = &outboxMetrics{
+			pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "pending_entries",
+				Help:      "Number of pending outbox entries",
+			}, []string{"outbox_id"}),
+			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "processed_entries_total",
+				Help:      "Total number of processed outbox entries",
+			}),
+			processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "processing_duration_seconds",
+				Help:      "Duration of outbox processing in seconds",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			}),
+			errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "outbox",
+				Name:      "errors_total",
+				Help:      "Total number of outbox processing errors",
+			}),
+			claimLostCounter:   prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "outbox", Name: "claim_lost_total", Help: "Total number of storage outbox claims lost during processing"}),
+			retryCounter:       prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "outbox", Name: "retries_total", Help: "Total number of storage outbox entries scheduled for retry"}),
+			inFlightEntries:    prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "entries_in_flight", Help: "Number of storage outbox entries currently being processed"}),
+			oldestPendingAge:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending storage outbox entry"}, []string{"outbox_id"}),
+			processingRate:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "processing_rate_entries_per_second", Help: "Smoothed storage outbox processing throughput"}, []string{"outbox_id"}),
+			estimatedDrainTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "estimated_drain_time_seconds", Help: "Estimated time to drain the current storage outbox backlog at the observed processing rate"}, []string{"outbox_id"}),
 		}
-	}
-	if err := registerer.Register(m.processedEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processedEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processingDuration); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processingDuration metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.errorsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register errorsCounter metric", "error", err)
-		}
-	}
+	})
 
-	return m
+	pithosMetrics.Register(sharedOutboxMetrics.pendingEntries, sharedOutboxMetrics.processedEntries, sharedOutboxMetrics.processingDuration, sharedOutboxMetrics.errorsCounter, sharedOutboxMetrics.claimLostCounter, sharedOutboxMetrics.retryCounter, sharedOutboxMetrics.inFlightEntries, sharedOutboxMetrics.oldestPendingAge, sharedOutboxMetrics.processingRate, sharedOutboxMetrics.estimatedDrainTime)
+
+	return sharedOutboxMetrics
 }
 
 type outboxStorage struct {
@@ -99,6 +99,7 @@ type outboxStorage struct {
 	storageOutboxEntryRepository storageOutboxEntry.Repository
 	tracer                       trace.Tracer
 	metrics                      *outboxMetrics
+	processingRate               float64
 }
 
 // Compile-time check to ensure outboxStorage implements storage.Storage
@@ -111,7 +112,7 @@ const defaultClaimLeaseDuration = 30 * time.Second
 // in memory before spilling to a temp file when wrapping it in a seekable reader.
 const maxReplayMemoryCacheSize = 10 * 1000 * 1000 // 10MB
 
-func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (storage.Storage, error) {
+func NewStorage(db database.Database, outboxId string, innerStorage storage.Storage, storageOutboxEntryRepository storageOutboxEntry.Repository, claimLeaseDuration time.Duration) (storage.Storage, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("OutboxStorage")
 	if err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func NewStorage(db database.Database, outboxId string, innerStorage storage.Stor
 		innerStorage:                 innerStorage,
 		storageOutboxEntryRepository: storageOutboxEntryRepository,
 		tracer:                       otel.Tracer("internal/storage/outbox"),
-		metrics:                      newOutboxMetrics(registerer),
+		metrics:                      newOutboxMetrics(),
 	}
 	return os, nil
 }
@@ -253,6 +254,7 @@ func (os *outboxStorage) startStorageOutboxHeartbeat(ctx context.Context, entry 
 					continue
 				}
 				if !extended {
+					os.metrics.claimLostCounter.Inc()
 					slog.WarnContext(ctx, "Storage outbox heartbeat lost claim", "entryId", entry.Id.String())
 				}
 			case <-stop:
@@ -281,22 +283,48 @@ func waitForStorageOutboxRetry(ctx context.Context) {
 func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	startTime := time.Now()
 	processedOutboxEntryCount := 0
+	pendingCount := 0
 	defer func() {
-		os.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
+		elapsed := time.Since(startTime).Seconds()
+		os.metrics.processingDuration.Observe(elapsed)
 		if processedOutboxEntryCount > 0 {
 			os.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
+			instantaneousRate := float64(processedOutboxEntryCount) / elapsed
+			if os.processingRate == 0 {
+				os.processingRate = instantaneousRate
+			} else {
+				os.processingRate = 0.2*instantaneousRate + 0.8*os.processingRate
+			}
+			os.metrics.processingRate.WithLabelValues(os.outboxId).Set(os.processingRate)
+		}
+		remaining := max(0, pendingCount-processedOutboxEntryCount)
+		if os.processingRate > 0 {
+			os.metrics.estimatedDrainTime.WithLabelValues(os.outboxId).Set(float64(remaining) / os.processingRate)
+		} else if remaining > 0 {
+			os.metrics.estimatedDrainTime.WithLabelValues(os.outboxId).Set(math.NaN())
+		} else {
+			os.metrics.estimatedDrainTime.WithLabelValues(os.outboxId).Set(0)
 		}
 	}()
 
-	var pendingCount int
+	var oldestEntry *storageOutboxEntry.Entity
 	if err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		pendingCount, err = os.storageOutboxEntryRepository.Count(ctx, tx.SqlTx(), os.outboxId)
+		if err != nil {
+			return err
+		}
+		oldestEntry, err = os.storageOutboxEntryRepository.FindFirstStorageOutboxEntry(ctx, tx.SqlTx(), os.outboxId)
 		return err
 	}); err != nil {
 		return
 	}
-	os.metrics.pendingEntries.Set(float64(pendingCount))
+	os.metrics.pendingEntries.WithLabelValues(os.outboxId).Set(float64(pendingCount))
+	if oldestEntry == nil {
+		os.metrics.oldestPendingAge.WithLabelValues(os.outboxId).Set(0)
+	} else {
+		os.metrics.oldestPendingAge.WithLabelValues(os.outboxId).Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
+	}
 
 	for {
 		var entry *storageOutboxEntry.Entity
@@ -306,16 +334,20 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
 			waitForStorageOutboxRetry(ctx)
 			return
 		}
 		if entry == nil || !claimed {
 			break
 		}
+		os.metrics.inFlightEntries.Inc()
 
 		putObjectReaders, err = os.readStorageOutboxChunks(ctx, entry)
 		if err != nil {
+			os.metrics.inFlightEntries.Dec()
 			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
 			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
 			waitForStorageOutboxRetry(ctx)
 			return
@@ -323,7 +355,9 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 
 		putObjectOpts, err = os.readStorageOutboxPutOptions(ctx, entry)
 		if err != nil {
+			os.metrics.inFlightEntries.Dec()
 			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
 			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
 			time.Sleep(5 * time.Second)
 			return
@@ -356,9 +390,11 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			err = fmt.Errorf("invalid storage outbox operation: %s", entry.Operation)
 		}
 		stopHeartbeat()
+		os.metrics.inFlightEntries.Dec()
 		if err != nil {
 			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
 			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
 			waitForStorageOutboxRetry(ctx)
 			return
 		}
@@ -366,11 +402,13 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		deleted, err := os.finalizeStorageOutboxEntry(ctx, entry)
 		if err != nil {
 			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
 			waitForStorageOutboxRetry(ctx)
 			return
 		}
 		if !deleted {
 			os.metrics.errorsCounter.Inc()
+			os.metrics.claimLostCounter.Inc()
 			slog.Warn("Storage outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}

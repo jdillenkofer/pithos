@@ -14,11 +14,29 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/task"
 	"github.com/klauspost/reedsolomon"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var erasureMetricsOnce sync.Once
+var erasureMetrics struct {
+	scans, reconstructed, healWrites prometheus.Counter
+	missing                          prometheus.Gauge
+}
+
+func registerErasureMetrics() {
+	erasureMetricsOnce.Do(func() {
+		erasureMetrics.scans = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "erasure_coding", Name: "heal_scans_total", Help: "Number of erasure coding heal scans"})
+		erasureMetrics.missing = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "erasure_coding", Name: "shards_missing", Help: "Number of missing shards observed by the latest healing read"})
+		erasureMetrics.reconstructed = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "erasure_coding", Name: "reads_reconstructed_total", Help: "Number of reads requiring shard reconstruction"})
+		erasureMetrics.healWrites = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "erasure_coding", Name: "heal_writes_total", Help: "Number of replacement shard writes started"})
+	})
+	pithosmetrics.Register(erasureMetrics.scans, erasureMetrics.missing, erasureMetrics.reconstructed, erasureMetrics.healWrites)
+}
 
 const shardMagic = "PEC1"
 const shardHeaderVersion = uint8(1)
@@ -55,7 +73,31 @@ func WithHealScanInterval(interval time.Duration) Option {
 
 var _ partstore.PartStore = (*erasureCodingPartStore)(nil)
 
+func (e *erasureCodingPartStore) SupportsStats() bool {
+	for _, store := range e.partStores {
+		provider, ok := store.(partstore.StatsProvider)
+		if !ok || !provider.SupportsStats() {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *erasureCodingPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	var total partstore.Stats
+	for _, store := range e.partStores {
+		stats, _, err := partstore.StatsOf(ctx, tx, store)
+		if err != nil {
+			return partstore.Stats{}, err
+		}
+		total.Parts += stats.Parts
+		total.Bytes += stats.Bytes
+	}
+	return total, nil
+}
+
 func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, partStores []partstore.PartStore, opts ...Option) (partstore.PartStore, error) {
+	registerErasureMetrics()
 	if dataShards < 1 {
 		return nil, errors.New("dataShards must be >= 1")
 	}
@@ -151,6 +193,7 @@ func (e *erasureCodingPartStore) healScanLoop(cancelTask *atomic.Bool) {
 }
 
 func (e *erasureCodingPartStore) healScanOnce(ctx context.Context, cancelTask *atomic.Bool) {
+	erasureMetrics.scans.Inc()
 	partIds, err := e.GetPartIds(ctx, nil)
 	if err != nil {
 		slog.Warn("erasurecoding heal scan failed to list part ids", "err", err)
@@ -328,6 +371,16 @@ func (e *erasureCodingPartStore) GetPart(ctx context.Context, tx database.Tx, pa
 		unlock()
 		return nil, err
 	}
+	missing := 0
+	for _, heal := range healShards {
+		if heal {
+			missing++
+		}
+	}
+	erasureMetrics.missing.Set(float64(missing))
+	if missing > 0 {
+		erasureMetrics.reconstructed.Inc()
+	}
 	if hasHealShards(healShards) {
 		closePartReaders(readers)
 		unlock()
@@ -435,6 +488,7 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				prHeal, pwHeal := io.Pipe()
 				healPipeWriters[i] = pwHeal
 				healingShardCount++
+				erasureMetrics.healWrites.Inc()
 				go func(idx int, reader *io.PipeReader) {
 					healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
 				}(i, prHeal)

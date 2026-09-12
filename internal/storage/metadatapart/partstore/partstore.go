@@ -31,6 +31,30 @@ type PartStore interface {
 	PartManager
 }
 
+// Stats describes the physical occupancy of a part store. Bytes is the number
+// of bytes stored by the backend, which may differ from logical object size.
+type Stats struct {
+	Parts int64
+	Bytes int64
+}
+
+// StatsProvider is implemented by stores that can report occupancy without
+// opening and reading every part.
+type StatsProvider interface {
+	SupportsStats() bool
+	Stats(ctx context.Context, tx database.Tx) (Stats, error)
+}
+
+// StatsOf reports whether ps supports cheap occupancy statistics.
+func StatsOf(ctx context.Context, tx database.Tx, ps PartStore) (Stats, bool, error) {
+	provider, ok := ps.(StatsProvider)
+	if !ok || !provider.SupportsStats() {
+		return Stats{}, false, nil
+	}
+	stats, err := provider.Stats(ctx, tx)
+	return stats, true, err
+}
+
 // Capability describes an optional behavior supported by a part store.
 type Capability uint64
 

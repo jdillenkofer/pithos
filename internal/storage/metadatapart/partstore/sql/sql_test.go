@@ -61,6 +61,30 @@ func TestSqlPartStore(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestSqlPartStoreStatsAggregatesChunks(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "stats.db"))
+	require.NoError(t, err)
+	defer db.Close()
+	repository, err := repositoryFactory.NewPartContentRepository(db)
+	require.NoError(t, err)
+	store, err := New(db, repository)
+	require.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	require.NoError(t, err)
+
+	err = database.WithTx(context.Background(), db, nil, func(ctx context.Context, tx database.Tx) error {
+		return store.PutPart(ctx, tx, *id, bytes.NewReader([]byte("seven!!")))
+	})
+	require.NoError(t, err)
+	err = database.WithTx(context.Background(), db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		stats, err := store.(partstore.StatsProvider).Stats(ctx, tx)
+		require.Equal(t, partstore.Stats{Parts: 1, Bytes: 7}, stats)
+		return err
+	})
+	require.NoError(t, err)
+}
+
 func TestSqlPartStore_Chunking(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	storagePath, err := os.MkdirTemp("", "pithos-test-data-")

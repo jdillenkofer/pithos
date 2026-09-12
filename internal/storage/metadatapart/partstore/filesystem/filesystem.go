@@ -28,6 +28,9 @@ type filesystemPartStore struct {
 
 // Compile-time check to ensure filesystemPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*filesystemPartStore)(nil)
+var _ partstore.StatsProvider = (*filesystemPartStore)(nil)
+
+func (bs *filesystemPartStore) SupportsStats() bool { return true }
 
 func (bs *filesystemPartStore) ensureRootDir() error {
 	err := os.MkdirAll(bs.root, os.ModePerm)
@@ -193,6 +196,29 @@ func (bs *filesystemPartStore) GetPartIds(ctx context.Context, tx database.Tx) (
 		}
 	}
 	return partIds, nil
+}
+
+func (bs *filesystemPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	dirEntries, err := os.ReadDir(bs.root)
+	if err != nil {
+		return partstore.Stats{}, err
+	}
+	var stats partstore.Stats
+	for _, entry := range dirEntries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := bs.tryGetPartIdFromFilename(entry.Name()); !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return partstore.Stats{}, err
+		}
+		stats.Parts++
+		stats.Bytes += info.Size()
+	}
+	return stats, nil
 }
 
 func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {

@@ -15,7 +15,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +35,7 @@ func TestOutboxGetPartTxFree(t *testing.T) {
 	require.NoError(t, err)
 	partOutboxEntryRepository, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
-	outboxStore, err := New(db, "default", inner, partOutboxEntryRepository, prometheus.NewRegistry(), 30*time.Second)
+	outboxStore, err := New(db, "default", inner, partOutboxEntryRepository, 30*time.Second)
 	require.NoError(t, err)
 
 	capabilities := partstore.CapabilitiesOf(outboxStore)
@@ -130,7 +129,7 @@ func TestOutboxCommitAfterStopDoesNotPanic(t *testing.T) {
 	require.NoError(t, err)
 	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
-	outboxStore, err := New(db, "default", inner, repo, prometheus.NewRegistry(), 30*time.Second)
+	outboxStore, err := New(db, "default", inner, repo, 30*time.Second)
 	require.NoError(t, err)
 
 	require.NoError(t, outboxStore.Start(ctx))

@@ -20,7 +20,6 @@ import (
 	sqlMetadataStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -129,8 +128,7 @@ func TestMetadataPartStorageWithOutbox(t *testing.T) {
 		os.Exit(1)
 
 	}
-	reg := prometheus.NewRegistry()
-	outboxStorage, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, reg, 30*time.Second)
+	outboxStorage, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, 30*time.Second)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxStorage: %s", err))
 		os.Exit(1)
@@ -180,7 +178,7 @@ func TestOutboxedPutObjectPreservesPutOptionsOnReplay(t *testing.T) {
 	defer db2.Close()
 	storageOutboxEntryRepository, err := repositoryFactory.NewStorageOutboxEntryRepository(db2)
 	require.NoError(t, err)
-	outboxStg, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, prometheus.NewRegistry(), 30*time.Second)
+	outboxStg, err := NewStorage(db2, "default", metadataPartStorage, storageOutboxEntryRepository, 30*time.Second)
 	require.NoError(t, err)
 	// The outbox worker is deliberately not started so the queued entries stay
 	// put until the test drains them explicitly.

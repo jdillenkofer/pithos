@@ -25,6 +25,7 @@ const logLevelEnvKey = envKeyPrefix + "_LOG_LEVEL"
 const otelEnabledEnvKey = envKeyPrefix + "_OTEL_ENABLED"
 const otelExporterEnvKey = envKeyPrefix + "_OTEL_EXPORTER"
 const otelEndpointEnvKey = envKeyPrefix + "_OTEL_ENDPOINT"
+const metricsGaugesIntervalSecondsEnvKey = envKeyPrefix + "_METRICS_GAUGES_INTERVAL_SECONDS"
 
 func getCredentialsFromEnv() []Credentials {
 	var credentials []Credentials = nil
@@ -115,6 +116,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	otelEnabled := getBoolFromEnv(otelEnabledEnvKey)
 	otelExporter := getStringFromEnv(otelExporterEnvKey)
 	otelEndpoint := getStringFromEnv(otelEndpointEnvKey)
+	metricsGaugesIntervalSeconds := getIntFromEnv(metricsGaugesIntervalSecondsEnvKey)
 
 	return &Settings{
 		authenticationEnabled: authenticationEnabled,
@@ -135,5 +137,6 @@ func loadSettingsFromEnv() (*Settings, error) {
 		otelEnabled:           otelEnabled,
 		otelExporter:          otelExporter,
 		otelEndpoint:          otelEndpoint,
+		metricsGaugesIntervalSeconds: metricsGaugesIntervalSeconds,
 	}, nil
 }

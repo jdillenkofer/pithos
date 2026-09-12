@@ -25,7 +25,7 @@ Pithos supports multiple storage backends that can be configured in the storage 
 ### Storage Middleware
 
 - **ConditionalStorage**: Conditional forwarding to different storage backends based on bucket name
-- **PrometheusStorage**: Adds Prometheus metrics for storage operations
+- Storage operation metrics are always enabled when running `pithos serve`.
 - **AuditStorage**: Provides cryptographically signed audit logs (see [Audit Logging](audit-logging.md))
 - **ObjectCacheStorageMiddleware**: Adds read-through object caching for object storage backends (especially S3)
   - Caches `GetObject` full-object reads and `HeadObject` metadata

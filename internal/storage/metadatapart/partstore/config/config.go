@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	cacheConfig "github.com/jdillenkofer/pithos/internal/cache/config"
@@ -30,7 +29,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp"
 	sftpConfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sftp/config"
 	sqlPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -367,12 +365,7 @@ func (o *OutboxPartStoreConfiguration) Instantiate(diProvider dependencyinjectio
 	if err != nil {
 		return nil, err
 	}
-	t := reflect.TypeOf((*prometheus.Registerer)(nil))
-	prometheusRegisterer, err := diProvider.LookupByType(t)
-	if err != nil {
-		return nil, err
-	}
-	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, prometheusRegisterer.(prometheus.Registerer), claimLeaseDuration)
+	return outbox.New(db, outboxId, innerPartStore, partOutboxEntryRepository, claimLeaseDuration)
 }
 
 type SftpPartStoreConfiguration struct {

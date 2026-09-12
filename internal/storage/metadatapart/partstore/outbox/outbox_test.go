@@ -13,7 +13,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,8 +51,7 @@ func TestOutboxPartStore(t *testing.T) {
 		slog.Error(fmt.Sprintf("Could not create PartOutboxEntryRepository: %s", err))
 		os.Exit(1)
 	}
-	reg := prometheus.NewRegistry()
-	outboxPartStore, err := New(db, "default", filesystemPartStore, partOutboxEntryRepository, reg, 30*time.Second)
+	outboxPartStore, err := New(db, "default", filesystemPartStore, partOutboxEntryRepository, 30*time.Second)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Could not create OutboxPartStore: %s", err))
 		os.Exit(1)

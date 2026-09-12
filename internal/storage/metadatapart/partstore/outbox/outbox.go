@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosMetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	partOutboxEntry "github.com/jdillenkofer/pithos/internal/storage/database/repository/partoutboxentry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -24,63 +26,61 @@ import (
 )
 
 type partOutboxMetrics struct {
-	pendingEntries     prometheus.Gauge
+	pendingEntries     *prometheus.GaugeVec
 	processedEntries   prometheus.Counter
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
+	claimLostCounter   prometheus.Counter
+	retryCounter       prometheus.Counter
+	inFlightEntries    prometheus.Gauge
+	oldestPendingAge   *prometheus.GaugeVec
+	processingRate     *prometheus.GaugeVec
+	estimatedDrainTime *prometheus.GaugeVec
 }
 
-func newPartOutboxMetrics(registerer prometheus.Registerer) *partOutboxMetrics {
-	m := &partOutboxMetrics{
-		pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "pending_entries",
-			Help:      "Number of pending part outbox entries",
-		}),
-		processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "processed_entries_total",
-			Help:      "Total number of processed part outbox entries",
-		}),
-		processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "processing_duration_seconds",
-			Help:      "Duration of part outbox processing in seconds",
-			Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
-		}),
-		errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "pithos",
-			Subsystem: "part_outbox",
-			Name:      "errors_total",
-			Help:      "Total number of part outbox processing errors",
-		}),
-	}
+var partOutboxMetricsOnce sync.Once
+var sharedPartOutboxMetrics *partOutboxMetrics
 
-	if err := registerer.Register(m.pendingEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register pendingEntries metric", "error", err)
+func newPartOutboxMetrics() *partOutboxMetrics {
+	partOutboxMetricsOnce.Do(func() {
+		sharedPartOutboxMetrics = &partOutboxMetrics{
+			pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "pending_entries",
+				Help:      "Number of pending part outbox entries",
+			}, []string{"outbox_id"}),
+			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "processed_entries_total",
+				Help:      "Total number of processed part outbox entries",
+			}),
+			processingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "processing_duration_seconds",
+				Help:      "Duration of part outbox processing in seconds",
+				Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			}),
+			errorsCounter: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "pithos",
+				Subsystem: "part_outbox",
+				Name:      "errors_total",
+				Help:      "Total number of part outbox processing errors",
+			}),
+			claimLostCounter:   prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "claim_lost_total", Help: "Total number of part outbox claims lost during processing"}),
+			retryCounter:       prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "retries_total", Help: "Total number of part outbox entries scheduled for retry"}),
+			inFlightEntries:    prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "entries_in_flight", Help: "Number of part outbox entries currently being processed"}),
+			oldestPendingAge:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending part outbox entry"}, []string{"outbox_id"}),
+			processingRate:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "processing_rate_entries_per_second", Help: "Smoothed part outbox processing throughput"}, []string{"outbox_id"}),
+			estimatedDrainTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "estimated_drain_time_seconds", Help: "Estimated time to drain the current part outbox backlog at the observed processing rate"}, []string{"outbox_id"}),
 		}
-	}
-	if err := registerer.Register(m.processedEntries); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processedEntries metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.processingDuration); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register processingDuration metric", "error", err)
-		}
-	}
-	if err := registerer.Register(m.errorsCounter); err != nil {
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
-			slog.Error("Failed to register errorsCounter metric", "error", err)
-		}
-	}
+	})
 
-	return m
+	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter, sharedPartOutboxMetrics.claimLostCounter, sharedPartOutboxMetrics.retryCounter, sharedPartOutboxMetrics.inFlightEntries, sharedPartOutboxMetrics.oldestPendingAge, sharedPartOutboxMetrics.processingRate, sharedPartOutboxMetrics.estimatedDrainTime)
+
+	return sharedPartOutboxMetrics
 }
 
 type outboxPartStore struct {
@@ -98,10 +98,21 @@ type outboxPartStore struct {
 	partOutboxEntryRepository partOutboxEntry.Repository
 	tracer                    trace.Tracer
 	metrics                   *partOutboxMetrics
+	processingRate            float64
 }
 
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*outboxPartStore)(nil)
+
+func (obs *outboxPartStore) SupportsStats() bool {
+	provider, ok := obs.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (obs *outboxPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, obs.innerPartStore)
+	return stats, err
+}
 
 const defaultClaimLeaseDuration = 30 * time.Second
 
@@ -113,7 +124,7 @@ var errPartOutboxEntryVanished = errors.New("part outbox entry deleted while it 
 // something is wrong; failing is better than livelocking the request.
 const maxGetPartRaceRetries = 8
 
-func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, registerer prometheus.Registerer, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
+func New(db database.Database, outboxId string, innerPartStore partstore.PartStore, partOutboxEntryRepository partOutboxEntry.Repository, claimLeaseDuration time.Duration) (partstore.PartStore, error) {
 	validatedLifecycle, err := lifecycle.NewValidatedLifecycle("outboxPartStore")
 	if err != nil {
 		return nil, err
@@ -133,7 +144,7 @@ func New(db database.Database, outboxId string, innerPartStore partstore.PartSto
 		innerPartStore:            innerPartStore,
 		partOutboxEntryRepository: partOutboxEntryRepository,
 		tracer:                    otel.Tracer("internal/storage/metadatapart/partstore/outbox"),
-		metrics:                   newPartOutboxMetrics(registerer),
+		metrics:                   newPartOutboxMetrics(),
 	}
 	return obs, nil
 }
@@ -207,6 +218,7 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 					continue
 				}
 				if !extended {
+					obs.metrics.claimLostCounter.Inc()
 					slog.WarnContext(ctx, "Part outbox heartbeat lost claim", "entryId", entry.Id.String())
 				}
 			case <-stop:
@@ -238,22 +250,48 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 
 	startTime := time.Now()
 	processedOutboxEntryCount := 0
+	pendingCount := 0
 	defer func() {
-		obs.metrics.processingDuration.Observe(time.Since(startTime).Seconds())
+		elapsed := time.Since(startTime).Seconds()
+		obs.metrics.processingDuration.Observe(elapsed)
 		if processedOutboxEntryCount > 0 {
 			obs.metrics.processedEntries.Add(float64(processedOutboxEntryCount))
+			instantaneousRate := float64(processedOutboxEntryCount) / elapsed
+			if obs.processingRate == 0 {
+				obs.processingRate = instantaneousRate
+			} else {
+				obs.processingRate = 0.2*instantaneousRate + 0.8*obs.processingRate
+			}
+			obs.metrics.processingRate.WithLabelValues(obs.outboxId).Set(obs.processingRate)
+		}
+		remaining := max(0, pendingCount-processedOutboxEntryCount)
+		if obs.processingRate > 0 {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(float64(remaining) / obs.processingRate)
+		} else if remaining > 0 {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(math.NaN())
+		} else {
+			obs.metrics.estimatedDrainTime.WithLabelValues(obs.outboxId).Set(0)
 		}
 	}()
 
-	var pendingCount int
+	var oldestEntry *partOutboxEntry.Entity
 	if err := database.WithTx(ctx, obs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		pendingCount, err = obs.partOutboxEntryRepository.Count(ctx, tx.SqlTx(), obs.outboxId)
+		if err != nil {
+			return err
+		}
+		oldestEntry, err = obs.partOutboxEntryRepository.FindFirstPartOutboxEntry(ctx, tx.SqlTx(), obs.outboxId)
 		return err
 	}); err != nil {
 		return
 	}
-	obs.metrics.pendingEntries.Set(float64(pendingCount))
+	obs.metrics.pendingEntries.WithLabelValues(obs.outboxId).Set(float64(pendingCount))
+	if oldestEntry == nil {
+		obs.metrics.oldestPendingAge.WithLabelValues(obs.outboxId).Set(0)
+	} else {
+		obs.metrics.oldestPendingAge.WithLabelValues(obs.outboxId).Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
+	}
 
 	for {
 		var entry *partOutboxEntry.Entity
@@ -261,12 +299,14 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		entry, claimed, err := obs.claimNextOutboxEntry(ctx)
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
 		if entry == nil || !claimed {
 			break
 		}
+		obs.metrics.inFlightEntries.Inc()
 
 		stopHeartbeat := obs.startPartOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
@@ -279,9 +319,11 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			err = fmt.Errorf("invalid part outbox operation: %s", entry.Operation)
 		}
 		stopHeartbeat()
+		obs.metrics.inFlightEntries.Dec()
 		if err != nil {
 			_, _ = obs.releasePartOutboxEntry(ctx, entry)
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
@@ -292,11 +334,13 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
 		if err != nil {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.retryCounter.Inc()
 			waitForPartOutboxRetry(ctx)
 			return
 		}
 		if !deleted {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.claimLostCounter.Inc()
 			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}

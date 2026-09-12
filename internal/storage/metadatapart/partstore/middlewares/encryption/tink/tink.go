@@ -84,6 +84,16 @@ type TinkEncryptionPartStoreMiddleware struct {
 // Compile-time check to ensure TinkEncryptionPartStoreMiddleware implements partstore.PartStore
 var _ partstore.PartStore = (*TinkEncryptionPartStoreMiddleware)(nil)
 
+func (mw *TinkEncryptionPartStoreMiddleware) SupportsStats() bool {
+	provider, ok := mw.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (mw *TinkEncryptionPartStoreMiddleware) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, mw.innerPartStore)
+	return stats, err
+}
+
 // testKeyAvailability performs a small encrypt/decrypt test to verify the AEAD key is accessible and functional
 func testKeyAvailability(aead tink.AEAD, kmsType string) error {
 	testData := []byte("test")

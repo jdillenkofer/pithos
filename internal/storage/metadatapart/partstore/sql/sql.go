@@ -25,6 +25,9 @@ type sqlPartStore struct {
 
 // Compile-time check to ensure sqlPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*sqlPartStore)(nil)
+var _ partstore.StatsProvider = (*sqlPartStore)(nil)
+
+func (bs *sqlPartStore) SupportsStats() bool { return true }
 
 type Option func(*sqlPartStore)
 
@@ -172,6 +175,16 @@ func (bs *sqlPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]parts
 	defer span.End()
 
 	return bs.partContentRepository.FindPartContentIds(ctx, tx.SqlTx(), bs.partStoreId)
+}
+
+func (bs *sqlPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	var stats partstore.Stats
+	err := tx.SqlTx().QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT id), COALESCE(SUM(LENGTH(content)), 0)
+		FROM part_contents
+		WHERE part_store_id = $1
+	`, bs.partStoreId).Scan(&stats.Parts, &stats.Bytes)
+	return stats, err
 }
 
 func (bs *sqlPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {

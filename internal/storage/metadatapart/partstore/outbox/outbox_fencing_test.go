@@ -17,7 +17,6 @@ import (
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +45,7 @@ func TestLostClaimLeavesInnerPartMutationForIdempotentReplay(t *testing.T) {
 	repo, err := repositoryFactory.NewPartOutboxEntryRepository(db)
 	require.NoError(t, err)
 	rejectingRepo := &rejectFinalizeRepository{Repository: repo}
-	store, err := New(db, "default", inner, rejectingRepo, prometheus.NewRegistry(), 30*time.Second)
+	store, err := New(db, "default", inner, rejectingRepo, 30*time.Second)
 	require.NoError(t, err)
 	obs := store.(*outboxPartStore)
 

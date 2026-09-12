@@ -16,6 +16,7 @@ type pgxRepository struct {
 const (
 	findInUsePartIdsStmt                                = "SELECT part_id FROM parts"
 	findInUsePartIdCountsStmt                           = "SELECT part_id, COUNT(*) FROM parts GROUP BY part_id"
+	groupByStoreStmt                                    = "SELECT COALESCE(NULLIF(part_store_name, ''), 'default'), COUNT(*), COALESCE(SUM(size), 0) FROM parts GROUP BY COALESCE(NULLIF(part_store_name, ''), 'default')"
 	findPartsByObjectIdOrderBySequenceNumberAscStmt     = "SELECT id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at FROM parts WHERE object_id = $1 ORDER BY sequence_number ASC"
 	insertPartStmt                                      = "INSERT INTO parts (id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"
 	updatePartByIdStmt                                  = "UPDATE parts SET part_id = $1, object_id = $2, etag = $3, checksum_crc32 = $4, checksum_crc32c = $5, checksum_crc64nvme = $6, checksum_sha1 = $7, checksum_sha256 = $8, size = $9, sequence_number = $10, part_store_name = $11, updated_at = $12 WHERE id = $13"
@@ -23,6 +24,23 @@ const (
 	deletePartsByObjectIdReturningStmt                  = "DELETE FROM parts WHERE object_id = $1 RETURNING id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at"
 	deletePartsByObjectIdAndSequenceNumberReturningStmt = "DELETE FROM parts WHERE object_id = $1 AND sequence_number = $2 RETURNING id, part_id, object_id, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, size, sequence_number, part_store_name, created_at, updated_at"
 )
+
+func (br *pgxRepository) GroupByStore(ctx context.Context, tx *sql.Tx) ([]part.StoreAggregate, error) {
+	rows, err := tx.QueryContext(ctx, groupByStoreStmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []part.StoreAggregate
+	for rows.Next() {
+		var a part.StoreAggregate
+		if err := rows.Scan(&a.Store, &a.Count, &a.Size); err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}
 
 func NewRepository() (part.Repository, error) {
 	return &pgxRepository{}, nil

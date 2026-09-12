@@ -35,11 +35,12 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive"
 	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
+	storagemetrics "github.com/jdillenkofer/pithos/internal/storage/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
+	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
 	"github.com/jdillenkofer/pithos/internal/telemetry"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const defaultStorageConfig = `
@@ -208,18 +209,26 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	logLevel := settings.LogLevel()
 	logLevelVar.Set(logLevel)
 
-	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath(), prometheus.DefaultRegisterer)
+	dbContainer, store := loadStorageConfiguration(settings.StorageJsonPath())
 
 	dbs := dbContainer.Dbs()
 
-	// Enforce bucket lifecycle configurations (object expiration and aborting
-	// stale multipart uploads) in the background while the server runs.
 	store = lifecyclereconciler.NewStorageMiddleware(store)
+
+	store, err = prometheusMiddleware.NewStorageMiddleware(store, time.Duration(settings.MetricsGaugesIntervalSeconds())*time.Second)
+	if err != nil {
+		return fmt.Errorf("wrap storage with prometheus: %w", err)
+	}
 
 	err = store.Start(ctx)
 	if err != nil {
 		return fmt.Errorf("start storage: %w", err)
 	}
+	storageMetricsTask := storagemetrics.Start(dbs, time.Duration(settings.MetricsGaugesIntervalSeconds())*time.Second)
+	defer func() {
+		storageMetricsTask.Cancel()
+		storageMetricsTask.JoinWithTimeout(gracefulShutdownTimeout)
+	}()
 
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
@@ -334,15 +343,10 @@ func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForw
 	})
 }
 
-func loadStorageConfiguration(storageJsonPath string, prometheusRegisterer prometheus.Registerer) (*config.DbContainer, storage.Storage) {
+func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {
 	diContainer, err := dependencyinjection.NewContainer()
 	if err != nil {
 		slog.Error(fmt.Sprint("Error while creating diContainer: ", err))
-		os.Exit(1)
-	}
-	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheusRegisterer)
-	if err != nil {
-		slog.Error(fmt.Sprint("Error while registering prometheus.Registerer in diContainer: ", err))
 		os.Exit(1)
 	}
 
@@ -386,7 +390,7 @@ func migrateStorage(ctx context.Context) {
 	sourceStorageConfig := os.Args[2]
 	destinationStorageConfig := os.Args[3]
 
-	sourceDbContainer, sourceStorage := loadStorageConfiguration(sourceStorageConfig, prometheus.NewRegistry())
+	sourceDbContainer, sourceStorage := loadStorageConfiguration(sourceStorageConfig)
 
 	sourceDbs := sourceDbContainer.Dbs()
 
@@ -411,7 +415,7 @@ func migrateStorage(ctx context.Context) {
 		}
 	}()
 
-	destinationDbContainer, destinationStorage := loadStorageConfiguration(destinationStorageConfig, prometheus.NewRegistry())
+	destinationDbContainer, destinationStorage := loadStorageConfiguration(destinationStorageConfig)
 
 	destinationDbs := destinationDbContainer.Dbs()
 
@@ -452,7 +456,7 @@ func benchmarkStorage(ctx context.Context) {
 	}
 	storageConfig := os.Args[2]
 
-	dbContainer, storage := loadStorageConfiguration(storageConfig, prometheus.NewRegistry())
+	dbContainer, storage := loadStorageConfiguration(storageConfig)
 
 	dbs := dbContainer.Dbs()
 
@@ -545,7 +549,7 @@ func validateStorage(ctx context.Context) {
 	}
 
 	// Load storage
-	dbContainer, storage := loadStorageConfiguration(storageConfigPath, prometheus.NewRegistry())
+	dbContainer, storage := loadStorageConfiguration(storageConfigPath)
 
 	dbs := dbContainer.Dbs()
 

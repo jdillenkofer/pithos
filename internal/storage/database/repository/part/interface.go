@@ -10,6 +10,7 @@ import (
 )
 
 type Repository interface {
+	GroupByStore(ctx context.Context, tx *sql.Tx) ([]StoreAggregate, error)
 	FindInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 	FindInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error)
 	FindPartsByObjectIdOrderBySequenceNumberAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]Entity, error)
@@ -17,6 +18,12 @@ type Repository interface {
 	DeletePartsByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error
 	DeletePartsByObjectIdReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]Entity, error)
 	DeletePartsByObjectIdAndSequenceNumberReturning(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, sequenceNumber int) ([]Entity, error)
+}
+
+type StoreAggregate struct {
+	Store string
+	Count int64
+	Size  int64
 }
 
 type Entity struct {

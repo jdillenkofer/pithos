@@ -17,3 +17,5 @@ type Sink interface {
 type InitialStateProvider interface {
 	InitialState() (*InitialState, error)
 }
+
+type SizeProvider interface{ SizeBytes() int64 }

@@ -102,6 +102,8 @@ type sqliteDatabase struct {
 	writeableDb *sql.DB
 }
 
+func (sdb *sqliteDatabase) SQLDBs() []*sql.DB { return []*sql.DB{sdb.readOnlyDb, sdb.writeableDb} }
+
 func (sdb *sqliteDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*database.TxController, error) {
 	readOnly := opts != nil && opts.ReadOnly
 	if tx, ok := database.TxControllerFromContext(ctx); ok && tx.DBHandle() == sdb {

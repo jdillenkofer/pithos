@@ -22,6 +22,7 @@ const defaultOtelEnabled = false
 const defaultWebsiteDomain = "s3-website.localhost"
 const defaultOtelExporter = "otlp"
 const defaultOtelEndpoint = "localhost:4318"
+const defaultMetricsGaugesIntervalSeconds = 30
 
 const mergableTagKey = "mergable"
 
@@ -49,6 +50,7 @@ type Settings struct {
 	otelEnabled           *bool         `mergable:""`
 	otelExporter          *string       `mergable:""`
 	otelEndpoint          *string       `mergable:""`
+	metricsGaugesIntervalSeconds *int   `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -149,6 +151,10 @@ func (s *Settings) OtelExporter() string {
 
 func (s *Settings) OtelEndpoint() string {
 	return valueOrDefault(s.otelEndpoint, defaultOtelEndpoint)
+}
+
+func (s *Settings) MetricsGaugesIntervalSeconds() int {
+	return valueOrDefault(s.metricsGaugesIntervalSeconds, defaultMetricsGaugesIntervalSeconds)
 }
 
 func getUnexportedField(field reflect.Value) interface{} {

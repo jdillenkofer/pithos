@@ -13,7 +13,6 @@ import (
 	repositoryFactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,7 +58,7 @@ func TestStopCancelsInFlightReplayBeforeStoppingInnerStorage(t *testing.T) {
 	repo, err := repositoryFactory.NewStorageOutboxEntryRepository(db)
 	require.NoError(t, err)
 	inner := newCancelAwareStorage()
-	store, err := NewStorage(db, "default", inner, repo, prometheus.NewRegistry(), 30*time.Second)
+	store, err := NewStorage(db, "default", inner, repo, 30*time.Second)
 	require.NoError(t, err)
 
 	_, err = store.PutObject(ctx, storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key"), nil, bytes.NewReader([]byte("blocked replay")), nil, nil)

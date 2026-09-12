@@ -14,8 +14,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,6 +29,8 @@ type AuditLogMiddleware struct {
 	lastHash    []byte
 	hashBuffer  [][]byte
 	mu          sync.Mutex
+	entries     prometheus.Counter
+	logSize     prometheus.Gauge
 }
 
 var _ storage.TransactionalStorage = (*AuditLogMiddleware)(nil)
@@ -60,6 +64,8 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 		mlDsaSigner:       mlDsaSigner,
 		lastHash:          lastHash,
 		hashBuffer:        initialHashBuffer,
+		entries:           prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "audit", Name: "entries_total", Help: "Number of successfully appended audit log entries"}),
+		logSize:           prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "audit", Name: "log_size_bytes", Help: "Current audit log size in bytes"}),
 	}
 
 	if m.hashBuffer == nil {
@@ -86,10 +92,20 @@ func NewAuditLogMiddleware(next storage.Storage, sink sink.Sink, signer signing.
 		_ = genesis.Sign(signer)
 		if err := sink.WriteEntry(genesis); err == nil {
 			m.lastHash = genesis.Hash
+			m.observeWrite()
 		}
 	}
 
 	return m
+}
+
+func (m *AuditLogMiddleware) observeWrite() {
+	m.entries.Inc()
+	size := int64(0)
+	if provider, ok := m.sink.(sink.SizeProvider); ok {
+		size = provider.SizeBytes()
+	}
+	m.logSize.Set(float64(size))
 }
 
 func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, phase auditlog.Phase, resource auditResource, err error, statusCode int32, durationMs int64) {
@@ -181,6 +197,7 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 	_ = entry.Sign(m.signer)
 
 	if err := m.sink.WriteEntry(entry); err == nil {
+		m.observeWrite()
 		m.lastHash = entry.Hash
 		m.hashBuffer = append(m.hashBuffer, entry.Hash)
 
@@ -210,16 +227,19 @@ func (m *AuditLogMiddleware) emitGrounding() {
 
 	_ = grounding.Sign(m.signer)
 	if err := m.sink.WriteEntry(grounding); err == nil {
+		m.observeWrite()
 		m.lastHash = grounding.Hash
 		m.hashBuffer = m.hashBuffer[:0]
 	}
 }
 
 func (m *AuditLogMiddleware) Start(ctx context.Context) error {
+	pithosmetrics.Register(m.entries, m.logSize)
 	return m.Next.Start(ctx)
 }
 
 func (m *AuditLogMiddleware) Stop(ctx context.Context) error {
+	pithosmetrics.Unregister(m.entries, m.logSize)
 	_ = m.sink.Close()
 	return m.Next.Stop(ctx)
 }

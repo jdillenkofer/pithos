@@ -8,12 +8,33 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
+	"strconv"
+	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/klauspost/compress/zstd"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var compressionMetricsOnce sync.Once
+var compressionMetrics struct {
+	parts             *prometheus.CounterVec
+	bytesIn, bytesOut prometheus.Counter
+	ratio             prometheus.Histogram
+}
+
+func registerCompressionMetrics() {
+	compressionMetricsOnce.Do(func() {
+		compressionMetrics.parts = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "compression", Name: "parts_total", Help: "Number of parts processed by compression"}, []string{"compressed"})
+		compressionMetrics.bytesIn = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "compression", Name: "bytes_in_total", Help: "Bytes supplied to compression"})
+		compressionMetrics.bytesOut = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "compression", Name: "bytes_out_total", Help: "Bytes emitted by compression including headers"})
+		compressionMetrics.ratio = prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: "pithos", Subsystem: "compression", Name: "ratio", Help: "Ratio of encoded bytes to input bytes"})
+	})
+	pithosmetrics.Register(compressionMetrics.parts, compressionMetrics.bytesIn, compressionMetrics.bytesOut, compressionMetrics.ratio)
+}
 
 const (
 	headerVersion     = byte(1)
@@ -60,6 +81,16 @@ type PartStoreMiddleware struct {
 	maxRatio       float64
 }
 
+func (mw *PartStoreMiddleware) SupportsStats() bool {
+	provider, ok := mw.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (mw *PartStoreMiddleware) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, mw.innerPartStore)
+	return stats, err
+}
+
 func New(innerPartStore partstore.PartStore) (partstore.PartStore, error) {
 	return NewWithConfig(innerPartStore, Config{})
 }
@@ -93,6 +124,7 @@ func NewWithConfig(innerPartStore partstore.PartStore, config Config) (partstore
 		return nil, fmt.Errorf("max compression ratio must be in range (0, 1]")
 	}
 
+	registerCompressionMetrics()
 	return &PartStoreMiddleware{
 		innerPartStore: innerPartStore,
 		sampleSize:     sampleSize,
@@ -126,7 +158,8 @@ func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, part
 		}
 		shouldCompress = ratio <= mw.maxRatio
 	}
-	bodyReader := io.MultiReader(bytes.NewReader(sample), reader)
+	var bytesIn int64
+	bodyReader := ioutils.NewCountingReader(io.MultiReader(bytes.NewReader(sample), reader), &bytesIn)
 
 	pipeReader, pipeWriter := io.Pipe()
 	go func() {
@@ -167,7 +200,15 @@ func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, part
 		}
 	}()
 
-	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
+	var bytesOut int64
+	err = mw.innerPartStore.PutPart(ctx, tx, partId, ioutils.NewCountingReader(pipeReader, &bytesOut))
+	compressionMetrics.parts.WithLabelValues(strconv.FormatBool(shouldCompress)).Inc()
+	compressionMetrics.bytesIn.Add(float64(bytesIn))
+	compressionMetrics.bytesOut.Add(float64(bytesOut))
+	if bytesIn > 0 {
+		compressionMetrics.ratio.Observe(float64(bytesOut) / float64(bytesIn))
+	}
+	return err
 }
 
 func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (float64, error) {

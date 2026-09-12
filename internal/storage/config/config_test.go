@@ -18,7 +18,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/notification"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -31,10 +30,6 @@ func createStorageFromJson(b []byte) (storage.Storage, error) {
 	}
 	dbContainer := config.NewDbContainer()
 	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*config.DbContainer)(nil)), dbContainer)
-	if err != nil {
-		return nil, err
-	}
-	err = diContainer.RegisterSingletonByType(reflect.TypeOf((*prometheus.Registerer)(nil)), prometheus.NewRegistry())
 	if err != nil {
 		return nil, err
 	}
@@ -475,46 +470,6 @@ func TestCanCreateConditionalStorageMiddlewareFromJson(t *testing.T) {
 			}
 		}
 	}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
-
-	storage, err := createStorageFromJson([]byte(jsonData))
-	assert.Nil(t, err)
-	assert.NotNil(t, storage)
-}
-
-func TestCanCreatePrometheusStorageMiddlewareFromJson(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	tempDir, cleanup, err := config.CreateTempDir()
-	assert.Nil(t, err)
-	t.Cleanup(cleanup)
-
-	storagePath := *tempDir
-	dbPath := filepath.Join(storagePath, "pithos.db")
-	jsonData := fmt.Sprintf(`{
-			"type": "PrometheusStorageMiddleware",
-			"innerStorage": {
-				"type": "MetadataPartStorage",
-				"db": {
-					"type": "RegisterDatabaseReference",
-					"refName": "db",
-					"db": {
-						"type": "SqliteDatabase",
-						"dbPath": %s
-					}
-				},
-				"metadataStore": {
-					"type": "SqlMetadataStore",
-					"db": {
-						"type": "DatabaseReference",
-						"refName": "db"
-					}
-				},
-				"partStore": {
-					"type": "FilesystemPartStore",
-					"root": %s
-				}
-			}
-		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
