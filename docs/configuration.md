@@ -17,6 +17,8 @@
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
+| `PITHOS_CREDENTIALS_PATH` | Optional path to a reloadable credentials JSON file; when set, environment credentials are ignored | - |
+| `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between credentials file reload checks; `0` checks on every authenticated request | `5` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Optional stable principal ID for the Nth credential | - |
@@ -25,6 +27,10 @@
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
+
+The credentials path and reload interval may also be set with the
+`-credentialsPath` and `-credentialsReloadIntervalSeconds` command-line flags.
+The credential values themselves are never accepted as arguments.
 
 Pithos reads these variables through its environment credential provider for
 each signed request. Credential changes therefore take effect without a server
@@ -54,6 +60,36 @@ function authorizeRequest(request)
   return request:principalIdEquals("storage-client")
 end
 ```
+
+#### Reloadable credentials file
+
+Set `PITHOS_CREDENTIALS_PATH` to use a JSON credential set instead of the
+indexed environment variables:
+
+```json
+{
+  "credentials": [
+    {
+      "accessKeyId": "old-key",
+      "secretAccessKey": "old-secret",
+      "principalId": "storage-client"
+    },
+    {
+      "accessKeyId": "new-key",
+      "secretAccessKey": "new-secret",
+      "principalId": "storage-client"
+    }
+  ]
+}
+```
+
+Pithos checks the file during authenticated requests at the configured
+interval. Valid updates replace the complete credential set atomically.
+Malformed, incomplete, oversized, or duplicate-key updates are rejected and
+the last valid set remains active. An empty `credentials` array intentionally
+revokes every credential. Publish changes using an atomic file replacement;
+when using Kubernetes, mount the Secret as a volume rather than with
+`subPath`, which does not receive automatic updates.
 
 ### Storage
 

@@ -5,12 +5,108 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func writeCredentialsFile(t *testing.T, path, contents string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+}
+
+func TestFileCredentialProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	writeCredentialsFile(t, path, `{
+		"credentials": [
+			{"accessKeyId":"old-key","secretAccessKey":"old-secret","principalId":"client"},
+			{"accessKeyId":"legacy-key","secretAccessKey":"legacy-secret"}
+		]
+	}`)
+
+	provider, err := NewFileCredentialProvider(path, 0)
+	require.NoError(t, err)
+
+	credential, found, err := provider.Lookup(context.Background(), "old-key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, Credential{AccessKeyID: "old-key", SecretAccessKey: "old-secret", PrincipalID: "client"}, credential)
+
+	credential, found, err = provider.Lookup(context.Background(), "legacy-key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Empty(t, credential.PrincipalID)
+
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"new-key","secretAccessKey":"new-secret","principalId":"client"}]}`)
+	_, found, err = provider.Lookup(context.Background(), "old-key")
+	require.NoError(t, err)
+	assert.False(t, found)
+	credential, found, err = provider.Lookup(context.Background(), "new-key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "client", credential.PrincipalID)
+
+	// A partial or malformed update must not replace the active snapshot.
+	writeCredentialsFile(t, path, `{"credentials":[`)
+	credential, found, err = provider.Lookup(context.Background(), "new-key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "new-secret", credential.SecretAccessKey)
+
+	// An explicit empty set is valid and revokes all credentials.
+	writeCredentialsFile(t, path, `{"credentials":[]}`)
+	_, found, err = provider.Lookup(context.Background(), "new-key")
+	require.NoError(t, err)
+	assert.False(t, found)
+}
+
+func TestFileCredentialProviderReloadInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old"}]}`)
+	provider, err := NewFileCredentialProvider(path, time.Hour)
+	require.NoError(t, err)
+
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new"}]}`)
+	credential, found, err := provider.Lookup(context.Background(), "key")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "old", credential.SecretAccessKey)
+}
+
+func TestFileCredentialProviderRejectsInvalidInitialFile(t *testing.T) {
+	tests := map[string]string{
+		"missing credentials":   `{}`,
+		"null credentials":      `{"credentials":null}`,
+		"unknown field":         `{"credentials":[],"extra":true}`,
+		"incomplete credential": `{"credentials":[{"accessKeyId":"key"}]}`,
+		"duplicate access key":  `{"credentials":[{"accessKeyId":"key","secretAccessKey":"one"},{"accessKeyId":"key","secretAccessKey":"two"}]}`,
+		"multiple documents":    `{"credentials":[]} {"credentials":[]}`,
+	}
+	for name, contents := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "credentials.json")
+			writeCredentialsFile(t, path, contents)
+			_, err := NewFileCredentialProvider(path, time.Second)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestFileCredentialProviderHonorsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	writeCredentialsFile(t, path, `{"credentials":[]}`)
+	provider, err := NewFileCredentialProvider(path, 0)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err = provider.Lookup(ctx, "key")
+	assert.ErrorIs(t, err, context.Canceled)
+}
 
 func setCredential(t *testing.T, index, accessKeyID, secretAccessKey string) {
 	t.Helper()

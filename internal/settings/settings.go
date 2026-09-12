@@ -8,6 +8,8 @@ import (
 )
 
 const defaultAuthenticationEnabled = true
+const defaultCredentialsPath = ""
+const defaultCredentialsReloadIntervalSeconds = 5
 const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
@@ -27,24 +29,26 @@ const defaultMetricsGaugesIntervalSeconds = 30
 const mergableTagKey = "mergable"
 
 type Settings struct {
-	authenticationEnabled        *bool    `mergable:""`
-	region                       *string  `mergable:""`
-	domain                       *string  `mergable:""`
-	websiteDomain                *string  `mergable:""`
-	bindAddress                  *string  `mergable:""`
-	port                         *int     `mergable:""`
-	monitoringPort               *int     `mergable:""`
-	monitoringPortEnabled        *bool    `mergable:""`
-	storageJsonPath              *string  `mergable:""`
-	authorizerPath               *string  `mergable:""`
-	spoolDir                     *string  `mergable:""`
-	trustForwardedHeaders        *bool    `mergable:""`
-	trustedProxyCIDRs            []string `mergable:""`
-	logLevel                     *string  `mergable:""`
-	otelEnabled                  *bool    `mergable:""`
-	otelExporter                 *string  `mergable:""`
-	otelEndpoint                 *string  `mergable:""`
-	metricsGaugesIntervalSeconds *int     `mergable:""`
+	authenticationEnabled            *bool    `mergable:""`
+	credentialsPath                  *string  `mergable:""`
+	credentialsReloadIntervalSeconds *int     `mergable:""`
+	region                           *string  `mergable:""`
+	domain                           *string  `mergable:""`
+	websiteDomain                    *string  `mergable:""`
+	bindAddress                      *string  `mergable:""`
+	port                             *int     `mergable:""`
+	monitoringPort                   *int     `mergable:""`
+	monitoringPortEnabled            *bool    `mergable:""`
+	storageJsonPath                  *string  `mergable:""`
+	authorizerPath                   *string  `mergable:""`
+	spoolDir                         *string  `mergable:""`
+	trustForwardedHeaders            *bool    `mergable:""`
+	trustedProxyCIDRs                []string `mergable:""`
+	logLevel                         *string  `mergable:""`
+	otelEnabled                      *bool    `mergable:""`
+	otelExporter                     *string  `mergable:""`
+	otelEndpoint                     *string  `mergable:""`
+	metricsGaugesIntervalSeconds     *int     `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -56,6 +60,14 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 
 func (s *Settings) AuthenticationEnabled() bool {
 	return valueOrDefault(s.authenticationEnabled, defaultAuthenticationEnabled)
+}
+
+func (s *Settings) CredentialsPath() string {
+	return valueOrDefault(s.credentialsPath, defaultCredentialsPath)
+}
+
+func (s *Settings) CredentialsReloadIntervalSeconds() int {
+	return valueOrDefault(s.credentialsReloadIntervalSeconds, defaultCredentialsReloadIntervalSeconds)
 }
 
 func (s *Settings) Region() string {

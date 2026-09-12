@@ -83,3 +83,27 @@ func TestLoadSpoolDirFromEnv(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "/var/tmp/pithos", settings.SpoolDir())
 }
+
+func TestCredentialFileSettings(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		settings := &Settings{}
+		assert.Empty(t, settings.CredentialsPath())
+		assert.Equal(t, 5, settings.CredentialsReloadIntervalSeconds())
+	})
+
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv(credentialsPathEnvKey, "/run/secrets/pithos-credentials.json")
+		t.Setenv(credentialsReloadIntervalSecondsEnvKey, "12")
+		settings, err := loadSettingsFromEnv()
+		assert.NoError(t, err)
+		assert.Equal(t, "/run/secrets/pithos-credentials.json", settings.CredentialsPath())
+		assert.Equal(t, 12, settings.CredentialsReloadIntervalSeconds())
+	})
+
+	t.Run("arguments", func(t *testing.T) {
+		settings, err := loadSettingsFromCmdArgs([]string{"-credentialsPath", "/run/credentials.json", "-credentialsReloadIntervalSeconds", "3"})
+		assert.NoError(t, err)
+		assert.Equal(t, "/run/credentials.json", settings.CredentialsPath())
+		assert.Equal(t, 3, settings.CredentialsReloadIntervalSeconds())
+	})
+}

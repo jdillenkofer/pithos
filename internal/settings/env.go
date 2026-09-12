@@ -9,6 +9,8 @@ import (
 const envKeyPrefix = "PITHOS"
 
 const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
+const credentialsPathEnvKey = envKeyPrefix + "_CREDENTIALS_PATH"
+const credentialsReloadIntervalSecondsEnvKey = envKeyPrefix + "_CREDENTIALS_RELOAD_INTERVAL_SECONDS"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
 const websiteDomainEnvKey = envKeyPrefix + "_WEBSITE_DOMAIN"
@@ -76,6 +78,8 @@ func getStringSliceFromEnv(envKey string) []string {
 
 func loadSettingsFromEnv() (*Settings, error) {
 	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
+	credentialsPath := getStringFromEnv(credentialsPathEnvKey)
+	credentialsReloadIntervalSeconds := getIntFromEnv(credentialsReloadIntervalSecondsEnvKey)
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	websiteDomain := getStringFromEnv(websiteDomainEnvKey)
@@ -95,23 +99,25 @@ func loadSettingsFromEnv() (*Settings, error) {
 	metricsGaugesIntervalSeconds := getIntFromEnv(metricsGaugesIntervalSecondsEnvKey)
 
 	return &Settings{
-		authenticationEnabled:        authenticationEnabled,
-		region:                       region,
-		domain:                       domain,
-		websiteDomain:                websiteDomain,
-		bindAddress:                  bindAddress,
-		port:                         port,
-		monitoringPort:               monitoringPort,
-		monitoringPortEnabled:        monitoringPortEnabled,
-		storageJsonPath:              storageJsonPath,
-		authorizerPath:               authorizerPath,
-		spoolDir:                     spoolDir,
-		trustForwardedHeaders:        trustForwardedHeaders,
-		trustedProxyCIDRs:            trustedProxyCIDRs,
-		logLevel:                     logLevel,
-		otelEnabled:                  otelEnabled,
-		otelExporter:                 otelExporter,
-		otelEndpoint:                 otelEndpoint,
-		metricsGaugesIntervalSeconds: metricsGaugesIntervalSeconds,
+		authenticationEnabled:            authenticationEnabled,
+		credentialsPath:                  credentialsPath,
+		credentialsReloadIntervalSeconds: credentialsReloadIntervalSeconds,
+		region:                           region,
+		domain:                           domain,
+		websiteDomain:                    websiteDomain,
+		bindAddress:                      bindAddress,
+		port:                             port,
+		monitoringPort:                   monitoringPort,
+		monitoringPortEnabled:            monitoringPortEnabled,
+		storageJsonPath:                  storageJsonPath,
+		authorizerPath:                   authorizerPath,
+		spoolDir:                         spoolDir,
+		trustForwardedHeaders:            trustForwardedHeaders,
+		trustedProxyCIDRs:                trustedProxyCIDRs,
+		logLevel:                         logLevel,
+		otelEnabled:                      otelEnabled,
+		otelExporter:                     otelExporter,
+		otelEndpoint:                     otelEndpoint,
+		metricsGaugesIntervalSeconds:     metricsGaugesIntervalSeconds,
 	}, nil
 }

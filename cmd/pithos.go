@@ -260,7 +260,14 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 
 	var credentialProvider authentication.CredentialProvider
 	if authenticationEnabled {
-		credentialProvider = authentication.NewEnvCredentialProvider()
+		if credentialsPath := settings.CredentialsPath(); credentialsPath != "" {
+			credentialProvider, err = authentication.NewFileCredentialProvider(credentialsPath, time.Duration(settings.CredentialsReloadIntervalSeconds())*time.Second)
+			if err != nil {
+				return fmt.Errorf("create file credential provider: %w", err)
+			}
+		} else {
+			credentialProvider = authentication.NewEnvCredentialProvider()
+		}
 	}
 	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
