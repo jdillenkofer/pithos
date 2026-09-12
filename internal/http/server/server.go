@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
+	prometheusmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware/prometheus"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
@@ -104,7 +105,7 @@ func SetupServer(credentials []settings.Credentials, region string, apiEndpoint 
 	}
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
-	return rootHandler
+	return prometheusmiddleware.New(rootHandler)
 }
 
 func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
