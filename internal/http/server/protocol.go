@@ -274,6 +274,9 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 	case storage.ErrInvalidObjectLockConfiguration:
 		statusCode = 400
 		errResponse.Code = "InvalidRequest"
+	case storage.ErrObjectLockChecksumRequired:
+		statusCode = 400
+		errResponse.Code = "InvalidRequest"
 	case storage.ErrObjectLockConfigurationNotFound:
 		statusCode = 404
 	case storage.ErrObjectLockAccessDenied:

@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/xml"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -422,20 +421,11 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	putObjectOptions.ObjectLock = objectLock
 	if r.Header.Get("Content-MD5") == "" && r.Header.Get("x-amz-sdk-checksum-algorithm") == "" {
-		required := objectLock.Retention != nil
-		if !required {
-			configuration, err := s.storage.GetObjectLockConfiguration(ctx, bucketName)
-			if err == nil {
-				required = configuration.DefaultRetention != nil
-			} else if !errors.Is(err, storage.ErrObjectLockConfigurationNotFound) {
-				handleError(err, w, r)
-				return
-			}
-		}
-		if required {
+		if objectLock.Retention != nil {
 			handleError(ErrInvalidRequest, w, r)
 			return
 		}
+		ctx = storage.WithChecksumlessPut(ctx)
 	}
 	slog.InfoContext(r.Context(), "Putting object", "bucket", bucketName.String(), "key", key.String())
 	if r.Header.Get(expectHeader) == "100-continue" {

@@ -16,9 +16,6 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 
 	var result *storage.DeleteObjectResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		if err != nil {
 			return err
@@ -98,9 +95,6 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 	}
 
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		if err != nil {
 			return err

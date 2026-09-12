@@ -41,9 +41,6 @@ func (sms *sqlMetadataStore) PutObjectTagging(ctx context.Context, tx *sql.Tx, b
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObjectTagging")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return err
-	}
 
 	objectEntity, err := sms.findObjectForTagging(ctx, tx, bucketName, key, opts)
 	if err != nil {
@@ -66,9 +63,6 @@ func (sms *sqlMetadataStore) DeleteObjectTagging(ctx context.Context, tx *sql.Tx
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObjectTagging")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return err
-	}
 
 	objectEntity, err := sms.findObjectForTagging(ctx, tx, bucketName, key, opts)
 	if err != nil {

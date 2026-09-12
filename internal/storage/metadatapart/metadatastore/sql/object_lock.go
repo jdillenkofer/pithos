@@ -3,27 +3,13 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"sort"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/oklog/ulid/v2"
 )
-
-func (sms *sqlMetadataStore) LockBuckets(ctx context.Context, tx *sql.Tx, names ...metadatastore.BucketName) error {
-	names = append([]metadatastore.BucketName(nil), names...)
-	sort.Slice(names, func(i, j int) bool { return names[i].String() < names[j].String() })
-	for i, name := range names {
-		if i > 0 && name.String() == names[i-1].String() {
-			continue
-		}
-		if err := sms.lockBucket(ctx, tx, name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // Every metadata mutation acquires the bucket before reading mutable state.
 // PostgreSQL row locks serialize activation, versioning changes, protection
@@ -33,28 +19,59 @@ func (sms *sqlMetadataStore) lockBucket(ctx context.Context, tx *sql.Tx, name me
 }
 
 func (sms *sqlMetadataStore) loadLockConfiguration(ctx context.Context, tx *sql.Tx, name metadatastore.BucketName) (*metadatastore.ObjectLockConfiguration, error) {
-	return sms.objectLockRepository.FindBucketConfiguration(ctx, tx, name)
+	b, err := sms.bucketRepository.FindBucketByName(ctx, tx, name)
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return lockConfigurationFromBucket(b), nil
+}
+
+func lockConfigurationFromBucket(b *bucket.Entity) *metadatastore.ObjectLockConfiguration {
+	if b == nil || !b.ObjectLockEnabled {
+		return nil
+	}
+	c := &metadatastore.ObjectLockConfiguration{ObjectLockEnabled: "Enabled"}
+	if b.DefaultRetentionMode != nil {
+		c.DefaultRetention = &metadatastore.DefaultRetention{Mode: metadatastore.RetentionMode(*b.DefaultRetentionMode), Days: b.DefaultRetentionDays, Years: b.DefaultRetentionYears}
+	}
+	return c
 }
 
 func (sms *sqlMetadataStore) GetObjectLockConfiguration(ctx context.Context, tx *sql.Tx, name metadatastore.BucketName) (*metadatastore.ObjectLockConfiguration, error) {
-	if _, err := sms.HeadBucket(ctx, tx, name); err != nil {
+	b, err := sms.bucketRepository.FindBucketByName(ctx, tx, name)
+	if err != nil {
 		return nil, err
 	}
-	config, err := sms.loadLockConfiguration(ctx, tx, name)
-	if err == nil && config == nil {
-		err = metadatastore.ErrObjectLockConfigurationNotFound
+	if b == nil {
+		return nil, metadatastore.ErrNoSuchBucket
 	}
-	return config, err
+	config := lockConfigurationFromBucket(b)
+	if config == nil {
+		return nil, metadatastore.ErrObjectLockConfigurationNotFound
+	}
+	return config, nil
 }
 
 func (sms *sqlMetadataStore) PutObjectLockConfiguration(ctx context.Context, tx *sql.Tx, name metadatastore.BucketName, config *metadatastore.ObjectLockConfiguration) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
-	if err := sms.lockBucket(ctx, tx, name); err != nil {
+	b, err := sms.bucketRepository.FindBucketByNameForUpdate(ctx, tx, name)
+	if err != nil {
 		return err
 	}
-	err := sms.objectLockRepository.SaveBucketConfiguration(ctx, tx, name, config)
+	if b == nil {
+		return metadatastore.ErrNoSuchBucket
+	}
+	b.ObjectLockEnabled = true
+	enabled := string(metadatastore.BucketVersioningStatusEnabled)
+	b.VersioningStatus = &enabled
+	b.DefaultRetentionMode, b.DefaultRetentionDays, b.DefaultRetentionYears = nil, nil, nil
+	if d := config.DefaultRetention; d != nil {
+		mode := string(d.Mode)
+		b.DefaultRetentionMode, b.DefaultRetentionDays, b.DefaultRetentionYears = &mode, d.Days, d.Years
+	}
+	err = sms.bucketRepository.SaveBucket(ctx, tx, b)
 	if err == nil {
 		metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{Configuration: config})
 	}
@@ -123,9 +140,6 @@ func (sms *sqlMetadataStore) PutObjectRetention(ctx context.Context, tx *sql.Tx,
 	if err == nil {
 		lock.Retention = retention
 		err = sms.saveObjectLock(ctx, tx, *entity.Id, lock)
-		if err == nil {
-			lock, err = sms.loadObjectLock(ctx, tx, *entity.Id)
-		}
 	}
 	metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{Key: entity.Key.String(), VersionID: entity.VersionID, Effective: lock, BypassUsed: used, Err: err})
 	return err
@@ -153,13 +167,19 @@ func (sms *sqlMetadataStore) PutObjectLegalHold(ctx context.Context, tx *sql.Tx,
 	return err
 }
 
-func (sms *sqlMetadataStore) checkVersionDeletion(ctx context.Context, tx *sql.Tx, entity *object.Entity, bypass bool) error {
+func (sms *sqlMetadataStore) checkVersionDeletion(ctx context.Context, tx *sql.Tx, entity *object.Entity, objectLockEnabled, bypass bool) error {
 	if entity != nil && entity.IsDeleteMarker {
 		metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{Key: entity.Key.String(), VersionID: entity.VersionID})
 		return nil
 	}
 	if entity == nil || entity.UploadStatus != object.UploadStatusCompleted {
 		return nil
+	}
+	if !objectLockEnabled {
+		return nil
+	}
+	if err := sms.objectLockRepository.LockObject(ctx, tx, *entity.Id); err != nil {
+		return err
 	}
 	lock, err := sms.loadObjectLock(ctx, tx, *entity.Id)
 	if err != nil {

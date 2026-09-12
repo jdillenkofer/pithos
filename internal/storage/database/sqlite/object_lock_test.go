@@ -27,8 +27,9 @@ func TestObjectLockSchema(t *testing.T) {
 	var count int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM object_locks`).Scan(&count))
 	require.Zero(t, count, "migration must not retroactively protect versions")
-	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM bucket_object_lock_configurations`).Scan(&count))
-	require.Zero(t, count, "migration must not enable Object Lock")
+	var enabled bool
+	require.NoError(t, db.QueryRow(`SELECT object_lock_enabled FROM buckets WHERE name = 'bucket'`).Scan(&enabled))
+	require.False(t, enabled, "migration must not enable Object Lock")
 
 	for _, tc := range []struct {
 		name              string
@@ -46,10 +47,10 @@ func TestObjectLockSchema(t *testing.T) {
 		{"invalid mode", "invalid", 1, nil, false},
 	} {
 		t.Run("bucket/"+tc.name, func(t *testing.T) {
-			_, err := db.Exec(`INSERT INTO bucket_object_lock_configurations VALUES ('bucket', ?, ?, ?)`, tc.mode, tc.days, tc.years)
+			_, err := db.Exec(`UPDATE buckets SET object_lock_enabled = TRUE, default_retention_mode = ?, default_retention_days = ?, default_retention_years = ? WHERE name = 'bucket'`, tc.mode, tc.days, tc.years)
 			if tc.valid {
 				require.NoError(t, err)
-				_, err = db.Exec(`DELETE FROM bucket_object_lock_configurations`)
+				_, err = db.Exec(`UPDATE buckets SET object_lock_enabled = FALSE, default_retention_mode = NULL, default_retention_days = NULL, default_retention_years = NULL WHERE name = 'bucket'`)
 				require.NoError(t, err)
 			} else {
 				require.Error(t, err)
@@ -84,8 +85,6 @@ func TestObjectLockSchema(t *testing.T) {
 	}
 	_, err = db.Exec(`INSERT INTO object_locks (object_id, legal_hold_status) VALUES ('missing-version', 'ON')`)
 	require.Error(t, err, "locks must reference an existing version")
-	_, err = db.Exec(`INSERT INTO bucket_object_lock_configurations (bucket_name) VALUES ('missing-bucket')`)
-	require.Error(t, err)
 	_, err = db.Exec(`INSERT INTO objects (id, bucket_name, key, etag, size, upload_status, upload_id, created_at, updated_at)
 		VALUES ('pending-version', 'bucket', 'key', '', -1, 'PENDING', 'upload-id', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
 	require.NoError(t, err)

@@ -66,9 +66,6 @@ func (mbs *metadataPartStorage) PutObjectTagging(ctx context.Context, bucketName
 	defer span.End()
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		if err := mbs.validateTaggingTarget(ctx, tx, bucketName, key, opts); err != nil {
 			return err
 		}
@@ -82,9 +79,6 @@ func (mbs *metadataPartStorage) DeleteObjectTagging(ctx context.Context, bucketN
 	defer span.End()
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		if err := mbs.validateTaggingTarget(ctx, tx, bucketName, key, opts); err != nil {
 			return err
 		}

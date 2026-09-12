@@ -15,9 +15,9 @@ type pgxRepository struct {
 
 const (
 	findAllBucketsStmt     = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets"
-	findBucketByNameStmt   = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
-	insertBucketStmt       = "INSERT INTO buckets (id, name, versioning_status, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
-	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, versioning_status = $2, website_index_document_suffix = $3, website_error_document_key = $4, website_redirect_all_host_name = $5, website_redirect_all_protocol = $6, website_routing_rules_json = $7, cors_configuration_json = $8, lifecycle_configuration_json = $9, notification_configuration_json = $10, updated_at = $11 WHERE id = $12"
+	findBucketByNameStmt   = "SELECT id, name, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, versioning_status = $2, object_lock_enabled = $3, default_retention_mode = $4, default_retention_days = $5, default_retention_years = $6, website_index_document_suffix = $7, website_error_document_key = $8, website_redirect_all_host_name = $9, website_redirect_all_protocol = $10, website_routing_rules_json = $11, cors_configuration_json = $12, lifecycle_configuration_json = $13, notification_configuration_json = $14, updated_at = $15 WHERE id = $16"
 	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = $1"
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = $1"
 )
@@ -63,6 +63,18 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	return &bucketEntity, nil
 }
 
+func convertStateRowToBucketEntity(rows *sql.Rows) (*bucket.Entity, error) {
+	var id, name string
+	var e bucket.Entity
+	err := rows.Scan(&id, &name, &e.VersioningStatus, &e.ObjectLockEnabled, &e.DefaultRetentionMode, &e.DefaultRetentionDays, &e.DefaultRetentionYears, &e.WebsiteIndexDocumentSuffix, &e.WebsiteErrorDocumentKey, &e.WebsiteRedirectAllHostName, &e.WebsiteRedirectAllProtocol, &e.WebsiteRoutingRulesJSON, &e.CORSConfigurationJSON, &e.LifecycleConfigurationJSON, &e.NotificationConfigurationJSON, &e.CreatedAt, &e.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	parsed := ulid.MustParse(id)
+	e.Id, e.Name = &parsed, storage.MustNewBucketName(name)
+	return &e, nil
+}
+
 func (br *pgxRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]bucket.Entity, error) {
 	bucketRows, err := tx.QueryContext(ctx, findAllBucketsStmt)
 	if err != nil {
@@ -81,7 +93,16 @@ func (br *pgxRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]buck
 }
 
 func (br *pgxRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bucket.Entity, error) {
-	bucketRows, err := tx.QueryContext(ctx, findBucketByNameStmt, bucketName.String())
+	return br.findBucketByName(ctx, tx, bucketName, "")
+}
+func (br *pgxRepository) FindBucketByNameForShare(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bucket.Entity, error) {
+	return br.findBucketByName(ctx, tx, bucketName, " FOR SHARE")
+}
+func (br *pgxRepository) FindBucketByNameForUpdate(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bucket.Entity, error) {
+	return br.findBucketByName(ctx, tx, bucketName, " FOR UPDATE")
+}
+func (br *pgxRepository) findBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, suffix string) (*bucket.Entity, error) {
+	bucketRows, err := tx.QueryContext(ctx, findBucketByNameStmt+suffix, bucketName.String())
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +110,7 @@ func (br *pgxRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bucke
 	if !bucketRows.Next() {
 		return nil, nil
 	}
-	bucketEntity, err := convertRowToBucketEntity(bucketRows)
+	bucketEntity, err := convertStateRowToBucketEntity(bucketRows)
 	if err != nil {
 		return nil, err
 	}
@@ -102,11 +123,11 @@ func (br *pgxRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *buc
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.VersioningStatus, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 

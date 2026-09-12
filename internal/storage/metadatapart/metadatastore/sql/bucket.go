@@ -151,11 +151,7 @@ func (sms *sqlMetadataStore) PutBucketWebsiteConfiguration(ctx context.Context, 
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketWebsiteConfiguration")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return err
-	}
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForUpdate(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -237,11 +233,7 @@ func (sms *sqlMetadataStore) PutBucketVersioningConfiguration(ctx context.Contex
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutBucketVersioningConfiguration")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return err
-	}
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForUpdate(ctx, tx, bucketName)
 	if err != nil {
 		return err
 	}
@@ -249,11 +241,7 @@ func (sms *sqlMetadataStore) PutBucketVersioningConfiguration(ctx context.Contex
 		return metadatastore.ErrNoSuchBucket
 	}
 
-	lockConfig, err := sms.loadLockConfiguration(ctx, tx, bucketName)
-	if err != nil {
-		return err
-	}
-	if lockConfig != nil && (config == nil || config.Status == nil || *config.Status != metadatastore.BucketVersioningStatusEnabled) {
+	if bucketEntity.ObjectLockEnabled && (config == nil || config.Status == nil || *config.Status != metadatastore.BucketVersioningStatusEnabled) {
 		return metadatastore.ErrInvalidObjectLockConfiguration
 	}
 

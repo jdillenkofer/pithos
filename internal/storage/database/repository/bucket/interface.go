@@ -12,6 +12,8 @@ import (
 type Repository interface {
 	FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]Entity, error)
 	FindBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
+	FindBucketByNameForShare(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
+	FindBucketByNameForUpdate(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*Entity, error)
 	SaveBucket(ctx context.Context, tx *sql.Tx, bucket *Entity) error
 	ExistsBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) (*bool, error)
 	DeleteBucketByName(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName) error
@@ -21,6 +23,10 @@ type Entity struct {
 	Id                            *ulid.ULID
 	Name                          storage.BucketName
 	VersioningStatus              *string
+	ObjectLockEnabled             bool
+	DefaultRetentionMode          *string
+	DefaultRetentionDays          *int32
+	DefaultRetentionYears         *int32
 	WebsiteIndexDocumentSuffix    *string
 	WebsiteErrorDocumentKey       *string
 	WebsiteRedirectAllHostName    *string

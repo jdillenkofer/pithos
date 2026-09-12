@@ -12,8 +12,6 @@ import (
 type Repository interface {
 	LockBucket(context.Context, *sql.Tx, metadatastore.BucketName) error
 	LockObject(context.Context, *sql.Tx, ulid.ULID) error
-	FindBucketConfiguration(context.Context, *sql.Tx, metadatastore.BucketName) (*metadatastore.ObjectLockConfiguration, error)
-	SaveBucketConfiguration(context.Context, *sql.Tx, metadatastore.BucketName, *metadatastore.ObjectLockConfiguration) error
 	FindObjectLock(context.Context, *sql.Tx, ulid.ULID) (metadatastore.ObjectLock, error)
 	SaveObjectLock(context.Context, *sql.Tx, ulid.ULID, metadatastore.ObjectLock) error
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
@@ -17,15 +18,11 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateMultipartUpload")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return nil, err
-	}
-
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
@@ -34,7 +31,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		requestedLock = opts.ObjectLock
 	}
 	// Validate bucket eligibility without applying defaults until completion.
-	if _, err := sms.effectiveLock(ctx, tx, bucketName, requestedLock); err != nil {
+	if _, err := metadatastore.EffectiveObjectLock(lockConfigurationFromBucket(bucketEntity), requestedLock, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 
@@ -67,8 +64,10 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		return nil, err
 	}
 
-	if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, requestedLock); err != nil {
-		return nil, err
+	if requestedLock.Retention != nil || requestedLock.LegalHold != nil {
+		if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, requestedLock); err != nil {
+			return nil, err
+		}
 	}
 	// Persist any tags supplied via x-amz-tagging and any user-defined metadata
 	// on the pending object. They are carried over when the upload is completed
@@ -120,10 +119,6 @@ func (sms *sqlMetadataStore) GetMultipartUpload(ctx context.Context, tx *sql.Tx,
 func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.UploadPart")
 	defer span.End()
-
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return nil, err
-	}
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
@@ -207,11 +202,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CompleteMultipartUpload")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return nil, err
-	}
-
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +333,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			return nil, metadatastore.ErrPreconditionFailed
 		}
 		if nullVersionEntity != nil {
-			if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, false); err != nil {
+			if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, false); err != nil {
 				return nil, err
 			}
 			unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
@@ -390,20 +381,21 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
-	requestedLock, err := sms.loadObjectLock(ctx, tx, *objectEntity.Id)
+	requestedLock := metadatastore.ObjectLock{}
+	if bucketEntity.ObjectLockEnabled {
+		requestedLock, err = sms.loadObjectLock(ctx, tx, *objectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	effectiveLock, err := metadatastore.EffectiveObjectLock(lockConfigurationFromBucket(bucketEntity), requestedLock, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
-	effectiveLock, err := sms.effectiveLock(ctx, tx, bucketName, requestedLock)
-	if err != nil {
-		return nil, err
-	}
-	if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, effectiveLock); err != nil {
-		return nil, err
-	}
-	effectiveLock, err = sms.loadObjectLock(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
+	if effectiveLock.Retention != nil || effectiveLock.LegalHold != nil {
+		if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, effectiveLock); err != nil {
+			return nil, err
+		}
 	}
 
 	objectEntity.UploadStatus = object.UploadStatusCompleted
@@ -444,10 +436,6 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.AbortMultipartResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AbortMultipartUpload")
 	defer span.End()
-
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return nil, err
-	}
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {

@@ -27,6 +27,16 @@ type ObjectLockObservation struct {
 }
 
 type objectLockObserverKey struct{}
+type checksumlessPutKey struct{}
+
+func WithChecksumlessPut(ctx context.Context) context.Context {
+	return context.WithValue(ctx, checksumlessPutKey{}, true)
+}
+
+func IsChecksumlessPut(ctx context.Context) bool {
+	v, _ := ctx.Value(checksumlessPutKey{}).(bool)
+	return v
+}
 
 func WithObjectLockObserver(ctx context.Context, observer func(ObjectLockObservation)) context.Context {
 	return context.WithValue(ctx, objectLockObserverKey{}, observer)
@@ -39,8 +49,6 @@ func ObserveObjectLock(ctx context.Context, observation ObjectLockObservation) {
 }
 
 type ObjectLockStore interface {
-	// LockBuckets acquires bucket locks before any object or part locks.
-	LockBuckets(context.Context, *sql.Tx, ...BucketName) error
 	GetObjectLockConfiguration(context.Context, *sql.Tx, BucketName) (*ObjectLockConfiguration, error)
 	PutObjectLockConfiguration(context.Context, *sql.Tx, BucketName, *ObjectLockConfiguration) error
 	GetObjectRetention(context.Context, *sql.Tx, BucketName, ObjectKey, *ObjectLockOptions) (*ObjectRetention, error)
@@ -68,6 +76,7 @@ var (
 	ErrObjectLockConfigurationNotFound = errors.New("ObjectLockConfigurationNotFoundError")
 	ErrObjectLockAccessDenied          = errors.New("AccessDenied")
 	ErrObjectLockMethodNotAllowed      = errors.New("MethodNotAllowed")
+	ErrObjectLockChecksumRequired      = errors.New("ObjectLockChecksumRequired")
 )
 
 // ObjectRetention belongs to one version, identified internally by object ID.

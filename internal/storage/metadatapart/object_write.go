@@ -20,9 +20,6 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	defer span.End()
 	var object metadatastore.Object
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
 		partId, err := partstore.NewRandomPartId()
@@ -120,9 +117,6 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 	var combinedChecksums checksumutils.ChecksumValues
 	var totalSize int64
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		if err != nil {
 			return err
@@ -318,9 +312,6 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
 
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		var object *metadatastore.Object
 		var err error
 		var versionID *string

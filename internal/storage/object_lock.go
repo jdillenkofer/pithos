@@ -26,6 +26,8 @@ const LegalHoldOff = metadatastore.LegalHoldOff
 
 var ErrInvalidObjectLockConfiguration = metadatastore.ErrInvalidObjectLockConfiguration
 var ErrObjectLockConfigurationNotFound = metadatastore.ErrObjectLockConfigurationNotFound
+var ErrObjectLockChecksumRequired = metadatastore.ErrObjectLockChecksumRequired
+var WithChecksumlessPut = metadatastore.WithChecksumlessPut
 var ErrObjectLockAccessDenied = metadatastore.ErrObjectLockAccessDenied
 var ErrObjectLockMethodNotAllowed = metadatastore.ErrObjectLockMethodNotAllowed
 

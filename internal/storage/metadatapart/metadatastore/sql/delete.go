@@ -12,12 +12,9 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
 
-	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return nil, err
-	}
 	unreferencedParts := []metadatastore.Part{}
 
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +49,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		}
 
-		if err := sms.checkVersionDeletion(ctx, tx, versionEntity, opts.BypassGovernanceRetention); err != nil {
+		if err := sms.checkVersionDeletion(ctx, tx, versionEntity, bucketEntity.ObjectLockEnabled, opts.BypassGovernanceRetention); err != nil {
 			return nil, err
 		}
 		if !versionEntity.IsDeleteMarker {
@@ -114,7 +111,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return nil, err
 			}
 			if nullVersionEntity != nil {
-				if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, opts != nil && opts.BypassGovernanceRetention); err != nil {
+				if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, opts != nil && opts.BypassGovernanceRetention); err != nil {
 					return nil, err
 				}
 				removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
@@ -164,7 +161,7 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 	}
 
 	if currentEntity != nil {
-		if err := sms.checkVersionDeletion(ctx, tx, currentEntity, opts != nil && opts.BypassGovernanceRetention); err != nil {
+		if err := sms.checkVersionDeletion(ctx, tx, currentEntity, bucketEntity.ObjectLockEnabled, opts != nil && opts.BypassGovernanceRetention); err != nil {
 			return nil, err
 		}
 		if opts != nil && opts.IfMatchETag != nil {

@@ -30,9 +30,6 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 	}
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		result, err := mbs.metadataStore.CreateMultipartUpload(ctx, tx.SqlTx(), bucketName, key, contentType, checksumType, metadataOpts)
 		if err != nil {
 			return err
@@ -52,9 +49,6 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 
 	var calculatedChecksums *checksumutils.ChecksumValues
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		// Parts route to the store of the class chosen at
 		// CreateMultipartUpload, so the upload must be resolved before the
 		// part bytes are streamed.
@@ -142,9 +136,6 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 
 	var result storage.UploadPartCopyResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), srcBucket, dstBucket); err != nil {
-			return err
-		}
 		var srcObject *metadatastore.Object
 		var err error
 		if opts != nil && opts.SourceVersionID != nil {
@@ -281,9 +272,6 @@ func (mbs *metadataPartStorage) CompleteMultipartUpload(ctx context.Context, buc
 	defer span.End()
 	var completeMultipartUploadResult storage.CompleteMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		result, err := mbs.metadataStore.CompleteMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId, checksumInput, opts)
 		if err != nil {
 			return err
@@ -304,9 +292,6 @@ func (mbs *metadataPartStorage) AbortMultipartUpload(ctx context.Context, bucket
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.AbortMultipartUpload")
 	defer span.End()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		if err := mbs.metadataStore.LockBuckets(ctx, tx.SqlTx(), bucketName); err != nil {
-			return err
-		}
 		abortMultipartUploadResult, err := mbs.metadataStore.AbortMultipartUpload(ctx, tx.SqlTx(), bucketName, key, uploadId)
 		if err != nil {
 			return err
