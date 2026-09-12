@@ -10,6 +10,11 @@ const (
 	AuthTypeSigV4Presign AuthType = "sigv4-presign"
 )
 
+type AuthenticatedIdentity struct {
+	AccessKeyID string
+	PrincipalID string
+}
+
 // RequestAuthentication is the authentication result attached to a request.
 // Identity is non-nil exactly when Authenticated is true.
 type RequestAuthentication struct {

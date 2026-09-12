@@ -29,11 +29,6 @@ type Credential struct {
 	PrincipalID     string `json:"principalId,omitempty"`
 }
 
-type AuthenticatedIdentity struct {
-	AccessKeyID string
-	PrincipalID string
-}
-
 type CredentialProvider interface {
 	Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error)
 }
