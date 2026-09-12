@@ -27,14 +27,14 @@ import (
 )
 
 type outboxMetrics struct {
-	pendingEntries     prometheus.Gauge
+	pendingEntries     *prometheus.GaugeVec
 	processedEntries   prometheus.Counter
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
 	claimLostCounter   prometheus.Counter
 	retryCounter       prometheus.Counter
 	inFlightEntries    prometheus.Gauge
-	oldestPendingAge   prometheus.Gauge
+	oldestPendingAge   *prometheus.GaugeVec
 	processingRate     *prometheus.GaugeVec
 	estimatedDrainTime *prometheus.GaugeVec
 }
@@ -45,12 +45,12 @@ var sharedOutboxMetrics *outboxMetrics
 func newOutboxMetrics() *outboxMetrics {
 	outboxMetricsOnce.Do(func() {
 		sharedOutboxMetrics = &outboxMetrics{
-			pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+			pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 				Namespace: "pithos",
 				Subsystem: "outbox",
 				Name:      "pending_entries",
 				Help:      "Number of pending outbox entries",
-			}),
+			}, []string{"outbox_id"}),
 			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "pithos",
 				Subsystem: "outbox",
@@ -73,7 +73,7 @@ func newOutboxMetrics() *outboxMetrics {
 			claimLostCounter:   prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "outbox", Name: "claim_lost_total", Help: "Total number of storage outbox claims lost during processing"}),
 			retryCounter:       prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "outbox", Name: "retries_total", Help: "Total number of storage outbox entries scheduled for retry"}),
 			inFlightEntries:    prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "entries_in_flight", Help: "Number of storage outbox entries currently being processed"}),
-			oldestPendingAge:   prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending storage outbox entry"}),
+			oldestPendingAge:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending storage outbox entry"}, []string{"outbox_id"}),
 			processingRate:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "processing_rate_entries_per_second", Help: "Smoothed storage outbox processing throughput"}, []string{"outbox_id"}),
 			estimatedDrainTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "outbox", Name: "estimated_drain_time_seconds", Help: "Estimated time to drain the current storage outbox backlog at the observed processing rate"}, []string{"outbox_id"}),
 		}
@@ -319,11 +319,11 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 	}); err != nil {
 		return
 	}
-	os.metrics.pendingEntries.Set(float64(pendingCount))
+	os.metrics.pendingEntries.WithLabelValues(os.outboxId).Set(float64(pendingCount))
 	if oldestEntry == nil {
-		os.metrics.oldestPendingAge.Set(0)
+		os.metrics.oldestPendingAge.WithLabelValues(os.outboxId).Set(0)
 	} else {
-		os.metrics.oldestPendingAge.Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
+		os.metrics.oldestPendingAge.WithLabelValues(os.outboxId).Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
 	}
 
 	for {

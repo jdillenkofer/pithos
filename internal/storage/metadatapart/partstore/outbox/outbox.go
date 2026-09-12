@@ -26,14 +26,14 @@ import (
 )
 
 type partOutboxMetrics struct {
-	pendingEntries     prometheus.Gauge
+	pendingEntries     *prometheus.GaugeVec
 	processedEntries   prometheus.Counter
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
 	claimLostCounter   prometheus.Counter
 	retryCounter       prometheus.Counter
 	inFlightEntries    prometheus.Gauge
-	oldestPendingAge   prometheus.Gauge
+	oldestPendingAge   *prometheus.GaugeVec
 	processingRate     *prometheus.GaugeVec
 	estimatedDrainTime *prometheus.GaugeVec
 }
@@ -44,12 +44,12 @@ var sharedPartOutboxMetrics *partOutboxMetrics
 func newPartOutboxMetrics() *partOutboxMetrics {
 	partOutboxMetricsOnce.Do(func() {
 		sharedPartOutboxMetrics = &partOutboxMetrics{
-			pendingEntries: prometheus.NewGauge(prometheus.GaugeOpts{
+			pendingEntries: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 				Namespace: "pithos",
 				Subsystem: "part_outbox",
 				Name:      "pending_entries",
 				Help:      "Number of pending part outbox entries",
-			}),
+			}, []string{"outbox_id"}),
 			processedEntries: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "pithos",
 				Subsystem: "part_outbox",
@@ -72,7 +72,7 @@ func newPartOutboxMetrics() *partOutboxMetrics {
 			claimLostCounter:   prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "claim_lost_total", Help: "Total number of part outbox claims lost during processing"}),
 			retryCounter:       prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "retries_total", Help: "Total number of part outbox entries scheduled for retry"}),
 			inFlightEntries:    prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "entries_in_flight", Help: "Number of part outbox entries currently being processed"}),
-			oldestPendingAge:   prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending part outbox entry"}),
+			oldestPendingAge:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "oldest_pending_age_seconds", Help: "Age of the oldest claimed pending part outbox entry"}, []string{"outbox_id"}),
 			processingRate:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "processing_rate_entries_per_second", Help: "Smoothed part outbox processing throughput"}, []string{"outbox_id"}),
 			estimatedDrainTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "estimated_drain_time_seconds", Help: "Estimated time to drain the current part outbox backlog at the observed processing rate"}, []string{"outbox_id"}),
 		}
@@ -286,11 +286,11 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 	}); err != nil {
 		return
 	}
-	obs.metrics.pendingEntries.Set(float64(pendingCount))
+	obs.metrics.pendingEntries.WithLabelValues(obs.outboxId).Set(float64(pendingCount))
 	if oldestEntry == nil {
-		obs.metrics.oldestPendingAge.Set(0)
+		obs.metrics.oldestPendingAge.WithLabelValues(obs.outboxId).Set(0)
 	} else {
-		obs.metrics.oldestPendingAge.Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
+		obs.metrics.oldestPendingAge.WithLabelValues(obs.outboxId).Set(max(0, time.Since(oldestEntry.CreatedAt).Seconds()))
 	}
 
 	for {
