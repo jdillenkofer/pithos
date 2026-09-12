@@ -105,8 +105,8 @@ func (m *PartStoreMiddleware) DeletePart(ctx context.Context, tx database.Tx, id
 	return err
 }
 
-func (m *PartStoreMiddleware) refresh(ctx context.Context) {
-	_ = database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+func (m *PartStoreMiddleware) refresh(ctx context.Context) error {
+	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		ids, err := m.inner.GetPartIds(ctx, tx)
 		if err != nil {
 			return err
@@ -139,7 +139,9 @@ func (m *PartStoreMiddleware) Start(ctx context.Context) error {
 	}
 	m.task = task.Start(func(cancel *atomic.Bool) {
 		for !cancel.Load() {
-			m.refresh(context.Background())
+			started := time.Now()
+			err := m.refresh(context.Background())
+			pithosmetrics.ObserveRefresh("partstore:"+m.name, started, err)
 			deadline := time.Now().Add(m.interval)
 			for !cancel.Load() && time.Now().Before(deadline) {
 				time.Sleep(min(250*time.Millisecond, time.Until(deadline)))

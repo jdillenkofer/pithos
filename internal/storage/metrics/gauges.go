@@ -100,7 +100,10 @@ func Start(dbs []database.Database, interval time.Duration) *task.TaskHandle {
 	}
 	return task.Start(func(cancel *atomic.Bool) {
 		for !cancel.Load() {
-			if err := refresh(context.Background(), dbs); err != nil {
+			started := time.Now()
+			err := refresh(context.Background(), dbs)
+			pithosmetrics.ObserveRefresh("storage_database", started, err)
+			if err != nil {
 				slog.Warn("Could not refresh storage database metrics", "error", err)
 			}
 			deadline := time.Now().Add(interval)

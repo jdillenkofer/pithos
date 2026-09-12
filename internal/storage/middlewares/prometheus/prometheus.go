@@ -189,19 +189,20 @@ func NewStorageMiddleware(innerStorage storage.Storage, gaugesInterval time.Dura
 	}, nil
 }
 
-func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) {
+func (psm *prometheusStorageMiddleware) measureMetrics(ctx context.Context) error {
 	buckets, err := psm.Next.ListBuckets(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	for _, bucket := range buckets {
 		totalSize, objectCount, err := psm.getBucketMetrics(ctx, bucket)
 		if err != nil {
-			return
+			return err
 		}
 		psm.totalSizeByBucket.With(prometheus.Labels{"bucket": bucket.Name.String()}).Set(float64(*totalSize))
 		psm.objectCountByBucket.WithLabelValues(bucket.Name.String()).Set(float64(objectCount))
 	}
+	return nil
 }
 
 func (psm *prometheusStorageMiddleware) getBucketMetrics(ctx context.Context, bucket storage.Bucket) (*int64, int64, error) {
@@ -233,7 +234,9 @@ func (psm *prometheusStorageMiddleware) getBucketMetrics(ctx context.Context, bu
 func (psm *prometheusStorageMiddleware) measureMetricsLoop(cancelMetricsMeasuring *atomic.Bool) {
 	ctx := context.Background()
 	for {
-		psm.measureMetrics(ctx)
+		started := time.Now()
+		err := psm.measureMetrics(ctx)
+		pithosmetrics.ObserveRefresh("storage_objects", started, err)
 		interval := psm.gaugesInterval
 		if interval <= 0 {
 			interval = 30 * time.Second
