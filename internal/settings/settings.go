@@ -8,8 +8,10 @@ import (
 )
 
 const defaultAuthenticationEnabled = true
+const defaultCredentialsProvider = "auto"
 const defaultCredentialsPath = ""
 const defaultCredentialsReloadIntervalSeconds = 5
+const defaultCredentialsDatabaseIndex = 0
 const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
@@ -30,8 +32,10 @@ const mergableTagKey = "mergable"
 
 type Settings struct {
 	authenticationEnabled            *bool    `mergable:""`
+	credentialsProvider              *string  `mergable:""`
 	credentialsPath                  *string  `mergable:""`
 	credentialsReloadIntervalSeconds *int     `mergable:""`
+	credentialsDatabaseIndex         *int     `mergable:""`
 	region                           *string  `mergable:""`
 	domain                           *string  `mergable:""`
 	websiteDomain                    *string  `mergable:""`
@@ -62,12 +66,20 @@ func (s *Settings) AuthenticationEnabled() bool {
 	return valueOrDefault(s.authenticationEnabled, defaultAuthenticationEnabled)
 }
 
+func (s *Settings) CredentialsProvider() string {
+	return valueOrDefault(s.credentialsProvider, defaultCredentialsProvider)
+}
+
 func (s *Settings) CredentialsPath() string {
 	return valueOrDefault(s.credentialsPath, defaultCredentialsPath)
 }
 
 func (s *Settings) CredentialsReloadIntervalSeconds() int {
 	return valueOrDefault(s.credentialsReloadIntervalSeconds, defaultCredentialsReloadIntervalSeconds)
+}
+
+func (s *Settings) CredentialsDatabaseIndex() int {
+	return valueOrDefault(s.credentialsDatabaseIndex, defaultCredentialsDatabaseIndex)
 }
 
 func (s *Settings) Region() string {

@@ -107,3 +107,27 @@ func TestCredentialFileSettings(t *testing.T) {
 		assert.Equal(t, 3, settings.CredentialsReloadIntervalSeconds())
 	})
 }
+
+func TestSQLCredentialSettings(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		settings := &Settings{}
+		assert.Equal(t, "auto", settings.CredentialsProvider())
+		assert.Zero(t, settings.CredentialsDatabaseIndex())
+	})
+
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv(credentialsProviderEnvKey, "sql")
+		t.Setenv(credentialsDatabaseIndexEnvKey, "2")
+		settings, err := loadSettingsFromEnv()
+		assert.NoError(t, err)
+		assert.Equal(t, "sql", settings.CredentialsProvider())
+		assert.Equal(t, 2, settings.CredentialsDatabaseIndex())
+	})
+
+	t.Run("arguments", func(t *testing.T) {
+		settings, err := loadSettingsFromCmdArgs([]string{"-credentialsProvider", "sql", "-credentialsDatabaseIndex", "1"})
+		assert.NoError(t, err)
+		assert.Equal(t, "sql", settings.CredentialsProvider())
+		assert.Equal(t, 1, settings.CredentialsDatabaseIndex())
+	})
+}

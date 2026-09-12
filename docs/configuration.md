@@ -17,8 +17,10 @@
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
+| `PITHOS_CREDENTIALS_PROVIDER` | Credential source: `auto`, `environment`, `file`, or `sql`; `auto` selects `file` when a credentials path is set and `environment` otherwise | `auto` |
 | `PITHOS_CREDENTIALS_PATH` | Optional path to a reloadable credentials JSON file; when set, environment credentials are ignored | - |
 | `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between credentials file reload checks; `0` checks on every authenticated request | `5` |
+| `PITHOS_CREDENTIALS_DATABASE_INDEX` | Zero-based configured database index used by the SQL provider | `0` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Optional stable principal ID for the Nth credential | - |
@@ -28,8 +30,9 @@
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
 
-The credentials path and reload interval may also be set with the
-`-credentialsPath` and `-credentialsReloadIntervalSeconds` command-line flags.
+The provider settings may also be set with the `-credentialsProvider`,
+`-credentialsPath`, `-credentialsReloadIntervalSeconds`, and
+`-credentialsDatabaseIndex` command-line flags.
 The credential values themselves are never accepted as arguments.
 
 Pithos reads these variables through its environment credential provider for
@@ -90,6 +93,31 @@ the last valid set remains active. An empty `credentials` array intentionally
 revokes every credential. Publish changes using an atomic file replacement;
 when using Kubernetes, mount the Secret as a volume rather than with
 `subPath`, which does not receive automatic updates.
+
+#### SQL credentials
+
+Set `PITHOS_CREDENTIALS_PROVIDER=sql` to read credentials from the
+`authentication_credentials` table in a database already configured by
+`storage.json`. Database index `0` is the default and is the database used by
+the default storage configuration. Enabled rows are periodically loaded into
+an in-memory snapshot, so normal authentication does not perform a database
+query and transient reload failures retain the last valid set.
+
+Credentials can initially be provisioned with SQL:
+
+```sql
+INSERT INTO authentication_credentials
+    (access_key_id, secret_access_key, principal_id)
+VALUES
+    ('old-key', 'old-secret', 'storage-client'),
+    ('new-key', 'new-secret', 'storage-client');
+```
+
+Set `enabled` to `FALSE` or delete a row to revoke it. The `revision`,
+`created_at`, and `updated_at` columns are reserved for managed updates by a
+future administration API. Secret access keys are stored in reversible form
+because SigV4 verification requires them; protect the database with strict
+access controls and storage-level encryption.
 
 ### Storage
 

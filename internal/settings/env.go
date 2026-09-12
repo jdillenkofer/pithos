@@ -9,8 +9,10 @@ import (
 const envKeyPrefix = "PITHOS"
 
 const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
+const credentialsProviderEnvKey = envKeyPrefix + "_CREDENTIALS_PROVIDER"
 const credentialsPathEnvKey = envKeyPrefix + "_CREDENTIALS_PATH"
 const credentialsReloadIntervalSecondsEnvKey = envKeyPrefix + "_CREDENTIALS_RELOAD_INTERVAL_SECONDS"
+const credentialsDatabaseIndexEnvKey = envKeyPrefix + "_CREDENTIALS_DATABASE_INDEX"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
 const websiteDomainEnvKey = envKeyPrefix + "_WEBSITE_DOMAIN"
@@ -78,8 +80,10 @@ func getStringSliceFromEnv(envKey string) []string {
 
 func loadSettingsFromEnv() (*Settings, error) {
 	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
+	credentialsProvider := getStringFromEnv(credentialsProviderEnvKey)
 	credentialsPath := getStringFromEnv(credentialsPathEnvKey)
 	credentialsReloadIntervalSeconds := getIntFromEnv(credentialsReloadIntervalSecondsEnvKey)
+	credentialsDatabaseIndex := getIntFromEnv(credentialsDatabaseIndexEnvKey)
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	websiteDomain := getStringFromEnv(websiteDomainEnvKey)
@@ -100,8 +104,10 @@ func loadSettingsFromEnv() (*Settings, error) {
 
 	return &Settings{
 		authenticationEnabled:            authenticationEnabled,
+		credentialsProvider:              credentialsProvider,
 		credentialsPath:                  credentialsPath,
 		credentialsReloadIntervalSeconds: credentialsReloadIntervalSeconds,
+		credentialsDatabaseIndex:         credentialsDatabaseIndex,
 		region:                           region,
 		domain:                           domain,
 		websiteDomain:                    websiteDomain,

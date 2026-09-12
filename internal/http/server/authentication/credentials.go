@@ -163,7 +163,7 @@ func (p *FileCredentialProvider) Lookup(ctx context.Context, accessKeyID string)
 	return credential, found, nil
 }
 
-func validateCredential(credential Credential) error {
+func ValidateCredential(credential Credential) error {
 	if len(credential.AccessKeyID) == 0 {
 		return fmt.Errorf("access key ID must not be empty")
 	}
@@ -180,6 +180,10 @@ func validateCredential(credential Credential) error {
 		return fmt.Errorf("principal ID exceeds maximum length of %d bytes", MaxPrincipalIDLength)
 	}
 	return nil
+}
+
+func validateCredential(credential Credential) error {
+	return ValidateCredential(credential)
 }
 
 // EnvCredentialProvider resolves credentials from the process environment on

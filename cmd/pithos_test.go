@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/settings"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/pgx"
@@ -86,6 +87,46 @@ func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
 		assert.True(t, allowed)
+	})
+}
+
+func TestLoadCredentialProvider(t *testing.T) {
+	t.Run("auto defaults to environment", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		t.Setenv("PITHOS_CREDENTIALS_PATH", "")
+		configured, err := settings.LoadSettings(nil)
+		require.NoError(t, err)
+		provider, err := loadCredentialProvider(context.Background(), configured, nil)
+		require.NoError(t, err)
+		assert.IsType(t, &authentication.EnvCredentialProvider{}, provider)
+	})
+
+	t.Run("sql uses selected database", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "credentials.db"))
+		require.NoError(t, err)
+		defer db.Close()
+		err = database.WithTx(context.Background(), db, nil, func(ctx context.Context, tx database.Tx) error {
+			_, err := tx.SqlTx().ExecContext(ctx, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "secret")
+			return err
+		})
+		require.NoError(t, err)
+		configured, err := settings.LoadSettings([]string{"-credentialsProvider", "sql", "-credentialsReloadIntervalSeconds", "0"})
+		require.NoError(t, err)
+		provider, err := loadCredentialProvider(context.Background(), configured, []database.Database{db})
+		require.NoError(t, err)
+		credential, found, err := provider.Lookup(context.Background(), "key")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "secret", credential.SecretAccessKey)
+	})
+
+	t.Run("sql rejects an unavailable database index", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		configured, err := settings.LoadSettings([]string{"-credentialsProvider", "sql"})
+		require.NoError(t, err)
+		_, err = loadCredentialProvider(context.Background(), configured, nil)
+		assert.Error(t, err)
 	})
 }
 
