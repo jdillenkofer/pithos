@@ -137,6 +137,14 @@ To disable: `chflags nouappnd ./data/audit.log` or `sudo chflags nosappnd ./data
 
 With these attributes set, Pithos can still read the file to retrieve the last hash for the chain, but it cannot delete or modify previous entries.
 
+## Principal identities (format 5)
+
+Format 5 adds `actor.principal_id` while retaining `actor.credential_id`. The
+principal ID identifies the stable actor across credential rotations, while the
+credential ID identifies the exact access key used for an individual request.
+Both fields are covered by the entry hash and signature. Anonymous requests and
+credentials without a configured principal omit `principal_id`.
+
 ## Object Lock records (format 4)
 
 Format 4 adds `resource.version_id` and `object_lock`. The latter contains

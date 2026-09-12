@@ -178,7 +178,10 @@ func (t *AuditLogTool) Stats(inputFormat string) (*LogStats, error) {
 			stats.LogEntries++
 			details := entry.Details.(*auditlog.LogDetails)
 			stats.Operations[details.Operation]++
-			actor := details.Actor.CredentialID
+			actor := details.Actor.PrincipalID
+			if actor == "" {
+				actor = details.Actor.CredentialID
+			}
 			if actor == "" {
 				actor = "anonymous"
 			}
