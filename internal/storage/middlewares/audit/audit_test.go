@@ -79,9 +79,13 @@ func TestAuditLogMiddleware(t *testing.T) {
 	mock := &mockStorage{}
 	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsa87Signer(mlPriv), lastHash, initialBuffer)
 
-	ctx := context.WithValue(context.Background(), authentication.AuthenticatedIdentityContextKey{}, authentication.AuthenticatedIdentity{
-		AccessKeyID: "rotated-key",
-		PrincipalID: "stable-principal",
+	ctx := authentication.WithRequestAuthentication(context.Background(), authentication.RequestAuthentication{
+		Authenticated: true,
+		Identity: &authentication.AuthenticatedIdentity{
+			AccessKeyID: "rotated-key",
+			PrincipalID: "stable-principal",
+		},
+		Type: authentication.AuthTypeSigV4Header,
 	})
 	bucketName := metadatastore.MustNewBucketName("test-bucket")
 	err = middleware.CreateBucket(ctx, bucketName)

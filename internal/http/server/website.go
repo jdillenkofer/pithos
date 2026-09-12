@@ -390,21 +390,12 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		}
 	}
 
-	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
-	var accessKeyId *string
-	var principalId *string
-	if isAuthenticated {
-		identity, _ := ctx.Value(authentication.AuthenticatedIdentityContextKey{}).(authentication.AuthenticatedIdentity)
-		accessKeyId = &identity.AccessKeyID
-		if identity.PrincipalID != "" {
-			principalId = &identity.PrincipalID
-		}
-	}
+	auth := authentication.RequestAuthenticationFromContext(ctx)
 
 	bucketStr := bucketName.String()
 	authRequest := &authorization.Request{
 		Operation:     operation,
-		Authorization: authorization.Authorization{AccessKeyId: accessKeyId, PrincipalId: principalId},
+		Authorization: authorizationFromAuthentication(auth),
 		Bucket:        &bucketStr,
 		Key:           keyStr,
 		HttpRequest:   makeAuthorizationHTTPRequest(r),
@@ -415,7 +406,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		return nil, storage.ObjectKey{}, "", false
 	}
 	if !allowed {
-		if !isAuthenticated {
+		if !auth.Authenticated {
 			writePlainError(w, http.StatusUnauthorized)
 		} else {
 			writePlainError(w, http.StatusForbidden)

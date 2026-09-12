@@ -66,9 +66,6 @@ var ErrTrailerChecksumMismatch = errors.New("BadDigest")
 // Its text is the S3 error code reported to the client.
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
-type AccessKeyIdContextKey struct{}
-type AuthenticatedIdentityContextKey struct{}
-type AuthTypeContextKey struct{}
 type RequestIDContextKey struct{}
 type ClientIPContextKey struct{}
 
@@ -1005,19 +1002,17 @@ func (r *awsChunkReadCloser) Close() error {
 	return nil
 }
 
-type IsAuthenticatedContextKey struct{}
-
-func authTypeForRequest(r *http.Request) string {
+func authTypeForRequest(r *http.Request) AuthType {
 	if isAnonymousRequest(r) {
-		return "anonymous"
+		return AuthTypeAnonymous
 	}
 	if r.Header.Get("Authorization") != "" {
-		return "sigv4-header"
+		return AuthTypeSigV4Header
 	}
 	if r.URL.Query().Get("X-Amz-Credential") != "" {
-		return "sigv4-presign"
+		return AuthTypeSigV4Presign
 	}
-	return "anonymous"
+	return AuthTypeAnonymous
 }
 
 func isAnonymousRequest(r *http.Request) bool {
@@ -1039,8 +1034,9 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 		// let it through as an anonymous request. The server handlers
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
-			ctx := context.WithValue(r.Context(), IsAuthenticatedContextKey{}, false)
-			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
+			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
+				Type: AuthTypeAnonymous,
+			})
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 			return
@@ -1053,10 +1049,11 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			return
 		}
 		if isAuthenticated {
-			ctx := context.WithValue(r.Context(), AuthenticatedIdentityContextKey{}, *identity)
-			ctx = context.WithValue(ctx, AccessKeyIdContextKey{}, identity.AccessKeyID)
-			ctx = context.WithValue(ctx, IsAuthenticatedContextKey{}, true)
-			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
+			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
+				Authenticated: true,
+				Identity:      identity,
+				Type:          authTypeForRequest(r),
+			})
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
