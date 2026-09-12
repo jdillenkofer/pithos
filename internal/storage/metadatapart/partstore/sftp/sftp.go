@@ -46,6 +46,9 @@ type sftpPartStore struct {
 
 // Compile-time check to ensure sftpPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*sftpPartStore)(nil)
+var _ partstore.StatsProvider = (*sftpPartStore)(nil)
+
+func (s *sftpPartStore) SupportsStats() bool { return true }
 
 func (s *sftpPartStore) ensureRootDir() error {
 	_, err := doRetriableOperation(context.Background(), func() (*struct{}, error) {
@@ -329,6 +332,27 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]parts
 		}
 	}
 	return partIds, nil
+}
+
+func (s *sftpPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	dirEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
+		return s.client.ReadDir(s.root)
+	}, maxStpRetries, s.reconnectSftpClient, nil)
+	if err != nil {
+		return partstore.Stats{}, err
+	}
+	var stats partstore.Stats
+	for _, entry := range dirEntries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := s.tryGetPartIdFromFilename(entry.Name()); !ok {
+			continue
+		}
+		stats.Parts++
+		stats.Bytes += entry.Size()
+	}
+	return stats, nil
 }
 
 func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId partstore.PartId) error {

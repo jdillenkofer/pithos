@@ -81,6 +81,16 @@ type PartStoreMiddleware struct {
 	maxRatio       float64
 }
 
+func (mw *PartStoreMiddleware) SupportsStats() bool {
+	provider, ok := mw.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (mw *PartStoreMiddleware) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, mw.innerPartStore)
+	return stats, err
+}
+
 func New(innerPartStore partstore.PartStore) (partstore.PartStore, error) {
 	return NewWithConfig(innerPartStore, Config{})
 }

@@ -73,6 +73,29 @@ func WithHealScanInterval(interval time.Duration) Option {
 
 var _ partstore.PartStore = (*erasureCodingPartStore)(nil)
 
+func (e *erasureCodingPartStore) SupportsStats() bool {
+	for _, store := range e.partStores {
+		provider, ok := store.(partstore.StatsProvider)
+		if !ok || !provider.SupportsStats() {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *erasureCodingPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	var total partstore.Stats
+	for _, store := range e.partStores {
+		stats, _, err := partstore.StatsOf(ctx, tx, store)
+		if err != nil {
+			return partstore.Stats{}, err
+		}
+		total.Parts += stats.Parts
+		total.Bytes += stats.Bytes
+	}
+	return total, nil
+}
+
 func NewWithPartStores(dataShards int, parityShards int, stripeShardSize int, partStores []partstore.PartStore, opts ...Option) (partstore.PartStore, error) {
 	registerErasureMetrics()
 	if dataShards < 1 {

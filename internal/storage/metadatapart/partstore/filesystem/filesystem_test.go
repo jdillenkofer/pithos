@@ -67,6 +67,21 @@ func TestFilesystemPartStore(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestStatsCountsOnlyPartFilesWithoutReadingThem(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	assert.NoError(t, err)
+	id, err := partstore.NewRandomPartId()
+	assert.NoError(t, err)
+	filesystemStore := store.(*filesystemPartStore)
+	assert.NoError(t, os.WriteFile(filesystemStore.getFilename(*id), []byte("payload"), 0o600))
+	assert.NoError(t, os.WriteFile(filepath.Join(root, ".temporary-file"), []byte("ignored"), 0o600))
+
+	stats, err := filesystemStore.Stats(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, partstore.Stats{Parts: 1, Bytes: 7}, stats)
+}
+
 func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

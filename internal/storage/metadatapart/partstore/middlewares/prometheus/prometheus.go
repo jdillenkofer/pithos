@@ -48,6 +48,7 @@ type PartStoreMiddleware struct {
 
 var _ partstore.PartStore = (*PartStoreMiddleware)(nil)
 var _ partstore.CapabilityProvider = (*PartStoreMiddleware)(nil)
+var _ partstore.StatsProvider = (*PartStoreMiddleware)(nil)
 
 func New(inner partstore.PartStore, db database.Database, name string, interval time.Duration) partstore.PartStore {
 	registerMetrics()
@@ -59,6 +60,19 @@ func New(inner partstore.PartStore, db database.Database, name string, interval 
 
 func (m *PartStoreMiddleware) Capabilities() partstore.Capabilities {
 	return partstore.CapabilitiesOf(m.inner)
+}
+
+func (m *PartStoreMiddleware) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, supported, err := partstore.StatsOf(ctx, tx, m.inner)
+	if !supported {
+		return partstore.Stats{}, errors.New("part store does not support cheap occupancy statistics")
+	}
+	return stats, err
+}
+
+func (m *PartStoreMiddleware) SupportsStats() bool {
+	provider, ok := m.inner.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
 }
 
 func (m *PartStoreMiddleware) observe(operation string, started time.Time, err error) {
@@ -107,28 +121,15 @@ func (m *PartStoreMiddleware) DeletePart(ctx context.Context, tx database.Tx, id
 
 func (m *PartStoreMiddleware) refresh(ctx context.Context) error {
 	return database.WithTx(ctx, m.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
-		ids, err := m.inner.GetPartIds(ctx, tx)
+		stats, supported, err := partstore.StatsOf(ctx, tx, m.inner)
 		if err != nil {
 			return err
 		}
-		var bytes int64
-		for _, id := range ids {
-			reader, err := m.inner.GetPart(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			n, readErr := io.Copy(io.Discard, reader)
-			closeErr := reader.Close()
-			if readErr != nil {
-				return readErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
-			bytes += n
+		if !supported {
+			return nil
 		}
-		metrics.parts.WithLabelValues(m.name).Set(float64(len(ids)))
-		metrics.partBytes.WithLabelValues(m.name).Set(float64(bytes))
+		metrics.parts.WithLabelValues(m.name).Set(float64(stats.Parts))
+		metrics.partBytes.WithLabelValues(m.name).Set(float64(stats.Bytes))
 		return nil
 	})
 }
@@ -136,6 +137,10 @@ func (m *PartStoreMiddleware) refresh(ctx context.Context) error {
 func (m *PartStoreMiddleware) Start(ctx context.Context) error {
 	if err := m.inner.Start(ctx); err != nil {
 		return err
+	}
+	provider, supported := m.inner.(partstore.StatsProvider)
+	if !supported || !provider.SupportsStats() {
+		return nil
 	}
 	m.task = task.Start(func(cancel *atomic.Bool) {
 		for !cancel.Load() {

@@ -104,6 +104,16 @@ type outboxPartStore struct {
 // Compile-time check to ensure outboxPartStore implements partstore.PartStore
 var _ partstore.PartStore = (*outboxPartStore)(nil)
 
+func (obs *outboxPartStore) SupportsStats() bool {
+	provider, ok := obs.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (obs *outboxPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, obs.innerPartStore)
+	return stats, err
+}
+
 const defaultClaimLeaseDuration = 30 * time.Second
 
 var errPartOutboxEntryVanished = errors.New("part outbox entry deleted while it was being read")

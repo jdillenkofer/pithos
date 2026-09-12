@@ -37,6 +37,16 @@ type cachePartStore struct {
 
 var _ partstore.PartStore = (*cachePartStore)(nil)
 
+func (ps *cachePartStore) SupportsStats() bool {
+	provider, ok := ps.innerPartStore.(partstore.StatsProvider)
+	return ok && provider.SupportsStats()
+}
+
+func (ps *cachePartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
+	stats, _, err := partstore.StatsOf(ctx, tx, ps.innerPartStore)
+	return stats, err
+}
+
 func New(cache cachepkg.Cache, innerPartStore partstore.PartStore, opts Options) (partstore.PartStore, error) {
 	maxPartSizeBytes := opts.MaxPartSizeBytes
 	if maxPartSizeBytes <= 0 {
