@@ -669,8 +669,13 @@ An explicit journal database uses the normal database configuration, for example
 
 The journal stores pending operation data until every destination confirms.
 Successful calls confirm all replicas, including any storage outbox barrier.
-Failures are retained and retried. The coordinator serializes mutations and
-recovery; deploy a single writer coordinator per topology. Metrics are
+Definite replica failures are retained and retried. A remote-primary request
+whose outcome is ambiguous is never replayed because doing so could create a
+duplicate version; inspect the primary and run `reconcile-replication` instead.
+Likewise, an ambiguous multipart completion on a replica remains pending until
+reconciliation supersedes it from the authoritative primary version list. The
+coordinator serializes mutations and recovery; deploy a single writer
+coordinator per topology. Metrics are
 `pithos_replication_pending_operations`, `pithos_replication_retries_total` and
 `pithos_replication_failures_total`, labeled by `replication_id`.
 

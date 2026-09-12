@@ -27,6 +27,8 @@ import (
 const maxMemoryCacheSize = 10 * 1000 * 1000
 
 var ErrMissingMapping = errors.New("replication version mapping missing; run reconcile-replication")
+var ErrIndeterminatePrimary = errors.New("remote primary outcome is indeterminate; inspect the primary and run reconcile-replication")
+var ErrIndeterminateReplicaCompletion = errors.New("replica multipart completion outcome is indeterminate; manual reconciliation is required")
 
 type Options struct {
 	Registerer      prometheus.Registerer
@@ -362,18 +364,16 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 			if definitiveRejection(err) {
 				return nil, rs.finishRejected(ctx, op, err)
 			}
-			return nil, rs.recordFailure(ctx, op, err)
+			return nil, rs.finishIndeterminatePrimary(ctx, op, err)
 		}
 		err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 			return rs.finalizePrimary(ctx, tx, op, &p, result, cached)
 		})
 		if err != nil {
-			// Finalization rolled back. Keep the original intent and original
-			// bytes; no remote version identity is durably confirmed yet.
-			op.State = "INTENT"
-			op.PrimaryResult = nil
+			// The primary succeeded, but its result could not be made durable.
+			// Reissuing a version-producing request could create another version.
 			op.Payload = string(encoded)
-			return nil, rs.recordFailure(ctx, op, err)
+			return nil, rs.finishIndeterminatePrimary(ctx, op, err)
 		}
 	}
 	if err != nil {
@@ -487,33 +487,14 @@ func (rs *replicationStorage) replayPending(ctx context.Context) error {
 			rs.metrics.retries.Inc()
 		}
 		if op.State == "INTENT" {
-			// A remote primary might have accepted a timed-out write. Retrying can
-			// create another version; never infer its identity from ETag or time.
-			originalPayload := op.Payload
-			var p operationPayload
-			if err := json.Unmarshal([]byte(op.Payload), &p); err != nil {
+			// INTENT is used only with a remote primary. After a restart there is
+			// no safe way to know whether the request was accepted, so never replay
+			// it. Reconciliation can recover authoritative object versions without
+			// risking another primary mutation.
+			if err := rs.markIndeterminatePrimary(ctx, op, errors.New("recovered unresolved remote-primary intent")); err != nil {
 				return err
 			}
-			reader, err := rs.cachedData(ctx, op.ID)
-			if err != nil {
-				return err
-			}
-			result, applyErr := rs.apply(ctx, rs.Next, op.Name, &p, reader)
-			if applyErr == nil {
-				applyErr = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
-					return rs.finalizePrimary(ctx, tx, op, &p, result, reader)
-				})
-			}
-			reader.Close()
-			if applyErr != nil {
-				if definitiveRejection(applyErr) {
-					return rs.finishRejected(ctx, op, applyErr)
-				}
-				op.State = "INTENT"
-				op.PrimaryResult = nil
-				op.Payload = originalPayload
-				return rs.recordFailure(ctx, op, applyErr)
-			}
+			continue
 		}
 		if err := rs.replicate(ctx, op); err != nil {
 			return err
@@ -801,19 +782,10 @@ func (rs *replicationStorage) writeSnapshot(ctx context.Context, operationID, se
 		return nil, errors.New("invalid durable multipart snapshot progress")
 	}
 	// Completion may have succeeded remotely before its result could be
-	// journaled. Confirm the expected snapshot before retrying Complete with an
-	// upload ID that the remote has already consumed.
+	// journaled. Size, ETag and protection are not a unique operation identity,
+	// so a HEAD response cannot safely identify the completed version.
 	if progress.Completing {
-		actual, headErr := target.HeadObject(ctx, b, k, nil)
-		if headErr == nil && actual.Size == obj.Size && actual.ETag == obj.ETag && sameProtection(actual.ObjectLock, obj.ObjectLock) {
-			completed := &storage.CompleteMultipartUploadResult{VersionID: actual.VersionID, ETag: actual.ETag, ChecksumCRC32: actual.ChecksumCRC32, ChecksumCRC32C: actual.ChecksumCRC32C, ChecksumCRC64NVME: actual.ChecksumCRC64NVME, ChecksumSHA1: actual.ChecksumSHA1, ChecksumSHA256: actual.ChecksumSHA256, ChecksumType: actual.ChecksumType}
-			result := &operationResult{Complete: completed, VersionID: actual.VersionID}
-			progress.Complete = result
-			if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
-				return nil, err
-			}
-			return result, nil
-		}
+		return nil, ErrIndeterminateReplicaCompletion
 	}
 	uploadID, err := storage.NewUploadId(progress.UploadID)
 	if err != nil {
@@ -877,7 +849,7 @@ func (rs *replicationStorage) apply(ctx context.Context, target storage.Storage,
 		if _, err = target.HeadBucket(ctx, b); errors.Is(err, storage.ErrNoSuchBucket) {
 			err = target.CreateBucket(ctx, b, storage.CreateBucketOptions{ObjectLockEnabled: p.LockConfiguration != nil})
 		}
-		if err == nil {
+		if err == nil && p.Versioning != nil && p.Versioning.Status != nil {
 			status := storage.BucketVersioningStatusEnabled
 			err = target.PutBucketVersioningConfiguration(ctx, b, &storage.BucketVersioningConfiguration{Status: &status})
 		}
@@ -1004,4 +976,24 @@ func (rs *replicationStorage) finishRejected(ctx context.Context, op *replicatio
 		return rs.journal.DeleteData(ctx, tx.SqlTx(), op.ID)
 	})
 	return errors.Join(cause, err)
+}
+
+func (rs *replicationStorage) finishIndeterminatePrimary(ctx context.Context, op *replicationjournal.Operation, cause error) error {
+	err := rs.markIndeterminatePrimary(ctx, op, cause)
+	return errors.Join(fmt.Errorf("%w: operation %s: %v", ErrIndeterminatePrimary, op.ID, cause), err)
+}
+
+func (rs *replicationStorage) markIndeterminatePrimary(ctx context.Context, op *replicationjournal.Operation, cause error) error {
+	op.State = "COMPLETE"
+	op.PrimaryResult = nil
+	op.LastError = fmt.Sprintf("%v: %v", ErrIndeterminatePrimary, cause)
+	op.Attempts++
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return database.WithTx(saveCtx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
+			return err
+		}
+		return rs.journal.DeleteData(ctx, tx.SqlTx(), op.ID)
+	})
 }

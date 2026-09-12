@@ -20,11 +20,20 @@ import (
 // replication coordinator to ensure it reconstructs all state from SQL.
 type replicaFaultStorage struct {
 	delegator.DelegatingStorage
-	blocked          atomic.Bool
-	writes           atomic.Int32
-	multipartCreates atomic.Int32
-	partUploads      [3]atomic.Int32
-	failPart         atomic.Int32
+	blocked           atomic.Bool
+	writes            atomic.Int32
+	multipartCreates  atomic.Int32
+	partUploads       [3]atomic.Int32
+	failPart          atomic.Int32
+	ambiguousComplete atomic.Bool
+}
+
+func (s *replicaFaultStorage) CompleteMultipartUpload(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, checksum *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
+	result, err := s.Next.CompleteMultipartUpload(ctx, bucket, key, uploadID, checksum, opts)
+	if err == nil && s.ambiguousComplete.CompareAndSwap(true, false) {
+		return nil, errors.New("connection lost after completing multipart upload")
+	}
+	return result, err
 }
 
 func (s *replicaFaultStorage) CreateMultipartUpload(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
@@ -221,6 +230,44 @@ func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
 	require.Equal(t, "firstsecond", string(data))
 }
 
+func TestReplicationDoesNotInferAmbiguousMultipartCompletion(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, doneSecondary := newTestStorage(t)
+	defer doneSecondary()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	options := replication.Options{ReplicationID: "multipart-ambiguous", SecondaryIDs: []string{"replica"}, Registerer: prometheus.NewRegistry()}
+	ctx := t.Context()
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	bucket := storage.MustNewBucketName("multipart-ambiguous")
+	source := storage.MustNewObjectKey("source")
+	destination := storage.MustNewObjectKey("destination")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
+	upload, err := coordinator.CreateMultipartUpload(ctx, bucket, source, nil, nil, nil)
+	require.NoError(t, err)
+	part1, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader("first"), nil)
+	require.NoError(t, err)
+	part2, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 2, strings.NewReader("second"), nil)
+	require.NoError(t, err)
+	_, err = coordinator.CompleteMultipartUpload(ctx, bucket, source, upload.UploadId, nil, &storage.CompleteMultipartUploadOptions{Parts: []storage.CompleteMultipartUploadPart{{PartNumber: 1, ETag: part1.ETag}, {PartNumber: 2, ETag: part2.ETag}}})
+	require.NoError(t, err)
+	s.ambiguousComplete.Store(true)
+	_, err = coordinator.CopyObject(ctx, bucket, source, bucket, destination, nil)
+	require.Error(t, err)
+	_, err = coordinator.PutObject(ctx, bucket, storage.MustNewObjectKey("later"), nil, strings.NewReader("later"), nil, nil)
+	require.ErrorIs(t, err, replication.ErrIndeterminateReplicaCompletion)
+	require.NoError(t, replication.ReconcileStorage(ctx, coordinator, options.ReplicationID, []storage.BucketName{bucket}, false))
+	primaryObject, err := primary.HeadObject(ctx, bucket, destination, nil)
+	require.NoError(t, err)
+	replicaObject, err := secondary.HeadObject(ctx, bucket, destination, nil)
+	require.NoError(t, err)
+	require.Equal(t, primaryObject.ETag, replicaObject.ETag)
+}
+
 func TestReplicationReturnsDeleteMarker(t *testing.T) {
 	primary, done := newTestStorage(t)
 	defer done()
@@ -359,7 +406,7 @@ func TestReplicationRemotePrimaryAmbiguity(t *testing.T) {
 	require.NoError(t, coordinator.CreateBucket(ctx, bucket, storage.CreateBucketOptions{ObjectLockEnabled: true}))
 	p.ambiguous.Store(true)
 	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("retained input"), nil, nil)
-	require.Error(t, err)
+	require.ErrorIs(t, err, replication.ErrIndeterminatePrimary)
 	require.NoError(t, coordinator.Stop(ctx))
 	p.ambiguous.Store(false)
 	coordinator, err = replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
@@ -368,7 +415,10 @@ func TestReplicationRemotePrimaryAmbiguity(t *testing.T) {
 	defer coordinator.Stop(ctx)
 	versions, err := primary.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 100})
 	require.NoError(t, err)
-	require.Len(t, versions.Versions, 2)
+	require.Len(t, versions.Versions, 1, "an ambiguous remote write must never be replayed")
+	_, err = secondary.HeadObject(ctx, bucket, key, nil)
+	require.ErrorIs(t, err, storage.ErrNoSuchKey)
+	require.NoError(t, replication.ReconcileStorage(ctx, coordinator, "remote", []storage.BucketName{bucket}, false))
 	target, err := secondary.HeadObject(ctx, bucket, key, nil)
 	require.NoError(t, err)
 	latest := versions.Versions[0].VersionID
@@ -379,6 +429,27 @@ func TestReplicationRemotePrimaryAmbiguity(t *testing.T) {
 	// A definite rejection must not leave the entire topology blocked forever.
 	require.ErrorIs(t, coordinator.PutObjectLockConfiguration(ctx, bucket, &storage.ObjectLockConfiguration{}), storage.ErrInvalidObjectLockConfiguration)
 	require.NoError(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOff, &storage.ObjectLockOptions{VersionID: &latest}))
-	old := versions.Versions[1].VersionID
-	require.ErrorIs(t, coordinator.PutObjectLegalHold(ctx, bucket, key, storage.LegalHoldOn, &storage.ObjectLockOptions{VersionID: &old}), replication.ErrMissingMapping)
+}
+
+func TestReplicationReconcileKeepsUnversionedBucketUnversioned(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, doneSecondary := newTestStorage(t)
+	defer doneSecondary()
+	ctx := t.Context()
+	bucket, key := storage.MustNewBucketName("plain-reconcile"), storage.MustNewObjectKey("key")
+	require.NoError(t, primary.CreateBucket(ctx, bucket))
+	_, err := primary.PutObject(ctx, bucket, key, nil, strings.NewReader("content"), nil, nil)
+	require.NoError(t, err)
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	options := replication.Options{ReplicationID: "plain-reconcile", SecondaryIDs: []string{"replica"}, Registerer: prometheus.NewRegistry()}
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	require.NoError(t, replication.ReconcileStorage(ctx, coordinator, options.ReplicationID, []storage.BucketName{bucket}, false))
+	versioning, err := secondary.GetBucketVersioningConfiguration(ctx, bucket)
+	require.NoError(t, err)
+	require.Nil(t, versioning.Status)
 }

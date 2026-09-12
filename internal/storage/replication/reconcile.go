@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,12 +23,50 @@ func (rs *replicationStorage) Reconcile(ctx context.Context, buckets []storage.B
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if !dryRun {
+		if err := rs.discardIndeterminateReplicaCompletions(ctx); err != nil {
+			return err
+		}
 		if err := rs.replayPending(ctx); err != nil {
 			return err
 		}
 	}
 	for _, bucket := range buckets {
 		if err := rs.reconcileBucket(ctx, bucket, dryRun); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// An indeterminate snapshot completion cannot be identified safely from object
+// attributes. Reconciliation supersedes it by rebuilding any missing mapping
+// from the authoritative primary version list.
+func (rs *replicationStorage) discardIndeterminateReplicaCompletions(ctx context.Context) error {
+	var ops []replicationjournal.Operation
+	if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		ops, err = rs.journal.Pending(ctx, tx.SqlTx(), rs.options.ReplicationID)
+		return err
+	}); err != nil {
+		return err
+	}
+	for i := range ops {
+		op := &ops[i]
+		if !strings.Contains(op.LastError, ErrIndeterminateReplicaCompletion.Error()) {
+			continue
+		}
+		op.State = "COMPLETE"
+		if err := database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+			if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
+				return err
+			}
+			for _, id := range rs.options.SecondaryIDs {
+				if err := rs.journal.DeleteProgress(ctx, tx.SqlTx(), op.ID, id); err != nil {
+					return err
+				}
+			}
+			return rs.journal.DeleteData(ctx, tx.SqlTx(), op.ID)
+		}); err != nil {
 			return err
 		}
 	}
@@ -101,6 +140,10 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 	if err != nil && !errors.Is(err, storage.ErrObjectLockConfigurationNotFound) {
 		return err
 	}
+	sourceVersioning, err := rs.Next.GetBucketVersioningConfiguration(ctx, bucket)
+	if err != nil {
+		return err
+	}
 	restore := make(map[string]*storage.ObjectLockConfiguration)
 	for i, id := range rs.options.SecondaryIDs {
 		targetConfig, err := rs.secondaryStorages[i].GetObjectLockConfiguration(ctx, bucket)
@@ -146,7 +189,7 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 			return nil
 		}
 		for _, id := range rs.options.SecondaryIDs {
-			if err := save("PrepareReconcileBucket", operationPayload{Bucket: bucket.String(), LockConfiguration: restore[id]}, operationResult{}, map[string]bool{id: true}, nil); err != nil {
+			if err := save("PrepareReconcileBucket", operationPayload{Bucket: bucket.String(), LockConfiguration: restore[id], Versioning: sourceVersioning}, operationResult{}, map[string]bool{id: true}, nil); err != nil {
 				return err
 			}
 		}
@@ -180,6 +223,17 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 			}
 			if closeErr != nil {
 				return closeErr
+			}
+		}
+		if sourceVersioning != nil && sourceVersioning.Status != nil {
+			targets := make(map[string]bool)
+			for _, secondaries := range changedKeys {
+				for id := range secondaries {
+					targets[id] = true
+				}
+			}
+			if err := save("PutBucketVersioningConfiguration", operationPayload{Bucket: bucket.String(), Versioning: sourceVersioning}, operationResult{}, targets, nil); err != nil {
+				return err
 			}
 		}
 		for _, id := range rs.options.SecondaryIDs {
