@@ -75,6 +75,22 @@ func (r *repository) Acknowledgments(ctx context.Context, tx *sql.Tx, id string)
 	}
 	return result, rows.Err()
 }
+func (r *repository) SaveProgress(ctx context.Context, tx *sql.Tx, operationID, secondaryID, progress string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO replication_progress (operation_id,secondary_id,progress) VALUES ($1,$2,$3) ON CONFLICT(operation_id,secondary_id) DO UPDATE SET progress = excluded.progress`, operationID, secondaryID, progress)
+	return err
+}
+func (r *repository) FindProgress(ctx context.Context, tx *sql.Tx, operationID, secondaryID string) (*string, error) {
+	var progress string
+	err := tx.QueryRowContext(ctx, `SELECT progress FROM replication_progress WHERE operation_id=$1 AND secondary_id=$2`, operationID, secondaryID).Scan(&progress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &progress, err
+}
+func (r *repository) DeleteProgress(ctx context.Context, tx *sql.Tx, operationID, secondaryID string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM replication_progress WHERE operation_id=$1 AND secondary_id=$2`, operationID, secondaryID)
+	return err
+}
 func (r *repository) SaveMapping(ctx context.Context, tx *sql.Tx, m replicationjournal.Mapping) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO replication_mappings (replication_id,secondary_id,bucket_name,object_key,kind,primary_id,secondary_object_id) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(replication_id,secondary_id,bucket_name,object_key,kind,primary_id) DO UPDATE SET secondary_object_id = excluded.secondary_object_id`, m.ReplicationID, m.SecondaryID, m.Bucket, m.Key, m.Kind, m.PrimaryID, m.SecondaryObjectID)
 	return err

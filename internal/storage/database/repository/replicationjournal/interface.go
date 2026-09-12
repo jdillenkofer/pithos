@@ -35,6 +35,9 @@ type Repository interface {
 	Pending(context.Context, *sql.Tx, string) ([]Operation, error)
 	Acknowledge(context.Context, *sql.Tx, string, string, string) error
 	Acknowledgments(context.Context, *sql.Tx, string) (map[string]string, error)
+	SaveProgress(context.Context, *sql.Tx, string, string, string) error
+	FindProgress(context.Context, *sql.Tx, string, string) (*string, error)
+	DeleteProgress(context.Context, *sql.Tx, string, string) error
 	SaveMapping(context.Context, *sql.Tx, Mapping) error
 	FindMapping(context.Context, *sql.Tx, Mapping) (*string, error)
 	SaveData(context.Context, *sql.Tx, string, io.Reader) error

@@ -95,6 +95,16 @@ type operationResult struct {
 	VersionID *string
 }
 
+// multipartSnapshotProgress is durable per operation and secondary. Uploaded
+// parts form a contiguous prefix, allowing recovery to seek past acknowledged
+// bytes and resume without creating another multipart upload.
+type multipartSnapshotProgress struct {
+	UploadID   string                                `json:"uploadId"`
+	Parts      []storage.CompleteMultipartUploadPart `json:"parts,omitempty"`
+	Completing bool                                  `json:"completing,omitempty"`
+	Complete   *operationResult                      `json:"complete,omitempty"`
+}
+
 func NewStorage(primary storage.Storage, secondaries ...storage.Storage) (storage.Storage, error) {
 	ids := make([]string, len(secondaries))
 	for i := range ids {
@@ -592,7 +602,7 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 					return rs.recordFailure(ctx, op, abortErr)
 				}
 			}
-			result, err = rs.writeSnapshot(ctx, secondary, &replicaPayload, reader)
+			result, err = rs.writeSnapshot(ctx, op.ID, id, secondary, &replicaPayload, reader)
 		} else if op.Name == "UploadPartCopy" {
 			result, err = rs.apply(ctx, secondary, "UploadPart", &replicaPayload, reader)
 		} else {
@@ -644,7 +654,10 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 					return err
 				}
 			}
-			return rs.journal.Acknowledge(ctx, tx.SqlTx(), op.ID, id, string(encoded))
+			if err := rs.journal.Acknowledge(ctx, tx.SqlTx(), op.ID, id, string(encoded)); err != nil {
+				return err
+			}
+			return rs.journal.DeleteProgress(ctx, tx.SqlTx(), op.ID, id)
 		})
 		if err != nil {
 			return rs.recordFailure(ctx, op, err)
@@ -723,7 +736,34 @@ func (rs *replicationStorage) translate(ctx context.Context, id string, p *opera
 	return nil
 }
 
-func (rs *replicationStorage) writeSnapshot(ctx context.Context, target storage.Storage, p *operationPayload, reader io.Reader) (*operationResult, error) {
+func (rs *replicationStorage) loadSnapshotProgress(ctx context.Context, operationID, secondaryID string) (*multipartSnapshotProgress, error) {
+	var encoded *string
+	err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		encoded, err = rs.journal.FindProgress(ctx, tx.SqlTx(), operationID, secondaryID)
+		return err
+	})
+	if err != nil || encoded == nil {
+		return nil, err
+	}
+	var progress multipartSnapshotProgress
+	if err := json.Unmarshal([]byte(*encoded), &progress); err != nil {
+		return nil, err
+	}
+	return &progress, nil
+}
+
+func (rs *replicationStorage) saveSnapshotProgress(ctx context.Context, operationID, secondaryID string, progress *multipartSnapshotProgress) error {
+	encoded, err := json.Marshal(progress)
+	if err != nil {
+		return err
+	}
+	return database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		return rs.journal.SaveProgress(ctx, tx.SqlTx(), operationID, secondaryID, string(encoded))
+	})
+}
+
+func (rs *replicationStorage) writeSnapshot(ctx context.Context, operationID, secondaryID string, target storage.Storage, p *operationPayload, reader io.Reader) (*operationResult, error) {
 	obj := p.Snapshot
 	b := storage.MustNewBucketName(p.Bucket)
 	k := storage.MustNewObjectKey(p.Key)
@@ -739,28 +779,84 @@ func (rs *replicationStorage) writeSnapshot(ctx context.Context, target storage.
 	if len(obj.PartSizes) == 0 {
 		return nil, errors.New("multipart snapshot lacks part boundaries")
 	}
-	upload, err := target.CreateMultipartUpload(ctx, b, k, obj.ContentType, obj.ChecksumType, &storage.CreateMultipartUploadOptions{ObjectLock: obj.ObjectLock, Tags: obj.Tags, Metadata: &obj.Metadata, StorageClass: obj.StorageClass})
+	progress, err := rs.loadSnapshotProgress(ctx, operationID, secondaryID)
 	if err != nil {
 		return nil, err
 	}
-	parts := make([]storage.CompleteMultipartUploadPart, 0, len(obj.PartSizes))
-	for i, size := range obj.PartSizes {
+	if progress != nil && progress.Complete != nil {
+		return progress.Complete, nil
+	}
+	if progress == nil {
+		upload, err := target.CreateMultipartUpload(ctx, b, k, obj.ContentType, obj.ChecksumType, &storage.CreateMultipartUploadOptions{ObjectLock: obj.ObjectLock, Tags: obj.Tags, Metadata: &obj.Metadata, StorageClass: obj.StorageClass})
+		if err != nil {
+			return nil, err
+		}
+		progress = &multipartSnapshotProgress{UploadID: upload.UploadId.String()}
+		if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
+			abortErr := target.AbortMultipartUpload(context.WithoutCancel(ctx), b, k, upload.UploadId)
+			return nil, errors.Join(err, abortErr)
+		}
+	}
+	if progress.UploadID == "" || len(progress.Parts) > len(obj.PartSizes) {
+		return nil, errors.New("invalid durable multipart snapshot progress")
+	}
+	// Completion may have succeeded remotely before its result could be
+	// journaled. Confirm the expected snapshot before retrying Complete with an
+	// upload ID that the remote has already consumed.
+	if progress.Completing {
+		actual, headErr := target.HeadObject(ctx, b, k, nil)
+		if headErr == nil && actual.Size == obj.Size && actual.ETag == obj.ETag && sameProtection(actual.ObjectLock, obj.ObjectLock) {
+			completed := &storage.CompleteMultipartUploadResult{VersionID: actual.VersionID, ETag: actual.ETag, ChecksumCRC32: actual.ChecksumCRC32, ChecksumCRC32C: actual.ChecksumCRC32C, ChecksumCRC64NVME: actual.ChecksumCRC64NVME, ChecksumSHA1: actual.ChecksumSHA1, ChecksumSHA256: actual.ChecksumSHA256, ChecksumType: actual.ChecksumType}
+			result := &operationResult{Complete: completed, VersionID: actual.VersionID}
+			progress.Complete = result
+			if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+	}
+	uploadID, err := storage.NewUploadId(progress.UploadID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range progress.Parts {
+		if progress.Parts[i].PartNumber != int32(i+1) {
+			return nil, errors.New("non-contiguous durable multipart snapshot progress")
+		}
+		if _, err := io.CopyN(io.Discard, reader, obj.PartSizes[i]); err != nil {
+			return nil, err
+		}
+	}
+	for i := len(progress.Parts); i < len(obj.PartSizes); i++ {
+		size := obj.PartSizes[i]
 		cached, err := ioutils.NewSmartCachedReadSeekCloser(io.LimitReader(reader, size), maxMemoryCacheSize)
 		if err != nil {
 			return nil, err
 		}
-		part, err := target.UploadPart(ctx, b, k, upload.UploadId, int32(i+1), cached, nil)
+		part, err := target.UploadPart(ctx, b, k, uploadID, int32(i+1), cached, nil)
 		cached.Close()
 		if err != nil {
 			return nil, err
 		}
-		parts = append(parts, storage.CompleteMultipartUploadPart{PartNumber: int32(i + 1), ETag: part.ETag, ChecksumCRC32: part.ChecksumCRC32, ChecksumCRC32C: part.ChecksumCRC32C, ChecksumCRC64NVME: part.ChecksumCRC64NVME, ChecksumSHA1: part.ChecksumSHA1, ChecksumSHA256: part.ChecksumSHA256})
+		progress.Parts = append(progress.Parts, storage.CompleteMultipartUploadPart{PartNumber: int32(i + 1), ETag: part.ETag, ChecksumCRC32: part.ChecksumCRC32, ChecksumCRC32C: part.ChecksumCRC32C, ChecksumCRC64NVME: part.ChecksumCRC64NVME, ChecksumSHA1: part.ChecksumSHA1, ChecksumSHA256: part.ChecksumSHA256})
+		if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
+			return nil, err
+		}
 	}
-	complete, err := target.CompleteMultipartUpload(ctx, b, k, upload.UploadId, nil, &storage.CompleteMultipartUploadOptions{Parts: parts})
+	progress.Completing = true
+	if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
+		return nil, err
+	}
+	complete, err := target.CompleteMultipartUpload(ctx, b, k, uploadID, nil, &storage.CompleteMultipartUploadOptions{Parts: progress.Parts})
 	if err != nil {
 		return nil, err
 	}
-	return &operationResult{Complete: complete, VersionID: complete.VersionID}, nil
+	result := &operationResult{Complete: complete, VersionID: complete.VersionID}
+	progress.Complete = result
+	if err := rs.saveSnapshotProgress(ctx, operationID, secondaryID, progress); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (rs *replicationStorage) apply(ctx context.Context, target storage.Storage, name string, p *operationPayload, data io.Reader) (*operationResult, error) {

@@ -20,8 +20,26 @@ import (
 // replication coordinator to ensure it reconstructs all state from SQL.
 type replicaFaultStorage struct {
 	delegator.DelegatingStorage
-	blocked atomic.Bool
-	writes  atomic.Int32
+	blocked          atomic.Bool
+	writes           atomic.Int32
+	multipartCreates atomic.Int32
+	partUploads      [3]atomic.Int32
+	failPart         atomic.Int32
+}
+
+func (s *replicaFaultStorage) CreateMultipartUpload(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	s.multipartCreates.Add(1)
+	return s.Next.CreateMultipartUpload(ctx, bucket, key, contentType, checksumType, opts)
+}
+
+func (s *replicaFaultStorage) UploadPart(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, partNumber int32, data io.Reader, checksum *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	if partNumber >= 1 && partNumber <= int32(len(s.partUploads)) {
+		s.partUploads[partNumber-1].Add(1)
+	}
+	if s.failPart.CompareAndSwap(partNumber, 0) {
+		return nil, errors.New("injected part upload failure")
+	}
+	return s.Next.UploadPart(ctx, bucket, key, uploadID, partNumber, data, checksum)
 }
 
 func (s *replicaFaultStorage) Start(context.Context) error { return nil }
@@ -147,6 +165,60 @@ func TestReplicationMapsUnversionedNullVersion(t *testing.T) {
 	tags, err := secondary.GetObjectTagging(ctx, bucket, key, nil)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"state": "mapped"}, tags)
+}
+
+func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	secondary, doneSecondary := newTestStorage(t)
+	defer doneSecondary()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	s := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(secondary)}
+	options := replication.Options{ReplicationID: "multipart-resume", SecondaryIDs: []string{"replica"}, Registerer: prometheus.NewRegistry()}
+	ctx := t.Context()
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	bucket := storage.MustNewBucketName("multipart-resume")
+	source := storage.MustNewObjectKey("source")
+	destination := storage.MustNewObjectKey("destination")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
+	upload, err := coordinator.CreateMultipartUpload(ctx, bucket, source, nil, nil, nil)
+	require.NoError(t, err)
+	first, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 1, strings.NewReader("first"), nil)
+	require.NoError(t, err)
+	second, err := coordinator.UploadPart(ctx, bucket, source, upload.UploadId, 2, strings.NewReader("second"), nil)
+	require.NoError(t, err)
+	_, err = coordinator.CompleteMultipartUpload(ctx, bucket, source, upload.UploadId, nil, &storage.CompleteMultipartUploadOptions{Parts: []storage.CompleteMultipartUploadPart{{PartNumber: 1, ETag: first.ETag}, {PartNumber: 2, ETag: second.ETag}}})
+	require.NoError(t, err)
+
+	createsBefore := s.multipartCreates.Load()
+	partOneBefore := s.partUploads[0].Load()
+	partTwoBefore := s.partUploads[1].Load()
+	s.failPart.Store(2)
+	_, err = coordinator.CopyObject(ctx, bucket, source, bucket, destination, nil)
+	require.Error(t, err)
+	require.EqualValues(t, createsBefore+1, s.multipartCreates.Load())
+	require.EqualValues(t, partOneBefore+1, s.partUploads[0].Load())
+	require.EqualValues(t, partTwoBefore+1, s.partUploads[1].Load())
+	require.NoError(t, coordinator.Stop(ctx))
+
+	coordinator, err = replication.NewStorageWithOptions(p, []storage.Storage{s}, options)
+	require.NoError(t, err)
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	require.EqualValues(t, createsBefore+1, s.multipartCreates.Load(), "retry must reuse the durable upload ID")
+	require.EqualValues(t, partOneBefore+1, s.partUploads[0].Load(), "retry must not retransmit an acknowledged part")
+	require.EqualValues(t, partTwoBefore+2, s.partUploads[1].Load())
+	object, readers, err := secondary.GetObject(ctx, bucket, destination, nil, nil)
+	require.NoError(t, err)
+	primaryObject, err := primary.HeadObject(ctx, bucket, destination, nil)
+	require.NoError(t, err)
+	require.Equal(t, primaryObject.ETag, object.ETag)
+	data, err := io.ReadAll(readers[0])
+	readers[0].Close()
+	require.NoError(t, err)
+	require.Equal(t, "firstsecond", string(data))
 }
 
 func TestReplicationReturnsDeleteMarker(t *testing.T) {
