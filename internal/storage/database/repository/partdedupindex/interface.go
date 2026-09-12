@@ -9,6 +9,7 @@ import (
 )
 
 type Repository interface {
+	GroupByStore(ctx context.Context, tx *sql.Tx) ([]StoreAggregate, error)
 	FindEntry(ctx context.Context, tx *sql.Tx, partStoreName, checksumSHA256 string, size int64) (*Entity, error)
 	TryInsert(ctx context.Context, tx *sql.Tx, entity *Entity) (bool, error)
 	DeleteByPartIds(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) error
@@ -21,6 +22,12 @@ type Repository interface {
 	// (or whose entry was pruned together with a dead identical part) become
 	// dedup candidates again.
 	BackfillFromParts(ctx context.Context, tx *sql.Tx) (int64, error)
+}
+
+type StoreAggregate struct {
+	Store string
+	Count int64
+	Size  int64
 }
 
 type Entity struct {

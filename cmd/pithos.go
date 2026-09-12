@@ -35,6 +35,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive"
 	onedriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/onedrive/auth"
+	storagemetrics "github.com/jdillenkofer/pithos/internal/storage/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/lifecyclereconciler"
 	prometheusMiddleware "github.com/jdillenkofer/pithos/internal/storage/middlewares/prometheus"
 	"github.com/jdillenkofer/pithos/internal/storage/migrator"
@@ -223,6 +224,11 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	if err != nil {
 		return fmt.Errorf("start storage: %w", err)
 	}
+	storageMetricsTask := storagemetrics.Start(dbs, time.Duration(settings.MetricsGaugesIntervalSeconds())*time.Second)
+	defer func() {
+		storageMetricsTask.Cancel()
+		storageMetricsTask.JoinWithTimeout(gracefulShutdownTimeout)
+	}()
 
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)

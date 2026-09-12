@@ -17,7 +17,25 @@ const (
 	deletePartDedupIndexByPartIdStmt = "DELETE FROM part_dedup_index WHERE part_id = $1"
 	findAllPartDedupIndexPartIdsStmt = "SELECT part_id FROM part_dedup_index"
 	backfillPartDedupIndexStmt       = "INSERT OR IGNORE INTO part_dedup_index (part_store_name, checksum_sha256, size, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, part_id, created_at, updated_at) SELECT COALESCE(part_store_name, ''), checksum_sha256, size, MIN(etag), MIN(checksum_crc32), MIN(checksum_crc32c), MIN(checksum_crc64nvme), MIN(checksum_sha1), MIN(part_id), $1, $2 FROM parts WHERE checksum_sha256 IS NOT NULL AND checksum_crc32 IS NOT NULL AND checksum_crc32c IS NOT NULL AND checksum_crc64nvme IS NOT NULL AND checksum_sha1 IS NOT NULL GROUP BY COALESCE(part_store_name, ''), checksum_sha256, size"
+	groupByStoreStmt                 = "SELECT COALESCE(NULLIF(part_store_name, ''), 'default'), COUNT(*), COALESCE(SUM(size), 0) FROM part_dedup_index GROUP BY COALESCE(NULLIF(part_store_name, ''), 'default')"
 )
+
+func (r *repository) GroupByStore(ctx context.Context, tx *sql.Tx) ([]index.StoreAggregate, error) {
+	rows, err := tx.QueryContext(ctx, groupByStoreStmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []index.StoreAggregate
+	for rows.Next() {
+		var a index.StoreAggregate
+		if err := rows.Scan(&a.Store, &a.Count, &a.Size); err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}
 
 func NewRepository() (index.Repository, error) { return &repository{}, nil }
 
