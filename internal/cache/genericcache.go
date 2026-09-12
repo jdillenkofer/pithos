@@ -34,6 +34,7 @@ func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
 	if size >= 0 {
 		c.mu.Lock()
 		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, size)
+		ObserveEvictions("generic", len(evictedKeys))
 		c.mu.Unlock()
 		for _, evictedKey := range evictedKeys {
 			err = c.cachePersistor.Remove(evictedKey)
@@ -58,6 +59,7 @@ func (c *GenericCache) Set(key string, reader io.Reader, size int64) error {
 	if size < 0 {
 		c.mu.Lock()
 		evictedKeys := c.cacheEvictionPolicy.TrackSetAndReturnEvictedKeys(key, actualSize)
+		ObserveEvictions("generic", len(evictedKeys))
 		c.mu.Unlock()
 		for _, evictedKey := range evictedKeys {
 			err = c.cachePersistor.Remove(evictedKey)

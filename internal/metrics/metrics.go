@@ -30,6 +30,18 @@ func Register(collectors ...prometheus.Collector) {
 	}
 }
 
+func Unregister(collectors ...prometheus.Collector) {
+	mu.Lock()
+	defer mu.Unlock()
+	if currentRegisterer != prometheus.DefaultRegisterer {
+		return
+	}
+	for _, collector := range collectors {
+		prometheus.DefaultRegisterer.Unregister(collector)
+		delete(registered, collector)
+	}
+}
+
 // WithTestRegisterer temporarily swaps the global registerer for an isolated test.
 func WithTestRegisterer(registerer prometheus.Registerer, fn func()) {
 	testMu.Lock()

@@ -29,6 +29,7 @@ type partOutboxMetrics struct {
 	processedEntries   prometheus.Counter
 	processingDuration prometheus.Histogram
 	errorsCounter      prometheus.Counter
+	claimLostCounter   prometheus.Counter
 }
 
 var partOutboxMetricsOnce sync.Once
@@ -62,10 +63,11 @@ func newPartOutboxMetrics() *partOutboxMetrics {
 				Name:      "errors_total",
 				Help:      "Total number of part outbox processing errors",
 			}),
+			claimLostCounter: prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "part_outbox", Name: "claim_lost_total", Help: "Total number of part outbox claims lost during processing"}),
 		}
 	})
 
-	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter)
+	pithosMetrics.Register(sharedPartOutboxMetrics.pendingEntries, sharedPartOutboxMetrics.processedEntries, sharedPartOutboxMetrics.processingDuration, sharedPartOutboxMetrics.errorsCounter, sharedPartOutboxMetrics.claimLostCounter)
 
 	return sharedPartOutboxMetrics
 }
@@ -194,6 +196,7 @@ func (obs *outboxPartStore) startPartOutboxHeartbeat(ctx context.Context, entry 
 					continue
 				}
 				if !extended {
+					obs.metrics.claimLostCounter.Inc()
 					slog.WarnContext(ctx, "Part outbox heartbeat lost claim", "entryId", entry.Id.String())
 				}
 			case <-stop:
@@ -284,6 +287,7 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 		}
 		if !deleted {
 			obs.metrics.errorsCounter.Inc()
+			obs.metrics.claimLostCounter.Inc()
 			slog.Warn("Part outbox finalize skipped because claim owner no longer matched", "entryId", entry.Id.String())
 			return
 		}

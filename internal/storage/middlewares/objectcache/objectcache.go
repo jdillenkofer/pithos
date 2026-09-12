@@ -495,6 +495,7 @@ func (m *objectCacheStorageMiddleware) invalidateObjectCaches(ctx context.Contex
 func (m *objectCacheStorageMiddleware) readHeadFromCache(ctx context.Context, key string) (*storage.Object, error) {
 	rc, err := m.cache.Get(key)
 	if err != nil {
+		cachepkg.ObserveMiss("object_head")
 		if err != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
 			return nil, err
 		}
@@ -502,14 +503,17 @@ func (m *objectCacheStorageMiddleware) readHeadFromCache(ctx context.Context, ke
 	}
 	var obj storage.Object
 	if err = json.NewDecoder(rc).Decode(&obj); err != nil {
+		cachepkg.ObserveMiss("object_head")
 		_ = rc.Close()
 		_ = m.cache.Remove(key)
 		slog.DebugContext(ctx, "Failed to decode head cache entry", "key", key, "error", err)
 		return nil, cachepkg.ErrCacheMiss
 	}
 	if err = rc.Close(); err != nil {
+		cachepkg.ObserveMiss("object_head")
 		return nil, cachepkg.ErrCacheMiss
 	}
+	cachepkg.ObserveHit("object_head")
 	return &obj, nil
 }
 
@@ -521,14 +525,17 @@ func (m *objectCacheStorageMiddleware) readObjectFromCache(ctx context.Context, 
 	}
 	rc, err := m.cache.Get(key)
 	if err != nil {
+		cachepkg.ObserveMiss("object_body")
 		if err != cachepkg.ErrCacheMiss && !m.cacheReadErrorsAsMiss {
 			return nil, err
 		}
 		return nil, cachepkg.ErrCacheMiss
 	}
 	if err = rc.Close(); err != nil {
+		cachepkg.ObserveMiss("object_body")
 		return nil, cachepkg.ErrCacheMiss
 	}
+	cachepkg.ObserveHit("object_body")
 	return obj, nil
 }
 

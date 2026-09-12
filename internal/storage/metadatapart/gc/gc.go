@@ -5,17 +5,38 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var gcMetricsOnce sync.Once
+var gcMetrics struct {
+	runs, deleted, errors prometheus.Counter
+	duration              prometheus.Histogram
+	drift                 prometheus.Gauge
+}
+
+func registerGCMetrics() {
+	gcMetricsOnce.Do(func() {
+		gcMetrics.runs = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "runs_total", Help: "Number of garbage collection runs"})
+		gcMetrics.duration = prometheus.NewHistogram(prometheus.HistogramOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "duration_seconds", Help: "Duration of garbage collection runs"})
+		gcMetrics.deleted = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "deleted_parts_total", Help: "Number of parts deleted by garbage collection"})
+		gcMetrics.errors = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "errors_total", Help: "Number of garbage collection errors"})
+		gcMetrics.drift = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "part_registry_drift", Help: "Number of part registry rows requiring reconciliation"})
+	})
+	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.errors, gcMetrics.drift)
+}
 
 type PartGarbageCollector interface {
 	RunGCLoop(stopRunning *atomic.Bool)
@@ -34,6 +55,7 @@ type partGC struct {
 }
 
 func New(db database.Database, metadataStore metadatastore.MetadataStore, partStores *partstore.NamedPartStores, partRegistryRepository partregistry.Repository, partDedupIndexRepository partdedupindex.Repository, durations ...time.Duration) (PartGarbageCollector, error) {
+	registerGCMetrics()
 	graceWindow := 30 * time.Minute
 	if len(durations) > 0 {
 		graceWindow = durations[0]
@@ -175,7 +197,15 @@ func (partGC *partGC) runGC() error {
 	return partGC.runGCWithContext(context.Background())
 }
 
-func (partGC *partGC) runGCWithContext(ctx context.Context) error {
+func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
+	started := time.Now()
+	gcMetrics.runs.Inc()
+	defer func() {
+		gcMetrics.duration.Observe(time.Since(started).Seconds())
+		if resultErr != nil {
+			gcMetrics.errors.Inc()
+		}
+	}()
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runGC")
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
@@ -187,6 +217,7 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	gcMetrics.drift.Set(float64(len(observations)))
 	for start := 0; start < len(observations); start += 256 {
 		end := min(start+256, len(observations))
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -288,5 +319,6 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) error {
 		}
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
+	gcMetrics.deleted.Add(float64(numDeletedParts))
 	return nil
 }

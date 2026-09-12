@@ -129,8 +129,10 @@ func (ps *cachePartStore) GetPart(ctx context.Context, tx database.Tx, partId pa
 		slog.WarnContext(ctx, "Treating cache read error as cache miss", "cacheKey", cacheKey, "error", err)
 	}
 	if err == nil {
+		cachepkg.ObserveHit("part")
 		return rc, nil
 	}
+	cachepkg.ObserveMiss("part")
 	if ps.hasOversizedHint(cacheKey) {
 		return ps.innerPartStore.GetPart(ctx, tx, partId)
 	}

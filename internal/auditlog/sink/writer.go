@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
@@ -18,6 +19,7 @@ type WriterSink struct {
 	mu           sync.Mutex
 	buf          bytes.Buffer
 	initialState *InitialState
+	sizeBytes    atomic.Int64
 }
 
 func NewWriterSink(writer io.Writer, serializer serialization.Serializer) *WriterSink {
@@ -91,6 +93,7 @@ func NewFileSink(path string, serializer serialization.Serializer) (*WriterSink,
 	}
 
 	ws := NewWriterSink(f, serializer).WithCloser(f)
+	ws.sizeBytes.Store(info.Size())
 	if lastHash != nil {
 		ws.initialState = &InitialState{
 			LastHash:   lastHash,
@@ -110,9 +113,12 @@ func (s *WriterSink) WriteEntry(e *auditlog.Entry) error {
 		return err
 	}
 
-	_, err := s.writer.Write(s.buf.Bytes())
+	n, err := s.writer.Write(s.buf.Bytes())
+	s.sizeBytes.Add(int64(n))
 	return err
 }
+
+func (s *WriterSink) SizeBytes() int64 { return s.sizeBytes.Load() }
 
 func (s *WriterSink) Close() error {
 	s.mu.Lock()

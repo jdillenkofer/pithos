@@ -4,15 +4,40 @@ import (
 	"context"
 	"database/sql"
 	"io"
+	"strconv"
 	"sync"
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
+	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var replicationMetricsOnce sync.Once
+var replicationErrors *prometheus.CounterVec
+var replicationOps *prometheus.CounterVec
+
+func registerReplicationMetrics() {
+	replicationMetricsOnce.Do(func() {
+		replicationErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "replication", Name: "secondary_errors_total", Help: "Number of failed secondary replication operations"}, []string{"storage"})
+		replicationOps = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "replication", Name: "secondary_ops_total", Help: "Number of secondary replication operations"}, []string{"storage", "operation", "outcome"})
+	})
+	pithosmetrics.Register(replicationErrors, replicationOps)
+}
+
+func observeSecondary(index int, operation string, err error) {
+	storageLabel := strconv.Itoa(index)
+	outcome := "success"
+	if err != nil {
+		outcome = "error"
+		replicationErrors.WithLabelValues(storageLabel).Inc()
+	}
+	replicationOps.WithLabelValues(storageLabel, operation, outcome).Inc()
+}
 
 const maxMemoryCacheSize = 10 * 1000 * 1000
 
@@ -29,6 +54,7 @@ var _ storage.Storage = (*replicationStorage)(nil)
 var _ storage.TransactionalStorage = (*replicationStorage)(nil)
 
 func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
+	registerReplicationMetrics()
 	lc, err := lifecycle.NewValidatedLifecycle("ReplicationStorage")
 	if err != nil {
 		return nil, err
@@ -92,8 +118,9 @@ func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName stora
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.CreateBucket(ctx, bucketName)
+		observeSecondary(i, "CreateBucket", err)
 		if err != nil {
 			return err
 		}
@@ -109,8 +136,9 @@ func (rs *replicationStorage) DeleteBucket(ctx context.Context, bucketName stora
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.DeleteBucket(ctx, bucketName)
+		observeSecondary(i, "DeleteBucket", err)
 		if err != nil {
 			return err
 		}
@@ -125,10 +153,12 @@ func (rs *replicationStorage) PutBucketVersioningConfiguration(ctx context.Conte
 	if err := rs.Next.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		if err := secondaryStorage.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
+			observeSecondary(i, "PutBucketVersioning", err)
 			return err
 		}
+		observeSecondary(i, "PutBucketVersioning", nil)
 	}
 	return nil
 }
@@ -154,12 +184,13 @@ func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.
 	if opts != nil && (len(opts.Tags) > 0 || opts.Metadata != nil || opts.StorageClass != nil) {
 		secondaryOpts = &storage.PutObjectOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err = readSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
 			return nil, err
 		}
 		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, secondaryOpts)
+		observeSecondary(i, "PutObject", err)
 		if err != nil {
 			return nil, err
 		}
@@ -175,8 +206,9 @@ func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName s
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
+		observeSecondary(i, "PutObjectTagging", err)
 		if err != nil {
 			return err
 		}
@@ -192,8 +224,9 @@ func (rs *replicationStorage) DeleteObjectTagging(ctx context.Context, bucketNam
 	if err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		err = secondaryStorage.DeleteObjectTagging(ctx, bucketName, key, opts)
+		observeSecondary(i, "DeleteObjectTagging", err)
 		if err != nil {
 			return err
 		}
@@ -215,12 +248,13 @@ func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName stora
 	if err != nil {
 		return nil, err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err = readSeekCloser.Seek(0, io.SeekStart)
 		if err != nil {
 			return nil, err
 		}
 		_, err = secondaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, opts)
+		observeSecondary(i, "AppendObject", err)
 		if err != nil {
 			return nil, err
 		}
@@ -236,8 +270,10 @@ func (rs *replicationStorage) CopyObject(ctx context.Context, srcBucket storage.
 	if err != nil {
 		return nil, err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
-		if _, err = secondaryStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts); err != nil {
+	for i, secondaryStorage := range rs.secondaryStorages {
+		_, err = secondaryStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+		observeSecondary(i, "CopyObject", err)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -252,8 +288,9 @@ func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName stora
 	if err != nil {
 		return nil, err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		_, err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
+		observeSecondary(i, "DeleteObject", err)
 		if err != nil {
 			return nil, err
 		}
@@ -268,10 +305,12 @@ func (rs *replicationStorage) TransitionObjectStorageClass(ctx context.Context, 
 	if err := rs.Next.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
 		return err
 	}
-	for _, secondaryStorage := range rs.secondaryStorages {
+	for i, secondaryStorage := range rs.secondaryStorages {
 		if err := secondaryStorage.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
+			observeSecondary(i, "TransitionObjectStorageClass", err)
 			return err
 		}
+		observeSecondary(i, "TransitionObjectStorageClass", nil)
 	}
 	return nil
 }

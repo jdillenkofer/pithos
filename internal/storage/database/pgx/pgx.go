@@ -52,6 +52,8 @@ type pgxDatabase struct {
 	*sql.DB
 }
 
+func (d *pgxDatabase) SQLDBs() []*sql.DB { return []*sql.DB{d.DB} }
+
 const (
 	defaultMaxOpenConns    = 20
 	defaultMaxIdleConns    = 20

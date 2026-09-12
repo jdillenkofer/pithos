@@ -37,6 +37,9 @@ func TestWriterSink_WriteEntry(t *testing.T) {
 	if output == "" {
 		t.Error("Output is empty")
 	}
+	if sink.SizeBytes() != int64(buf.Len()) {
+		t.Fatalf("SizeBytes() = %d, want %d", sink.SizeBytes(), buf.Len())
+	}
 
 	// Basic check if output contains expected string
 	if !bytes.Contains(buf.Bytes(), []byte("test-bucket")) {

@@ -2,11 +2,22 @@ package sink
 
 import (
 	"errors"
+
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 )
 
 type MultiSink struct {
 	sinks []Sink
+}
+
+func (s *MultiSink) SizeBytes() int64 {
+	var total int64
+	for _, child := range s.sinks {
+		if provider, ok := child.(SizeProvider); ok {
+			total += provider.SizeBytes()
+		}
+	}
+	return total
 }
 
 func NewMultiSink(sinks ...Sink) *MultiSink {
