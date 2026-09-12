@@ -83,6 +83,7 @@ function authorizeRequest(request)
 end
 `
 
+const subcommandReconcileReplication = "reconcile-replication"
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
@@ -103,7 +104,7 @@ const gracefulShutdownTimeout = 30 * time.Second
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
 		os.Exit(1)
 	}
 
@@ -116,6 +117,11 @@ func main() {
 		logBuildInfo(currentBuildInfo)
 		if err := serve(ctx, logLevelVar); err != nil {
 			slog.Error("Server stopped with an error", "err", err)
+			os.Exit(1)
+		}
+	case subcommandReconcileReplication:
+		if err := reconcileReplication(ctx, os.Args[2:]); err != nil {
+			slog.Error("Replication reconciliation failed", "err", err)
 			os.Exit(1)
 		}
 	case subcommandMigrateStorage:
@@ -135,7 +141,7 @@ func main() {
 	case subcommandVersion:
 		printVersion(os.Stdout, currentBuildInfo)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
 		os.Exit(1)
 	}
 }
@@ -356,7 +362,6 @@ func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, stor
 		slog.Error(fmt.Sprint("Error while registering dbContainer in diContainer: ", err))
 		os.Exit(1)
 	}
-
 	storageJsonConfig, err := os.ReadFile(storageJsonPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load storageJson: ", err))

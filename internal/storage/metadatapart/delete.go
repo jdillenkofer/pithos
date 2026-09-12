@@ -52,8 +52,9 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 		var metaOpts *metadatastore.DeleteObjectOptions
 		if opts != nil {
 			metaOpts = &metadatastore.DeleteObjectOptions{
-				VersionID:   opts.VersionID,
-				IfMatchETag: opts.IfMatchETag,
+				VersionID:                 opts.VersionID,
+				BypassGovernanceRetention: opts.BypassGovernanceRetention,
+				IfMatchETag:               opts.IfMatchETag,
 			}
 		}
 		metaResult, err := mbs.metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, key, metaOpts)
@@ -116,15 +117,16 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 					if entry.IfMatchETag != nil {
 						// Object does not exist but ETag condition set → precondition failed for this entry.
 						result.Entries = append(result.Entries, storage.DeleteObjectsEntry{
-							Key:     entry.Key,
-							Deleted: false,
-							ErrCode: "PreconditionFailed",
-							ErrMsg:  "At least one of the pre-conditions you specified did not hold",
+							Key:       entry.Key,
+							VersionID: entry.VersionID,
+							Deleted:   false,
+							ErrCode:   "PreconditionFailed",
+							ErrMsg:    "At least one of the pre-conditions you specified did not hold",
 						})
 						continue
 					}
 					if !(entry.VersionID == nil && (versioningEnabled || versioningSuspended)) {
-						result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, Deleted: true})
+						result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, Deleted: true})
 						continue
 					}
 					object = nil
@@ -136,20 +138,26 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 			// Object exists — check conditional ETag if specified.
 			if entry.IfMatchETag != nil && (object == nil || object.ETag != *entry.IfMatchETag) {
 				result.Entries = append(result.Entries, storage.DeleteObjectsEntry{
-					Key:     entry.Key,
-					Deleted: false,
-					ErrCode: "PreconditionFailed",
-					ErrMsg:  "At least one of the pre-conditions you specified did not hold",
+					Key:       entry.Key,
+					VersionID: entry.VersionID,
+					Deleted:   false,
+					ErrCode:   "PreconditionFailed",
+					ErrMsg:    "At least one of the pre-conditions you specified did not hold",
 				})
 				continue
 			}
 
 			var metaOpts *metadatastore.DeleteObjectOptions
-			if entry.IfMatchETag != nil || entry.VersionID != nil {
-				metaOpts = &metadatastore.DeleteObjectOptions{VersionID: entry.VersionID, IfMatchETag: entry.IfMatchETag}
+			if entry.IfMatchETag != nil || entry.VersionID != nil || entry.BypassGovernanceRetention {
+				metaOpts = &metadatastore.DeleteObjectOptions{VersionID: entry.VersionID, IfMatchETag: entry.IfMatchETag, BypassGovernanceRetention: entry.BypassGovernanceRetention}
 			}
 			metaResult, err := mbs.metadataStore.DeleteObject(ctx, tx.SqlTx(), bucketName, entry.Key, metaOpts)
 			if err != nil {
+				if err == storage.ErrObjectLockAccessDenied {
+					result.Entries = append(result.Entries, storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID, ErrCode: "AccessDenied", ErrMsg: "Object version is protected by Object Lock"})
+					continue
+				}
+
 				return err
 			}
 			if err := mbs.deleteUnreferencedParts(ctx, tx, metaResult.UnreferencedParts); err != nil {

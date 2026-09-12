@@ -12,6 +12,7 @@ import (
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/objectlock"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
@@ -41,6 +42,7 @@ func isUniqueConstraintViolation(err error) bool {
 }
 
 type sqlMetadataStore struct {
+	objectLockRepository objectlock.Repository
 	*lifecycle.ValidatedLifecycle
 	bucketRepository         bucket.Repository
 	objectRepository         object.Repository
@@ -68,7 +70,12 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 	if err != nil {
 		return nil, err
 	}
+	objectLockRepository, err := repositoryfactory.NewObjectLockRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &sqlMetadataStore{
+		objectLockRepository:     objectLockRepository,
 		ValidatedLifecycle:       lifecycle,
 		bucketRepository:         bucketRepository,
 		objectRepository:         objectRepository,

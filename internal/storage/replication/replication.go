@@ -2,604 +2,161 @@ package replication
 
 import (
 	"context"
-	"database/sql"
-	"io"
-	"strconv"
-	"sync"
-
-	"github.com/jdillenkofer/pithos/internal/ioutils"
-	"github.com/jdillenkofer/pithos/internal/lifecycle"
-	pithosmetrics "github.com/jdillenkofer/pithos/internal/metrics"
+	"errors"
 	"github.com/jdillenkofer/pithos/internal/storage"
-	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
-	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/trace"
+	"io"
 )
 
-var replicationMetricsOnce sync.Once
-var replicationErrors *prometheus.CounterVec
-var replicationOps *prometheus.CounterVec
-
-func registerReplicationMetrics() {
-	replicationMetricsOnce.Do(func() {
-		replicationErrors = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "replication", Name: "secondary_errors_total", Help: "Number of failed secondary replication operations"}, []string{"storage"})
-		replicationOps = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "replication", Name: "secondary_ops_total", Help: "Number of secondary replication operations"}, []string{"storage", "operation", "outcome"})
-	})
-	pithosmetrics.Register(replicationErrors, replicationOps)
+func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
+	_, err := rs.execute(ctx, "CreateBucket", operationPayload{Bucket: bucketName.String(), Create: options}, nil)
+	return err
 }
-
-func observeSecondary(index int, operation string, err error) {
-	storageLabel := strconv.Itoa(index)
-	outcome := "success"
-	if err != nil {
-		outcome = "error"
-		replicationErrors.WithLabelValues(storageLabel).Inc()
-	}
-	replicationOps.WithLabelValues(storageLabel, operation, outcome).Inc()
-}
-
-const maxMemoryCacheSize = 10 * 1000 * 1000
-
-type replicationStorage struct {
-	*lifecycle.ValidatedLifecycle
-	delegator.DelegatingStorage
-	secondaryStorages                   []storage.Storage
-	primaryUploadIdToSecondaryUploadIds map[storage.UploadId][]storage.UploadId
-	mapMutex                            sync.Mutex
-	tracer                              trace.Tracer
-}
-
-var _ storage.Storage = (*replicationStorage)(nil)
-var _ storage.TransactionalStorage = (*replicationStorage)(nil)
-
-func NewStorage(primaryStorage storage.Storage, secondaryStorages ...storage.Storage) (storage.Storage, error) {
-	registerReplicationMetrics()
-	lc, err := lifecycle.NewValidatedLifecycle("ReplicationStorage")
-	if err != nil {
-		return nil, err
-	}
-
-	return &replicationStorage{
-		ValidatedLifecycle:                  lc,
-		DelegatingStorage:                   delegator.Wrap(primaryStorage),
-		secondaryStorages:                   secondaryStorages,
-		primaryUploadIdToSecondaryUploadIds: make(map[storage.UploadId][]storage.UploadId),
-		mapMutex:                            sync.Mutex{},
-		tracer:                              otel.Tracer("internal/storage/replication"),
-	}, nil
-}
-
-func (rs *replicationStorage) WithTransaction(ctx context.Context, opts *sql.TxOptions, fn func(ctx context.Context, txStorage storage.Storage) error) error {
-	txPrimary, ok := rs.Next.(storage.TransactionalStorage)
-	if !ok {
-		return fn(ctx, rs)
-	}
-	return txPrimary.WithTransaction(ctx, opts, func(ctx context.Context, _ storage.Storage) error {
-		return fn(ctx, rs)
-	})
-}
-
-func (rs *replicationStorage) Start(ctx context.Context) error {
-	if err := rs.ValidatedLifecycle.Start(ctx); err != nil {
-		return err
-	}
-	if err := rs.Next.Start(ctx); err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		if err := secondaryStorage.Start(ctx); err != nil {
-			observeSecondary(i, "Start", err)
-			return err
-		}
-		observeSecondary(i, "Start", nil)
-	}
-	return nil
-}
-
-func (rs *replicationStorage) Stop(ctx context.Context) error {
-	if err := rs.ValidatedLifecycle.Stop(ctx); err != nil {
-		return err
-	}
-	if err := rs.Next.Stop(ctx); err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		if err := secondaryStorage.Stop(ctx); err != nil {
-			observeSecondary(i, "Stop", err)
-			return err
-		}
-		observeSecondary(i, "Stop", nil)
-	}
-	return nil
-}
-
-func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateBucket")
-	defer span.End()
-
-	err := rs.Next.CreateBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.CreateBucket(ctx, bucketName)
-		observeSecondary(i, "CreateBucket", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (rs *replicationStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucket")
-	defer span.End()
-
-	err := rs.Next.DeleteBucket(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteBucket(ctx, bucketName)
-		observeSecondary(i, "DeleteBucket", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := rs.execute(ctx, "DeleteBucket", operationPayload{Bucket: bucketName.String()}, nil)
+	return err
 }
-
 func (rs *replicationStorage) PutBucketVersioningConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketVersioningConfiguration) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketVersioningConfiguration")
-	defer span.End()
-
-	if err := rs.Next.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		if err := secondaryStorage.PutBucketVersioningConfiguration(ctx, bucketName, config); err != nil {
-			observeSecondary(i, "PutBucketVersioning", err)
-			return err
-		}
-		observeSecondary(i, "PutBucketVersioning", nil)
-	}
-	return nil
+	_, err := rs.execute(ctx, "PutBucketVersioningConfiguration", operationPayload{Bucket: bucketName.String(), Versioning: config}, nil)
+	return err
 }
-
 func (rs *replicationStorage) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObject")
-	defer span.End()
-
-	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
+	result, err := rs.execute(ctx, "PutObject", operationPayload{Bucket: bucketName.String(), Key: key.String(), ContentType: contentType, Checksum: checksumInput, Put: opts}, reader)
 	if err != nil {
 		return nil, err
 	}
-	defer readSeekCloser.Close()
-
-	putObjectResult, err := rs.Next.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, opts)
-	if err != nil {
-		return nil, err
-	}
-	// Secondaries must not re-evaluate conditional-write preconditions (the
-	// primary already enforced them), but the tag set, object metadata and
-	// storage class apply to every replica.
-	var secondaryOpts *storage.PutObjectOptions
-	if opts != nil && (len(opts.Tags) > 0 || opts.Metadata != nil || opts.StorageClass != nil) {
-		secondaryOpts = &storage.PutObjectOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = readSeekCloser.Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		_, err = secondaryStorage.PutObject(ctx, bucketName, key, contentType, readSeekCloser, checksumInput, secondaryOpts)
-		observeSecondary(i, "PutObject", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return putObjectResult, nil
+	return result.Put, nil
 }
-
 func (rs *replicationStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutObjectTagging")
-	defer span.End()
-
-	err := rs.Next.PutObjectTagging(ctx, bucketName, key, tags, opts)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.PutObjectTagging(ctx, bucketName, key, tags, opts)
-		observeSecondary(i, "PutObjectTagging", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := rs.execute(ctx, "PutObjectTagging", operationPayload{Bucket: bucketName.String(), Key: key.String(), Tags: tags, TagOptions: opts}, nil)
+	return err
 }
-
 func (rs *replicationStorage) DeleteObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.ObjectTaggingOptions) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjectTagging")
-	defer span.End()
-
-	err := rs.Next.DeleteObjectTagging(ctx, bucketName, key, opts)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteObjectTagging(ctx, bucketName, key, opts)
-		observeSecondary(i, "DeleteObjectTagging", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := rs.execute(ctx, "DeleteObjectTagging", operationPayload{Bucket: bucketName.String(), Key: key.String(), TagOptions: opts}, nil)
+	return err
 }
-
 func (rs *replicationStorage) AppendObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, reader io.Reader, checksumInput *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.AppendObject")
-	defer span.End()
-
-	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
+	result, err := rs.execute(ctx, "AppendObject", operationPayload{Bucket: bucketName.String(), Key: key.String(), Checksum: checksumInput, Append: opts}, reader)
 	if err != nil {
 		return nil, err
 	}
-	defer readSeekCloser.Close()
-
-	appendObjectResult, err := rs.Next.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, opts)
-	if err != nil {
-		return nil, err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = readSeekCloser.Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		_, err = secondaryStorage.AppendObject(ctx, bucketName, key, readSeekCloser, checksumInput, opts)
-		observeSecondary(i, "AppendObject", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return appendObjectResult, nil
+	return result.Append, nil
 }
-
 func (rs *replicationStorage) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CopyObject")
-	defer span.End()
-
-	result, err := rs.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
+	result, err := rs.execute(ctx, "CopyObject", operationPayload{Bucket: dstBucket.String(), Key: dstKey.String(), SourceBucket: srcBucket.String(), SourceKey: srcKey.String(), Copy: opts}, nil)
 	if err != nil {
 		return nil, err
 	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = secondaryStorage.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
-		observeSecondary(i, "CopyObject", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
+	return result.Copy, nil
 }
-
 func (rs *replicationStorage) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObject")
-	defer span.End()
-
-	result, err := rs.Next.DeleteObject(ctx, bucketName, key, opts)
+	result, err := rs.execute(ctx, "DeleteObject", operationPayload{Bucket: bucketName.String(), Key: key.String(), Delete: opts}, nil)
 	if err != nil {
 		return nil, err
 	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = secondaryStorage.DeleteObject(ctx, bucketName, key, opts)
-		observeSecondary(i, "DeleteObject", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
+	return result.Delete, nil
 }
-
 func (rs *replicationStorage) TransitionObjectStorageClass(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, targetStorageClass string, opts *storage.TransitionObjectStorageClassOptions) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.TransitionObjectStorageClass")
-	defer span.End()
-
-	if err := rs.Next.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		if err := secondaryStorage.TransitionObjectStorageClass(ctx, bucketName, key, targetStorageClass, opts); err != nil {
-			observeSecondary(i, "TransitionObjectStorageClass", err)
-			return err
-		}
-		observeSecondary(i, "TransitionObjectStorageClass", nil)
-	}
-	return nil
+	_, err := rs.execute(ctx, "TransitionObjectStorageClass", operationPayload{Bucket: bucketName.String(), Key: key.String(), StorageClass: targetStorageClass, Transition: opts}, nil)
+	return err
 }
-
-func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteObjects")
-	defer span.End()
-
-	result, err := rs.Next.DeleteObjects(ctx, bucketName, entries)
+func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	result, err := rs.execute(ctx, "CreateMultipartUpload", operationPayload{Bucket: bucketName.String(), Key: key.String(), ContentType: contentType, ChecksumType: checksumType, Multipart: opts}, nil)
 	if err != nil {
 		return nil, err
 	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = secondaryStorage.DeleteObjects(ctx, bucketName, entries)
-		observeSecondary(i, "DeleteObjects", err)
-		if err != nil {
+	return &storage.InitiateMultipartUploadResult{UploadId: storage.MustNewUploadId(result.UploadID)}, nil
+}
+func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
+	result, err := rs.execute(ctx, "UploadPart", operationPayload{Bucket: bucketName.String(), Key: key.String(), UploadID: uploadId.String(), PartNumber: partNumber, Checksum: checksumInput}, reader)
+	if err != nil {
+		return nil, err
+	}
+	return result.Part, nil
+}
+func (rs *replicationStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
+	result, err := rs.execute(ctx, "UploadPartCopy", operationPayload{Bucket: dstBucket.String(), Key: dstKey.String(), SourceBucket: srcBucket.String(), SourceKey: srcKey.String(), UploadID: uploadId.String(), PartNumber: partNumber, PartCopy: opts}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return result.PartCopy, nil
+}
+func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
+	result, err := rs.execute(ctx, "CompleteMultipartUpload", operationPayload{Bucket: bucketName.String(), Key: key.String(), UploadID: uploadId.String(), Checksum: checksumInput, Complete: opts}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return result.Complete, nil
+}
+func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
+	_, err := rs.execute(ctx, "AbortMultipartUpload", operationPayload{Bucket: bucketName.String(), Key: key.String(), UploadID: uploadId.String()}, nil)
+	return err
+}
+func (rs *replicationStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
+	_, err := rs.execute(ctx, "PutBucketWebsiteConfiguration", operationPayload{Bucket: bucketName.String(), Website: config}, nil)
+	return err
+}
+func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	_, err := rs.execute(ctx, "DeleteBucketWebsiteConfiguration", operationPayload{Bucket: bucketName.String()}, nil)
+	return err
+}
+func (rs *replicationStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
+	_, err := rs.execute(ctx, "PutBucketCORSConfiguration", operationPayload{Bucket: bucketName.String(), CORS: config}, nil)
+	return err
+}
+func (rs *replicationStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	_, err := rs.execute(ctx, "DeleteBucketCORSConfiguration", operationPayload{Bucket: bucketName.String()}, nil)
+	return err
+}
+func (rs *replicationStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
+	_, err := rs.execute(ctx, "PutBucketLifecycleConfiguration", operationPayload{Bucket: bucketName.String(), Lifecycle: config}, nil)
+	return err
+}
+func (rs *replicationStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
+	_, err := rs.execute(ctx, "DeleteBucketLifecycleConfiguration", operationPayload{Bucket: bucketName.String()}, nil)
+	return err
+}
+func (rs *replicationStorage) PutObjectLockConfiguration(ctx context.Context, bucket storage.BucketName, config *storage.ObjectLockConfiguration) error {
+	_, err := rs.execute(ctx, "PutObjectLockConfiguration", operationPayload{Bucket: bucket.String(), LockConfiguration: config}, nil)
+	return err
+}
+func (rs *replicationStorage) PutBucketNotificationConfiguration(ctx context.Context, bucket storage.BucketName, config *storage.BucketNotificationConfiguration) error {
+	_, err := rs.execute(ctx, "PutBucketNotificationConfiguration", operationPayload{Bucket: bucket.String(), Notification: config}, nil)
+	return err
+}
+
+func (rs *replicationStorage) PutObjectRetention(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, retention *storage.ObjectRetention, opts *storage.ObjectLockOptions) error {
+	_, err := rs.execute(ctx, "PutObjectRetention", operationPayload{Bucket: bucket.String(), Key: key.String(), Retention: retention, LockOptions: opts}, nil)
+	return err
+}
+func (rs *replicationStorage) PutObjectLegalHold(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, status storage.LegalHoldStatus, opts *storage.ObjectLockOptions) error {
+	_, err := rs.execute(ctx, "PutObjectLegalHold", operationPayload{Bucket: bucket.String(), Key: key.String(), Hold: status, LockOptions: opts}, nil)
+	return err
+}
+func (rs *replicationStorage) DeleteObjects(ctx context.Context, bucket storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
+	result := &storage.DeleteObjectsResult{}
+	for _, entry := range entries {
+		deleted, err := rs.DeleteObject(ctx, bucket, entry.Key, &storage.DeleteObjectOptions{VersionID: entry.VersionID, IfMatchETag: entry.IfMatchETag, BypassGovernanceRetention: entry.BypassGovernanceRetention})
+		if errors.Is(err, storage.ErrNoSuchBucket) {
 			return nil, err
 		}
+		row := storage.DeleteObjectsEntry{Key: entry.Key, VersionID: entry.VersionID}
+		if err != nil {
+			row.ErrCode = "InternalError"
+			row.ErrMsg = err.Error()
+			if errors.Is(err, storage.ErrObjectLockAccessDenied) {
+				row.ErrCode = "AccessDenied"
+			}
+			if errors.Is(err, storage.ErrPreconditionFailed) {
+				row.ErrCode = "PreconditionFailed"
+			}
+		} else {
+			row.Deleted = true
+			row.DeleteMarker = &deleted.IsDeleteMarker
+			if deleted.IsDeleteMarker && entry.VersionID == nil {
+				row.DeleteMarkerVersionID = deleted.VersionID
+			}
+		}
+		result.Entries = append(result.Entries, row)
 	}
 	return result, nil
-}
-
-func (rs *replicationStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CreateMultipartUpload")
-	defer span.End()
-
-	primaryResult, err := rs.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
-	if err != nil {
-		return nil, err
-	}
-	secondaryUploadIDs := make([]storage.UploadId, 0, len(rs.secondaryStorages))
-	for i, secondaryStorage := range rs.secondaryStorages {
-		secondaryResult, err := secondaryStorage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
-		observeSecondary(i, "CreateMultipartUpload", err)
-		if err != nil {
-			return nil, err
-		}
-		secondaryUploadIDs = append(secondaryUploadIDs, secondaryResult.UploadId)
-	}
-
-	rs.mapMutex.Lock()
-	rs.primaryUploadIdToSecondaryUploadIds[primaryResult.UploadId] = secondaryUploadIDs
-	rs.mapMutex.Unlock()
-
-	return primaryResult, nil
-}
-
-func (rs *replicationStorage) UploadPart(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, partNumber int32, reader io.Reader, checksumInput *storage.ChecksumInput) (*storage.UploadPartResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPart")
-	defer span.End()
-
-	readSeekCloser, err := ioutils.NewSmartCachedReadSeekCloser(reader, maxMemoryCacheSize)
-	if err != nil {
-		return nil, err
-	}
-	defer readSeekCloser.Close()
-
-	uploadPartResult, err := rs.Next.UploadPart(ctx, bucketName, key, uploadId, partNumber, readSeekCloser, checksumInput)
-	if err != nil {
-		return nil, err
-	}
-
-	rs.mapMutex.Lock()
-	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
-	rs.mapMutex.Unlock()
-
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = readSeekCloser.Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		_, err = secondaryStorage.UploadPart(ctx, bucketName, key, secondaryUploadIds[i], partNumber, readSeekCloser, checksumInput)
-		observeSecondary(i, "UploadPart", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return uploadPartResult, nil
-}
-
-func (rs *replicationStorage) UploadPartCopy(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, uploadId storage.UploadId, partNumber int32, opts *storage.UploadPartCopyOptions) (*storage.UploadPartCopyResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.UploadPartCopy")
-	defer span.End()
-
-	uploadPartCopyResult, err := rs.Next.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, uploadId, partNumber, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	rs.mapMutex.Lock()
-	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
-	rs.mapMutex.Unlock()
-
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err = secondaryStorage.UploadPartCopy(ctx, srcBucket, srcKey, dstBucket, dstKey, secondaryUploadIds[i], partNumber, opts)
-		observeSecondary(i, "UploadPartCopy", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return uploadPartCopyResult, nil
-}
-
-func completeMultipartUploadPartsOnlyOptions(opts *storage.CompleteMultipartUploadOptions) *storage.CompleteMultipartUploadOptions {
-	if opts == nil || len(opts.Parts) == 0 {
-		return nil
-	}
-	return &storage.CompleteMultipartUploadOptions{
-		Parts: opts.Parts,
-	}
-}
-
-func (rs *replicationStorage) CompleteMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId, checksumInput *storage.ChecksumInput, opts *storage.CompleteMultipartUploadOptions) (*storage.CompleteMultipartUploadResult, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.CompleteMultipartUpload")
-	defer span.End()
-
-	completeMultipartUploadResult, err := rs.Next.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	rs.mapMutex.Lock()
-	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
-	rs.mapMutex.Unlock()
-
-	secondaryOpts := completeMultipartUploadPartsOnlyOptions(opts)
-	for i, secondaryStorage := range rs.secondaryStorages {
-		_, err := secondaryStorage.CompleteMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i], checksumInput, secondaryOpts)
-		observeSecondary(i, "CompleteMultipartUpload", err)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	rs.mapMutex.Lock()
-	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
-	rs.mapMutex.Unlock()
-	return completeMultipartUploadResult, nil
-}
-
-func (rs *replicationStorage) AbortMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, uploadId storage.UploadId) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.AbortMultipartUpload")
-	defer span.End()
-
-	err := rs.Next.AbortMultipartUpload(ctx, bucketName, key, uploadId)
-	if err != nil {
-		return err
-	}
-
-	rs.mapMutex.Lock()
-	secondaryUploadIds := rs.primaryUploadIdToSecondaryUploadIds[uploadId]
-	rs.mapMutex.Unlock()
-
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err := secondaryStorage.AbortMultipartUpload(ctx, bucketName, key, secondaryUploadIds[i])
-		observeSecondary(i, "AbortMultipartUpload", err)
-		if err != nil {
-			return err
-		}
-	}
-
-	rs.mapMutex.Lock()
-	delete(rs.primaryUploadIdToSecondaryUploadIds, uploadId)
-	rs.mapMutex.Unlock()
-	return nil
-}
-
-func (rs *replicationStorage) PutBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.WebsiteConfiguration) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketWebsiteConfiguration")
-	defer span.End()
-
-	err := rs.Next.PutBucketWebsiteConfiguration(ctx, bucketName, config)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.PutBucketWebsiteConfiguration(ctx, bucketName, config)
-		observeSecondary(i, "PutBucketWebsite", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rs *replicationStorage) DeleteBucketWebsiteConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketWebsiteConfiguration")
-	defer span.End()
-
-	err := rs.Next.DeleteBucketWebsiteConfiguration(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteBucketWebsiteConfiguration(ctx, bucketName)
-		observeSecondary(i, "DeleteBucketWebsite", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rs *replicationStorage) GetBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketCORSConfiguration, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketCORSConfiguration")
-	defer span.End()
-
-	return rs.Next.GetBucketCORSConfiguration(ctx, bucketName)
-}
-
-func (rs *replicationStorage) PutBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketCORSConfiguration) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketCORSConfiguration")
-	defer span.End()
-
-	err := rs.Next.PutBucketCORSConfiguration(ctx, bucketName, config)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.PutBucketCORSConfiguration(ctx, bucketName, config)
-		observeSecondary(i, "PutBucketCORS", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rs *replicationStorage) DeleteBucketCORSConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketCORSConfiguration")
-	defer span.End()
-
-	err := rs.Next.DeleteBucketCORSConfiguration(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteBucketCORSConfiguration(ctx, bucketName)
-		observeSecondary(i, "DeleteBucketCORS", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rs *replicationStorage) GetBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.GetBucketLifecycleConfiguration")
-	defer span.End()
-
-	return rs.Next.GetBucketLifecycleConfiguration(ctx, bucketName)
-}
-
-func (rs *replicationStorage) PutBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName, config *storage.BucketLifecycleConfiguration) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.PutBucketLifecycleConfiguration")
-	defer span.End()
-
-	err := rs.Next.PutBucketLifecycleConfiguration(ctx, bucketName, config)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.PutBucketLifecycleConfiguration(ctx, bucketName, config)
-		observeSecondary(i, "PutBucketLifecycle", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (rs *replicationStorage) DeleteBucketLifecycleConfiguration(ctx context.Context, bucketName storage.BucketName) error {
-	ctx, span := rs.tracer.Start(ctx, "ReplicationStorage.DeleteBucketLifecycleConfiguration")
-	defer span.End()
-
-	err := rs.Next.DeleteBucketLifecycleConfiguration(ctx, bucketName)
-	if err != nil {
-		return err
-	}
-	for i, secondaryStorage := range rs.secondaryStorages {
-		err = secondaryStorage.DeleteBucketLifecycleConfiguration(ctx, bucketName)
-		observeSecondary(i, "DeleteBucketLifecycle", err)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }

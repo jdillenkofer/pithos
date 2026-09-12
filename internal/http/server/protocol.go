@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
@@ -270,6 +271,18 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		statusCode = 400
 	case storage.ErrInvalidWriteOffset:
 		statusCode = 400
+	case storage.ErrInvalidObjectLockConfiguration:
+		statusCode = 400
+		errResponse.Code = "InvalidRequest"
+	case storage.ErrObjectLockChecksumRequired:
+		statusCode = 400
+		errResponse.Code = "InvalidRequest"
+	case storage.ErrObjectLockConfigurationNotFound:
+		statusCode = 404
+	case storage.ErrObjectLockAccessDenied:
+		statusCode = 403
+	case storage.ErrObjectLockMethodNotAllowed:
+		statusCode = 405
 	case storage.ErrInvalidStorageClass:
 		statusCode = 400
 	case storage.ErrPreconditionFailed:
@@ -360,6 +373,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 		return true
 	}
 	if !authorized {
+		s.recordAuthorizationDenied(ctx, request)
 		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
 		if !isAuthenticated {
 			w.WriteHeader(401)
@@ -434,6 +448,23 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		Key:               key,
 		HttpRequest:       makeAuthorizationHTTPRequest(r),
 		RequestObjectTags: requestTags,
+	}
+	request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	request.ObjectLockMode = getHeaderAsPtr(r.Header, "x-amz-object-lock-mode")
+	request.ObjectLockRetainUntilDate = getHeaderAsPtr(r.Header, "x-amz-object-lock-retain-until-date")
+	request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
+	request.BypassGovernanceRetentionRequested = r.Header.Get("x-amz-bypass-governance-retention") == "true"
+	if lock, ok := ctx.Value(requestedLockContextKey{}).(storage.ObjectLock); ok {
+		if lock.Retention != nil {
+			mode := string(lock.Retention.Mode)
+			until := lock.Retention.RetainUntilDate.UTC().Format(time.RFC3339Nano)
+			request.ObjectLockMode = &mode
+			request.ObjectLockRetainUntilDate = &until
+		}
+		if lock.LegalHold != nil {
+			hold := string(*lock.LegalHold)
+			request.ObjectLockLegalHold = &hold
+		}
 	}
 	return request, isAuthenticated
 }

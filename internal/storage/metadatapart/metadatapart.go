@@ -251,7 +251,9 @@ func (mbs *metadataPartStorage) Start(ctx context.Context) error {
 		return err
 	}
 
-	mbs.gcTaskHandle = task.Start(mbs.partGC.RunGCLoop)
+	if !lifecycle.IsMaintenance(ctx) {
+		mbs.gcTaskHandle = task.Start(mbs.partGC.RunGCLoop)
+	}
 
 	return nil
 }

@@ -68,6 +68,14 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 		createOpts.StorageClass = storageClass
 	}
 
+	objectLock, stop := s.prepareUploadLock(w, r, bucketName.String(), key.String())
+	if stop {
+		return
+	}
+	if createOpts == nil {
+		createOpts = &storage.CreateMultipartUploadOptions{}
+	}
+	createOpts.ObjectLock = objectLock
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
 	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, createOpts)
 	if err != nil {
@@ -404,6 +412,21 @@ func (s *Server) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	objectLock, stop := s.prepareUploadLock(w, r, bucketName.String(), key.String())
+	if stop {
+		return
+	}
+	if putObjectOptions == nil {
+		putObjectOptions = &storage.PutObjectOptions{}
+	}
+	putObjectOptions.ObjectLock = objectLock
+	if r.Header.Get("Content-MD5") == "" && r.Header.Get("x-amz-sdk-checksum-algorithm") == "" {
+		if objectLock.Retention != nil {
+			handleError(ErrInvalidRequest, w, r)
+			return
+		}
+		ctx = storage.WithChecksumlessPut(ctx)
+	}
 	slog.InfoContext(r.Context(), "Putting object", "bucket", bucketName.String(), "key", key.String())
 	if r.Header.Get(expectHeader) == "100-continue" {
 		w.WriteHeader(100)
@@ -451,8 +474,12 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if shouldReturn {
 		return
 	}
+	objectLock, shouldReturn := s.prepareUploadLock(w, r, bucketName.String(), key.String())
+	if shouldReturn {
+		return
+	}
 
-	var appendObjectOptions *storage.AppendObjectOptions
+	appendObjectOptions := &storage.AppendObjectOptions{ObjectLock: objectLock}
 	if values, present := r.Header[http.CanonicalHeaderKey(writeOffsetBytesHeader)]; present {
 		if len(values) != 1 || values[0] == "" {
 			handleError(ErrInvalidRequest, w, r)
@@ -463,7 +490,7 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 			handleError(ErrInvalidRequest, w, r)
 			return
 		}
-		appendObjectOptions = &storage.AppendObjectOptions{WriteOffset: &writeOffset}
+		appendObjectOptions.WriteOffset = &writeOffset
 	}
 
 	shouldReturn = validateMaxEntitySize(r, w)
@@ -522,6 +549,10 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// PutObjectTagging
+	if query.Has("retention") || query.Has("legal-hold") {
+		s.objectProtectionHandler(w, r)
+		return
+	}
 	if query.Has(taggingQuery) {
 		s.putObjectTaggingHandler(w, r)
 		return

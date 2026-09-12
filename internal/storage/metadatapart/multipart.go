@@ -26,7 +26,7 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
-		metadataOpts = &metadatastore.CreateMultipartUploadOptions{Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
 	}
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {

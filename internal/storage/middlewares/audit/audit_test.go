@@ -24,7 +24,7 @@ type mockStorage struct {
 	storage.Storage
 }
 
-func (m *mockStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (m *mockStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	return nil
 }
 

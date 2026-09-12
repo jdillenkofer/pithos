@@ -46,7 +46,7 @@ func TestCreateSerializerInstantiatorFromJson(t *testing.T) {
 			diContainer, _ := dependencyinjection.NewContainer()
 			inst, err := CreateSerializerInstantiatorFromJson([]byte(tt.json))
 			assert.Nil(t, err)
-			
+
 			s, err := inst.Instantiate(diContainer)
 			assert.Nil(t, err)
 			tt.validate(t, s)

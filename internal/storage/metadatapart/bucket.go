@@ -10,11 +10,11 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
-func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (mbs *metadataPartStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateBucket")
 	defer span.End()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return mbs.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName)
+		return mbs.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucketName, options...)
 	})
 }
 

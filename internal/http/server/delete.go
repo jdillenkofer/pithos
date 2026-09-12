@@ -42,6 +42,14 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if ifMatch != nil || versionID != nil {
 		deleteOpts = &storage.DeleteObjectOptions{IfMatchETag: ifMatch, VersionID: versionID}
 	}
+	bypass, stop := s.authorizeGovernanceBypass(ctx, bucketName.String(), key.String(), w, r)
+	if stop {
+		return
+	}
+	if deleteOpts == nil {
+		deleteOpts = &storage.DeleteObjectOptions{}
+	}
+	deleteOpts.BypassGovernanceRetention = bypass
 	deleteResult, err := s.storage.DeleteObject(ctx, bucketName, key, deleteOpts)
 	if err != nil {
 		handleError(err, w, r)
@@ -175,19 +183,39 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		validEntries = append(validEntries, validEntry{rawKey: obj.Key, key: key, versionID: obj.VersionId, etag: obj.ETag})
 	}
 
+	bypass, err := requestedBypass(r)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	// Second pass: authorize valid entries and collect entries to bulk-delete.
 	authorizedEntries := make([]validEntry, 0, len(validEntries))
 	for _, ve := range validEntries {
-		allowed, err := s.authorizeDeleteObjectEntry(ctx, baseRequest, ve.key.String())
+		entryRequest := *baseRequest
+		entryRequest.VersionID = ve.versionID
+		entryKey := ve.key.String()
+		entryRequest.Key = &entryKey
+		s.bindExistingObjectTagsResolver(&entryRequest, entryRequest.Bucket, &entryKey, ve.versionID)
+		allowed, err := s.authorizeDeleteObjectEntry(ctx, &entryRequest, entryKey)
+		if err == nil && allowed && ve.versionID != nil {
+			entryRequest.Operation = authorization.OperationDeleteObjectVersion
+			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+		}
+		if err == nil && allowed && bypass {
+			entryRequest.Operation = authorization.OperationBypassGovernanceRetention
+			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+		}
 		if err != nil {
 			handleError(err, w, r)
 			return
 		}
 		if !allowed {
+			s.recordAuthorizationDenied(ctx, &entryRequest)
 			result.Errors = append(result.Errors, &DeleteErrorEntry{
-				Key:     ve.rawKey,
-				Code:    "AccessDenied",
-				Message: "Access Denied",
+				Key:       ve.rawKey,
+				VersionId: ve.versionID,
+				Code:      "AccessDenied",
+				Message:   "Access Denied",
 			})
 			continue
 		}
@@ -198,7 +226,7 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if len(authorizedEntries) > 0 {
 		inputEntries := make([]storage.DeleteObjectsInputEntry, len(authorizedEntries))
 		for i, ve := range authorizedEntries {
-			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, VersionID: ve.versionID, IfMatchETag: ve.etag}
+			inputEntries[i] = storage.DeleteObjectsInputEntry{Key: ve.key, VersionID: ve.versionID, IfMatchETag: ve.etag, BypassGovernanceRetention: bypass}
 		}
 
 		slog.InfoContext(r.Context(), "DeleteObjects: deleting objects", "bucket", bucketName.String(), "count", len(inputEntries))

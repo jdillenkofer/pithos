@@ -94,6 +94,22 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
+	responseSize := object.Size
+	if raw := r.URL.Query().Get("partNumber"); raw != "" {
+		number, err := strconv.Atoi(raw)
+		sizes := object.PartSizes
+		if len(sizes) == 0 {
+			sizes = []int64{object.Size}
+		}
+		if err != nil || number < 1 || number > len(sizes) || number > 10000 {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		responseSize = sizes[number-1]
+		if strings.Contains(object.ETag, "-") {
+			w.Header().Set("x-amz-mp-parts-count", strconv.Itoa(len(sizes)))
+		}
+	}
 	responseHeaders := w.Header()
 	setETagHeaderFromObject(responseHeaders, object)
 	setChecksumHeadersFromObject(responseHeaders, object)
@@ -103,13 +119,14 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
 	setStorageClassHeaderFromObject(responseHeaders, object)
+	s.setObjectLockHeaders(w, r, object)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
 	if object.ContentType != nil {
 		responseHeaders.Set(contentTypeHeader, *object.ContentType)
 	}
-	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", object.Size))
+	responseHeaders.Set(contentLengthHeader, fmt.Sprintf("%v", responseSize))
 	w.WriteHeader(200)
 }
 
@@ -205,6 +222,10 @@ func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Requ
 	query := r.URL.Query()
 	if query.Has(uploadIdQuery) {
 		s.listPartsHandler(w, r)
+		return
+	}
+	if query.Has("retention") || query.Has("legal-hold") {
+		s.objectProtectionHandler(w, r)
 		return
 	}
 	if query.Has(taggingQuery) {
@@ -482,6 +503,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
 	setStorageClassHeaderFromObject(responseHeaders, object)
+	s.setObjectLockHeaders(w, r, object)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()

@@ -281,9 +281,9 @@ func (psm *prometheusStorageMiddleware) Stop(ctx context.Context) error {
 	return psm.Next.Stop(ctx)
 }
 
-func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (psm *prometheusStorageMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	return psm.run(ctx, "PrometheusStorageMiddleware.CreateBucket", "CreateBucket", func(ctx context.Context) error {
-		return psm.Next.CreateBucket(ctx, bucketName)
+		return psm.Next.CreateBucket(ctx, bucketName, options...)
 	})
 }
 

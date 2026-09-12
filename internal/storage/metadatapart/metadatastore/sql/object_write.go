@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
@@ -13,14 +14,23 @@ import (
 func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, obj *metadatastore.Object, opts *metadatastore.PutObjectOptions) (*metadatastore.PartMutationResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.PutObject")
 	defer span.End()
+
 	result := metadatastore.PartMutationResult{}
 
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
 	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	effectiveLock, err := metadatastore.EffectiveObjectLock(lockConfigurationFromBucket(bucketEntity), obj.ObjectLock, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if metadatastore.IsChecksumlessPut(ctx) && effectiveLock.Retention != nil {
+		return nil, metadatastore.ErrObjectLockChecksumRequired
 	}
 
 	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
@@ -118,6 +128,9 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		}
 
 		if nullVersionEntity != nil {
+			if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, false); err != nil {
+				return nil, err
+			}
 			objectEntity.Id = nullVersionEntity.Id
 			objectEntity.OptimisticLockVersion = nullVersionEntity.OptimisticLockVersion
 			if err := sms.objectRepository.SaveObject(ctx, tx, &objectEntity); err != nil {
@@ -141,12 +154,19 @@ func (sms *sqlMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, bucketNa
 		}
 	}
 
+	if effectiveLock.Retention != nil || effectiveLock.LegalHold != nil {
+		if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, effectiveLock); err != nil {
+			return nil, err
+		}
+	}
+	obj.ObjectLock = effectiveLock
 	objectId := objectEntity.Id
 	if err = sms.savePartRows(ctx, tx, *objectId, obj.Parts, 0); err != nil {
 		return nil, err
 	}
 
 	obj.VersionID = objectEntity.VersionID
+	metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{VersionID: obj.VersionID, Effective: effectiveLock})
 
 	// PutObject replaces the object entirely, so its tag set and user metadata
 	// are replaced with the values supplied on the new object (empty when none
@@ -165,7 +185,7 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AppendObject")
 	defer span.End()
 
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +195,9 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 
 	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
 	if versioningEnabled {
+		if opts != nil {
+			obj.ObjectLock = opts.ObjectLock
+		}
 		return sms.PutObject(ctx, tx, bucketName, obj, nil)
 	}
 
@@ -185,6 +208,9 @@ func (sms *sqlMetadataStore) AppendObject(ctx context.Context, tx *sql.Tx, bucke
 	}
 
 	if oldObjectEntity != nil {
+		if err := sms.checkVersionDeletion(ctx, tx, oldObjectEntity, bucketEntity.ObjectLockEnabled, false); err != nil {
+			return nil, err
+		}
 		existingParts, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *oldObjectEntity.Id)
 		if err != nil {
 			return nil, err

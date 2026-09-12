@@ -57,6 +57,9 @@ type BucketVersioningConfiguration struct {
 type ObjectMetadata = metadatastore.ObjectMetadata
 
 type Object struct {
+	// PartSizes preserves multipart boundaries for synchronous replication.
+	PartSizes         []int64
+	ObjectLock        ObjectLock
 	Key               ObjectKey
 	ContentType       *string
 	LastModified      time.Time
@@ -109,6 +112,7 @@ type PutObjectResult struct {
 }
 
 type PutObjectOptions struct {
+	ObjectLock      ObjectLock
 	IfNoneMatchStar bool
 	IfMatchETag     *string
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It
@@ -126,6 +130,7 @@ type PutObjectOptions struct {
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
+	ObjectLock ObjectLock
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string
@@ -140,6 +145,7 @@ type CreateMultipartUploadOptions struct {
 
 // AppendObjectOptions holds options for an AppendObject operation.
 type AppendObjectOptions struct {
+	ObjectLock ObjectLock
 	// WriteOffset, when non-nil, specifies the expected current size of the
 	// object in bytes. The append is only performed if the actual object size
 	// matches this value; otherwise ErrInvalidWriteOffset is returned.
@@ -161,7 +167,8 @@ const ChecksumTypeFullObject = metadatastore.ChecksumTypeFullObject
 const ChecksumTypeComposite = metadatastore.ChecksumTypeComposite
 
 type DeleteObjectOptions struct {
-	VersionID *string
+	BypassGovernanceRetention bool
+	VersionID                 *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
 	// value before deleting; otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
@@ -222,6 +229,7 @@ type CopySourceConditions struct {
 // CopyObjectOptions holds options for a server-side CopyObject. A nil pointer is
 // equivalent to a plain COPY of the whole object with no preconditions.
 type CopyObjectOptions struct {
+	ObjectLock ObjectLock
 	// SourceVersionID, when non-nil, copies this exact source object version.
 	SourceVersionID *string
 	// ReplaceMetadata corresponds to x-amz-metadata-directive: REPLACE. When true,
@@ -370,9 +378,10 @@ type DeleteObjectsResult struct {
 
 // DeleteObjectsInputEntry represents a single entry in a bulk DeleteObjects request, optionally with a conditional ETag.
 type DeleteObjectsInputEntry struct {
-	Key         ObjectKey
-	VersionID   *string
-	IfMatchETag *string
+	BypassGovernanceRetention bool
+	Key                       ObjectKey
+	VersionID                 *string
+	IfMatchETag               *string
 }
 
 type ObjectVersion struct {
@@ -505,7 +514,7 @@ type ListPartsOptions struct {
 
 // BucketManager manages bucket operations
 type BucketManager interface {
-	CreateBucket(ctx context.Context, bucketName BucketName) error
+	CreateBucket(ctx context.Context, bucketName BucketName, options ...CreateBucketOptions) error
 	DeleteBucket(ctx context.Context, bucketName BucketName) error
 	ListBuckets(ctx context.Context) ([]Bucket, error)
 	HeadBucket(ctx context.Context, bucketName BucketName) (*Bucket, error)
@@ -648,6 +657,7 @@ type MultipartUploadManager interface {
 
 // Storage is a composite interface that combines all storage operations
 type Storage interface {
+	ObjectLockManager
 	lifecycle.Manager
 	BucketManager
 	BucketWebsiteManager

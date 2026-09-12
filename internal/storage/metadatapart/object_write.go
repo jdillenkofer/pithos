@@ -77,6 +77,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 			},
 		}
 		if opts != nil {
+			object.ObjectLock = opts.ObjectLock
 			object.Tags = opts.Tags
 			if opts.Metadata != nil {
 				object.Metadata = *opts.Metadata
@@ -268,6 +269,9 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 
 		metaOpts := &metadatastore.AppendObjectOptions{}
+		if opts != nil {
+			metaOpts.ObjectLock = opts.ObjectLock
+		}
 		metadataResult, err := mbs.metadataStore.AppendObject(ctx, tx.SqlTx(), bucketName, updatedObject, metaOpts)
 		if err != nil {
 			// The sql layer uses a CAS (DELETE WHERE id=X AND etag=Y) to detect a

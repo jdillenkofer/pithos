@@ -444,6 +444,9 @@ func (os *outboxStorage) Start(ctx context.Context) error {
 	if err := os.innerStorage.Start(ctx); err != nil {
 		return err
 	}
+	if lifecycle.IsDryRun(ctx) {
+		return nil
+	}
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	os.workerCancel = cancel
 	os.workerDone = make(chan struct{})
@@ -506,9 +509,19 @@ func (os *outboxStorage) storeStorageOutboxEntry(ctx context.Context, tx databas
 	return entry.Id, nil
 }
 
-func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
+func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.CreateBucket")
 	defer span.End()
+
+	if len(options) > 1 {
+		return storage.ErrInvalidObjectLockConfiguration
+	}
+	if len(options) == 1 && options[0].ObjectLockEnabled {
+		if err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName); err != nil {
+			return err
+		}
+		return os.innerStorage.CreateBucket(ctx, bucketName, options...)
+	}
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
@@ -519,6 +532,19 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 func (os *outboxStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
 	ctx, span := os.tracer.Start(ctx, "OutboxStorage.DeleteBucket")
 	defer span.End()
+
+	// Versioned buckets (including every Object Lock bucket) require an
+	// immediate emptiness check and a confirmed deletion result.
+	versioned, err := os.bucketHasVersioningStatus(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	if versioned {
+		if err := os.waitForAllOutboxEntriesOfBucket(ctx, bucketName); err != nil {
+			return err
+		}
+		return os.innerStorage.DeleteBucket(ctx, bucketName)
+	}
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketStorageOperation, bucketName, "", nil, nil)
@@ -546,6 +572,9 @@ func (os *outboxStorage) waitUntilOutboxEntriesDrained(ctx context.Context, find
 		return nil
 	}
 
+	if lifecycle.IsDryRun(ctx) {
+		return errors.New("dry run requires drained storage outbox")
+	}
 	lastId := lastStorageOutboxEntry.Id
 
 	for {
@@ -728,7 +757,7 @@ func (os *outboxStorage) PutObject(ctx context.Context, bucketName storage.Bucke
 	// object, so such puts bypass the outbox: drain the key's pending entries
 	// and write through to the inner storage instead. Tags, metadata and
 	// storage class are persisted with the entry and applied on replay.
-	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil)
+	putMustBeSynchronous := opts != nil && (opts.IfNoneMatchStar || opts.IfMatchETag != nil || opts.ObjectLock.Retention != nil || opts.ObjectLock.LegalHold != nil)
 	if !putMustBeSynchronous {
 		// Versioning-enabled buckets must write through: an outboxed put cannot
 		// return the new version id and replay would collapse version ordering.
@@ -863,7 +892,7 @@ func (os *outboxStorage) DeleteObject(ctx context.Context, bucketName storage.Bu
 
 	// ETag-conditional deletes must execute synchronously so the precondition
 	// is evaluated against the current object.
-	deleteMustBeSynchronous := opts != nil && opts.IfMatchETag != nil
+	deleteMustBeSynchronous := opts != nil && (opts.IfMatchETag != nil || opts.BypassGovernanceRetention)
 	if !deleteMustBeSynchronous {
 		// Deletes on versioning-enabled or -suspended buckets create a delete
 		// marker whose version id must be returned to the caller; an outboxed

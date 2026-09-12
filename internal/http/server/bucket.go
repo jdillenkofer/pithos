@@ -72,6 +72,10 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has("object-lock") {
+		s.objectLockConfigurationHandler(w, r)
+		return
+	}
 	if query.Has(versioningQuery) {
 		s.getBucketVersioningHandler(w, r)
 		return
@@ -483,6 +487,10 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if query.Has("object-lock") {
+		s.objectLockConfigurationHandler(w, r)
+		return
+	}
 	if query.Has(versioningQuery) {
 		s.putBucketVersioningHandler(w, r)
 		return
@@ -522,7 +530,15 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.InfoContext(r.Context(), "Creating bucket", "bucket", bucketName.String())
-	err = s.storage.CreateBucket(ctx, bucketName)
+	lockEnabled := false
+	if value := getHeaderAsPtr(r.Header, "x-amz-bucket-object-lock-enabled"); value != nil {
+		if *value != "true" && *value != "false" {
+			handleError(ErrInvalidArgument, w, r)
+			return
+		}
+		lockEnabled = *value == "true"
+	}
+	err = s.storage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{ObjectLockEnabled: lockEnabled})
 	if err != nil {
 		handleError(err, w, r)
 		return

@@ -136,3 +136,27 @@ For maximum security on macOS, use `sappnd`. This prevents the Pithos process fr
 To disable: `chflags nouappnd ./data/audit.log` or `sudo chflags nosappnd ./data/audit.log`
 
 With these attributes set, Pithos can still read the file to retrieve the last hash for the chain, but it cannot delete or modify previous entries.
+
+## Object Lock records (format 4)
+
+Format 4 adds `resource.version_id` and `object_lock`. The latter contains
+`requested` and `effective` values (`enabled`, `mode`, `retain_until_date`,
+`legal_hold`, `days`, `years`), plus `bypass_requested`, `bypass_authorized` and
+`bypass_used`. A supplied bypass can be authorized without being needed, such as
+after retention has expired. Multi-Delete emits records per target version;
+permission denials at the HTTP layer also reach the audit recorder.
+
+All new fields, as well as copy source bucket/key, are included in the format-4
+hash in binary, JSON and text serialization. Verification of formats 1–3 retains
+the historical hash rules. Dump a log for inspection with the existing command:
+
+```sh
+pithos audit-log dump -input-file ./data/audit.log \
+  -ed25519-public-key "$ED25519_PUBLIC_KEY" \
+  -ml-dsa-87-public-key "$ML_DSA_PUBLIC_KEY" \
+  -output-format json -output-file audit.json
+```
+
+Inspect the target version and all three bypass flags together when reviewing
+protected deletion attempts. Requested values describe the client's intent;
+effective values describe the version observed by the storage transaction.

@@ -11,9 +11,10 @@ import (
 func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, opts *metadatastore.DeleteObjectOptions) (*metadatastore.DeleteObjectResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteObject")
 	defer span.End()
+
 	unreferencedParts := []metadatastore.Part{}
 
-	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByNameForShare(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
@@ -48,6 +49,9 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 			}
 		}
 
+		if err := sms.checkVersionDeletion(ctx, tx, versionEntity, bucketEntity.ObjectLockEnabled, opts.BypassGovernanceRetention); err != nil {
+			return nil, err
+		}
 		if !versionEntity.IsDeleteMarker {
 			removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *versionEntity.Id)
 			err = removeErr
@@ -107,6 +111,9 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 				return nil, err
 			}
 			if nullVersionEntity != nil {
+				if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, opts != nil && opts.BypassGovernanceRetention); err != nil {
+					return nil, err
+				}
 				removed, removeErr := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
 				if removeErr != nil {
 					return nil, removeErr
@@ -149,10 +156,14 @@ func (sms *sqlMetadataStore) DeleteObject(ctx context.Context, tx *sql.Tx, bucke
 		if err := sms.objectRepository.SaveObject(ctx, tx, &deleteMarker); err != nil {
 			return nil, err
 		}
+		metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{Key: key.String(), VersionID: deleteMarker.VersionID})
 		return &metadatastore.DeleteObjectResult{VersionID: deleteMarker.VersionID, IsDeleteMarker: true, UnreferencedParts: unreferencedParts}, nil
 	}
 
 	if currentEntity != nil {
+		if err := sms.checkVersionDeletion(ctx, tx, currentEntity, bucketEntity.ObjectLockEnabled, opts != nil && opts.BypassGovernanceRetention); err != nil {
+			return nil, err
+		}
 		if opts != nil && opts.IfMatchETag != nil {
 			lockedObjectEntity := *currentEntity
 			locked, lockErr := sms.objectRepository.UpdateObjectByIdAndOptimisticLockVersion(ctx, tx, &lockedObjectEntity, currentEntity.OptimisticLockVersion)

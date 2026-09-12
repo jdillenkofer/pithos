@@ -142,6 +142,19 @@ Versioned requests use distinct Lua authorizer operation names:
 
 See [Configuration](configuration.md#available-operations) for the complete operation list.
 
+## Object Lock
+
+`GET`/`PUT /<bucket>?object-lock` configure Object Lock; `GET`/`PUT
+`/<bucket>/<key>?retention` and `?legal-hold` operate on the selected `versionId`.
+CreateBucket accepts `x-amz-bucket-object-lock-enabled: true`. Enabling Object
+Lock also enables versioning permanently. Protected version deletes return
+`AccessDenied`; Multi-Delete reports this per target. GET/HEAD return authorized
+lock metadata. HEAD with `partNumber` reports the selected part's size and, for
+multipart objects, `x-amz-mp-parts-count`.
+
+See [Object Lock](object-lock.md) for XML/header semantics, checksum requirements,
+Lua permissions, governance bypass, multipart behavior and replication.
+
 ## Append routing
 
 A PUT carrying `x-amz-write-offset-bytes` selects AppendObject, including offset

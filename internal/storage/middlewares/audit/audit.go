@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"time"
 
@@ -40,6 +41,9 @@ func (m *AuditLogMiddleware) WithTransaction(ctx context.Context, opts *sql.TxOp
 }
 
 type auditResource struct {
+	versionID    *string
+	objectLock   *auditlog.ObjectLockDetails
+	denied       bool
 	bucket       string
 	key          string
 	uploadID     string
@@ -51,6 +55,19 @@ type auditResource struct {
 func (m *AuditLogMiddleware) run(ctx context.Context, op auditlog.Operation, resource auditResource, fn func(context.Context) error) error {
 	start := time.Now()
 	m.log(ctx, op, auditlog.PhaseStart, resource, nil, 0, 0)
+	ctx = storage.WithObjectLockObserver(ctx, func(observation storage.ObjectLockObservation) {
+		if observation.VersionID != nil {
+			resource.versionID = observation.VersionID
+		}
+		if resource.objectLock == nil {
+			resource.objectLock = &auditlog.ObjectLockDetails{}
+		}
+		resource.objectLock.Effective = lockValues(observation.Effective)
+		if observation.Configuration != nil {
+			resource.objectLock.Effective = configurationValues(observation.Configuration)
+		}
+		resource.objectLock.BypassUsed = observation.BypassUsed
+	})
 	err := fn(ctx)
 	m.log(ctx, op, auditlog.PhaseComplete, resource, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return err
@@ -150,21 +167,34 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 
 	outcome := auditlog.OutcomePending
 	if phase == auditlog.PhaseComplete {
-		if err != nil {
+		if resource.denied || errors.Is(err, storage.ErrObjectLockAccessDenied) {
+			outcome = auditlog.OutcomeDenied
+		} else if err != nil {
 			outcome = auditlog.OutcomeError
 		} else {
 			outcome = auditlog.OutcomeSuccess
 		}
 	}
 
+	versionID := ""
+	if resource.versionID != nil {
+		versionID = *resource.versionID
+	}
+	var lock *auditlog.ObjectLockDetails
+	if resource.objectLock != nil {
+		copy := *resource.objectLock
+		lock = &copy
+	}
 	entry := &auditlog.Entry{
 		Version:   auditlog.CurrentVersion,
 		Timestamp: time.Now(),
 		Type:      auditlog.EntryTypeLog,
 		Details: &auditlog.LogDetails{
-			Operation: op,
-			Phase:     phase,
+			ObjectLock: lock,
+			Operation:  op,
+			Phase:      phase,
 			Resource: auditlog.ResourceDetails{
+				VersionID:    versionID,
 				Bucket:       resource.bucket,
 				Key:          resource.key,
 				UploadID:     resource.uploadID,
@@ -244,9 +274,13 @@ func (m *AuditLogMiddleware) Stop(ctx context.Context) error {
 	return m.Next.Stop(ctx)
 }
 
-func (m *AuditLogMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName) error {
-	return m.run(ctx, auditlog.OpCreateBucket, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
-		return m.Next.CreateBucket(ctx, bucketName)
+func (m *AuditLogMiddleware) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
+	details := &auditlog.ObjectLockDetails{}
+	if len(options) == 1 && options[0].ObjectLockEnabled {
+		details.Requested.Enabled = "Enabled"
+	}
+	return m.run(ctx, auditlog.OpCreateBucket, auditResource{objectLock: details, bucket: bucketName.String()}, func(ctx context.Context) error {
+		return m.Next.CreateBucket(ctx, bucketName, options...)
 	})
 }
 
@@ -379,27 +413,44 @@ func (m *AuditLogMiddleware) ListObjects(ctx context.Context, bucketName storage
 }
 
 func (m *AuditLogMiddleware) HeadObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.HeadObjectOptions) (*storage.Object, error) {
+	resource := auditResource{bucket: bucketName.String(), key: key.String()}
+	if opts != nil {
+		resource.versionID = opts.VersionID
+	}
 	var result *storage.Object
-	err := m.run(ctx, auditlog.OpHeadObject, auditResource{bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
+	err := m.run(ctx, auditlog.OpHeadObject, resource, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.HeadObject(ctx, bucketName, key, opts)
+		if err == nil && result != nil {
+			storage.ObserveObjectLock(ctx, storage.ObjectLockObservation{Key: key.String(), VersionID: result.VersionID, Effective: result.ObjectLock})
+		}
 		return err
 	})
 	return result, err
 }
-
 func (m *AuditLogMiddleware) GetObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, ranges []storage.ByteRange, opts *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
 	start := time.Now()
 	resource := auditResource{bucket: bucketName.String(), key: key.String()}
+	if opts != nil {
+		resource.versionID = opts.VersionID
+	}
 	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseStart, resource, nil, 0, 0)
 	obj, readers, err := m.Next.GetObject(ctx, bucketName, key, ranges, opts)
+	if err == nil && obj != nil {
+		resource.versionID = obj.VersionID
+		resource.objectLock = &auditlog.ObjectLockDetails{Effective: lockValues(obj.ObjectLock)}
+	}
 	m.log(ctx, auditlog.OpGetObject, auditlog.PhaseComplete, resource, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return obj, readers, err
 }
 
 func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, data io.Reader, checksumInput *storage.ChecksumInput, opts *storage.PutObjectOptions) (*storage.PutObjectResult, error) {
+	requested := storage.ObjectLock{}
+	if opts != nil {
+		requested = opts.ObjectLock
+	}
 	var result *storage.PutObjectResult
-	err := m.run(ctx, auditlog.OpPutObject, auditResource{bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
+	err := m.run(ctx, auditlog.OpPutObject, auditResource{objectLock: lockDetails(requested, false), bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.PutObject(ctx, bucketName, key, contentType, data, checksumInput, opts)
 		return err
@@ -408,8 +459,12 @@ func (m *AuditLogMiddleware) PutObject(ctx context.Context, bucketName storage.B
 }
 
 func (m *AuditLogMiddleware) CopyObject(ctx context.Context, srcBucket storage.BucketName, srcKey storage.ObjectKey, dstBucket storage.BucketName, dstKey storage.ObjectKey, opts *storage.CopyObjectOptions) (*storage.CopyObjectResult, error) {
+	requested := storage.ObjectLock{}
+	if opts != nil {
+		requested = opts.ObjectLock
+	}
 	var result *storage.CopyObjectResult
-	err := m.run(ctx, auditlog.OpCopyObject, auditResource{bucket: dstBucket.String(), key: dstKey.String(), sourceBucket: srcBucket.String(), sourceKey: srcKey.String()}, func(ctx context.Context) error {
+	err := m.run(ctx, auditlog.OpCopyObject, auditResource{objectLock: lockDetails(requested, false), bucket: dstBucket.String(), key: dstKey.String(), sourceBucket: srcBucket.String(), sourceKey: srcKey.String()}, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.CopyObject(ctx, srcBucket, srcKey, dstBucket, dstKey, opts)
 		return err
@@ -428,8 +483,14 @@ func (m *AuditLogMiddleware) AppendObject(ctx context.Context, bucketName storag
 }
 
 func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, opts *storage.DeleteObjectOptions) (*storage.DeleteObjectResult, error) {
+	var versionID *string
+	bypass := false
+	if opts != nil {
+		versionID = opts.VersionID
+		bypass = opts.BypassGovernanceRetention
+	}
 	var result *storage.DeleteObjectResult
-	err := m.run(ctx, auditlog.OpDeleteObject, auditResource{bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
+	err := m.run(ctx, auditlog.OpDeleteObject, auditResource{versionID: versionID, objectLock: lockDetails(storage.ObjectLock{}, bypass), bucket: bucketName.String(), key: key.String()}, func(ctx context.Context) error {
 		var err error
 		result, err = m.Next.DeleteObject(ctx, bucketName, key, opts)
 		return err
@@ -438,24 +499,90 @@ func (m *AuditLogMiddleware) DeleteObject(ctx context.Context, bucketName storag
 }
 
 func (m *AuditLogMiddleware) DeleteObjects(ctx context.Context, bucketName storage.BucketName, entries []storage.DeleteObjectsInputEntry) (*storage.DeleteObjectsResult, error) {
-	var result *storage.DeleteObjectsResult
-	err := m.run(ctx, auditlog.OpDeleteObjects, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
-		var err error
-		result, err = m.Next.DeleteObjects(ctx, bucketName, entries)
-		return err
-	})
+	start := time.Now()
+	resources := make([]auditResource, len(entries))
+	for i, entry := range entries {
+		resources[i] = auditResource{bucket: bucketName.String(), key: entry.Key.String(), versionID: entry.VersionID, objectLock: lockDetails(storage.ObjectLock{}, entry.BypassGovernanceRetention)}
+		m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseStart, resources[i], nil, 0, 0)
+	}
+	var observations []storage.ObjectLockObservation
+	observedCtx := storage.WithObjectLockObserver(ctx, func(o storage.ObjectLockObservation) { observations = append(observations, o) })
+	result, err := m.Next.DeleteObjects(observedCtx, bucketName, entries)
+	usedResults := make(map[int]bool)
+	for i, entry := range entries {
+		resource := resources[i]
+		for j, observation := range observations {
+			if observation.Key != entry.Key.String() {
+				continue
+			}
+			if entry.VersionID != nil && (observation.VersionID == nil || *entry.VersionID != *observation.VersionID) {
+				continue
+			}
+			resource.objectLock.Effective = lockValues(observation.Effective)
+			resource.objectLock.BypassUsed = observation.BypassUsed
+			resource.versionID = observation.VersionID
+			observations = append(observations[:j], observations[j+1:]...)
+			break
+		}
+		entryErr := err
+		status := statusCodeFromError(err)
+		if err == nil && result != nil {
+			var outcome *storage.DeleteObjectsEntry
+			for j := range result.Entries {
+				candidate := &result.Entries[j]
+				if usedResults[j] || candidate.Key.String() != entry.Key.String() {
+					continue
+				}
+				if entry.VersionID != nil && (candidate.VersionID == nil || *candidate.VersionID != *entry.VersionID) {
+					continue
+				}
+				if entry.VersionID == nil && candidate.VersionID != nil && candidate.DeleteMarkerVersionID == nil {
+					continue
+				}
+				outcome = candidate
+				usedResults[j] = true
+				break
+			}
+			if outcome == nil {
+				m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseComplete, resource, errors.New("missing per-version deletion result"), 500, time.Since(start).Milliseconds())
+				continue
+			}
+			if outcome.VersionID != nil {
+				resource.versionID = outcome.VersionID
+			}
+			if outcome.DeleteMarkerVersionID != nil {
+				resource.versionID = outcome.DeleteMarkerVersionID
+			}
+			if !outcome.Deleted {
+				entryErr = errors.New(outcome.ErrCode + ": " + outcome.ErrMsg)
+				status = 500
+				if outcome.ErrCode == "AccessDenied" {
+					resource.denied = true
+					status = 403
+				}
+				if outcome.ErrCode == "PreconditionFailed" {
+					status = 412
+				}
+			}
+		}
+		m.log(ctx, auditlog.OpDeleteObjects, auditlog.PhaseComplete, resource, entryErr, status, time.Since(start).Milliseconds())
+	}
 	return result, err
 }
 
 func (m *AuditLogMiddleware) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	requested := storage.ObjectLock{}
+	if opts != nil {
+		requested = opts.ObjectLock
+	}
 	start := time.Now()
-	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, auditResource{bucket: bucketName.String(), key: key.String()}, nil, 0, 0)
+	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseStart, auditResource{objectLock: lockDetails(requested, false), bucket: bucketName.String(), key: key.String()}, nil, 0, 0)
 	res, err := m.Next.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, opts)
 	uid := ""
 	if res != nil {
 		uid = res.UploadId.String()
 	}
-	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseComplete, auditResource{bucket: bucketName.String(), key: key.String(), uploadID: uid}, err, statusCodeFromError(err), time.Since(start).Milliseconds())
+	m.log(ctx, auditlog.OpCreateMultipartUpload, auditlog.PhaseComplete, auditResource{objectLock: lockDetails(requested, false), bucket: bucketName.String(), key: key.String(), uploadID: uid}, err, statusCodeFromError(err), time.Since(start).Milliseconds())
 	return res, err
 }
 
@@ -516,6 +643,15 @@ func (m *AuditLogMiddleware) ListParts(ctx context.Context, bucketName storage.B
 }
 
 func statusCodeFromError(err error) int32 {
+	if errors.Is(err, storage.ErrObjectLockAccessDenied) {
+		return 403
+	}
+	if errors.Is(err, storage.ErrInvalidObjectLockConfiguration) {
+		return 400
+	}
+	if errors.Is(err, storage.ErrObjectLockConfigurationNotFound) {
+		return 404
+	}
 	if err != nil {
 		return 500
 	}

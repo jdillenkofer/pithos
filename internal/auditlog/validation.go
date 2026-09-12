@@ -28,8 +28,8 @@ type Validator struct {
 func NewValidator(ed25519Verifier, mlDsa87Verifier signing.Verifier) *Validator {
 	return &Validator{
 		Ed25519Verifier: ed25519Verifier,
-		MlDsa87Verifier:  mlDsa87Verifier,
-		HashBuffer:       make([][]byte, 0, GroundingBlockSize),
+		MlDsa87Verifier: mlDsa87Verifier,
+		HashBuffer:      make([][]byte, 0, GroundingBlockSize),
 	}
 }
 

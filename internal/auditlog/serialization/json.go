@@ -25,9 +25,11 @@ type jsonEntry struct {
 }
 
 type jsonLogDetails struct {
-	Operation string `json:"operation"`
-	Phase     string `json:"phase"`
-	Resource  struct {
+	ObjectLock *auditlog.ObjectLockDetails `json:"object_lock,omitempty"`
+	Operation  string                      `json:"operation"`
+	Phase      string                      `json:"phase"`
+	Resource   struct {
+		VersionID    string `json:"version_id,omitempty"`
 		Bucket       string `json:"bucket"`
 		Key          string `json:"key,omitempty"`
 		UploadID     string `json:"upload_id,omitempty"`
@@ -100,6 +102,10 @@ func (s *JsonSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 			payload.Resource.PartNumber = d.Resource.PartNumber
 			payload.Resource.SourceBucket = d.Resource.SourceBucket
 			payload.Resource.SourceKey = d.Resource.SourceKey
+			if e.Version >= 4 {
+				payload.Resource.VersionID = d.Resource.VersionID
+				payload.ObjectLock = d.ObjectLock
+			}
 			payload.Actor.CredentialID = d.Actor.CredentialID
 			payload.Actor.AuthType = string(d.Actor.AuthType)
 			payload.Request.RequestID = d.Request.RequestID
@@ -226,8 +232,9 @@ func (d *JsonDecoder) Decode() (*auditlog.Entry, error) {
 			return nil, fmt.Errorf("failed to unmarshal log details: %w", err)
 		}
 		e.Details = &auditlog.LogDetails{
-			Operation: auditlog.Operation(jd.Operation),
-			Phase:     auditlog.Phase(jd.Phase),
+			ObjectLock: jd.ObjectLock,
+			Operation:  auditlog.Operation(jd.Operation),
+			Phase:      auditlog.Phase(jd.Phase),
 			Resource: auditlog.ResourceDetails{
 				Bucket:       jd.Resource.Bucket,
 				Key:          jd.Resource.Key,
@@ -235,6 +242,7 @@ func (d *JsonDecoder) Decode() (*auditlog.Entry, error) {
 				PartNumber:   jd.Resource.PartNumber,
 				SourceBucket: jd.Resource.SourceBucket,
 				SourceKey:    jd.Resource.SourceKey,
+				VersionID:    jd.Resource.VersionID,
 			},
 			Actor: auditlog.ActorDetails{
 				CredentialID: jd.Actor.CredentialID,

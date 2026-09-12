@@ -83,6 +83,7 @@ type ObjectMetadata struct {
 }
 
 type Object struct {
+	ObjectLock        ObjectLock
 	Key               ObjectKey
 	ContentType       *string // only set in HeadObject and PutObject
 	LastModified      time.Time
@@ -340,6 +341,7 @@ type PutObjectOptions struct {
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
+	ObjectLock ObjectLock
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string
@@ -354,6 +356,7 @@ type CreateMultipartUploadOptions struct {
 
 // AppendObjectOptions holds options for an AppendObject operation.
 type AppendObjectOptions struct {
+	ObjectLock ObjectLock
 	// WriteOffset, when non-nil, specifies the expected current size of the
 	// object in bytes. The append is only performed if the actual object size
 	// matches this value; otherwise ErrInvalidWriteOffset is returned.
@@ -362,7 +365,8 @@ type AppendObjectOptions struct {
 }
 
 type DeleteObjectOptions struct {
-	VersionID *string
+	BypassGovernanceRetention bool
+	VersionID                 *string
 	// IfMatchETag, when non-nil, requires the stored object's ETag to equal this
 	// value before deleting; otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object (i.e. HTTP If-Match: *),
@@ -433,7 +437,7 @@ type MaintenanceStore interface {
 }
 
 type BucketStore interface {
-	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName, options ...CreateBucketOptions) error
 	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
@@ -660,6 +664,7 @@ type MultipartStore interface {
 }
 
 type MetadataStore interface {
+	ObjectLockStore
 	lifecycle.Manager
 	MaintenanceStore
 	BucketStore

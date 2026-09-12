@@ -298,11 +298,11 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.HeadObject")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
@@ -342,7 +342,14 @@ func (sms *sqlMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx, bucketN
 		return nil, err
 	}
 
-	return &metadatastore.Object{
+	objectLock := metadatastore.ObjectLock{}
+	if bucketEntity.ObjectLockEnabled {
+		objectLock, err = sms.loadObjectLock(ctx, tx, *objectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &metadatastore.Object{ObjectLock: objectLock,
 		Key:               key,
 		ContentType:       objectEntity.ContentType,
 		LastModified:      objectEntity.UpdatedAt,
@@ -367,11 +374,11 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.HeadObjectVersion")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
@@ -405,5 +412,12 @@ func (sms *sqlMetadataStore) HeadObjectVersion(ctx context.Context, tx *sql.Tx, 
 		return nil, err
 	}
 
-	return &metadatastore.Object{Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, StorageClass: objectEntity.StorageClass, Parts: parts, Tags: tags, Metadata: metadata}, nil
+	objectLock := metadatastore.ObjectLock{}
+	if bucketEntity.ObjectLockEnabled {
+		objectLock, err = sms.loadObjectLock(ctx, tx, *objectEntity.Id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &metadatastore.Object{ObjectLock: objectLock, Key: key, ContentType: objectEntity.ContentType, LastModified: objectEntity.UpdatedAt, VersionID: objectEntity.VersionID, IsDeleteMarker: objectEntity.IsDeleteMarker, ETag: objectEntity.ETag, ChecksumCRC32: objectEntity.ChecksumCRC32, ChecksumCRC32C: objectEntity.ChecksumCRC32C, ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME, ChecksumSHA1: objectEntity.ChecksumSHA1, ChecksumSHA256: objectEntity.ChecksumSHA256, ChecksumType: objectEntity.ChecksumType, Size: objectEntity.Size, StorageClass: objectEntity.StorageClass, Parts: parts, Tags: tags, Metadata: metadata}, nil
 }

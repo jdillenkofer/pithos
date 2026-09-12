@@ -59,6 +59,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			// The destination class comes from the copy request only; the
 			// source's class is never carried over (matching AWS).
 			dstObject.StorageClass = opts.StorageClass
+			dstObject.ObjectLock = opts.ObjectLock
 		}
 		dstStoreName, dstStore := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(dstObject.StorageClass))
 
