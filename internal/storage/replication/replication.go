@@ -7,6 +7,20 @@ import (
 	"io"
 )
 
+func (rs *replicationStorage) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	return rs.Next.GetBucketTagging(ctx, bucketName)
+}
+
+func (rs *replicationStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	_, err := rs.execute(ctx, "PutBucketTagging", operationPayload{Bucket: bucketName.String(), Tags: tags}, nil)
+	return err
+}
+
+func (rs *replicationStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	_, err := rs.execute(ctx, "DeleteBucketTagging", operationPayload{Bucket: bucketName.String()}, nil)
+	return err
+}
+
 func (rs *replicationStorage) CreateBucket(ctx context.Context, bucketName storage.BucketName, options ...storage.CreateBucketOptions) error {
 	_, err := rs.execute(ctx, "CreateBucket", operationPayload{Bucket: bucketName.String(), Create: options}, nil)
 	return err

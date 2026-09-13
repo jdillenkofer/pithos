@@ -26,6 +26,9 @@ const (
 
 	OpCreateBucket            Operation = "CreateBucket"
 	OpDeleteBucket            Operation = "DeleteBucket"
+	OpGetBucketTagging        Operation = "GetBucketTagging"
+	OpPutBucketTagging        Operation = "PutBucketTagging"
+	OpDeleteBucketTagging     Operation = "DeleteBucketTagging"
 	OpListBuckets             Operation = "ListBuckets"
 	OpHeadBucket              Operation = "HeadBucket"
 	OpListObjects             Operation = "ListObjects"

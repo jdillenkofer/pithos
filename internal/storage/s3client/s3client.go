@@ -136,6 +136,32 @@ func (rs *s3ClientStorage) bucketTags(ctx context.Context, bucketName storage.Bu
 	return result.TagSet, nil
 }
 
+func (rs *s3ClientStorage) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	tagSet, err := rs.bucketTags(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	tags := make(map[string]string, len(tagSet))
+	for _, tag := range tagSet {
+		tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	return tags, nil
+}
+
+func (rs *s3ClientStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	tagSet := make([]types.Tag, 0, len(tags))
+	for key, value := range tags {
+		tagSet = append(tagSet, types.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+	_, err := rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucketName.String()), Tagging: &types.Tagging{TagSet: tagSet}})
+	return err
+}
+
+func (rs *s3ClientStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	_, err := rs.s3Client.DeleteBucketTagging(ctx, &s3.DeleteBucketTaggingInput{Bucket: aws.String(bucketName.String())})
+	return err
+}
+
 func setBucketTag(tags []types.Tag, key, value string) []types.Tag {
 	for i := range tags {
 		if aws.ToString(tags[i].Key) == key {

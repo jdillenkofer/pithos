@@ -78,8 +78,10 @@ type CreateBucketOptions struct {
 }
 
 const (
-	CreateBucketStorageOperation = "CreateBucket"
-	DeleteBucketStorageOperation = "DeleteBucket"
-	PutObjectStorageOperation    = "PutObject"
-	DeleteObjectStorageOperation = "DeleteObject"
+	CreateBucketStorageOperation        = "CreateBucket"
+	DeleteBucketStorageOperation        = "DeleteBucket"
+	PutObjectStorageOperation           = "PutObject"
+	DeleteObjectStorageOperation        = "DeleteObject"
+	PutBucketTaggingStorageOperation    = "PutBucketTagging"
+	DeleteBucketTaggingStorageOperation = "DeleteBucketTagging"
 )

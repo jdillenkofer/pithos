@@ -873,6 +873,10 @@ func (rs *replicationStorage) apply(ctx context.Context, target storage.Storage,
 		err = target.PutObjectTagging(ctx, b, k, p.Tags, p.TagOptions)
 	case "DeleteObjectTagging":
 		err = target.DeleteObjectTagging(ctx, b, k, p.TagOptions)
+	case "PutBucketTagging":
+		err = target.PutBucketTagging(ctx, b, p.Tags)
+	case "DeleteBucketTagging":
+		err = target.DeleteBucketTagging(ctx, b)
 	case "PutObject":
 		result.Put, err = target.PutObject(ctx, b, k, p.ContentType, data, p.Checksum, p.Put)
 		if err == nil {
