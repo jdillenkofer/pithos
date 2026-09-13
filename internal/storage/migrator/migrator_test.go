@@ -85,16 +85,16 @@ func TestStorageMigrator(t *testing.T) {
 			}
 		}`, strconv.Quote(dbPath), strconv.Quote(storagePath))
 
-	storage, err := createStorageFromJson([]byte(jsonData))
+	sourceStorage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
-	storage.Start(ctx)
-	defer storage.Stop(ctx)
+	sourceStorage.Start(ctx)
+	defer sourceStorage.Stop(ctx)
 
-	err = storage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{OwnerAccountID: "account-a"})
+	err = sourceStorage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{OwnerAccountID: "account-a"})
 	assert.Nil(t, err)
 
 	// @TODO: Use checksumInput
-	_, err = storage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil, nil)
+	_, err = sourceStorage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil, nil)
 	assert.Nil(t, err)
 
 	storagePath2 := *tempDir2
@@ -131,7 +131,7 @@ func TestStorageMigrator(t *testing.T) {
 	defer storage2.Stop(ctx)
 
 	// Act
-	err = MigrateStorage(ctx, storage, storage2)
+	err = MigrateStorage(ctx, sourceStorage, storage2)
 	assert.Nil(t, err)
 
 	// Assert
