@@ -47,6 +47,9 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if d.Actor.CredentialID != "" {
 			base += fmt.Sprintf(" | CredentialID: %s", escape(d.Actor.CredentialID))
 		}
+		if e.Version >= 5 && d.Actor.PrincipalID != "" {
+			base += fmt.Sprintf(" | PrincipalID: %s", escape(d.Actor.PrincipalID))
+		}
 		if d.Actor.AuthType != "" {
 			base += fmt.Sprintf(" | AuthType: %s", escape(string(d.Actor.AuthType)))
 		}
@@ -182,6 +185,10 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 				dls.Resource.SourceKey = unescape(val)
 			case "Actor", "CredentialID":
 				dls.Actor.CredentialID = unescape(val)
+			case "PrincipalID":
+				if version >= 5 {
+					dls.Actor.PrincipalID = unescape(val)
+				}
 			case "AuthType":
 				dls.Actor.AuthType = auditlog.AuthType(unescape(val))
 			case "RequestID":

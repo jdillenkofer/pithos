@@ -67,7 +67,9 @@ const (
 // CurrentVersion is the audit log entry format version.
 //   - v2 added actor/request/outcome detail fields.
 //   - v3 added ResourceDetails.SourceBucket/SourceKey for server-side copy operations.
-const CurrentVersion uint16 = 4
+//   - v4 added object-lock and version details and authenticated copy source fields.
+//   - v5 added ActorDetails.PrincipalID.
+const CurrentVersion uint16 = 5
 
 type EntryType string
 
@@ -112,6 +114,7 @@ type ResourceDetails struct {
 
 type ActorDetails struct {
 	CredentialID string
+	PrincipalID  string
 	AuthType     AuthType
 }
 
@@ -201,6 +204,9 @@ func (e *Entry) CalculateHash() []byte {
 		}
 
 		writeString(buf, d.Actor.CredentialID)
+		if e.Version >= 5 {
+			writeString(buf, d.Actor.PrincipalID)
+		}
 		writeString(buf, string(d.Actor.AuthType))
 		writeString(buf, d.Request.RequestID)
 		writeString(buf, d.Request.TraceID)

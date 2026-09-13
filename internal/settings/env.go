@@ -9,6 +9,10 @@ import (
 const envKeyPrefix = "PITHOS"
 
 const authenticationEnabledEnvKey = envKeyPrefix + "_AUTHENTICATION_ENABLED"
+const credentialsProviderEnvKey = envKeyPrefix + "_CREDENTIALS_PROVIDER"
+const credentialsPathEnvKey = envKeyPrefix + "_CREDENTIALS_PATH"
+const credentialsReloadIntervalSecondsEnvKey = envKeyPrefix + "_CREDENTIALS_RELOAD_INTERVAL_SECONDS"
+const credentialsDatabaseIndexEnvKey = envKeyPrefix + "_CREDENTIALS_DATABASE_INDEX"
 const regionEnvKey = envKeyPrefix + "_REGION"
 const domainEnvKey = envKeyPrefix + "_DOMAIN"
 const websiteDomainEnvKey = envKeyPrefix + "_WEBSITE_DOMAIN"
@@ -26,29 +30,6 @@ const otelEnabledEnvKey = envKeyPrefix + "_OTEL_ENABLED"
 const otelExporterEnvKey = envKeyPrefix + "_OTEL_EXPORTER"
 const otelEndpointEnvKey = envKeyPrefix + "_OTEL_ENDPOINT"
 const metricsGaugesIntervalSecondsEnvKey = envKeyPrefix + "_METRICS_GAUGES_INTERVAL_SECONDS"
-
-func getCredentialsFromEnv() []Credentials {
-	var credentials []Credentials = nil
-	for i := 0; ; i++ {
-		accessKeyId := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_ACCESS_KEY_ID")
-		secretAccessKey := getStringFromEnv(envKeyPrefix + "_CREDENTIALS_" + strconv.Itoa(i) + "_SECRET_ACCESS_KEY")
-
-		if accessKeyId == nil || secretAccessKey == nil {
-			// This allows the index to start from 0 or 1
-			if i == 0 {
-				continue
-			}
-			break
-		}
-
-		credentials = append(credentials, Credentials{
-			AccessKeyId:     *accessKeyId,
-			SecretAccessKey: *secretAccessKey,
-		})
-	}
-
-	return credentials
-}
 
 func getStringFromEnv(envKey string) *string {
 	val := os.Getenv(envKey)
@@ -98,8 +79,11 @@ func getStringSliceFromEnv(envKey string) []string {
 }
 
 func loadSettingsFromEnv() (*Settings, error) {
-	credentials := getCredentialsFromEnv()
 	authenticationEnabled := getBoolFromEnv(authenticationEnabledEnvKey)
+	credentialsProvider := getStringFromEnv(credentialsProviderEnvKey)
+	credentialsPath := getStringFromEnv(credentialsPathEnvKey)
+	credentialsReloadIntervalSeconds := getIntFromEnv(credentialsReloadIntervalSecondsEnvKey)
+	credentialsDatabaseIndex := getIntFromEnv(credentialsDatabaseIndexEnvKey)
 	region := getStringFromEnv(regionEnvKey)
 	domain := getStringFromEnv(domainEnvKey)
 	websiteDomain := getStringFromEnv(websiteDomainEnvKey)
@@ -119,24 +103,27 @@ func loadSettingsFromEnv() (*Settings, error) {
 	metricsGaugesIntervalSeconds := getIntFromEnv(metricsGaugesIntervalSecondsEnvKey)
 
 	return &Settings{
-		authenticationEnabled: authenticationEnabled,
-		credentials:           credentials,
-		region:                region,
-		domain:                domain,
-		websiteDomain:         websiteDomain,
-		bindAddress:           bindAddress,
-		port:                  port,
-		monitoringPort:        monitoringPort,
-		monitoringPortEnabled: monitoringPortEnabled,
-		storageJsonPath:       storageJsonPath,
-		authorizerPath:        authorizerPath,
-		spoolDir:              spoolDir,
-		trustForwardedHeaders: trustForwardedHeaders,
-		trustedProxyCIDRs:     trustedProxyCIDRs,
-		logLevel:              logLevel,
-		otelEnabled:           otelEnabled,
-		otelExporter:          otelExporter,
-		otelEndpoint:          otelEndpoint,
-		metricsGaugesIntervalSeconds: metricsGaugesIntervalSeconds,
+		authenticationEnabled:            authenticationEnabled,
+		credentialsProvider:              credentialsProvider,
+		credentialsPath:                  credentialsPath,
+		credentialsReloadIntervalSeconds: credentialsReloadIntervalSeconds,
+		credentialsDatabaseIndex:         credentialsDatabaseIndex,
+		region:                           region,
+		domain:                           domain,
+		websiteDomain:                    websiteDomain,
+		bindAddress:                      bindAddress,
+		port:                             port,
+		monitoringPort:                   monitoringPort,
+		monitoringPortEnabled:            monitoringPortEnabled,
+		storageJsonPath:                  storageJsonPath,
+		authorizerPath:                   authorizerPath,
+		spoolDir:                         spoolDir,
+		trustForwardedHeaders:            trustForwardedHeaders,
+		trustedProxyCIDRs:                trustedProxyCIDRs,
+		logLevel:                         logLevel,
+		otelEnabled:                      otelEnabled,
+		otelExporter:                     otelExporter,
+		otelEndpoint:                     otelEndpoint,
+		metricsGaugesIntervalSeconds:     metricsGaugesIntervalSeconds,
 	}, nil
 }

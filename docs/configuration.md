@@ -17,13 +17,113 @@
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
+| `PITHOS_CREDENTIALS_PROVIDER` | Credential source: `auto`, `environment`, `file`, or `sql`; `auto` selects `file` when a credentials path is set and `environment` otherwise | `auto` |
+| `PITHOS_CREDENTIALS_PATH` | Optional path to a reloadable credentials JSON file; when set, environment credentials are ignored | - |
+| `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between background file or SQL credential refreshes; `0` loads only at startup | `5` |
+| `PITHOS_CREDENTIALS_DATABASE_INDEX` | Zero-based configured database index used by the SQL provider | `0` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
+| `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Optional stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
+
+The provider settings may also be set with the `-credentialsProvider`,
+`-credentialsPath`, `-credentialsReloadIntervalSeconds`, and
+`-credentialsDatabaseIndex` command-line flags.
+The credential values themselves are never accepted as arguments.
+
+Pithos reads these variables once when the environment credential provider is
+created at startup and caches the resulting credential set. Environment
+credential changes require restarting Pithos. Indices may begin at `0` or `1`,
+must be contiguous, and loading stops at the first missing or incomplete pair
+after the initial index.
+
+Access Key IDs are limited to 128 bytes, secret access keys to 256 bytes, and
+principal IDs to 256 bytes. Access Key IDs and secret access keys must be
+non-empty; an empty principal ID means that no principal is configured.
+
+Principal IDs are optional, opaque, and case-sensitive. To rotate a credential
+without changing policy, configure the old and new entries with the same ID:
+
+```shell
+PITHOS_CREDENTIALS_0_ACCESS_KEY_ID=old-key
+PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY=old-secret
+PITHOS_CREDENTIALS_0_PRINCIPAL_ID=storage-client
+PITHOS_CREDENTIALS_1_ACCESS_KEY_ID=new-key
+PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY=new-secret
+PITHOS_CREDENTIALS_1_PRINCIPAL_ID=storage-client
+```
+
+The corresponding policy can remain unchanged during the rotation:
+
+```lua
+function authorizeRequest(request)
+  return request:principalIdEquals("storage-client")
+end
+```
+
+#### Reloadable credentials file
+
+Set `PITHOS_CREDENTIALS_PATH` to use a JSON credential set instead of the
+indexed environment variables:
+
+```json
+{
+  "credentials": [
+    {
+      "accessKeyId": "old-key",
+      "secretAccessKey": "old-secret",
+      "principalId": "storage-client"
+    },
+    {
+      "accessKeyId": "new-key",
+      "secretAccessKey": "new-secret",
+      "principalId": "storage-client"
+    }
+  ]
+}
+```
+
+Pithos validates the file before startup succeeds, then refreshes it in the
+background at the configured interval. Authenticated requests always read the
+most recently valid in-memory snapshot and never wait for file I/O. Valid
+updates replace the complete credential set atomically. Malformed, incomplete,
+oversized, or duplicate-key updates are rejected and the last valid set remains
+active. An empty `credentials` array intentionally revokes every credential.
+Set the interval to `0` to keep the startup snapshot for the process lifetime.
+Publish changes using an atomic file replacement; when using Kubernetes, mount
+the Secret as a volume rather than with `subPath`, which does not receive
+automatic updates.
+
+#### SQL credentials
+
+Set `PITHOS_CREDENTIALS_PROVIDER=sql` to read credentials from the
+`authentication_credentials` table in a database already configured by
+`storage.json`. Database index `0` is the default and is the database used by
+the default storage configuration. Enabled rows are periodically loaded into
+an in-memory snapshot, so normal authentication does not perform a database
+query. Pithos requires a valid initial query result to start; later transient
+refresh failures retain the last valid set. Set the reload interval to `0` to
+keep the initial snapshot for the process lifetime.
+
+Credentials can initially be provisioned with SQL:
+
+```sql
+INSERT INTO authentication_credentials
+    (access_key_id, secret_access_key, principal_id)
+VALUES
+    ('old-key', 'old-secret', 'storage-client'),
+    ('new-key', 'new-secret', 'storage-client');
+```
+
+Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
+`created_at`, and `updated_at` columns are reserved for managed updates by a
+future administration API. Secret access keys are stored in reversible form
+because SigV4 verification requires them; protect the database with strict
+access controls and storage-level encryption.
 
 ### Storage
 
@@ -71,12 +171,16 @@ The Lua authorizer script controls access to all operations, including anonymous
 
 ### Default Behaviour (no authorizer.lua)
 
-When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether credentials are configured:
+When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether authentication is enabled:
 
-| Credentials configured | Default behaviour |
-|------------------------|-------------------|
-| No | All requests are allowed (permissive mode, suitable for local development) |
-| Yes | Anonymous requests are denied; authenticated requests are allowed |
+| Authentication | Default behaviour |
+|----------------|-------------------|
+| Disabled | All requests are allowed (permissive mode, suitable for local development) |
+| Enabled | Anonymous requests are denied; authenticated requests are allowed |
+
+The enabled fallback remains deny-anonymous even when the environment provider
+contains no credentials. This prevents an accidentally empty credential
+configuration from enabling anonymous access.
 
 To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
 
@@ -86,6 +190,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 |-------|------|-------------|
 | `request.operation` | `string` | The S3 operation being performed (e.g. `"GetObject"`, `"PutObject"`) |
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
+| `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` when absent or anonymous |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
 | `request.sourceBucket` | `string\|nil` | The copy source bucket for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
@@ -126,6 +231,9 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request:hasAccessKeyId()` | `boolean` | Returns `true` if `request.authorization.accessKeyId` is present |
 | `request:accessKeyIdEquals(value)` | `boolean` | Returns `true` if `accessKeyId` exactly matches `value` |
 | `request:accessKeyIdIn(values)` | `boolean` | Returns `true` if `accessKeyId` matches any value in `values` |
+| `request:hasPrincipalId()` | `boolean` | Returns `true` if `request.authorization.principalId` is present |
+| `request:principalIdEquals(value)` | `boolean` | Returns `true` if `principalId` exactly matches `value` |
+| `request:principalIdIn(values)` | `boolean` | Returns `true` if `principalId` matches any value in `values` |
 | `request:bucketEquals(bucket)` | `boolean` | Returns `true` if request bucket exactly matches `bucket` |
 | `request:keyHasPrefix(prefix)` | `boolean` | Returns `true` if request key starts with `prefix` |
 | `request:keyHasSuffix(suffix)` | `boolean` | Returns `true` if request key ends with `suffix` |

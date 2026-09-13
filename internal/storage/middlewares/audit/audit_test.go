@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	"github.com/jdillenkofer/pithos/internal/auditlog/sink"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	_ "github.com/jdillenkofer/pithos/internal/testing"
@@ -78,7 +79,14 @@ func TestAuditLogMiddleware(t *testing.T) {
 	mock := &mockStorage{}
 	middleware := NewAuditLogMiddleware(mock, s, signing.NewEd25519Signer(priv), signing.NewMlDsa87Signer(mlPriv), lastHash, initialBuffer)
 
-	ctx := context.Background()
+	ctx := authentication.WithRequestAuthentication(context.Background(), authentication.RequestAuthentication{
+		Authenticated: true,
+		Identity: &authentication.AuthenticatedIdentity{
+			AccessKeyID: "rotated-key",
+			PrincipalID: "stable-principal",
+		},
+		Type: authentication.AuthTypeSigV4Header,
+	})
 	bucketName := metadatastore.MustNewBucketName("test-bucket")
 	err = middleware.CreateBucket(ctx, bucketName)
 	if err != nil {
@@ -127,6 +135,9 @@ func TestAuditLogMiddleware(t *testing.T) {
 	}
 	if dStart.Resource.Bucket != "test-bucket" {
 		t.Errorf("expected bucket test-bucket, got %s", dStart.Resource.Bucket)
+	}
+	if dStart.Actor.CredentialID != "rotated-key" || dStart.Actor.PrincipalID != "stable-principal" {
+		t.Errorf("unexpected actor details: %+v", dStart.Actor)
 	}
 	if !entryStart.Verify(signing.NewEd25519Verifier(pub)) {
 		t.Error("entryStart signature verification failed")

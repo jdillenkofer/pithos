@@ -792,6 +792,9 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	  assert(request:hasAccessKeyId(), "hasAccessKeyId")
 	  assert(request:accessKeyIdEquals("AKIAIOSFODNN7EXAMPLE"), "accessKeyIdEquals")
 	  assert(request:accessKeyIdIn({"AKIAIOSFODNN7EXAMPLE", "OTHER"}), "accessKeyIdIn")
+	  assert(request:hasPrincipalId(), "hasPrincipalId")
+	  assert(request:principalIdEquals("storage-client"), "principalIdEquals")
+	  assert(request:principalIdIn({"other", "storage-client"}), "principalIdIn")
 	  assert(request:isOperation("GetObject"), "isOperation")
 	  assert(request:isOperationIn({"PutObject", "GetObject"}), "isOperationIn")
 	  assert(request:isReadOnly(), "isReadOnly")
@@ -829,6 +832,7 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 		Operation: authorization.OperationGetObject,
 		Authorization: authorization.Authorization{
 			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+			PrincipalId: ptrutils.ToPtr("storage-client"),
 		},
 		Bucket: ptrutils.ToPtr("my-bucket"),
 		Key:    ptrutils.ToPtr("public/file.txt"),
@@ -854,4 +858,31 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 	assert.True(t, authorized)
 	assert.Nil(t, err)
+}
+
+func TestPrincipalHelpersFailClosedWithoutPrincipal(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	authorizer, err := NewLuaAuthorizer(`
+	function authorizeRequest(request)
+	  return request.authorization.principalId == nil
+	    and not request:hasPrincipalId()
+	    and not request:principalIdEquals("storage-client")
+	    and not request:principalIdIn({"storage-client"})
+	end
+	`)
+	assert.NoError(t, err)
+
+	for _, request := range []*authorization.Request{
+		{Operation: authorization.OperationGetObject},
+		{
+			Operation: authorization.OperationGetObject,
+			Authorization: authorization.Authorization{
+				AccessKeyId: ptrutils.ToPtr("legacy-key"),
+			},
+		},
+	} {
+		allowed, authorizeErr := authorizer.AuthorizeRequest(context.Background(), request)
+		assert.NoError(t, authorizeErr)
+		assert.True(t, allowed)
+	}
 }

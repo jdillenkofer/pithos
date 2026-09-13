@@ -127,18 +127,14 @@ func (m *AuditLogMiddleware) observeWrite() {
 
 func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, phase auditlog.Phase, resource auditResource, err error, statusCode int32, durationMs int64) {
 	credentialID := ""
-	if val := ctx.Value(authentication.AccessKeyIdContextKey{}); val != nil {
-		if s, ok := val.(string); ok {
-			credentialID = s
-		}
+	principalID := ""
+	auth := authentication.RequestAuthenticationFromContext(ctx)
+	if auth.Authenticated && auth.Identity != nil {
+		credentialID = auth.Identity.AccessKeyID
+		principalID = auth.Identity.PrincipalID
 	}
 
-	authType := auditlog.AuthTypeAnonymous
-	if val := ctx.Value(authentication.AuthTypeContextKey{}); val != nil {
-		if s, ok := val.(string); ok {
-			authType = auditlog.AuthType(s)
-		}
-	}
+	authType := auditlog.AuthType(auth.Type)
 
 	requestID := ""
 	if val := ctx.Value(authentication.RequestIDContextKey{}); val != nil {
@@ -204,6 +200,7 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 			},
 			Actor: auditlog.ActorDetails{
 				CredentialID: credentialID,
+				PrincipalID:  principalID,
 				AuthType:     authType,
 			},
 			Request: auditlog.RequestDetails{

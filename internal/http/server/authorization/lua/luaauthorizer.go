@@ -715,6 +715,39 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 	})
 	L.SetField(-2, "accessKeyIdIn")
 	L.PushGoFunction(func(L *lua.State) int {
+		L.Field(1, "authorization")
+		L.Field(-1, "principalId")
+		L.PushBoolean(!L.IsNil(-1))
+		return 1
+	})
+	L.SetField(-2, "hasPrincipalId")
+	L.PushGoFunction(func(L *lua.State) int {
+		expected, ok := L.ToString(2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "authorization")
+		L.Field(-1, "principalId")
+		actual, ok := L.ToString(-1)
+		L.PushBoolean(ok && actual == expected)
+		return 1
+	})
+	L.SetField(-2, "principalIdEquals")
+	L.PushGoFunction(func(L *lua.State) int {
+		expected, ok := luaStringSliceArg(L, 2)
+		if !ok {
+			L.PushBoolean(false)
+			return 1
+		}
+		L.Field(1, "authorization")
+		L.Field(-1, "principalId")
+		actual, ok := L.ToString(-1)
+		L.PushBoolean(ok && stringInSlice(actual, expected))
+		return 1
+	})
+	L.SetField(-2, "principalIdIn")
+	L.PushGoFunction(func(L *lua.State) int {
 		expectedBucket, ok := L.ToString(2)
 		if !ok || request.Bucket == nil {
 			L.PushBoolean(false)

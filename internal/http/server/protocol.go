@@ -416,13 +416,7 @@ func taggingHeaderApplies(operation string, r *http.Request) bool {
 }
 
 func makeAuthorizationRequest(ctx context.Context, operation string, bucket *string, key *string, r *http.Request) (*authorization.Request, bool) {
-	isAuthenticated, _ := ctx.Value(authentication.IsAuthenticatedContextKey{}).(bool)
-
-	var accessKeyId *string
-	if isAuthenticated {
-		keyStr, _ := ctx.Value(authentication.AccessKeyIdContextKey{}).(string)
-		accessKeyId = &keyStr
-	}
+	auth := authentication.RequestAuthenticationFromContext(ctx)
 
 	// Expose tags supplied via the x-amz-tagging header as request tags
 	// (s3:RequestObjectTag), but only for operations that actually store the
@@ -440,10 +434,8 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 	}
 
 	request := &authorization.Request{
-		Operation: operation,
-		Authorization: authorization.Authorization{
-			AccessKeyId: accessKeyId,
-		},
+		Operation:         operation,
+		Authorization:     authorizationFromAuthentication(auth),
 		Bucket:            bucket,
 		Key:               key,
 		HttpRequest:       makeAuthorizationHTTPRequest(r),
@@ -466,7 +458,19 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 			request.ObjectLockLegalHold = &hold
 		}
 	}
-	return request, isAuthenticated
+	return request, auth.Authenticated
+}
+
+func authorizationFromAuthentication(auth authentication.RequestAuthentication) authorization.Authorization {
+	if !auth.Authenticated || auth.Identity == nil {
+		return authorization.Authorization{}
+	}
+
+	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID}
+	if auth.Identity.PrincipalID != "" {
+		result.PrincipalId = &auth.Identity.PrincipalID
+	}
+	return result
 }
 
 func (s *Server) authorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {

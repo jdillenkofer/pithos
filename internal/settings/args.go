@@ -59,6 +59,10 @@ func registerBoolFlag(flagSet *flag.FlagSet, name string, defaultValue bool, des
 func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	serveCommand := flag.NewFlagSet("serve", flag.ExitOnError)
 	authenticationEnabledAccessor := registerBoolFlag(serveCommand, "authenticationEnabled", defaultAuthenticationEnabled, "determines if authentication is enabled or not")
+	credentialsProviderAccessor := registerStringFlag(serveCommand, "credentialsProvider", defaultCredentialsProvider, "credential provider: auto, environment, file, or sql")
+	credentialsPathAccessor := registerStringFlag(serveCommand, "credentialsPath", defaultCredentialsPath, "path to the reloadable credentials JSON file")
+	credentialsReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "credentialsReloadIntervalSeconds", defaultCredentialsReloadIntervalSeconds, "interval in seconds between background credential refreshes; zero disables refresh after startup")
+	credentialsDatabaseIndexAccessor := registerIntFlag(serveCommand, "credentialsDatabaseIndex", defaultCredentialsDatabaseIndex, "zero-based configured database index used by the SQL credential provider")
 	regionAccessor := registerStringFlag(serveCommand, "region", defaultRegion, "the region for the s3 api")
 	domainAccessor := registerStringFlag(serveCommand, "domain", defaultDomain, "the domain for the s3 api")
 	websiteDomainAccessor := registerStringFlag(serveCommand, "websiteDomain", defaultWebsiteDomain, "the domain for s3 website hosting (e.g. s3-website.localhost)")
@@ -95,23 +99,26 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	}
 
 	return &Settings{
-		authenticationEnabled: authenticationEnabledAccessor(),
-		credentials:           nil, // Credentials are not set via command line args
-		region:                regionAccessor(),
-		domain:                domainAccessor(),
-		websiteDomain:         websiteDomainAccessor(),
-		bindAddress:           bindAddressAccessor(),
-		port:                  portAccessor(),
-		monitoringPort:        monitoringPortAccessor(),
-		monitoringPortEnabled: monitoringPortEnabledAccessor(),
-		storageJsonPath:       storageJsonPathAccessor(),
-		authorizerPath:        authorizerPathAccessor(),
-		spoolDir:              spoolDirAccessor(),
-		trustForwardedHeaders: trustForwardedHeadersAccessor(),
-		trustedProxyCIDRs:     trustedProxyCIDRs,
-		logLevel:              logLevelAccessor(),
-		otelEnabled:           otelEnabledAccessor(),
-		otelExporter:          otelExporterAccessor(),
-		otelEndpoint:          otelEndpointAccessor(),
+		authenticationEnabled:            authenticationEnabledAccessor(),
+		credentialsProvider:              credentialsProviderAccessor(),
+		credentialsPath:                  credentialsPathAccessor(),
+		credentialsReloadIntervalSeconds: credentialsReloadIntervalSecondsAccessor(),
+		credentialsDatabaseIndex:         credentialsDatabaseIndexAccessor(),
+		region:                           regionAccessor(),
+		domain:                           domainAccessor(),
+		websiteDomain:                    websiteDomainAccessor(),
+		bindAddress:                      bindAddressAccessor(),
+		port:                             portAccessor(),
+		monitoringPort:                   monitoringPortAccessor(),
+		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
+		storageJsonPath:                  storageJsonPathAccessor(),
+		authorizerPath:                   authorizerPathAccessor(),
+		spoolDir:                         spoolDirAccessor(),
+		trustForwardedHeaders:            trustForwardedHeadersAccessor(),
+		trustedProxyCIDRs:                trustedProxyCIDRs,
+		logLevel:                         logLevelAccessor(),
+		otelEnabled:                      otelEnabledAccessor(),
+		otelExporter:                     otelExporterAccessor(),
+		otelEndpoint:                     otelEndpointAccessor(),
 	}, nil
 }

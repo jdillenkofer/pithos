@@ -8,6 +8,10 @@ import (
 )
 
 const defaultAuthenticationEnabled = true
+const defaultCredentialsProvider = "auto"
+const defaultCredentialsPath = ""
+const defaultCredentialsReloadIntervalSeconds = 5
+const defaultCredentialsDatabaseIndex = 0
 const defaultRegion = "eu-central-1"
 const defaultDomain = "localhost"
 const defaultBindAddress = "0.0.0.0"
@@ -26,31 +30,29 @@ const defaultMetricsGaugesIntervalSeconds = 30
 
 const mergableTagKey = "mergable"
 
-type Credentials struct {
-	AccessKeyId     string
-	SecretAccessKey string
-}
-
 type Settings struct {
-	authenticationEnabled *bool         `mergable:""`
-	credentials           []Credentials `mergable:""`
-	region                *string       `mergable:""`
-	domain                *string       `mergable:""`
-	websiteDomain         *string       `mergable:""`
-	bindAddress           *string       `mergable:""`
-	port                  *int          `mergable:""`
-	monitoringPort        *int          `mergable:""`
-	monitoringPortEnabled *bool         `mergable:""`
-	storageJsonPath       *string       `mergable:""`
-	authorizerPath        *string       `mergable:""`
-	spoolDir              *string       `mergable:""`
-	trustForwardedHeaders *bool         `mergable:""`
-	trustedProxyCIDRs     []string      `mergable:""`
-	logLevel              *string       `mergable:""`
-	otelEnabled           *bool         `mergable:""`
-	otelExporter          *string       `mergable:""`
-	otelEndpoint          *string       `mergable:""`
-	metricsGaugesIntervalSeconds *int   `mergable:""`
+	authenticationEnabled            *bool    `mergable:""`
+	credentialsProvider              *string  `mergable:""`
+	credentialsPath                  *string  `mergable:""`
+	credentialsReloadIntervalSeconds *int     `mergable:""`
+	credentialsDatabaseIndex         *int     `mergable:""`
+	region                           *string  `mergable:""`
+	domain                           *string  `mergable:""`
+	websiteDomain                    *string  `mergable:""`
+	bindAddress                      *string  `mergable:""`
+	port                             *int     `mergable:""`
+	monitoringPort                   *int     `mergable:""`
+	monitoringPortEnabled            *bool    `mergable:""`
+	storageJsonPath                  *string  `mergable:""`
+	authorizerPath                   *string  `mergable:""`
+	spoolDir                         *string  `mergable:""`
+	trustForwardedHeaders            *bool    `mergable:""`
+	trustedProxyCIDRs                []string `mergable:""`
+	logLevel                         *string  `mergable:""`
+	otelEnabled                      *bool    `mergable:""`
+	otelExporter                     *string  `mergable:""`
+	otelEndpoint                     *string  `mergable:""`
+	metricsGaugesIntervalSeconds     *int     `mergable:""`
 }
 
 func valueOrDefault[V any](v *V, defaultValue V) V {
@@ -60,18 +62,24 @@ func valueOrDefault[V any](v *V, defaultValue V) V {
 	return *v
 }
 
-func (s *Settings) isAuthenticationEnabled() bool {
+func (s *Settings) AuthenticationEnabled() bool {
 	return valueOrDefault(s.authenticationEnabled, defaultAuthenticationEnabled)
 }
 
-func (s *Settings) Credentials() []Credentials {
-	if !s.isAuthenticationEnabled() {
-		return nil
-	}
-	if s.credentials == nil {
-		return []Credentials{}
-	}
-	return s.credentials
+func (s *Settings) CredentialsProvider() string {
+	return valueOrDefault(s.credentialsProvider, defaultCredentialsProvider)
+}
+
+func (s *Settings) CredentialsPath() string {
+	return valueOrDefault(s.credentialsPath, defaultCredentialsPath)
+}
+
+func (s *Settings) CredentialsReloadIntervalSeconds() int {
+	return valueOrDefault(s.credentialsReloadIntervalSeconds, defaultCredentialsReloadIntervalSeconds)
+}
+
+func (s *Settings) CredentialsDatabaseIndex() int {
+	return valueOrDefault(s.credentialsDatabaseIndex, defaultCredentialsDatabaseIndex)
 }
 
 func (s *Settings) Region() string {

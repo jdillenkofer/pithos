@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/settings"
@@ -25,6 +26,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/jdillenkofer/pithos/internal/storage/s3client"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"log/slog"
 	"net"
@@ -32,6 +35,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +61,84 @@ var (
 func TestMain(m *testing.M) {
 	flag.Parse()
 	os.Exit(m.Run())
+}
+
+func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-authorizer.lua")
+
+	t.Run("enabled denies anonymous even with no credentials", func(t *testing.T) {
+		authorizer, err := loadRequestAuthorizer(missingPath, true, false, nil)
+		require.NoError(t, err)
+
+		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		assert.False(t, allowed)
+
+		accessKeyID := "key"
+		allowed, err = authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
+			Authorization: authorization.Authorization{AccessKeyId: &accessKeyID},
+		})
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	})
+
+	t.Run("disabled remains permissive", func(t *testing.T) {
+		authorizer, err := loadRequestAuthorizer(missingPath, false, false, nil)
+		require.NoError(t, err)
+		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		assert.True(t, allowed)
+	})
+}
+
+func TestLoadCredentialProvider(t *testing.T) {
+	t.Run("auto defaults to environment", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		t.Setenv("PITHOS_CREDENTIALS_PATH", "")
+		configured, err := settings.LoadSettings(nil)
+		require.NoError(t, err)
+		provider, err := loadCredentialProvider(context.Background(), configured, nil)
+		require.NoError(t, err)
+		assert.IsType(t, &authentication.EnvCredentialProvider{}, provider)
+	})
+
+	t.Run("environment rejects invalid credentials", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "environment")
+		t.Setenv("PITHOS_CREDENTIALS_0_ACCESS_KEY_ID", "key")
+		t.Setenv("PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY", strings.Repeat("s", authentication.MaxSecretAccessKeyLength+1))
+		configured, err := settings.LoadSettings(nil)
+		require.NoError(t, err)
+		_, err = loadCredentialProvider(context.Background(), configured, nil)
+		require.ErrorContains(t, err, "create environment credential provider")
+	})
+
+	t.Run("sql uses selected database", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "credentials.db"))
+		require.NoError(t, err)
+		defer db.Close()
+		err = database.WithTx(context.Background(), db, nil, func(ctx context.Context, tx database.Tx) error {
+			_, err := tx.SqlTx().ExecContext(ctx, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "secret")
+			return err
+		})
+		require.NoError(t, err)
+		configured, err := settings.LoadSettings([]string{"-credentialsProvider", "sql", "-credentialsReloadIntervalSeconds", "0"})
+		require.NoError(t, err)
+		provider, err := loadCredentialProvider(context.Background(), configured, []database.Database{db})
+		require.NoError(t, err)
+		credential, found, err := provider.Lookup(context.Background(), "key")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "secret", credential.SecretAccessKey)
+	})
+
+	t.Run("sql rejects an unavailable database index", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "")
+		configured, err := settings.LoadSettings([]string{"-credentialsProvider", "sql"})
+		require.NoError(t, err)
+		_, err = loadCredentialProvider(context.Background(), configured, nil)
+		assert.Error(t, err)
+	})
 }
 
 func customDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -153,13 +235,15 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
-	credentials := []settings.Credentials{
-		{
-			AccessKeyId:     accessKeyId,
-			SecretAccessKey: secretAccessKey,
-		},
-	}
-	return httptest.NewServer(server.SetupServer(credentials, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
+	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey}}
+	return httptest.NewServer(server.SetupServer(provider, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
+}
+
+type staticCredentialProvider map[string]authentication.Credential
+
+func (p staticCredentialProvider) Lookup(_ context.Context, accessKeyID string) (authentication.Credential, bool, error) {
+	credential, ok := p[accessKeyID]
+	return credential, ok, nil
 }
 
 func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, error) {

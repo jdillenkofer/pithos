@@ -23,6 +23,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
 	"github.com/jdillenkofer/pithos/internal/http/server"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
+	authenticationsql "github.com/jdillenkofer/pithos/internal/http/server/authentication/sql"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/logging"
@@ -30,6 +32,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/benchmark"
 	storageConfig "github.com/jdillenkofer/pithos/internal/storage/config"
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	gdriveAuth "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/gdrive/auth"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink/tpm"
@@ -251,13 +254,27 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}()
 
-	hasCredentials := len(settings.Credentials()) > 0
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), hasCredentials, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
+	authenticationEnabled := settings.AuthenticationEnabled()
+	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), authenticationEnabled, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
 	if err != nil {
 		return fmt.Errorf("create Lua authorizer: %w", err)
 	}
 
-	handler := server.SetupServer(settings.Credentials(), settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
+	var credentialProvider authentication.CredentialProvider
+	if authenticationEnabled {
+		credentialProvider, err = loadCredentialProvider(ctx, settings, dbs)
+		if err != nil {
+			return err
+		}
+		if closer, ok := credentialProvider.(io.Closer); ok {
+			defer func() {
+				if err := closer.Close(); err != nil {
+					slog.Error("Couldn't stop credential provider", "err", err)
+				}
+			}()
+		}
+	}
+	handler := server.SetupServer(credentialProvider, settings.Region(), settings.Domain(), settings.WebsiteDomain(), requestAuthorizer, store)
 	addr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.Port())
 	// Do not set ReadTimeout on the S3 server. Object uploads can be as large as
 	// storage.MaxEntitySize, and a global timeout would impose that deadline on
@@ -331,15 +348,53 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	return errors.Join(append([]error{serveErr}, shutdownErrors...)...)
 }
 
-func loadRequestAuthorizer(authorizerPath string, hasCredentials bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
+func loadCredentialProvider(ctx context.Context, configured *settings.Settings, dbs []database.Database) (authentication.CredentialProvider, error) {
+	providerName := strings.ToLower(configured.CredentialsProvider())
+	if providerName == "auto" {
+		if configured.CredentialsPath() != "" {
+			providerName = "file"
+		} else {
+			providerName = "environment"
+		}
+	}
+	reloadInterval := time.Duration(configured.CredentialsReloadIntervalSeconds()) * time.Second
+	switch providerName {
+	case "environment":
+		provider, err := authentication.NewEnvCredentialProvider()
+		if err != nil {
+			return nil, fmt.Errorf("create environment credential provider: %w", err)
+		}
+		return provider, nil
+	case "file":
+		provider, err := authentication.NewFileCredentialProvider(configured.CredentialsPath(), reloadInterval)
+		if err != nil {
+			return nil, fmt.Errorf("create file credential provider: %w", err)
+		}
+		return provider, nil
+	case "sql":
+		index := configured.CredentialsDatabaseIndex()
+		if index < 0 || index >= len(dbs) {
+			return nil, fmt.Errorf("credentials database index %d is out of range for %d configured databases", index, len(dbs))
+		}
+		provider, err := authenticationsql.NewCredentialProvider(ctx, dbs[index], reloadInterval)
+		if err != nil {
+			return nil, fmt.Errorf("create SQL credential provider: %w", err)
+		}
+		return provider, nil
+	default:
+		return nil, fmt.Errorf("unknown credential provider %q", configured.CredentialsProvider())
+	}
+}
+
+func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
-		if hasCredentials {
-			slog.Warn("No authorizer.lua found but credentials are configured — using default authorizer (anonymous requests will be denied)")
+		if authenticationEnabled {
+			slog.Warn("No authorizer.lua found and authentication is enabled — using default authorizer (anonymous requests will be denied)")
 			authorizerCode = []byte(defaultAuthorizationCodeWithCredentials)
 		} else {
-			slog.Warn("No authorizer.lua found and no credentials configured — using permissive default authorizer (all requests will be allowed)")
+			slog.Warn("No authorizer.lua found and authentication is disabled — using permissive default authorizer (all requests will be allowed)")
 			authorizerCode = []byte(defaultAuthorizationCode)
 		}
 	}

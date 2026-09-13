@@ -66,8 +66,6 @@ var ErrTrailerChecksumMismatch = errors.New("BadDigest")
 // Its text is the S3 error code reported to the client.
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
-type AccessKeyIdContextKey struct{}
-type AuthTypeContextKey struct{}
 type RequestIDContextKey struct{}
 type ClientIPContextKey struct{}
 
@@ -668,7 +666,7 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	}, nil
 }
 
-func checkAuthentication(validCredentials []Credentials, expectedRegion string, r *http.Request) (usedAccessKeyId *string, authenticated bool) {
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *AuthenticatedIdentity, authenticated bool, providerErr error) {
 	now := time.Now().UTC()
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
 	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
@@ -676,7 +674,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	parameters, err := parseSignatureParameters(r)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
 
 	accessKeyIdAndScope := strings.Split(parameters.credential, "/")
@@ -687,42 +685,49 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	scope, err := parameters.algorithm.parseCredentialScope(accessKeyIdAndScope, expectedRegion, regionSet)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Invalid credential scope: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
 
-	accessKeyId := accessKeyIdAndScope[0]
-	foundIndex := slices.IndexFunc(validCredentials, func(c Credentials) bool {
-		return c.AccessKeyId == accessKeyId
-	})
-	if foundIndex < 0 {
-		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
-		return nil, false
+	accessKeyID := accessKeyIdAndScope[0]
+	if len(accessKeyID) == 0 || len(accessKeyID) > MaxAccessKeyIDLength {
+		slog.DebugContext(r.Context(), "Access key ID has an invalid length")
+		return nil, false, nil
 	}
-	expectedCredentials := validCredentials[foundIndex]
+	expectedCredential, found, err := credentialProvider.Lookup(r.Context(), accessKeyID)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
+		return nil, false, nil
+	}
+	if err := validateCredential(expectedCredential); err != nil {
+		return nil, false, fmt.Errorf("credential provider returned an invalid credential: %w", err)
+	}
 	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
-		return nil, false
+		return nil, false, nil
 	}
 	if scope.request != expectedRequest {
 		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
-		return nil, false
+		return nil, false, nil
 	}
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", parameters.timestamp)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
 	if scope.date != parsedTimestamp.Format("20060102") {
 		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
-		return nil, false
+		return nil, false, nil
 	}
 
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(parameters.expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
-		return nil, false
+		return nil, false, nil
 	}
 
 	rawSignedHeadersArray := strings.Split(parameters.signedHeaders, ";")
@@ -735,34 +740,34 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 	}
 	if !slices.Contains(signedHeadersArray, "host") {
 		slog.DebugContext(r.Context(), "Signed headers do not include host")
-		return nil, false
+		return nil, false, nil
 	}
 	if err := parameters.algorithm.validateSignedHeaders(signedHeadersArray, parameters.isPresigned); err != nil {
 		slog.DebugContext(r.Context(), "Invalid signed headers: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
 	for headerKey := range r.Header {
 		headerKey = strings.ToLower(headerKey)
 		if mustBeSignedHeader(headerKey) && !slices.Contains(signedHeadersArray, headerKey) {
 			slog.DebugContext(r.Context(), "Request contains unsigned security-sensitive header", "header", headerKey)
-			return nil, false
+			return nil, false, nil
 		}
 	}
 
 	stringToSign, err := generateStringToSign(r, parameters.timestamp, scope.value, signedHeadersArray, parameters.isPresigned, parameters.algorithm)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
-	verifier, err := parameters.algorithm.newVerifier(accessKeyId, expectedCredentials.SecretAccessKey, scope)
+	verifier, err := parameters.algorithm.newVerifier(accessKeyID, expectedCredential.SecretAccessKey, scope)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to create signature verifier: "+err.Error())
-		return nil, false
+		return nil, false, nil
 	}
 	isSignatureValid := verifier.verify(*stringToSign, parameters.signature)
 	if !isSignatureValid {
 		slog.DebugContext(r.Context(), "Signature does not match calculated signature")
-		return nil, false
+		return nil, false, nil
 	}
 
 	if isAwsChunked {
@@ -770,7 +775,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		contentSHA256 := r.Header.Get(contentSHA256Header)
 		if !verifier.acceptsStreamingPayload(contentSHA256) {
 			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
-			return nil, false
+			return nil, false, nil
 		}
 		// aws-chunked is a transport encoding, not object metadata: strip it
 		// whether it is the only encoding or the first of several.
@@ -789,7 +794,7 @@ func checkAuthentication(validCredentials []Credentials, expectedRegion string, 
 		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
-	return &accessKeyId, isSignatureValid
+	return &AuthenticatedIdentity{AccessKeyID: accessKeyID, PrincipalID: expectedCredential.PrincipalID}, isSignatureValid, nil
 }
 
 type awsChunkReadCloser struct {
@@ -997,24 +1002,17 @@ func (r *awsChunkReadCloser) Close() error {
 	return nil
 }
 
-type Credentials struct {
-	AccessKeyId     string
-	SecretAccessKey string
-}
-
-type IsAuthenticatedContextKey struct{}
-
-func authTypeForRequest(r *http.Request) string {
+func authTypeForRequest(r *http.Request) AuthType {
 	if isAnonymousRequest(r) {
-		return "anonymous"
+		return AuthTypeAnonymous
 	}
 	if r.Header.Get("Authorization") != "" {
-		return "sigv4-header"
+		return AuthTypeSigV4Header
 	}
 	if r.URL.Query().Get("X-Amz-Credential") != "" {
-		return "sigv4-presign"
+		return AuthTypeSigV4Presign
 	}
-	return "anonymous"
+	return AuthTypeAnonymous
 }
 
 func isAnonymousRequest(r *http.Request) bool {
@@ -1030,24 +1028,32 @@ func isAnonymousRequest(r *http.Request) bool {
 	return true
 }
 
-func MakeSignatureMiddleware(validCredentials []Credentials, region string, next http.Handler) http.Handler {
+func MakeSignatureMiddleware(credentialProvider CredentialProvider, region string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// If the request has no authentication credentials at all,
 		// let it through as an anonymous request. The server handlers
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
-			ctx := context.WithValue(r.Context(), IsAuthenticatedContextKey{}, false)
-			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
+			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
+				Type: AuthTypeAnonymous,
+			})
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		usedAccessKeyId, isAuthenticated := checkAuthentication(validCredentials, region, r)
+		identity, isAuthenticated, err := checkAuthentication(credentialProvider, region, r)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
 		if isAuthenticated {
-			ctx := context.WithValue(r.Context(), AccessKeyIdContextKey{}, *usedAccessKeyId)
-			ctx = context.WithValue(ctx, IsAuthenticatedContextKey{}, true)
-			ctx = context.WithValue(ctx, AuthTypeContextKey{}, authTypeForRequest(r))
+			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
+				Authenticated: true,
+				Identity:      identity,
+				Type:          authTypeForRequest(r),
+			})
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
