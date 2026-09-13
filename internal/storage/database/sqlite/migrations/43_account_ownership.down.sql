@@ -1,0 +1,7 @@
+DROP TABLE storage_outbox_entry_create_bucket_options;
+DROP TRIGGER buckets_owner_account_id_update;
+DROP TRIGGER buckets_owner_account_id_insert;
+DROP TRIGGER authentication_credentials_account_identity_update;
+DROP TRIGGER authentication_credentials_account_identity_insert;
+ALTER TABLE buckets DROP COLUMN owner_account_id;
+ALTER TABLE authentication_credentials DROP COLUMN account_id;

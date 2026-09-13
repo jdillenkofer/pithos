@@ -1,0 +1,7 @@
+DROP TABLE storage_outbox_entry_create_bucket_options;
+ALTER TABLE buckets DROP CONSTRAINT buckets_owner_account_id_check;
+ALTER TABLE authentication_credentials DROP CONSTRAINT authentication_credentials_principal_required_check;
+ALTER TABLE authentication_credentials DROP CONSTRAINT authentication_credentials_account_id_check;
+ALTER TABLE buckets DROP COLUMN owner_account_id;
+ALTER TABLE authentication_credentials ALTER COLUMN principal_id DROP NOT NULL;
+ALTER TABLE authentication_credentials DROP COLUMN account_id;

@@ -337,26 +337,6 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
 }
 
-func (authorizer *LuaAuthorizer) AuthorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListBucket", request, bucketName)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListObject", request, key)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeDeleteObjectEntry(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeDeleteObjectEntry", request, key)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListMultipartUpload(ctx context.Context, request *authorization.Request, key string, uploadID string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListMultipartUpload", request, key, uploadID)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListPart(ctx context.Context, request *authorization.Request, partNumber int32) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListPart", request, int(partNumber))
-}
-
 func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (bool, error) {
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()

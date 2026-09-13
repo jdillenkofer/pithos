@@ -18,13 +18,15 @@ const credentialEnvPrefix = "PITHOS_CREDENTIALS_"
 const (
 	MaxAccessKeyIDLength     = 128
 	MaxSecretAccessKeyLength = 256
+	MaxAccountIDLength       = 256
 	MaxPrincipalIDLength     = 256
 )
 
 type Credential struct {
 	AccessKeyID     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey"`
-	PrincipalID     string `json:"principalId,omitempty"`
+	AccountID       string `json:"accountId"`
+	PrincipalID     string `json:"principalId"`
 }
 
 type CredentialProvider interface {
@@ -145,6 +147,15 @@ func ValidateCredential(credential Credential) error {
 	if len(credential.SecretAccessKey) > MaxSecretAccessKeyLength {
 		return fmt.Errorf("secret access key exceeds maximum length of %d bytes", MaxSecretAccessKeyLength)
 	}
+	if len(credential.AccountID) == 0 {
+		return fmt.Errorf("account ID must not be empty")
+	}
+	if len(credential.AccountID) > MaxAccountIDLength {
+		return fmt.Errorf("account ID exceeds maximum length of %d bytes", MaxAccountIDLength)
+	}
+	if len(credential.PrincipalID) == 0 {
+		return fmt.Errorf("principal ID must not be empty")
+	}
 	if len(credential.PrincipalID) > MaxPrincipalIDLength {
 		return fmt.Errorf("principal ID exceeds maximum length of %d bytes", MaxPrincipalIDLength)
 	}
@@ -169,6 +180,7 @@ func NewEnvCredentialProvider() (*EnvCredentialProvider, error) {
 		accessKeyID := os.Getenv(prefix + "_ACCESS_KEY_ID")
 		secretAccessKey := os.Getenv(prefix + "_SECRET_ACCESS_KEY")
 		principalID := os.Getenv(prefix + "_PRINCIPAL_ID")
+		accountID := os.Getenv(prefix + "_ACCOUNT_ID")
 		if accessKeyID == "" || secretAccessKey == "" {
 			// Preserve compatibility with configurations whose first index is 1.
 			if i == 0 {
@@ -179,6 +191,7 @@ func NewEnvCredentialProvider() (*EnvCredentialProvider, error) {
 		credential := Credential{
 			AccessKeyID:     accessKeyID,
 			SecretAccessKey: secretAccessKey,
+			AccountID:       accountID,
 			PrincipalID:     principalID,
 		}
 		if err := validateCredential(credential); err != nil {

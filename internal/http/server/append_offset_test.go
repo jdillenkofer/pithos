@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,10 @@ type appendRouteStorage struct {
 	storage.Storage
 	calls  int
 	offset *int64
+}
+
+func (s *appendRouteStorage) HeadBucket(_ context.Context, name storage.BucketName) (*storage.Bucket, error) {
+	return &storage.Bucket{Name: name, OwnerAccountID: "account"}, nil
 }
 
 func (s *appendRouteStorage) AppendObject(ctx context.Context, bucket storage.BucketName, key storage.ObjectKey, data io.Reader, checksum *storage.ChecksumInput, opts *storage.AppendObjectOptions) (*storage.AppendObjectResult, error) {
@@ -48,6 +53,7 @@ func TestAppendOffsetRouting(t *testing.T) {
 			backend := &appendRouteStorage{}
 			server := &Server{storage: backend, requestAuthorizer: authorizer, tracer: otel.Tracer("append-test")}
 			request := httptest.NewRequest("PUT", tc.url, strings.NewReader("data"))
+			request = request.WithContext(authentication.WithRequestAuthentication(request.Context(), authentication.RequestAuthentication{Authenticated: true, Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "account", PrincipalID: "principal"}}))
 			request.SetPathValue(bucketPath, "bucket")
 			request.SetPathValue(keyPath, "key")
 			if tc.values != nil {

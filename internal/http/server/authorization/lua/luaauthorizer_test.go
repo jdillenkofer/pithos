@@ -672,115 +672,6 @@ func TestIsOperationReturnsFalseWhenOperationDoesNotMatch(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestAuthorizeListBucketFallsBackToAllowWhenHookMissing(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{Operation: authorization.OperationListBuckets}
-	authorized, err := authorizer.AuthorizeListBucket(context.Background(), &request, "my-bucket")
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-}
-
-func TestAuthorizeListObjectUsesOptionalHook(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-
-	function authorizeListObject(request, key)
-	  return key == "public/readme.txt"
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{Operation: authorization.OperationListObjects}
-	authorized, err := authorizer.AuthorizeListObject(context.Background(), &request, "public/readme.txt")
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-
-	authorized, err = authorizer.AuthorizeListObject(context.Background(), &request, "private/secret.txt")
-	assert.False(t, authorized)
-	assert.Nil(t, err)
-}
-
-func TestAuthorizeDeleteObjectEntryFallsBackToAllowWhenHookMissing(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{Operation: authorization.OperationDeleteObjects}
-	authorized, err := authorizer.AuthorizeDeleteObjectEntry(context.Background(), &request, "secret.txt")
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-}
-
-func TestAuthorizeListMultipartUploadUsesOptionalHook(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-
-	function authorizeListMultipartUpload(request, key, uploadId)
-	  return key == "allowed/file.txt" and uploadId == "upload-1"
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{Operation: authorization.OperationListMultipartUploads}
-	authorized, err := authorizer.AuthorizeListMultipartUpload(context.Background(), &request, "allowed/file.txt", "upload-1")
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-
-	authorized, err = authorizer.AuthorizeListMultipartUpload(context.Background(), &request, "allowed/file.txt", "upload-2")
-	assert.False(t, authorized)
-	assert.Nil(t, err)
-}
-
-func TestAuthorizeListPartUsesOptionalHook(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-
-	function authorizeListPart(request, partNumber)
-	  return partNumber == 1
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	request := authorization.Request{Operation: authorization.OperationListParts}
-	authorized, err := authorizer.AuthorizeListPart(context.Background(), &request, 1)
-	assert.True(t, authorized)
-	assert.Nil(t, err)
-
-	authorized, err = authorizer.AuthorizeListPart(context.Background(), &request, 2)
-	assert.False(t, authorized)
-	assert.Nil(t, err)
-}
-
 func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
@@ -858,6 +749,28 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 	assert.True(t, authorized)
 	assert.Nil(t, err)
+}
+
+func TestRequestExposesAccountIdentityAndResourceOwner(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	authorizer, err := NewLuaAuthorizer(`
+	function authorizeRequest(request)
+	  return request.authorization.accountId == "account-a"
+	    and request.authorization.principalId == "principal-a"
+	    and request.resourceAccountId == "account-a"
+	end`)
+	assert.NoError(t, err)
+	request := &authorization.Request{
+		Operation: authorization.OperationGetObject,
+		Authorization: authorization.Authorization{
+			AccountId:   ptrutils.ToPtr("account-a"),
+			PrincipalId: ptrutils.ToPtr("principal-a"),
+		},
+		ResourceAccountId: ptrutils.ToPtr("account-a"),
+	}
+	allowed, err := authorizer.AuthorizeRequest(context.Background(), request)
+	assert.NoError(t, err)
+	assert.True(t, allowed)
 }
 
 func TestPrincipalHelpersFailClosedWithoutPrincipal(t *testing.T) {

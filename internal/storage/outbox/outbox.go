@@ -200,6 +200,22 @@ func (os *outboxStorage) readStorageOutboxPutOptions(ctx context.Context, entry 
 	}, nil
 }
 
+func (os *outboxStorage) readStorageOutboxCreateBucketOptions(ctx context.Context, entry *storageOutboxEntry.Entity) (*storage.CreateBucketOptions, error) {
+	if entry.Operation != storageOutboxEntry.CreateBucketStorageOperation {
+		return nil, nil
+	}
+	var persisted *storageOutboxEntry.CreateBucketOptions
+	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		persisted, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryCreateBucketOptionsById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &storage.CreateBucketOptions{OwnerAccountID: persisted.OwnerAccountID}, nil
+}
+
 func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
 	var deleted bool
 	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -330,6 +346,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		var entry *storageOutboxEntry.Entity
 		var putObjectReaders []io.Reader
 		var putObjectOpts *storage.PutObjectOptions
+		var createBucketOpts *storage.CreateBucketOptions
 
 		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
@@ -362,11 +379,20 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			time.Sleep(5 * time.Second)
 			return
 		}
+		createBucketOpts, err = os.readStorageOutboxCreateBucketOptions(ctx, entry)
+		if err != nil {
+			os.metrics.inFlightEntries.Dec()
+			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
+			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
+			waitForStorageOutboxRetry(ctx)
+			return
+		}
 
 		stopHeartbeat := os.startStorageOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
 		case storageOutboxEntry.CreateBucketStorageOperation:
-			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
+			err = os.innerStorage.CreateBucket(ctx, entry.Bucket, *createBucketOpts)
 		case storageOutboxEntry.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
 		case storageOutboxEntry.PutObjectStorageOperation:
@@ -524,8 +550,15 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	}
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
-		return err
+		id, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
+		if err != nil {
+			return err
+		}
+		ownerAccountID := "system"
+		if len(options) == 1 {
+			ownerAccountID = options[0].OwnerAccountID
+		}
+		return os.storageOutboxEntryRepository.SaveStorageOutboxEntryCreateBucketOptions(ctx, tx.SqlTx(), os.outboxId, *id, storageOutboxEntry.CreateBucketOptions{OwnerAccountID: ownerAccountID})
 	})
 }
 

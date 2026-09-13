@@ -31,6 +31,8 @@ type s3ClientStorage struct {
 	tracer   trace.Tracer
 }
 
+const ownerAccountIDBucketTag = "pithos:owner-account-id"
+
 // Compile-time check to ensure s3ClientStorage implements storage.Storage
 var _ storage.Storage = (*s3ClientStorage)(nil)
 
@@ -73,7 +75,32 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 	if err != nil {
 		return err
 	}
+	ownerAccountID := "system"
+	if len(options) == 1 && options[0].OwnerAccountID != "" {
+		ownerAccountID = options[0].OwnerAccountID
+	}
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket:  aws.String(bucketName.String()),
+		Tagging: &types.Tagging{TagSet: []types.Tag{{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String(ownerAccountID)}}},
+	})
+	if err != nil {
+		_, _ = rs.s3Client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName.String())})
+		return err
+	}
 	return nil
+}
+
+func (rs *s3ClientStorage) bucketOwnerAccountID(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	result, err := rs.s3Client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String(bucketName.String())})
+	if err != nil {
+		return "", err
+	}
+	for _, tag := range result.TagSet {
+		if aws.ToString(tag.Key) == ownerAccountIDBucketTag {
+			return aws.ToString(tag.Value), nil
+		}
+	}
+	return "", fmt.Errorf("bucket %q has no owner account", bucketName.String())
 }
 
 func (rs *s3ClientStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -104,12 +131,19 @@ func (rs *s3ClientStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, e
 	if err != nil {
 		return nil, err
 	}
-	buckets := sliceutils.Map(func(bucket types.Bucket) storage.Bucket {
-		return storage.Bucket{
-			Name:         storage.MustNewBucketName(*bucket.Name),
-			CreationDate: *bucket.CreationDate,
+	buckets := make([]storage.Bucket, 0, len(listBucketsResult.Buckets))
+	for _, bucket := range listBucketsResult.Buckets {
+		name := storage.MustNewBucketName(*bucket.Name)
+		ownerAccountID, err := rs.bucketOwnerAccountID(ctx, name)
+		if err != nil {
+			return nil, err
 		}
-	}, listBucketsResult.Buckets)
+		buckets = append(buckets, storage.Bucket{
+			Name:           storage.MustNewBucketName(*bucket.Name),
+			OwnerAccountID: ownerAccountID,
+			CreationDate:   *bucket.CreationDate,
+		})
+	}
 	return buckets, nil
 }
 
@@ -127,9 +161,14 @@ func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return nil, err
 	}
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
 	return &storage.Bucket{
-		Name:         bucketName,
-		CreationDate: time.Time{},
+		Name:           bucketName,
+		OwnerAccountID: ownerAccountID,
+		CreationDate:   time.Time{},
 	}, nil
 }
 

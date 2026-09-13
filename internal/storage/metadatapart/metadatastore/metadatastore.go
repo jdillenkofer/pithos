@@ -16,8 +16,9 @@ import (
 )
 
 type Bucket struct {
-	Name         BucketName
-	CreationDate time.Time
+	Name           BucketName
+	OwnerAccountID string
+	CreationDate   time.Time
 }
 
 type BucketVersioningStatus string

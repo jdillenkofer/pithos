@@ -176,35 +176,6 @@ func TestRequestTagPredicates(t *testing.T) {
 	assert.True(t, authorized)
 }
 
-func TestListObjectTagFilteringViaResource(t *testing.T) {
-	testutils.SkipIfIntegration(t)
-
-	luaCode := `
-	function authorizeRequest(request)
-	  return true
-	end
-	function authorizeListObject(request, key)
-	  return request:objectTagEquals("team", "storage")
-	end
-	`
-	authorizer, err := NewLuaAuthorizer(luaCode)
-	assert.Nil(t, err)
-
-	resolver := func(ctx context.Context) (map[string]string, error) {
-		return map[string]string{"team": "storage"}, nil
-	}
-	allowed, err := authorizer.AuthorizeListObject(context.Background(), taggingRequest(resolver, nil), "my-key")
-	assert.Nil(t, err)
-	assert.True(t, allowed)
-
-	denyResolver := func(ctx context.Context) (map[string]string, error) {
-		return map[string]string{"team": "other"}, nil
-	}
-	allowed, err = authorizer.AuthorizeListObject(context.Background(), taggingRequest(denyResolver, nil), "my-key")
-	assert.Nil(t, err)
-	assert.False(t, allowed)
-}
-
 func TestSourceObjectTagPredicates(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

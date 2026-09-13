@@ -400,17 +400,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		Key:           keyStr,
 		HttpRequest:   makeAuthorizationHTTPRequest(r),
 	}
-	allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, authRequest)
-	if err != nil {
-		writePlainError(w, http.StatusInternalServerError)
-		return nil, storage.ObjectKey{}, "", false
-	}
-	if !allowed {
-		if !auth.Authenticated {
-			writePlainError(w, http.StatusUnauthorized)
-		} else {
-			writePlainError(w, http.StatusForbidden)
-		}
+	if s.runAuthorization(ctx, authRequest, auth.Authenticated, w, r) {
 		return nil, storage.ObjectKey{}, "", false
 	}
 

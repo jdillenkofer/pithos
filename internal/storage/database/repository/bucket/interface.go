@@ -22,6 +22,7 @@ type Repository interface {
 type Entity struct {
 	Id                            *ulid.ULID
 	Name                          storage.BucketName
+	OwnerAccountID                string
 	VersioningStatus              *string
 	ObjectLockEnabled             bool
 	DefaultRetentionMode          *string
