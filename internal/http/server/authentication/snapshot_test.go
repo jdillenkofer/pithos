@@ -54,8 +54,6 @@ func TestSnapshotCoordinatorRefreshesRetainsAndCloses(t *testing.T) {
 		metric := &dto.Metric{}
 		require.NoError(t, credentialSnapshotReloadSuccesses.WithLabelValues("test").Write(metric))
 		assert.Greater(t, metric.GetCounter().GetValue(), float64(0))
-		require.NoError(t, credentialSnapshotAge.WithLabelValues("test").Write(metric))
-		assert.Greater(t, metric.GetGauge().GetValue(), float64(0))
 
 		require.NoError(t, coordinator.Close())
 		loadsAfterClose := loads.Load()
@@ -63,6 +61,18 @@ func TestSnapshotCoordinatorRefreshesRetainsAndCloses(t *testing.T) {
 		assert.Equal(t, loadsAfterClose, loads.Load())
 		require.NoError(t, coordinator.Close())
 	})
+}
+
+func TestSnapshotAgeCollectorCalculatesAgeWhenCollected(t *testing.T) {
+	collector := newSnapshotAgeCollector()
+	collector.lastSuccess["file"] = time.Now().Add(-time.Minute)
+	metrics := make(chan prometheus.Metric, 1)
+	collector.Collect(metrics)
+	close(metrics)
+
+	metric := &dto.Metric{}
+	require.NoError(t, (<-metrics).Write(metric))
+	assert.InDelta(t, time.Minute.Seconds(), metric.GetGauge().GetValue(), 0.1)
 }
 
 func TestSnapshotCoordinatorZeroIntervalDoesNotRefresh(t *testing.T) {

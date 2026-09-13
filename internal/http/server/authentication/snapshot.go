@@ -43,7 +43,7 @@ func NewSnapshotCoordinator[T any](ctx context.Context, provider string, interva
 		done:      make(chan struct{}),
 	}
 	coordinator.snapshot.Store(initial)
-	observeCredentialSnapshotAge(provider, 0)
+	observeCredentialSnapshotLoaded(provider)
 
 	if interval == 0 {
 		close(coordinator.done)
@@ -60,7 +60,6 @@ func (c *SnapshotCoordinator[T]) refreshLoop(ctx context.Context, interval time.
 	defer close(c.done)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	lastSuccess := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,7 +70,7 @@ func (c *SnapshotCoordinator[T]) refreshLoop(ctx context.Context, interval time.
 				if ctx.Err() != nil {
 					return
 				}
-				observeCredentialSnapshotReload(c.provider, false, time.Since(lastSuccess).Seconds())
+				observeCredentialSnapshotReload(c.provider, false)
 				slog.Error("Failed to reload credential snapshot; retaining last-known-good credentials", "provider", c.provider, "error", err)
 				continue
 			}
@@ -82,8 +81,7 @@ func (c *SnapshotCoordinator[T]) refreshLoop(ctx context.Context, interval time.
 					c.onChanged(next)
 				}
 			}
-			lastSuccess = time.Now()
-			observeCredentialSnapshotReload(c.provider, true, 0)
+			observeCredentialSnapshotReload(c.provider, true)
 		}
 	}
 }
