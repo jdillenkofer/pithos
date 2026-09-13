@@ -71,7 +71,7 @@ func determineMissingBuckets(ctx context.Context, source, destination storage.St
 
 func createMissingBuckets(ctx context.Context, missingBuckets []storage.Bucket, destination storage.Storage) error {
 	for _, missingBucket := range missingBuckets {
-		err := destination.CreateBucket(ctx, missingBucket.Name)
+		err := destination.CreateBucket(ctx, missingBucket.Name, storage.CreateBucketOptions{OwnerAccountID: missingBucket.OwnerAccountID})
 		if err != nil {
 			return err
 		}
