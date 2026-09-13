@@ -13,3 +13,5 @@ CREATE TABLE storage_outbox_entry_create_bucket_options (
   outbox_entry_id TEXT PRIMARY KEY REFERENCES storage_outbox_entries(id) ON DELETE CASCADE,
   owner_account_id TEXT NOT NULL
 );
+INSERT INTO storage_outbox_entry_create_bucket_options (outbox_entry_id, owner_account_id)
+SELECT id, 'legacy' FROM storage_outbox_entries WHERE operation = 'CreateBucket';
