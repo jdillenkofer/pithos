@@ -119,7 +119,7 @@ VALUES
     ('new-key', 'new-secret', 'storage-client');
 ```
 
-Set `enabled` to `FALSE` or delete a row to revoke it. The `revision`,
+Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
 `created_at`, and `updated_at` columns are reserved for managed updates by a
 future administration API. Secret access keys are stored in reversible form
 because SigV4 verification requires them; protect the database with strict

@@ -52,7 +52,7 @@ func TestCredentialProviderReloadsDatabaseSnapshot(t *testing.T) {
 	require.True(t, found)
 	assert.Empty(t, credential.PrincipalID)
 
-	execute(t, db, `UPDATE authentication_credentials SET enabled = FALSE, revision = revision + 1, updated_at = CURRENT_TIMESTAMP WHERE access_key_id = ?`, "old-key")
+	execute(t, db, `UPDATE authentication_credentials SET enabled = FALSE, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE access_key_id = ?`, "old-key")
 	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, principal_id) VALUES (?, ?, ?)`, "new-key", "new-secret", "client")
 
 	require.Eventually(t, func() bool {
