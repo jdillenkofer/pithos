@@ -46,6 +46,7 @@ For detailed documentation, see the [docs](docs/) directory:
 - [Getting Started](docs/getting-started.md) – Installation, build, and Docker setup
 - [CLI Reference](docs/cli-reference.md) – All commands and options
 - [Configuration](docs/configuration.md) – Environment variables and authorization
+- [Account Ownership Update](docs/account-ownership-update.md) – One-time upgrade procedure for existing databases
 - [S3 API Behavior](docs/s3-api.md) – Object metadata, versioning, and SDK-facing semantics
 - [Storage Backends](docs/storage-backends.md) – Storage types and configuration examples
 - [Audit Logging](docs/audit-logging.md) – Audit middleware and verification

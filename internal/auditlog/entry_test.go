@@ -39,3 +39,35 @@ func TestPrincipalIDHashCoverageStartsAtVersion5(t *testing.T) {
 		t.Fatal("principal ID must not change historical format-4 hashes")
 	}
 }
+
+func TestAccountIDHashCoverageStartsAtVersion6(t *testing.T) {
+	entry := &Entry{
+		Version:      6,
+		Timestamp:    time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC),
+		Type:         EntryTypeLog,
+		PreviousHash: make([]byte, sha512.Size),
+		Details: &LogDetails{
+			Operation: OpGetObject,
+			Phase:     PhaseComplete,
+			Actor: ActorDetails{
+				CredentialID: "rotated-key",
+				AccountID:    "storage-account",
+				PrincipalID:  "stable-principal",
+				AuthType:     AuthTypeSigV4Header,
+			},
+		},
+	}
+
+	v6Hash := entry.CalculateHash()
+	entry.Details.(*LogDetails).Actor.AccountID = "tampered-account"
+	if bytes.Equal(v6Hash, entry.CalculateHash()) {
+		t.Fatal("changing a format-6 account ID must change the entry hash")
+	}
+
+	entry.Version = 5
+	v5Hash := entry.CalculateHash()
+	entry.Details.(*LogDetails).Actor.AccountID = "another-account"
+	if !bytes.Equal(v5Hash, entry.CalculateHash()) {
+		t.Fatal("account ID must not change historical format-5 hashes")
+	}
+}

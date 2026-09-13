@@ -15,6 +15,7 @@ type ObjectLockOptions struct {
 
 type CreateBucketOptions struct {
 	ObjectLockEnabled bool
+	OwnerAccountID    string
 }
 
 type ObjectLockObservation struct {

@@ -196,11 +196,11 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		entryKey := ve.key.String()
 		entryRequest.Key = &entryKey
 		s.bindExistingObjectTagsResolver(&entryRequest, entryRequest.Bucket, &entryKey, ve.versionID)
-		allowed, err := s.authorizeDeleteObjectEntry(ctx, &entryRequest, entryKey)
-		if err == nil && allowed && ve.versionID != nil {
+		entryRequest.Operation = authorization.OperationDeleteObject
+		if ve.versionID != nil {
 			entryRequest.Operation = authorization.OperationDeleteObjectVersion
-			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
 		}
+		allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
 		if err == nil && allowed && bypass {
 			entryRequest.Operation = authorization.OperationBypassGovernanceRetention
 			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)

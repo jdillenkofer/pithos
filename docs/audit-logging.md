@@ -142,8 +142,15 @@ With these attributes set, Pithos can still read the file to retrieve the last h
 Format 5 adds `actor.principal_id` while retaining `actor.credential_id`. The
 principal ID identifies the stable actor across credential rotations, while the
 credential ID identifies the exact access key used for an individual request.
-Both fields are covered by the entry hash and signature. Anonymous requests and
-credentials without a configured principal omit `principal_id`.
+Both fields are covered by the entry hash and signature. Anonymous requests
+omit `principal_id`; every configured credential requires a stable principal ID.
+
+## Account identities (format 6)
+
+Format 6 adds `actor.account_id`. Together with `actor.principal_id`, it records
+the stable account and actor behind an authenticated request independently of
+the access key used. The account ID is covered by the entry hash and signature.
+Anonymous requests omit both `account_id` and `principal_id`.
 
 ## Object Lock records (format 4)
 

@@ -43,6 +43,7 @@ func TestSerializers(t *testing.T) {
 				},
 				Actor: auditlog.ActorDetails{
 					CredentialID: "test-actor",
+					AccountID:    "test-account",
 					PrincipalID:  "stable-actor",
 					AuthType:     auditlog.AuthTypeSigV4Header,
 				},

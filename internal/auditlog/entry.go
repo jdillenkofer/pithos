@@ -69,7 +69,8 @@ const (
 //   - v3 added ResourceDetails.SourceBucket/SourceKey for server-side copy operations.
 //   - v4 added object-lock and version details and authenticated copy source fields.
 //   - v5 added ActorDetails.PrincipalID.
-const CurrentVersion uint16 = 5
+//   - v6 added ActorDetails.AccountID.
+const CurrentVersion uint16 = 6
 
 type EntryType string
 
@@ -114,6 +115,7 @@ type ResourceDetails struct {
 
 type ActorDetails struct {
 	CredentialID string
+	AccountID    string
 	PrincipalID  string
 	AuthType     AuthType
 }
@@ -204,6 +206,9 @@ func (e *Entry) CalculateHash() []byte {
 		}
 
 		writeString(buf, d.Actor.CredentialID)
+		if e.Version >= 6 {
+			writeString(buf, d.Actor.AccountID)
+		}
 		if e.Version >= 5 {
 			writeString(buf, d.Actor.PrincipalID)
 		}

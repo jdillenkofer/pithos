@@ -4,6 +4,7 @@ import "context"
 
 type Authorization struct {
 	AccessKeyId *string
+	AccountId   *string
 	PrincipalId *string
 }
 
@@ -76,6 +77,7 @@ const (
 )
 
 type Request struct {
+	ResourceAccountId                  *string
 	VersionID                          *string
 	ObjectLockEnabled                  *string
 	ObjectLockMode                     *string
@@ -115,12 +117,4 @@ type Request struct {
 
 type RequestAuthorizer interface {
 	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
-}
-
-type RequestResourceAuthorizer interface {
-	AuthorizeListBucket(ctx context.Context, request *Request, bucketName string) (bool, error)
-	AuthorizeListObject(ctx context.Context, request *Request, key string) (bool, error)
-	AuthorizeDeleteObjectEntry(ctx context.Context, request *Request, key string) (bool, error)
-	AuthorizeListMultipartUpload(ctx context.Context, request *Request, key string, uploadID string) (bool, error)
-	AuthorizeListPart(ctx context.Context, request *Request, partNumber int32) (bool, error)
 }
