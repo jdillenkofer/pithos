@@ -147,11 +147,18 @@ func clearCredentials(t *testing.T) {
 	}
 }
 
+func newEnvCredentialProvider(t *testing.T) *EnvCredentialProvider {
+	t.Helper()
+	provider, err := NewEnvCredentialProvider()
+	require.NoError(t, err)
+	return provider
+}
+
 func TestEnvCredentialProviderLookup(t *testing.T) {
 	t.Run("index zero", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key-0", "secret-0")
-		credential, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "key-0")
+		credential, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-0")
 		require.NoError(t, err)
 		assert.True(t, found)
 		assert.Equal(t, Credential{AccessKeyID: "key-0", SecretAccessKey: "secret-0"}, credential)
@@ -160,7 +167,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 	t.Run("index one", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "1", "key-1", "secret-1")
-		_, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "key-1")
+		_, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-1")
 		require.NoError(t, err)
 		assert.True(t, found)
 	})
@@ -169,7 +176,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key-0", "secret-0")
 		setCredential(t, "1", "key-1", "secret-1")
-		credential, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "key-1")
+		credential, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-1")
 		require.NoError(t, err)
 		assert.True(t, found)
 		assert.Equal(t, "secret-1", credential.SecretAccessKey)
@@ -178,7 +185,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 	t.Run("unknown key", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key-0", "secret-0")
-		_, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "unknown")
+		_, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "unknown")
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -188,7 +195,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		setCredential(t, "0", "key-0", "secret-0")
 		t.Setenv(credentialEnvPrefix+"1_ACCESS_KEY_ID", "incomplete")
 		setCredential(t, "2", "key-2", "secret-2")
-		_, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "key-2")
+		_, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-2")
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -197,7 +204,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key-0", "secret-0")
 		setCredential(t, "2", "key-2", "secret-2")
-		_, found, err := NewEnvCredentialProvider().Lookup(context.Background(), "key-2")
+		_, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-2")
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -205,7 +212,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 	t.Run("environment changes after construction require a new provider", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key", "old-secret")
-		provider := NewEnvCredentialProvider()
+		provider := newEnvCredentialProvider(t)
 		credential, found, err := provider.Lookup(context.Background(), "key")
 		require.NoError(t, err)
 		require.True(t, found)
@@ -216,7 +223,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		require.True(t, found)
 		assert.Equal(t, "old-secret", credential.SecretAccessKey)
 
-		credential, found, err = NewEnvCredentialProvider().Lookup(context.Background(), "key")
+		credential, found, err = newEnvCredentialProvider(t).Lookup(context.Background(), "key")
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, "new-secret", credential.SecretAccessKey)
@@ -228,7 +235,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		setPrincipal(t, "0", "client")
 		setCredential(t, "1", "new-key", "new-secret")
 		setPrincipal(t, "1", "client")
-		provider := NewEnvCredentialProvider()
+		provider := newEnvCredentialProvider(t)
 		for _, key := range []string{"old-key", "new-key"} {
 			credential, found, err := provider.Lookup(context.Background(), key)
 			require.NoError(t, err)
@@ -240,7 +247,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 	t.Run("missing principal stays empty until a new provider is created", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key", "secret")
-		provider := NewEnvCredentialProvider()
+		provider := newEnvCredentialProvider(t)
 		credential, found, err := provider.Lookup(context.Background(), "key")
 		require.NoError(t, err)
 		require.True(t, found)
@@ -251,11 +258,34 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		require.True(t, found)
 		assert.Empty(t, credential.PrincipalID)
 
-		credential, found, err = NewEnvCredentialProvider().Lookup(context.Background(), "key")
+		credential, found, err = newEnvCredentialProvider(t).Lookup(context.Background(), "key")
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, "new-principal", credential.PrincipalID)
 	})
+}
+
+func TestEnvCredentialProviderRejectsInvalidCredentials(t *testing.T) {
+	tests := map[string]func(*testing.T){
+		"long access key ID": func(t *testing.T) {
+			setCredential(t, "0", strings.Repeat("a", MaxAccessKeyIDLength+1), "secret")
+		},
+		"long secret access key": func(t *testing.T) {
+			setCredential(t, "0", "key", strings.Repeat("s", MaxSecretAccessKeyLength+1))
+		},
+		"long principal ID": func(t *testing.T) {
+			setCredential(t, "0", "key", "secret")
+			setPrincipal(t, "0", strings.Repeat("p", MaxPrincipalIDLength+1))
+		},
+	}
+	for name, configure := range tests {
+		t.Run(name, func(t *testing.T) {
+			clearCredentials(t)
+			configure(t)
+			_, err := NewEnvCredentialProvider()
+			require.ErrorContains(t, err, "environment credential 0")
+		})
+	}
 }
 
 func TestValidateCredentialLengths(t *testing.T) {

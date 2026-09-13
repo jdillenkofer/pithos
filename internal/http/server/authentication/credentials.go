@@ -162,7 +162,7 @@ type EnvCredentialProvider struct {
 	credentials map[string]Credential
 }
 
-func NewEnvCredentialProvider() *EnvCredentialProvider {
+func NewEnvCredentialProvider() (*EnvCredentialProvider, error) {
 	credentials := make(map[string]Credential)
 	for i := 0; ; i++ {
 		prefix := credentialEnvPrefix + strconv.Itoa(i)
@@ -176,17 +176,21 @@ func NewEnvCredentialProvider() *EnvCredentialProvider {
 			}
 			break
 		}
+		credential := Credential{
+			AccessKeyID:     accessKeyID,
+			SecretAccessKey: secretAccessKey,
+			PrincipalID:     principalID,
+		}
+		if err := validateCredential(credential); err != nil {
+			return nil, fmt.Errorf("environment credential %d: %w", i, err)
+		}
 		// Preserve the previous lookup behavior when an access key is listed
 		// more than once: the lowest configured index wins.
 		if _, exists := credentials[accessKeyID]; !exists {
-			credentials[accessKeyID] = Credential{
-				AccessKeyID:     accessKeyID,
-				SecretAccessKey: secretAccessKey,
-				PrincipalID:     principalID,
-			}
+			credentials[accessKeyID] = credential
 		}
 	}
-	return &EnvCredentialProvider{credentials: credentials}
+	return &EnvCredentialProvider{credentials: credentials}, nil
 }
 
 func (p *EnvCredentialProvider) Lookup(ctx context.Context, accessKeyID string) (Credential, bool, error) {

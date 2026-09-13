@@ -360,7 +360,11 @@ func loadCredentialProvider(ctx context.Context, configured *settings.Settings, 
 	reloadInterval := time.Duration(configured.CredentialsReloadIntervalSeconds()) * time.Second
 	switch providerName {
 	case "environment":
-		return authentication.NewEnvCredentialProvider(), nil
+		provider, err := authentication.NewEnvCredentialProvider()
+		if err != nil {
+			return nil, fmt.Errorf("create environment credential provider: %w", err)
+		}
+		return provider, nil
 	case "file":
 		provider, err := authentication.NewFileCredentialProvider(configured.CredentialsPath(), reloadInterval)
 		if err != nil {

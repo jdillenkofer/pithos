@@ -35,6 +35,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -99,6 +100,16 @@ func TestLoadCredentialProvider(t *testing.T) {
 		provider, err := loadCredentialProvider(context.Background(), configured, nil)
 		require.NoError(t, err)
 		assert.IsType(t, &authentication.EnvCredentialProvider{}, provider)
+	})
+
+	t.Run("environment rejects invalid credentials", func(t *testing.T) {
+		t.Setenv("PITHOS_CREDENTIALS_PROVIDER", "environment")
+		t.Setenv("PITHOS_CREDENTIALS_0_ACCESS_KEY_ID", "key")
+		t.Setenv("PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY", strings.Repeat("s", authentication.MaxSecretAccessKeyLength+1))
+		configured, err := settings.LoadSettings(nil)
+		require.NoError(t, err)
+		_, err = loadCredentialProvider(context.Background(), configured, nil)
+		require.ErrorContains(t, err, "create environment credential provider")
 	})
 
 	t.Run("sql uses selected database", func(t *testing.T) {
