@@ -583,6 +583,9 @@ type BucketNotificationManager interface {
 
 // TaggingManager manages object tagging operations.
 type TaggingManager interface {
+	GetBucketTagging(ctx context.Context, bucketName BucketName) (map[string]string, error)
+	PutBucketTagging(ctx context.Context, bucketName BucketName, tags map[string]string) error
+	DeleteBucketTagging(ctx context.Context, bucketName BucketName) error
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
 	GetObjectTagging(ctx context.Context, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) (map[string]string, error)
@@ -732,6 +735,28 @@ func Tester(storage Storage, bucketNames []BucketName, content []byte) error {
 
 		if !bucketName.Equals(buckets[0].Name) {
 			return errors.New("invalid bucketName")
+		}
+
+		err = storage.PutBucketTagging(ctx, bucketName, map[string]string{"environment": "test"})
+		if err != nil {
+			return err
+		}
+		bucketTags, err := storage.GetBucketTagging(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+		if len(bucketTags) != 1 || bucketTags["environment"] != "test" {
+			return errors.New("invalid bucket tags")
+		}
+		if err = storage.DeleteBucketTagging(ctx, bucketName); err != nil {
+			return err
+		}
+		bucketTags, err = storage.GetBucketTagging(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+		if len(bucketTags) != 0 {
+			return errors.New("bucket tags were not deleted")
 		}
 
 		_, err = storage.PutObject(ctx, bucketName, key, nil, data, nil, nil)

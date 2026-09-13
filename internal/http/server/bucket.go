@@ -95,6 +95,10 @@ func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 		s.getBucketWebsiteHandler(w, r)
 		return
 	}
+	if query.Has(taggingQuery) {
+		s.getBucketTaggingHandler(w, r)
+		return
+	}
 	if query.Has(uploadsQuery) {
 		s.listMultipartUploadsHandler(w, r)
 		return
@@ -476,6 +480,10 @@ func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 		s.putBucketWebsiteHandler(w, r)
 		return
 	}
+	if query.Has(taggingQuery) {
+		s.putBucketTaggingHandler(w, r)
+		return
+	}
 	s.createBucketHandler(w, r)
 }
 
@@ -525,6 +533,10 @@ func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request
 	}
 	if query.Has(websiteQuery) {
 		s.deleteBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(taggingQuery) {
+		s.deleteBucketTaggingHandler(w, r)
 		return
 	}
 	s.deleteBucketHandler(w, r)

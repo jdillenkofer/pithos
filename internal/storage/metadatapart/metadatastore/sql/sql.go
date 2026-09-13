@@ -11,6 +11,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/buckettag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/objectlock"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
@@ -45,6 +46,7 @@ type sqlMetadataStore struct {
 	objectLockRepository objectlock.Repository
 	*lifecycle.ValidatedLifecycle
 	bucketRepository         bucket.Repository
+	bucketTagRepository      buckettag.Repository
 	objectRepository         object.Repository
 	partRepository           part.Repository
 	partDedupIndexRepository partdedupindex.Repository
@@ -74,10 +76,15 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 	if err != nil {
 		return nil, err
 	}
+	bucketTagRepository, err := repositoryfactory.NewBucketTagRepository(db)
+	if err != nil {
+		return nil, err
+	}
 	return &sqlMetadataStore{
 		objectLockRepository:     objectLockRepository,
 		ValidatedLifecycle:       lifecycle,
 		bucketRepository:         bucketRepository,
+		bucketTagRepository:      bucketTagRepository,
 		objectRepository:         objectRepository,
 		partRepository:           partRepository,
 		partDedupIndexRepository: partDedupIndexRepository,

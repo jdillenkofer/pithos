@@ -629,6 +629,9 @@ type ObjectStore interface {
 	// size, ErrInvalidWriteOffset is returned.
 	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) (*PartMutationResult, error)
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
+	GetBucketTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName) (map[string]string, error)
+	PutBucketTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, tags map[string]string) error
+	DeleteBucketTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	// GetObjectTagging returns the tag set of the object at key. Returns
 	// ErrNoSuchKey if the object does not exist.
 	GetObjectTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *ObjectTaggingOptions) (map[string]string, error)
