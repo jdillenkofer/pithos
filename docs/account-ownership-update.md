@@ -54,3 +54,25 @@ SELECT access_key_id FROM authentication_credentials WHERE account_id = 'legacy'
 
 Both queries must return no rows. Account IDs on credentials must exactly match
 the `owner_account_id` values assigned to their buckets.
+
+## S3 client storage backends
+
+`S3ClientStorage` records bucket ownership in the reserved upstream bucket tag
+`pithos:owner-account-id`. Before starting the upgraded Pithos version, add this
+tag to every existing bucket visible to each configured S3 client backend. Its
+value must be the account ID that owns the bucket and must exactly match the
+`accountId` configured on that account's credentials.
+
+For example, using the AWS CLI against an S3-compatible endpoint:
+
+```shell
+aws --endpoint-url https://s3.example.test s3api put-bucket-tagging \
+  --bucket team-a-assets \
+  --tagging 'TagSet=[{Key=pithos:owner-account-id,Value=team-a}]'
+```
+
+`put-bucket-tagging` replaces the complete bucket tag set. If an existing
+bucket has other tags, retrieve them first and include them alongside the
+Pithos ownership tag in the update. Repeat this for every existing bucket.
+Pithos cannot list or access an S3-backed bucket whose ownership tag is missing,
+so complete this update before serving traffic.
