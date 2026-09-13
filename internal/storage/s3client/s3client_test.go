@@ -2,16 +2,53 @@ package s3client
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsExistingBucketError(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "access denied API error",
+			err:  &smithy.GenericAPIError{Code: "AccessDenied", Message: "access denied"},
+			want: true,
+		},
+		{
+			name: "forbidden HTTP response",
+			err: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusForbidden}},
+				Err:      errors.New("forbidden"),
+			},
+			want: true,
+		},
+		{
+			name: "unrelated API error",
+			err:  &smithy.GenericAPIError{Code: "InternalError", Message: "remote failure"},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isExistingBucketError(tc.err))
+		})
+	}
+}
 
 func TestCopySourceValueEscapesSourceKey(t *testing.T) {
 	testutils.SkipIfIntegration(t)

@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -68,6 +69,9 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 	if err == nil {
 		return storage.ErrBucketAlreadyExists
 	}
+	if isExistingBucketError(err) {
+		return storage.ErrBucketAlreadyExists
+	}
 	if !isNoSuchBucketError(err) {
 		return err
 	}
@@ -101,6 +105,15 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 		return err
 	}
 	return nil
+}
+
+func isExistingBucketError(err error) bool {
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) && apiError.ErrorCode() == "AccessDenied" {
+		return true
+	}
+	var responseError *smithyhttp.ResponseError
+	return errors.As(err, &responseError) && responseError.HTTPStatusCode() == http.StatusForbidden
 }
 
 func isNoSuchBucketError(err error) bool {
