@@ -34,8 +34,8 @@ func execute(t *testing.T, db database.Database, statement string, args ...any) 
 func TestCredentialProviderReloadsDatabaseSnapshot(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	db := openTestDatabase(t)
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, principal_id) VALUES (?, ?, ?)`, "old-key", "old-secret", "client")
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "legacy-key", "legacy-secret")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "old-key", "old-secret", "account", "client")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "rotated-key", "rotated-secret", "account", "client")
 
 	provider, err := NewCredentialProvider(context.Background(), db, 10*time.Millisecond)
 	require.NoError(t, err)
@@ -47,13 +47,13 @@ func TestCredentialProviderReloadsDatabaseSnapshot(t *testing.T) {
 	assert.Equal(t, "old-secret", credential.SecretAccessKey)
 	assert.Equal(t, "client", credential.PrincipalID)
 
-	credential, found, err = provider.Lookup(context.Background(), "legacy-key")
+	credential, found, err = provider.Lookup(context.Background(), "rotated-key")
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Empty(t, credential.PrincipalID)
+	assert.Equal(t, "account", credential.AccountID)
 
 	execute(t, db, `UPDATE authentication_credentials SET enabled = FALSE, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE access_key_id = ?`, "old-key")
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, principal_id) VALUES (?, ?, ?)`, "new-key", "new-secret", "client")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "new-key", "new-secret", "account", "client")
 
 	require.Eventually(t, func() bool {
 		credential, found, err = provider.Lookup(context.Background(), "new-key")
@@ -67,7 +67,7 @@ func TestCredentialProviderReloadsDatabaseSnapshot(t *testing.T) {
 func TestCredentialProviderHonorsReloadInterval(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	db := openTestDatabase(t)
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "old-secret")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "key", "old-secret", "account", "principal")
 	provider, err := NewCredentialProvider(context.Background(), db, time.Hour)
 	require.NoError(t, err)
 	execute(t, db, `UPDATE authentication_credentials SET secret_access_key = ? WHERE access_key_id = ?`, "new-secret", "key")
@@ -81,7 +81,7 @@ func TestCredentialProviderHonorsReloadInterval(t *testing.T) {
 func TestCredentialProviderRetainsSnapshotOnReloadFailure(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	db := openTestDatabase(t)
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "secret")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "key", "secret", "account", "principal")
 	provider, err := NewCredentialProvider(context.Background(), db, 10*time.Millisecond)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, provider.Close()) })
@@ -96,7 +96,7 @@ func TestCredentialProviderRetainsSnapshotOnReloadFailure(t *testing.T) {
 func TestCredentialProviderZeroReloadIntervalKeepsStartupSnapshot(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	db := openTestDatabase(t)
-	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "old-secret")
+	execute(t, db, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "key", "old-secret", "account", "principal")
 	provider, err := NewCredentialProvider(context.Background(), db, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, provider.Close()) })

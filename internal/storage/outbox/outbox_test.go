@@ -186,7 +186,7 @@ func TestOutboxedPutObjectPreservesPutOptionsOnReplay(t *testing.T) {
 
 	bucketName := storage.MustNewBucketName("bucket")
 	key := storage.MustNewObjectKey("object-with-options")
-	require.NoError(t, outboxStg.CreateBucket(ctx, bucketName))
+	require.NoError(t, outboxStg.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{OwnerAccountID: "account-a"}))
 
 	contentType := "text/plain"
 	storageClass := "STANDARD_IA"
@@ -209,6 +209,9 @@ func TestOutboxedPutObjectPreservesPutOptionsOnReplay(t *testing.T) {
 	}))
 
 	obs.maybeProcessOutboxEntries(ctx)
+	bucket, err := metadataPartStorage.HeadBucket(ctx, bucketName)
+	require.NoError(t, err)
+	require.Equal(t, "account-a", bucket.OwnerAccountID)
 
 	object, err := metadataPartStorage.HeadObject(ctx, bucketName, key, nil)
 	require.NoError(t, err)

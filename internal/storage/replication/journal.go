@@ -53,6 +53,7 @@ type replicationStorage struct {
 
 type operationPayload struct {
 	Bucket            string
+	OwnerAccountID    string
 	Key               string
 	SourceBucket      string
 	SourceKey         string
@@ -847,7 +848,7 @@ func (rs *replicationStorage) apply(ctx context.Context, target storage.Storage,
 	switch name {
 	case "PrepareReconcileBucket":
 		if _, err = target.HeadBucket(ctx, b); errors.Is(err, storage.ErrNoSuchBucket) {
-			err = target.CreateBucket(ctx, b, storage.CreateBucketOptions{ObjectLockEnabled: p.LockConfiguration != nil})
+			err = target.CreateBucket(ctx, b, storage.CreateBucketOptions{ObjectLockEnabled: p.LockConfiguration != nil, OwnerAccountID: p.OwnerAccountID})
 		}
 		if err == nil && p.Versioning != nil && p.Versioning.Status != nil {
 			status := storage.BucketVersioningStatusEnabled

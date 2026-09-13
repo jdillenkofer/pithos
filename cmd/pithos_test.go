@@ -118,7 +118,7 @@ func TestLoadCredentialProvider(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		err = database.WithTx(context.Background(), db, nil, func(ctx context.Context, tx database.Tx) error {
-			_, err := tx.SqlTx().ExecContext(ctx, `INSERT INTO authentication_credentials (access_key_id, secret_access_key) VALUES (?, ?)`, "key", "secret")
+			_, err := tx.SqlTx().ExecContext(ctx, `INSERT INTO authentication_credentials (access_key_id, secret_access_key, account_id, principal_id) VALUES (?, ?, ?, ?)`, "key", "secret", "account", "principal")
 			return err
 		})
 		require.NoError(t, err)
@@ -235,7 +235,7 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
-	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey}}
+	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey, AccountID: "test-account", PrincipalID: "test-principal"}}
 	return httptest.NewServer(server.SetupServer(provider, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
 }
 

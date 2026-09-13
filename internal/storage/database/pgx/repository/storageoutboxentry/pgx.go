@@ -208,6 +208,20 @@ func (sor *pgxRepository) SaveStorageOutboxContentChunk(ctx context.Context, tx 
 	return err
 }
 
+func (sor *pgxRepository) SaveStorageOutboxEntryCreateBucketOptions(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, options storageoutboxentry.CreateBucketOptions) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO storage_outbox_entry_create_bucket_options (outbox_entry_id, owner_account_id) SELECT id, $1 FROM storage_outbox_entries WHERE id = $2 AND outbox_id = $3 ON CONFLICT (outbox_entry_id) DO UPDATE SET owner_account_id = EXCLUDED.owner_account_id`, options.OwnerAccountID, id.String(), outboxId)
+	return err
+}
+
+func (sor *pgxRepository) FindStorageOutboxEntryCreateBucketOptionsById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) (*storageoutboxentry.CreateBucketOptions, error) {
+	var options storageoutboxentry.CreateBucketOptions
+	err := tx.QueryRowContext(ctx, `SELECT o.owner_account_id FROM storage_outbox_entry_create_bucket_options o INNER JOIN storage_outbox_entries e ON e.id = o.outbox_entry_id WHERE o.outbox_entry_id = $1 AND e.outbox_id = $2`, id.String(), outboxId).Scan(&options.OwnerAccountID)
+	if err == sql.ErrNoRows {
+		return &options, nil
+	}
+	return &options, err
+}
+
 func (sor *pgxRepository) SaveStorageOutboxEntryPutOptions(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, putOptions *storageoutboxentry.PutOptions) error {
 	var cacheControl, contentDisposition, contentEncoding, contentLanguage, expires, websiteRedirectLocation *string
 	var userMetadata map[string]string

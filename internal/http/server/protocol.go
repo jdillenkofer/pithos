@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -366,6 +367,75 @@ func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, 
 // error/deny response. It returns true when the caller should stop handling the
 // request (error or denied).
 func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
+	// Account ownership is a hard boundary evaluated before the programmable
+	// authorizer. Lua can further restrict access, but can never cross it.
+	if request.Operation == authorization.OperationListBuckets && !isAuthenticated {
+		w.WriteHeader(http.StatusUnauthorized)
+		return true
+	}
+	if request.Operation == authorization.OperationCreateBucket && !isAuthenticated {
+		w.WriteHeader(http.StatusUnauthorized)
+		return true
+	}
+	if !isAuthenticated {
+		switch request.Operation {
+		case authorization.OperationGetObject, authorization.OperationGetObjectVersion,
+			authorization.OperationHeadObject, authorization.OperationHeadObjectVersion:
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			return true
+		}
+	}
+	if request.Operation == authorization.OperationCreateBucket && request.Authorization.AccountId != nil && request.Bucket != nil {
+		bucketName, err := storage.NewBucketName(*request.Bucket)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+		bucket, err := s.storage.HeadBucket(ctx, bucketName)
+		switch {
+		case err == nil:
+			request.ResourceAccountId = ptrutils.ToPtr(bucket.OwnerAccountID)
+			if bucket.OwnerAccountID != *request.Authorization.AccountId {
+				w.WriteHeader(http.StatusForbidden)
+				return true
+			}
+		case errors.Is(err, storage.ErrNoSuchBucket):
+			request.ResourceAccountId = request.Authorization.AccountId
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+	}
+	if request.Bucket != nil && request.Operation != authorization.OperationCreateBucket {
+		bucketName, err := storage.NewBucketName(*request.Bucket)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+		bucket, err := s.storage.HeadBucket(ctx, bucketName)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+		request.ResourceAccountId = ptrutils.ToPtr(bucket.OwnerAccountID)
+		if isAuthenticated && (request.Authorization.AccountId == nil || *request.Authorization.AccountId != bucket.OwnerAccountID) {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+	}
+	if request.SourceBucket != nil {
+		sourceBucketName, err := storage.NewBucketName(*request.SourceBucket)
+		if err != nil {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+		sourceBucket, err := s.storage.HeadBucket(ctx, sourceBucketName)
+		if err != nil || request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID {
+			w.WriteHeader(http.StatusForbidden)
+			return true
+		}
+	}
 	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
@@ -466,65 +536,19 @@ func authorizationFromAuthentication(auth authentication.RequestAuthentication) 
 		return authorization.Authorization{}
 	}
 
-	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID}
+	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID, AccountId: &auth.Identity.AccountID}
 	if auth.Identity.PrincipalID != "" {
 		result.PrincipalId = &auth.Identity.PrincipalID
 	}
 	return result
 }
 
-func (s *Server) authorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
-	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
-	if !ok {
-		return true, nil
+func storageAccountID(ctx context.Context) string {
+	auth := authentication.RequestAuthenticationFromContext(ctx)
+	if !auth.Authenticated || auth.Identity == nil {
+		return ""
 	}
-	return requestResourceAuthorizer.AuthorizeListBucket(ctx, request, bucketName)
-}
-
-// authorizeListObject filters a single listed key. existingTags, when non-nil,
-// is the object's tag set already loaded by the list query; it is served to
-// tag predicates directly so filtering a page does not cost one storage lookup
-// per key. A nil existingTags (e.g. common prefixes, or backends whose list
-// results carry no tags) falls back to a lazy per-key lookup.
-func (s *Server) authorizeListObject(ctx context.Context, request *authorization.Request, key string, existingTags map[string]string) (bool, error) {
-	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
-	if !ok {
-		return true, nil
-	}
-	// Re-bind the existing-tags resolver to the object currently being filtered so
-	// authorizeListObject policies can gate each listed object on its own tags.
-	if existingTags != nil {
-		request.ResolveExistingObjectTags = func(context.Context) (map[string]string, error) {
-			return existingTags, nil
-		}
-	} else {
-		s.bindExistingObjectTagsResolver(request, request.Bucket, &key, nil)
-	}
-	return requestResourceAuthorizer.AuthorizeListObject(ctx, request, key)
-}
-
-func (s *Server) authorizeDeleteObjectEntry(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
-	if !ok {
-		return true, nil
-	}
-	return requestResourceAuthorizer.AuthorizeDeleteObjectEntry(ctx, request, key)
-}
-
-func (s *Server) authorizeListMultipartUpload(ctx context.Context, request *authorization.Request, key string, uploadID string) (bool, error) {
-	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
-	if !ok {
-		return true, nil
-	}
-	return requestResourceAuthorizer.AuthorizeListMultipartUpload(ctx, request, key, uploadID)
-}
-
-func (s *Server) authorizeListPart(ctx context.Context, request *authorization.Request, partNumber int32) (bool, error) {
-	requestResourceAuthorizer, ok := s.requestAuthorizer.(authorization.RequestResourceAuthorizer)
-	if !ok {
-		return true, nil
-	}
-	return requestResourceAuthorizer.AuthorizeListPart(ctx, request, partNumber)
+	return auth.Identity.AccountID
 }
 
 func cloneStringSliceMap(input map[string][]string) map[string][]string {

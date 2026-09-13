@@ -12,6 +12,7 @@ const (
 
 type AuthenticatedIdentity struct {
 	AccessKeyID string
+	AccountID   string
 	PrincipalID string
 }
 

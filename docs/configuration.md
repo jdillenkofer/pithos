@@ -42,18 +42,19 @@ must be contiguous, and loading stops at the first missing or incomplete pair
 after the initial index.
 
 Access Key IDs are limited to 128 bytes, secret access keys to 256 bytes, and
-principal IDs to 256 bytes. Access Key IDs and secret access keys must be
-non-empty; an empty principal ID means that no principal is configured.
-
-Principal IDs are optional, opaque, and case-sensitive. To rotate a credential
-without changing policy, configure the old and new entries with the same ID:
+account and principal IDs to 256 bytes. All four credential fields are
+required, non-empty, opaque, and case-sensitive. To rotate a credential
+without changing ownership or policy, configure the old and new entries with
+the same account and principal IDs:
 
 ```shell
 PITHOS_CREDENTIALS_0_ACCESS_KEY_ID=old-key
 PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY=old-secret
+PITHOS_CREDENTIALS_0_ACCOUNT_ID=storage-account
 PITHOS_CREDENTIALS_0_PRINCIPAL_ID=storage-client
 PITHOS_CREDENTIALS_1_ACCESS_KEY_ID=new-key
 PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY=new-secret
+PITHOS_CREDENTIALS_1_ACCOUNT_ID=storage-account
 PITHOS_CREDENTIALS_1_PRINCIPAL_ID=storage-client
 ```
 
@@ -76,11 +77,13 @@ indexed environment variables:
     {
       "accessKeyId": "old-key",
       "secretAccessKey": "old-secret",
+      "accountId": "storage-account",
       "principalId": "storage-client"
     },
     {
       "accessKeyId": "new-key",
       "secretAccessKey": "new-secret",
+      "accountId": "storage-account",
       "principalId": "storage-client"
     }
   ]
@@ -113,10 +116,10 @@ Credentials can initially be provisioned with SQL:
 
 ```sql
 INSERT INTO authentication_credentials
-    (access_key_id, secret_access_key, principal_id)
+    (access_key_id, secret_access_key, account_id, principal_id)
 VALUES
-    ('old-key', 'old-secret', 'storage-client'),
-    ('new-key', 'new-secret', 'storage-client');
+    ('old-key', 'old-secret', 'storage-account', 'storage-client'),
+    ('new-key', 'new-secret', 'storage-account', 'storage-client');
 ```
 
 Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
@@ -124,6 +127,60 @@ Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
 future administration API. Secret access keys are stored in reversible form
 because SigV4 verification requires them; protect the database with strict
 access controls and storage-level encryption.
+
+#### One-time account ownership update
+
+When upgrading a database that already contains buckets, the account-ownership
+migration assigns the temporary account ID `legacy` to every existing bucket
+and SQL credential. This keeps all rows assigned to an account while the real
+ownership mapping is being applied; `legacy` is not intended as a permanent
+account ID.
+
+Before serving client traffic with the upgraded installation, update every
+existing bucket to its real owning account. If all existing buckets belong to
+one account, run this once after the schema migration:
+
+```sql
+UPDATE buckets
+SET owner_account_id = 'storage-account'
+WHERE owner_account_id = 'legacy';
+```
+
+For multiple accounts, use separate updates with explicit bucket names (or an
+equivalent reviewed mapping) so that every bucket receives the correct owner:
+
+```sql
+UPDATE buckets
+SET owner_account_id = 'team-a'
+WHERE name IN ('team-a-assets', 'team-a-backups');
+
+UPDATE buckets
+SET owner_account_id = 'team-b'
+WHERE name IN ('team-b-assets');
+```
+
+When the SQL credential provider is used, update its migrated credentials to
+the same account IDs and choose stable principal IDs as part of the same
+maintenance operation:
+
+```sql
+UPDATE authentication_credentials
+SET account_id = 'storage-account',
+    principal_id = access_key_id
+WHERE account_id = 'legacy';
+```
+
+File and environment credentials must instead be updated in their respective
+configuration source. Verify that no placeholder ownership remains before
+resuming client traffic:
+
+```sql
+SELECT name FROM buckets WHERE owner_account_id = 'legacy';
+SELECT access_key_id FROM authentication_credentials WHERE account_id = 'legacy';
+```
+
+Both queries must return no rows. Account IDs on credentials must exactly match
+the `owner_account_id` values assigned to their buckets.
 
 ### Storage
 
@@ -159,10 +216,16 @@ You can set up multiple credentials for different users or roles:
 ```sh
 export PITHOS_CREDENTIALS_1_ACCESS_KEY_ID="admin-access-key-id"
 export PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY="admin-secret-access-key"
+export PITHOS_CREDENTIALS_1_ACCOUNT_ID="admin-account"
+export PITHOS_CREDENTIALS_1_PRINCIPAL_ID="admin"
 export PITHOS_CREDENTIALS_2_ACCESS_KEY_ID="my-bucket-admin-access-key-id"
 export PITHOS_CREDENTIALS_2_SECRET_ACCESS_KEY="my-bucket-admin-secret-access-key"
+export PITHOS_CREDENTIALS_2_ACCOUNT_ID="bucket-account"
+export PITHOS_CREDENTIALS_2_PRINCIPAL_ID="bucket-admin"
 export PITHOS_CREDENTIALS_3_ACCESS_KEY_ID="my-bucket-readonly-access-key-id"
 export PITHOS_CREDENTIALS_3_SECRET_ACCESS_KEY="my-bucket-readonly-secret-access-key"
+export PITHOS_CREDENTIALS_3_ACCOUNT_ID="bucket-account"
+export PITHOS_CREDENTIALS_3_PRINCIPAL_ID="bucket-reader"
 ```
 
 ## Lua Authorizer Script
@@ -175,12 +238,16 @@ When no `authorizer.lua` file is found, pithos selects a built-in fallback based
 
 | Authentication | Default behaviour |
 |----------------|-------------------|
-| Disabled | All requests are allowed (permissive mode, suitable for local development) |
+| Disabled | Anonymous `GetObject`/`HeadObject` requests are allowed; anonymous writes, listings, and management operations remain denied |
 | Enabled | Anonymous requests are denied; authenticated requests are allowed |
 
 The enabled fallback remains deny-anonymous even when the environment provider
 contains no credentials. This prevents an accidentally empty credential
 configuration from enabling anonymous access.
+
+Anonymous API and website reads still pass through `authorizeRequest`; they are
+served only when Lua allows the corresponding `GetObject`, `HeadObject`,
+`GetObjectVersion`, or `HeadObjectVersion` operation.
 
 To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
 
@@ -190,7 +257,9 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 |-------|------|-------------|
 | `request.operation` | `string` | The S3 operation being performed (e.g. `"GetObject"`, `"PutObject"`) |
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
+| `request.authorization.accountId` | `string\|nil` | The caller's account ID, or `nil` for anonymous requests |
 | `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` when absent or anonymous |
+| `request.resourceAccountId` | `string\|nil` | The owning account of the target bucket; for `CreateBucket`, the caller's account |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
 | `request.sourceBucket` | `string\|nil` | The copy source bucket for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
@@ -246,38 +315,12 @@ Requests that target an explicit object version through the `versionId` query pa
 
 Server-side copies (`CopyObject` and `UploadPartCopy`, requested via the `x-amz-copy-source` header) are authorized as a single `CopyObject` / `UploadPartCopy` operation. For these operations the request carries both the destination (`request.bucket` / `request.key`) and the copy source (`request.sourceBucket` / `request.sourceKey`), so a policy can reason about both ends in one check.
 
-### Optional List Filtering Hooks
-
-In addition to `authorizeRequest(request)`, you can define optional hooks to filter list results item-by-item:
-
-```lua
-function authorizeListBucket(request, bucketName)
-  -- Return true if this bucket should be visible in ListBuckets
-  return true
-end
-
-function authorizeListObject(request, key)
-  -- Return true if this key (or common prefix) should be visible in ListObjects
-  return true
-end
-
-function authorizeDeleteObjectEntry(request, key)
-  -- Return true if this key should be deleted in DeleteObjects
-  return true
-end
-
-function authorizeListMultipartUpload(request, key, uploadId)
-  -- Return true if this upload should be visible in ListMultipartUploads
-  return true
-end
-
-function authorizeListPart(request, partNumber)
-  -- Return true if this part should be visible in ListParts
-  return true
-end
-```
-
-If a hook is not defined, items are allowed by default for backward compatibility.
+Account ownership is enforced before Lua runs. Authenticated requests can only
+target buckets owned by their account, and copy operations require both source
+and destination buckets to have that owner. `ListBuckets` only returns the
+caller's buckets. Object, multipart-upload, and part listings are authorized
+once and are not filtered item by item. Multi-delete authorizes each entry as
+`DeleteObject` or `DeleteObjectVersion`.
 
 ### Examples
 
