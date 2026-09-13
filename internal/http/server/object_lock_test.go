@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -19,6 +20,10 @@ type denialCaptureStorage struct {
 	operation auditlog.Operation
 	resource  auditlog.ResourceDetails
 	details   *auditlog.ObjectLockDetails
+}
+
+func (s *denialCaptureStorage) HeadBucket(_ context.Context, name storage.BucketName) (*storage.Bucket, error) {
+	return &storage.Bucket{Name: name, OwnerAccountID: "account"}, nil
 }
 
 func (s *denialCaptureStorage) RecordAuthorizationDenied(ctx context.Context, operation auditlog.Operation, resource auditlog.ResourceDetails, details *auditlog.ObjectLockDetails) {
@@ -37,6 +42,7 @@ func TestObjectLockAuthorizationAndDeniedAudit(t *testing.T) {
 	st := &denialCaptureStorage{}
 	server := &Server{storage: st, requestAuthorizer: authorizer}
 	request := httptest.NewRequest("DELETE", "/bucket/key?versionId=protected-version", nil)
+	request = request.WithContext(authentication.WithRequestAuthentication(request.Context(), authentication.RequestAuthentication{Authenticated: true, Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "account", PrincipalID: "principal"}}))
 	request.Header.Set("x-amz-bypass-governance-retention", "true")
 	response := httptest.NewRecorder()
 	allowed, stop := server.authorizeGovernanceBypass(request.Context(), "bucket", "key", response, request)
@@ -48,6 +54,7 @@ func TestObjectLockAuthorizationAndDeniedAudit(t *testing.T) {
 	require.False(t, st.details.BypassAuthorized)
 	// Confirm Lua receives the parsed requested values and the explicit version.
 	request = httptest.NewRequest("PUT", "/bucket/key?versionId=allowed-version", nil)
+	request = request.WithContext(authentication.WithRequestAuthentication(request.Context(), authentication.RequestAuthentication{Authenticated: true, Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "account", PrincipalID: "principal"}}))
 	request.Header.Set("x-amz-bypass-governance-retention", "true")
 	response = httptest.NewRecorder()
 	allowed, stop = server.authorizeGovernanceBypass(request.Context(), "bucket", "key", response, request)

@@ -47,6 +47,9 @@ func (s *TextSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if d.Actor.CredentialID != "" {
 			base += fmt.Sprintf(" | CredentialID: %s", escape(d.Actor.CredentialID))
 		}
+		if e.Version >= 6 && d.Actor.AccountID != "" {
+			base += fmt.Sprintf(" | AccountID: %s", escape(d.Actor.AccountID))
+		}
 		if e.Version >= 5 && d.Actor.PrincipalID != "" {
 			base += fmt.Sprintf(" | PrincipalID: %s", escape(d.Actor.PrincipalID))
 		}
@@ -185,6 +188,10 @@ func (d *TextDecoder) Decode() (*auditlog.Entry, error) {
 				dls.Resource.SourceKey = unescape(val)
 			case "Actor", "CredentialID":
 				dls.Actor.CredentialID = unescape(val)
+			case "AccountID":
+				if version >= 6 {
+					dls.Actor.AccountID = unescape(val)
+				}
 			case "PrincipalID":
 				if version >= 5 {
 					dls.Actor.PrincipalID = unescape(val)

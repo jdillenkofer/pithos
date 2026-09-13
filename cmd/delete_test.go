@@ -248,14 +248,13 @@ func TestDeleteObjects(t *testing.T) {
 			assert.NotNil(t, err)
 		})
 
-		t.Run("it should apply per-entry delete authorization hook"+testSuffix, func(t *testing.T) {
+		t.Run("it should authorize each delete entry as its concrete operation"+testSuffix, func(t *testing.T) {
 			authorizationCode := `
 			function authorizeRequest(request)
+			  if request.operation == "DeleteObject" or request.operation == "DeleteObjectVersion" then
+			    return request.key ~= "blocked.txt"
+			  end
 			  return true
-			end
-
-			function authorizeDeleteObjectEntry(request, key)
-			  return key ~= "blocked.txt"
 			end
 			`
 			requestAuthorizer, err := lua.NewLuaAuthorizer(authorizationCode)

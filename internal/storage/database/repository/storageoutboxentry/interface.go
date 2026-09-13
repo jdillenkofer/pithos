@@ -36,6 +36,8 @@ type Repository interface {
 	// options for an entry. Options that were never set come back as their
 	// zero values, which replay treats the same as absent.
 	FindStorageOutboxEntryPutOptionsById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) (*PutOptions, error)
+	SaveStorageOutboxEntryCreateBucketOptions(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, options CreateBucketOptions) error
+	FindStorageOutboxEntryCreateBucketOptionsById(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID) (*CreateBucketOptions, error)
 	ClaimFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string, owner string, now time.Time, claimUntil time.Time) (*Entity, bool, error)
 	DeleteStorageOutboxEntryByClaimOwner(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string) (bool, error)
 	ReleaseStorageOutboxEntryClaim(ctx context.Context, tx *sql.Tx, outboxId string, id ulid.ULID, owner string, now time.Time) (bool, error)
@@ -69,6 +71,10 @@ type PutOptions struct {
 	StorageClass *string
 	Tags         map[string]string
 	Metadata     *storage.ObjectMetadata
+}
+
+type CreateBucketOptions struct {
+	OwnerAccountID string
 }
 
 const (

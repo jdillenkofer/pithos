@@ -26,8 +26,13 @@ func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 		return metadatastore.ErrBucketAlreadyExists
 	}
 
+	ownerAccountID := "system"
+	if len(options) == 1 && options[0].OwnerAccountID != "" {
+		ownerAccountID = options[0].OwnerAccountID
+	}
 	err = sms.bucketRepository.SaveBucket(ctx, tx, &bucket.Entity{
-		Name: bucketName,
+		Name:           bucketName,
+		OwnerAccountID: ownerAccountID,
 	})
 	if err != nil {
 		return err
@@ -82,8 +87,9 @@ func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]met
 	}
 	buckets := sliceutils.Map(func(bucketEntity bucket.Entity) metadatastore.Bucket {
 		return metadatastore.Bucket{
-			Name:         bucketEntity.Name,
-			CreationDate: bucketEntity.CreatedAt,
+			Name:           bucketEntity.Name,
+			OwnerAccountID: bucketEntity.OwnerAccountID,
+			CreationDate:   bucketEntity.CreatedAt,
 		}
 	}, bucketEntities)
 
@@ -103,8 +109,9 @@ func (sms *sqlMetadataStore) HeadBucket(ctx context.Context, tx *sql.Tx, bucketN
 	}
 
 	bucket := metadatastore.Bucket{
-		Name:         bucketEntity.Name,
-		CreationDate: bucketEntity.CreatedAt,
+		Name:           bucketEntity.Name,
+		OwnerAccountID: bucketEntity.OwnerAccountID,
+		CreationDate:   bucketEntity.CreatedAt,
 	}
 
 	return &bucket, nil

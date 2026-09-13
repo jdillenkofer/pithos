@@ -14,10 +14,10 @@ type sqliteRepository struct {
 }
 
 const (
-	findAllBucketsStmt     = "SELECT id, name, versioning_status, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets"
-	findBucketByNameStmt   = "SELECT id, name, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
-	insertBucketStmt       = "INSERT INTO buckets (id, name, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
-	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, versioning_status = $2, object_lock_enabled = $3, default_retention_mode = $4, default_retention_days = $5, default_retention_years = $6, website_index_document_suffix = $7, website_error_document_key = $8, website_redirect_all_host_name = $9, website_redirect_all_protocol = $10, website_routing_rules_json = $11, cors_configuration_json = $12, lifecycle_configuration_json = $13, notification_configuration_json = $14, updated_at = $15 WHERE id = $16"
+	findAllBucketsStmt     = "SELECT id, name, owner_account_id, versioning_status, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets"
+	findBucketByNameStmt   = "SELECT id, name, owner_account_id, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at FROM buckets WHERE name = $1"
+	insertBucketStmt       = "INSERT INTO buckets (id, name, owner_account_id, versioning_status, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years, website_index_document_suffix, website_error_document_key, website_redirect_all_host_name, website_redirect_all_protocol, website_routing_rules_json, cors_configuration_json, lifecycle_configuration_json, notification_configuration_json, created_at, updated_at) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)"
+	updateBucketByIdStmt   = "UPDATE buckets SET name = $1, owner_account_id = $2, versioning_status = $3, object_lock_enabled = $4, default_retention_mode = $5, default_retention_days = $6, default_retention_years = $7, website_index_document_suffix = $8, website_error_document_key = $9, website_redirect_all_host_name = $10, website_redirect_all_protocol = $11, website_routing_rules_json = $12, cors_configuration_json = $13, lifecycle_configuration_json = $14, notification_configuration_json = $15, updated_at = $16 WHERE id = $17"
 	existsBucketByNameStmt = "SELECT id FROM buckets WHERE name = $1"
 	deleteBucketByNameStmt = "DELETE FROM buckets WHERE name = $1"
 )
@@ -29,6 +29,7 @@ func NewRepository() (bucket.Repository, error) {
 func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	var id string
 	var name string
+	var ownerAccountID string
 	var versioningStatus *string
 	var websiteIndexDocumentSuffix *string
 	var websiteErrorDocumentKey *string
@@ -40,7 +41,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	var notificationConfigurationJSON *string
 	var createdAt time.Time
 	var updatedAt time.Time
-	err := bucketRows.Scan(&id, &name, &versioningStatus, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &websiteRedirectAllHostName, &websiteRedirectAllProtocol, &websiteRoutingRulesJSON, &corsConfigurationJSON, &lifecycleConfigurationJSON, &notificationConfigurationJSON, &createdAt, &updatedAt)
+	err := bucketRows.Scan(&id, &name, &ownerAccountID, &versioningStatus, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &websiteRedirectAllHostName, &websiteRedirectAllProtocol, &websiteRoutingRulesJSON, &corsConfigurationJSON, &lifecycleConfigurationJSON, &notificationConfigurationJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -48,6 +49,7 @@ func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
 	bucketEntity := bucket.Entity{
 		Id:                            &ulidId,
 		Name:                          storage.MustNewBucketName(name),
+		OwnerAccountID:                ownerAccountID,
 		VersioningStatus:              versioningStatus,
 		WebsiteIndexDocumentSuffix:    websiteIndexDocumentSuffix,
 		WebsiteErrorDocumentKey:       websiteErrorDocumentKey,
@@ -91,7 +93,7 @@ func (br *sqliteRepository) FindBucketByName(ctx context.Context, tx *sql.Tx, bu
 	}
 	var id, name string
 	bucketEntity := &bucket.Entity{}
-	err = bucketRows.Scan(&id, &name, &bucketEntity.VersioningStatus, &bucketEntity.ObjectLockEnabled, &bucketEntity.DefaultRetentionMode, &bucketEntity.DefaultRetentionDays, &bucketEntity.DefaultRetentionYears, &bucketEntity.WebsiteIndexDocumentSuffix, &bucketEntity.WebsiteErrorDocumentKey, &bucketEntity.WebsiteRedirectAllHostName, &bucketEntity.WebsiteRedirectAllProtocol, &bucketEntity.WebsiteRoutingRulesJSON, &bucketEntity.CORSConfigurationJSON, &bucketEntity.LifecycleConfigurationJSON, &bucketEntity.NotificationConfigurationJSON, &bucketEntity.CreatedAt, &bucketEntity.UpdatedAt)
+	err = bucketRows.Scan(&id, &name, &bucketEntity.OwnerAccountID, &bucketEntity.VersioningStatus, &bucketEntity.ObjectLockEnabled, &bucketEntity.DefaultRetentionMode, &bucketEntity.DefaultRetentionDays, &bucketEntity.DefaultRetentionYears, &bucketEntity.WebsiteIndexDocumentSuffix, &bucketEntity.WebsiteErrorDocumentKey, &bucketEntity.WebsiteRedirectAllHostName, &bucketEntity.WebsiteRedirectAllProtocol, &bucketEntity.WebsiteRoutingRulesJSON, &bucketEntity.CORSConfigurationJSON, &bucketEntity.LifecycleConfigurationJSON, &bucketEntity.NotificationConfigurationJSON, &bucketEntity.CreatedAt, &bucketEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +115,11 @@ func (br *sqliteRepository) SaveBucket(ctx context.Context, tx *sql.Tx, bucket *
 		bucket.Id = &id
 		bucket.CreatedAt = time.Now().UTC()
 		bucket.UpdatedAt = bucket.CreatedAt
-		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
+		_, err := tx.ExecContext(ctx, insertBucketStmt, bucket.Id.String(), bucket.Name.String(), bucket.OwnerAccountID, bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.CreatedAt, bucket.UpdatedAt)
 		return err
 	}
 	bucket.UpdatedAt = time.Now().UTC()
-	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
+	_, err := tx.ExecContext(ctx, updateBucketByIdStmt, bucket.Name.String(), bucket.OwnerAccountID, bucket.VersioningStatus, bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, bucket.DefaultRetentionYears, bucket.WebsiteIndexDocumentSuffix, bucket.WebsiteErrorDocumentKey, bucket.WebsiteRedirectAllHostName, bucket.WebsiteRedirectAllProtocol, bucket.WebsiteRoutingRulesJSON, bucket.CORSConfigurationJSON, bucket.LifecycleConfigurationJSON, bucket.NotificationConfigurationJSON, bucket.UpdatedAt, bucket.Id.String())
 	return err
 }
 

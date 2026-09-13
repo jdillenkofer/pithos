@@ -24,8 +24,8 @@ func TestFileCredentialProvider(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	writeCredentialsFile(t, path, `{
 		"credentials": [
-			{"accessKeyId":"old-key","secretAccessKey":"old-secret","principalId":"client"},
-			{"accessKeyId":"legacy-key","secretAccessKey":"legacy-secret"}
+			{"accessKeyId":"old-key","secretAccessKey":"old-secret","accountId":"account","principalId":"client"},
+			{"accessKeyId":"rotated-key","secretAccessKey":"rotated-secret","accountId":"account","principalId":"client"}
 		]
 	}`)
 
@@ -36,14 +36,14 @@ func TestFileCredentialProvider(t *testing.T) {
 	credential, found, err := provider.Lookup(context.Background(), "old-key")
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, Credential{AccessKeyID: "old-key", SecretAccessKey: "old-secret", PrincipalID: "client"}, credential)
+	assert.Equal(t, Credential{AccessKeyID: "old-key", SecretAccessKey: "old-secret", AccountID: "account", PrincipalID: "client"}, credential)
 
-	credential, found, err = provider.Lookup(context.Background(), "legacy-key")
+	credential, found, err = provider.Lookup(context.Background(), "rotated-key")
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Empty(t, credential.PrincipalID)
+	assert.Equal(t, "account", credential.AccountID)
 
-	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"new-key","secretAccessKey":"new-secret","principalId":"client"}]}`)
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"new-key","secretAccessKey":"new-secret","accountId":"account","principalId":"client"}]}`)
 	require.Eventually(t, func() bool {
 		credential, found, err = provider.Lookup(context.Background(), "new-key")
 		return err == nil && found && credential.PrincipalID == "client"
@@ -70,11 +70,11 @@ func TestFileCredentialProvider(t *testing.T) {
 
 func TestFileCredentialProviderReloadInterval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
-	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old"}]}`)
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old","accountId":"account","principalId":"principal"}]}`)
 	provider, err := NewFileCredentialProvider(path, time.Hour)
 	require.NoError(t, err)
 
-	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new"}]}`)
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new","accountId":"account","principalId":"principal"}]}`)
 	credential, found, err := provider.Lookup(context.Background(), "key")
 	require.NoError(t, err)
 	require.True(t, found)
@@ -83,12 +83,12 @@ func TestFileCredentialProviderReloadInterval(t *testing.T) {
 
 func TestFileCredentialProviderZeroReloadIntervalKeepsStartupSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
-	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old"}]}`)
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"old","accountId":"account","principalId":"principal"}]}`)
 	provider, err := NewFileCredentialProvider(path, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, provider.Close()) })
 
-	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new"}]}`)
+	writeCredentialsFile(t, path, `{"credentials":[{"accessKeyId":"key","secretAccessKey":"new","accountId":"account","principalId":"principal"}]}`)
 	time.Sleep(25 * time.Millisecond)
 	credential, found, err := provider.Lookup(context.Background(), "key")
 	require.NoError(t, err)
@@ -130,6 +130,8 @@ func setCredential(t *testing.T, index, accessKeyID, secretAccessKey string) {
 	t.Helper()
 	t.Setenv(credentialEnvPrefix+index+"_ACCESS_KEY_ID", accessKeyID)
 	t.Setenv(credentialEnvPrefix+index+"_SECRET_ACCESS_KEY", secretAccessKey)
+	t.Setenv(credentialEnvPrefix+index+"_ACCOUNT_ID", "account")
+	t.Setenv(credentialEnvPrefix+index+"_PRINCIPAL_ID", "principal")
 }
 
 func setPrincipal(t *testing.T, index, principalID string) {
@@ -144,6 +146,7 @@ func clearCredentials(t *testing.T) {
 		t.Setenv(credentialEnvPrefix+index+"_ACCESS_KEY_ID", "")
 		t.Setenv(credentialEnvPrefix+index+"_SECRET_ACCESS_KEY", "")
 		t.Setenv(credentialEnvPrefix+index+"_PRINCIPAL_ID", "")
+		t.Setenv(credentialEnvPrefix+index+"_ACCOUNT_ID", "")
 	}
 }
 
@@ -161,7 +164,7 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		credential, found, err := newEnvCredentialProvider(t).Lookup(context.Background(), "key-0")
 		require.NoError(t, err)
 		assert.True(t, found)
-		assert.Equal(t, Credential{AccessKeyID: "key-0", SecretAccessKey: "secret-0"}, credential)
+		assert.Equal(t, Credential{AccessKeyID: "key-0", SecretAccessKey: "secret-0", AccountID: "account", PrincipalID: "principal"}, credential)
 	})
 
 	t.Run("index one", func(t *testing.T) {
@@ -244,24 +247,12 @@ func TestEnvCredentialProviderLookup(t *testing.T) {
 		}
 	})
 
-	t.Run("missing principal stays empty until a new provider is created", func(t *testing.T) {
+	t.Run("missing principal is rejected", func(t *testing.T) {
 		clearCredentials(t)
 		setCredential(t, "0", "key", "secret")
-		provider := newEnvCredentialProvider(t)
-		credential, found, err := provider.Lookup(context.Background(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Empty(t, credential.PrincipalID)
-		setPrincipal(t, "0", "new-principal")
-		credential, found, err = provider.Lookup(context.Background(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Empty(t, credential.PrincipalID)
-
-		credential, found, err = newEnvCredentialProvider(t).Lookup(context.Background(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, "new-principal", credential.PrincipalID)
+		setPrincipal(t, "0", "")
+		_, err := NewEnvCredentialProvider()
+		require.ErrorContains(t, err, "principal ID must not be empty")
 	})
 }
 
@@ -292,16 +283,20 @@ func TestValidateCredentialLengths(t *testing.T) {
 	valid := Credential{
 		AccessKeyID:     strings.Repeat("a", MaxAccessKeyIDLength),
 		SecretAccessKey: strings.Repeat("s", MaxSecretAccessKeyLength),
+		AccountID:       strings.Repeat("c", MaxAccountIDLength),
 		PrincipalID:     strings.Repeat("p", MaxPrincipalIDLength),
 	}
 	require.NoError(t, validateCredential(valid))
 
 	tests := map[string]Credential{
-		"empty access key ID":     {SecretAccessKey: "secret"},
-		"long access key ID":      {AccessKeyID: strings.Repeat("a", MaxAccessKeyIDLength+1), SecretAccessKey: "secret"},
-		"empty secret access key": {AccessKeyID: "key"},
-		"long secret access key":  {AccessKeyID: "key", SecretAccessKey: strings.Repeat("s", MaxSecretAccessKeyLength+1)},
-		"long principal ID":       {AccessKeyID: "key", SecretAccessKey: "secret", PrincipalID: strings.Repeat("p", MaxPrincipalIDLength+1)},
+		"empty access key ID":     {SecretAccessKey: "secret", AccountID: "account", PrincipalID: "principal"},
+		"long access key ID":      {AccessKeyID: strings.Repeat("a", MaxAccessKeyIDLength+1), SecretAccessKey: "secret", AccountID: "account", PrincipalID: "principal"},
+		"empty secret access key": {AccessKeyID: "key", AccountID: "account", PrincipalID: "principal"},
+		"long secret access key":  {AccessKeyID: "key", SecretAccessKey: strings.Repeat("s", MaxSecretAccessKeyLength+1), AccountID: "account", PrincipalID: "principal"},
+		"empty account ID":        {AccessKeyID: "key", SecretAccessKey: "secret", PrincipalID: "principal"},
+		"long account ID":         {AccessKeyID: "key", SecretAccessKey: "secret", AccountID: strings.Repeat("c", MaxAccountIDLength+1), PrincipalID: "principal"},
+		"empty principal ID":      {AccessKeyID: "key", SecretAccessKey: "secret", AccountID: "account"},
+		"long principal ID":       {AccessKeyID: "key", SecretAccessKey: "secret", AccountID: "account", PrincipalID: strings.Repeat("p", MaxPrincipalIDLength+1)},
 	}
 	for name, credential := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -309,8 +304,6 @@ func TestValidateCredentialLengths(t *testing.T) {
 		})
 	}
 
-	valid.PrincipalID = ""
-	require.NoError(t, validateCredential(valid))
 }
 
 type recordingCredentialProvider struct {

@@ -47,7 +47,7 @@ func (p *CredentialProvider) loadSnapshot(ctx context.Context) (*credentialSnaps
 	credentials := make(map[string]authentication.Credential)
 	err := database.WithTx(ctx, p.database, &dbsql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		rows, err := tx.SqlTx().QueryContext(ctx, `
-			SELECT access_key_id, secret_access_key, principal_id
+			SELECT access_key_id, secret_access_key, account_id, principal_id
 			FROM authentication_credentials
 			WHERE enabled = TRUE`)
 		if err != nil {
@@ -58,13 +58,15 @@ func (p *CredentialProvider) loadSnapshot(ctx context.Context) (*credentialSnaps
 		for rows.Next() {
 			var accessKeyID string
 			var secretAccessKey string
+			var accountID string
 			var principalID dbsql.NullString
-			if err := rows.Scan(&accessKeyID, &secretAccessKey, &principalID); err != nil {
+			if err := rows.Scan(&accessKeyID, &secretAccessKey, &accountID, &principalID); err != nil {
 				return err
 			}
 			credential := authentication.Credential{
 				AccessKeyID:     accessKeyID,
 				SecretAccessKey: secretAccessKey,
+				AccountID:       accountID,
 			}
 			if principalID.Valid {
 				credential.PrincipalID = principalID.String
