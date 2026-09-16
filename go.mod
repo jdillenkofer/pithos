@@ -8,14 +8,14 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.46.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.3
-	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.23.3
+	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.23.4
 	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.53.0
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.107.0
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.111.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.112.0
 	github.com/aws/aws-sdk-go-v2/service/sns v1.46.0
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.51.0
 	github.com/aws/smithy-go v1.28.1
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/go-tpm v0.9.8
 	github.com/google/tink/go v1.7.0
 	github.com/hashicorp/vault/api v1.23.0
@@ -38,10 +38,10 @@ require (
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
-	golang.org/x/crypto v0.56.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sync v0.23.0
-	golang.org/x/term v0.45.0
+	golang.org/x/term v0.46.0
 	google.golang.org/api v0.297.0
 )
 
@@ -140,8 +140,8 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260904194346-d0f1323225a4 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4 // indirect
