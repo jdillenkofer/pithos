@@ -39,6 +39,7 @@ type jsonLogDetails struct {
 	} `json:"resource"`
 	Actor struct {
 		CredentialID string `json:"credential_id,omitempty"`
+		AccountID    string `json:"account_id,omitempty"`
 		PrincipalID  string `json:"principal_id,omitempty"`
 		AuthType     string `json:"auth_type,omitempty"`
 	} `json:"actor"`
@@ -108,6 +109,9 @@ func (s *JsonSerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 				payload.ObjectLock = d.ObjectLock
 			}
 			payload.Actor.CredentialID = d.Actor.CredentialID
+			if e.Version >= 6 {
+				payload.Actor.AccountID = d.Actor.AccountID
+			}
 			if e.Version >= 5 {
 				payload.Actor.PrincipalID = d.Actor.PrincipalID
 			}
@@ -267,6 +271,9 @@ func (d *JsonDecoder) Decode() (*auditlog.Entry, error) {
 		}
 		if e.Version >= 5 {
 			e.Details.(*auditlog.LogDetails).Actor.PrincipalID = jd.Actor.PrincipalID
+		}
+		if e.Version >= 6 {
+			e.Details.(*auditlog.LogDetails).Actor.AccountID = jd.Actor.AccountID
 		}
 	case auditlog.EntryTypeGrounding:
 		var jd jsonGroundingDetails

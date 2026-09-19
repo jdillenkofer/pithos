@@ -364,6 +364,21 @@ func (csm *conditionalStorageMiddleware) GetObjectTagging(ctx context.Context, b
 	return s.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
+func (csm *conditionalStorageMiddleware) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	s := csm.lookupStorage(bucketName)
+	return s.GetBucketTagging(ctx, bucketName)
+}
+
+func (csm *conditionalStorageMiddleware) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	s := csm.lookupStorage(bucketName)
+	return s.PutBucketTagging(ctx, bucketName, tags)
+}
+
+func (csm *conditionalStorageMiddleware) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	s := csm.lookupStorage(bucketName)
+	return s.DeleteBucketTagging(ctx, bucketName)
+}
+
 func (csm *conditionalStorageMiddleware) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	ctx, span := csm.tracer.Start(ctx, "ConditionalStorageMiddleware.PutObjectTagging")
 	defer span.End()

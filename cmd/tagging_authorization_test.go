@@ -249,10 +249,6 @@ func TestTagBasedAuthorization(t *testing.T) {
 		  end
 		  return true
 		end
-
-		function authorizeListObject(request, key)
-		  return request:objectTagEquals("team", "storage")
-		end
 		`
 		newAuthorizer := func() authorization.RequestAuthorizer {
 			ra, err := lua.NewLuaAuthorizer(authorizationCode)
@@ -287,25 +283,6 @@ func TestTagBasedAuthorization(t *testing.T) {
 
 			_, err = s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key2})
 			assertForbidden(t, err)
-		})
-
-		t.Run("ListObjects is filtered by existing object tag"+testSuffix, func(t *testing.T) {
-			s3Client, _, cleanup := setupTestServerWithAuthorizer(newAuthorizer(), dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
-			t.Cleanup(cleanup)
-
-			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
-			assert.Nil(t, err)
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body), Tagging: aws.String("team=storage")})
-			assert.Nil(t, err)
-			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key2, Body: bytes.NewReader(body), Tagging: aws.String("team=other")})
-			assert.Nil(t, err)
-
-			list, err := s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{Bucket: bucketName})
-			assert.Nil(t, err)
-			assert.Len(t, list.Contents, 1)
-			if len(list.Contents) == 1 {
-				assert.Equal(t, *key, *list.Contents[0].Key)
-			}
 		})
 
 		t.Run("PutObjectTagging is gated by the request tag being set"+testSuffix, func(t *testing.T) {

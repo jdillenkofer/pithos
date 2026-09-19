@@ -127,10 +127,12 @@ func (m *AuditLogMiddleware) observeWrite() {
 
 func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, phase auditlog.Phase, resource auditResource, err error, statusCode int32, durationMs int64) {
 	credentialID := ""
+	accountID := ""
 	principalID := ""
 	auth := authentication.RequestAuthenticationFromContext(ctx)
 	if auth.Authenticated && auth.Identity != nil {
 		credentialID = auth.Identity.AccessKeyID
+		accountID = auth.Identity.AccountID
 		principalID = auth.Identity.PrincipalID
 	}
 
@@ -200,6 +202,7 @@ func (m *AuditLogMiddleware) log(ctx context.Context, op auditlog.Operation, pha
 			},
 			Actor: auditlog.ActorDetails{
 				CredentialID: credentialID,
+				AccountID:    accountID,
 				PrincipalID:  principalID,
 				AuthType:     authType,
 			},
@@ -285,6 +288,24 @@ func (m *AuditLogMiddleware) DeleteBucket(ctx context.Context, bucketName storag
 	return m.run(ctx, auditlog.OpDeleteBucket, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
 		return m.Next.DeleteBucket(ctx, bucketName)
 	})
+}
+
+func (m *AuditLogMiddleware) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	var tags map[string]string
+	err := m.run(ctx, auditlog.OpGetBucketTagging, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error {
+		var err error
+		tags, err = m.Next.GetBucketTagging(ctx, bucketName)
+		return err
+	})
+	return tags, err
+}
+
+func (m *AuditLogMiddleware) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	return m.run(ctx, auditlog.OpPutBucketTagging, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error { return m.Next.PutBucketTagging(ctx, bucketName, tags) })
+}
+
+func (m *AuditLogMiddleware) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	return m.run(ctx, auditlog.OpDeleteBucketTagging, auditResource{bucket: bucketName.String()}, func(ctx context.Context) error { return m.Next.DeleteBucketTagging(ctx, bucketName) })
 }
 
 func (m *AuditLogMiddleware) ListBuckets(ctx context.Context) ([]storage.Bucket, error) {

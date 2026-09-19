@@ -27,6 +27,88 @@ func tagSetToMap(tagging *Tagging) (map[string]string, error) {
 	return tags, nil
 }
 
+func taggingResponse(tags map[string]string) Tagging {
+	response := Tagging{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/", TagSet: make([]Tag, 0, len(tags))}
+	for key, value := range tags {
+		response.TagSet = append(response.TagSet, Tag{Key: key, Value: value})
+	}
+	return response
+}
+
+func (s *Server) getBucketTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.getBucketTaggingHandler")
+	defer span.End()
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if s.authorizeRequest(ctx, authorization.OperationGetBucketTagging, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+	tags, err := s.storage.GetBucketTagging(ctx, bucketName)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.Header().Set(contentTypeHeader, applicationXmlContentType)
+	writeXMLResponse(w, r, http.StatusOK, taggingResponse(tags))
+}
+
+func (s *Server) putBucketTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.putBucketTaggingHandler")
+	defer span.End()
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	data, validationErr := readLimitedBody(r, w, maxPutObjectTaggingBodySize)
+	var request Tagging
+	malformed := validationErr == nil && xml.Unmarshal(data, &request) != nil
+	var tags map[string]string
+	if validationErr == nil && !malformed {
+		tags, validationErr = tagSetToMap(&request)
+	}
+	if validationErr == nil && !malformed {
+		validationErr = storage.ValidateTags(tags)
+	}
+	if s.authorizeRequestWithRequestTags(ctx, authorization.OperationPutBucketTagging, ptrutils.ToPtr(bucketName.String()), nil, tags, w, r) {
+		return
+	}
+	if malformed {
+		writeMalformedXML(w, r)
+		return
+	}
+	if validationErr != nil {
+		handleError(validationErr, w, r)
+		return
+	}
+	if err := s.storage.PutBucketTagging(ctx, bucketName, tags); err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) deleteBucketTaggingHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, span := s.tracer.Start(r.Context(), "Server.deleteBucketTaggingHandler")
+	defer span.End()
+	bucketName, err := storage.NewBucketName(r.PathValue(bucketPath))
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
+	if s.authorizeRequest(ctx, authorization.OperationDeleteBucketTagging, ptrutils.ToPtr(bucketName.String()), nil, w, r) {
+		return
+	}
+	if err := s.storage.DeleteBucketTagging(ctx, bucketName); err != nil {
+		handleError(err, w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.tracer.Start(r.Context(), "Server.getObjectTaggingHandler")
 	defer span.End()
@@ -62,13 +144,7 @@ func (s *Server) getObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	response := Tagging{
-		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
-		TagSet: make([]Tag, 0, len(tags)),
-	}
-	for k, v := range tags {
-		response.TagSet = append(response.TagSet, Tag{Key: k, Value: v})
-	}
+	response := taggingResponse(tags)
 
 	responseHeaders := w.Header()
 	responseHeaders.Set(contentTypeHeader, applicationXmlContentType)

@@ -318,7 +318,6 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 	partNumberMarker := opts.PartNumberMarker
 	collectedParts := make([]*storage.MultipartPart, 0, maxParts)
 	var nextPartNumberMarker *string
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListParts, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), r)
 
 	for {
 		result, err := s.storage.ListParts(ctx, bucketName, key, uploadID, storage.ListPartsOptions{
@@ -333,13 +332,6 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 		for partIndex, part := range result.Parts {
 			partNumberStr := strconv.Itoa(int(part.PartNumber))
 			lastPartNumberMarker = &partNumberStr
-			allowed, err := s.authorizeListPart(ctx, baseRequest, part.PartNumber)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !allowed {
-				continue
-			}
 			collectedParts = append(collectedParts, part)
 			if int32(len(collectedParts)) >= maxParts {
 				hasMore := partIndex < len(result.Parts)-1 || result.IsTruncated

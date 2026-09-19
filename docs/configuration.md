@@ -16,14 +16,15 @@
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PITHOS_AUTHENTICATION_ENABLED` | Enable/disable authentication | `true` |
+| `PITHOS_AUTHENTICATION_ENABLED` | Enable authentication; explicitly set to `false` for permissive local-development mode | `true` |
 | `PITHOS_CREDENTIALS_PROVIDER` | Credential source: `auto`, `environment`, `file`, or `sql`; `auto` selects `file` when a credentials path is set and `environment` otherwise | `auto` |
 | `PITHOS_CREDENTIALS_PATH` | Optional path to a reloadable credentials JSON file; when set, environment credentials are ignored | - |
 | `PITHOS_CREDENTIALS_RELOAD_INTERVAL_SECONDS` | Interval between background file or SQL credential refreshes; `0` loads only at startup | `5` |
 | `PITHOS_CREDENTIALS_DATABASE_INDEX` | Zero-based configured database index used by the SQL provider | `0` |
 | `PITHOS_CREDENTIALS_[N]_ACCESS_KEY_ID` | Access Key ID for the Nth user | - |
 | `PITHOS_CREDENTIALS_[N]_SECRET_ACCESS_KEY` | Secret Access Key for the Nth user | - |
-| `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Optional stable principal ID for the Nth credential | - |
+| `PITHOS_CREDENTIALS_[N]_ACCOUNT_ID` | Required account ID for the Nth credential; determines bucket ownership | - |
+| `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Required stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
@@ -42,18 +43,19 @@ must be contiguous, and loading stops at the first missing or incomplete pair
 after the initial index.
 
 Access Key IDs are limited to 128 bytes, secret access keys to 256 bytes, and
-principal IDs to 256 bytes. Access Key IDs and secret access keys must be
-non-empty; an empty principal ID means that no principal is configured.
-
-Principal IDs are optional, opaque, and case-sensitive. To rotate a credential
-without changing policy, configure the old and new entries with the same ID:
+account and principal IDs to 256 bytes. All four credential fields are
+required, non-empty, opaque, and case-sensitive. To rotate a credential
+without changing ownership or policy, configure the old and new entries with
+the same account and principal IDs:
 
 ```shell
 PITHOS_CREDENTIALS_0_ACCESS_KEY_ID=old-key
 PITHOS_CREDENTIALS_0_SECRET_ACCESS_KEY=old-secret
+PITHOS_CREDENTIALS_0_ACCOUNT_ID=storage-account
 PITHOS_CREDENTIALS_0_PRINCIPAL_ID=storage-client
 PITHOS_CREDENTIALS_1_ACCESS_KEY_ID=new-key
 PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY=new-secret
+PITHOS_CREDENTIALS_1_ACCOUNT_ID=storage-account
 PITHOS_CREDENTIALS_1_PRINCIPAL_ID=storage-client
 ```
 
@@ -76,11 +78,13 @@ indexed environment variables:
     {
       "accessKeyId": "old-key",
       "secretAccessKey": "old-secret",
+      "accountId": "storage-account",
       "principalId": "storage-client"
     },
     {
       "accessKeyId": "new-key",
       "secretAccessKey": "new-secret",
+      "accountId": "storage-account",
       "principalId": "storage-client"
     }
   ]
@@ -113,10 +117,10 @@ Credentials can initially be provisioned with SQL:
 
 ```sql
 INSERT INTO authentication_credentials
-    (access_key_id, secret_access_key, principal_id)
+    (access_key_id, secret_access_key, account_id, principal_id)
 VALUES
-    ('old-key', 'old-secret', 'storage-client'),
-    ('new-key', 'new-secret', 'storage-client');
+    ('old-key', 'old-secret', 'storage-account', 'storage-client'),
+    ('new-key', 'new-secret', 'storage-account', 'storage-client');
 ```
 
 Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
@@ -124,6 +128,10 @@ Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
 future administration API. Secret access keys are stored in reversible form
 because SigV4 verification requires them; protect the database with strict
 access controls and storage-level encryption.
+
+Existing installations upgrading from v0.45.x or earlier to v0.46.x or later
+must perform the [one-time account ownership update](account-ownership-update.md)
+before serving client traffic after the account-ownership migration.
 
 ### Storage
 
@@ -159,10 +167,16 @@ You can set up multiple credentials for different users or roles:
 ```sh
 export PITHOS_CREDENTIALS_1_ACCESS_KEY_ID="admin-access-key-id"
 export PITHOS_CREDENTIALS_1_SECRET_ACCESS_KEY="admin-secret-access-key"
+export PITHOS_CREDENTIALS_1_ACCOUNT_ID="admin-account"
+export PITHOS_CREDENTIALS_1_PRINCIPAL_ID="admin"
 export PITHOS_CREDENTIALS_2_ACCESS_KEY_ID="my-bucket-admin-access-key-id"
 export PITHOS_CREDENTIALS_2_SECRET_ACCESS_KEY="my-bucket-admin-secret-access-key"
+export PITHOS_CREDENTIALS_2_ACCOUNT_ID="bucket-account"
+export PITHOS_CREDENTIALS_2_PRINCIPAL_ID="bucket-admin"
 export PITHOS_CREDENTIALS_3_ACCESS_KEY_ID="my-bucket-readonly-access-key-id"
 export PITHOS_CREDENTIALS_3_SECRET_ACCESS_KEY="my-bucket-readonly-secret-access-key"
+export PITHOS_CREDENTIALS_3_ACCOUNT_ID="bucket-account"
+export PITHOS_CREDENTIALS_3_PRINCIPAL_ID="bucket-reader"
 ```
 
 ## Lua Authorizer Script
@@ -175,12 +189,23 @@ When no `authorizer.lua` file is found, pithos selects a built-in fallback based
 
 | Authentication | Default behaviour |
 |----------------|-------------------|
-| Disabled | All requests are allowed (permissive mode, suitable for local development) |
+| Explicitly disabled | All requests are allowed (permissive mode, suitable for local development) |
 | Enabled | Anonymous requests are denied; authenticated requests are allowed |
 
 The enabled fallback remains deny-anonymous even when the environment provider
 contains no credentials. This prevents an accidentally empty credential
 configuration from enabling anonymous access.
+
+Authentication is disabled only when `PITHOS_AUTHENTICATION_ENABLED=false` (or
+the equivalent `-authenticationEnabled=false` flag) is set explicitly. In this
+mode no credentials are loaded and account-ownership boundaries are not
+enforced, because requests have no authenticated account. Do not use this mode
+for an internet-facing or multi-tenant deployment. A custom Lua authorizer is
+still evaluated when present.
+
+Anonymous API and website reads still pass through `authorizeRequest`; they are
+served only when Lua allows the corresponding `GetObject`, `HeadObject`,
+`GetObjectVersion`, or `HeadObjectVersion` operation.
 
 To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
 
@@ -190,7 +215,9 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 |-------|------|-------------|
 | `request.operation` | `string` | The S3 operation being performed (e.g. `"GetObject"`, `"PutObject"`) |
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
-| `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` when absent or anonymous |
+| `request.authorization.accountId` | `string\|nil` | The caller's account ID, or `nil` for anonymous requests |
+| `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` for anonymous requests |
+| `request.resourceAccountId` | `string\|nil` | The owning account of the target bucket; for `CreateBucket`, the caller's account |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
 | `request.sourceBucket` | `string\|nil` | The copy source bucket for `CopyObject`/`UploadPartCopy`, otherwise `nil` |
@@ -246,38 +273,14 @@ Requests that target an explicit object version through the `versionId` query pa
 
 Server-side copies (`CopyObject` and `UploadPartCopy`, requested via the `x-amz-copy-source` header) are authorized as a single `CopyObject` / `UploadPartCopy` operation. For these operations the request carries both the destination (`request.bucket` / `request.key`) and the copy source (`request.sourceBucket` / `request.sourceKey`), so a policy can reason about both ends in one check.
 
-### Optional List Filtering Hooks
-
-In addition to `authorizeRequest(request)`, you can define optional hooks to filter list results item-by-item:
-
-```lua
-function authorizeListBucket(request, bucketName)
-  -- Return true if this bucket should be visible in ListBuckets
-  return true
-end
-
-function authorizeListObject(request, key)
-  -- Return true if this key (or common prefix) should be visible in ListObjects
-  return true
-end
-
-function authorizeDeleteObjectEntry(request, key)
-  -- Return true if this key should be deleted in DeleteObjects
-  return true
-end
-
-function authorizeListMultipartUpload(request, key, uploadId)
-  -- Return true if this upload should be visible in ListMultipartUploads
-  return true
-end
-
-function authorizeListPart(request, partNumber)
-  -- Return true if this part should be visible in ListParts
-  return true
-end
-```
-
-If a hook is not defined, items are allowed by default for backward compatibility.
+Account ownership is enforced before Lua runs. Authenticated requests can only
+target buckets owned by their account, and copy operations require both source
+and destination buckets to have that owner. `ListBuckets` only returns the
+caller's buckets. Object, multipart-upload, and part listings are authorized
+once and are not filtered item by item. Multi-delete authorizes each entry as
+`DeleteObject` or `DeleteObjectVersion`. For S3 compatibility, a missing bucket
+returns `404 NoSuchBucket`; an existing bucket owned by another account returns
+`403 Forbidden`. Lua cannot override either result.
 
 ### Examples
 
@@ -314,7 +317,7 @@ end
 
 #### Public website bucket
 
-To serve a bucket via the [website endpoint](configuration.md#pithos_website_domain), anonymous `GetObject` requests must be allowed. Authenticated requests still require a valid Access Key ID:
+To serve a bucket via the [website endpoint](configuration.md#pithos_website_domain), anonymous `GetObject` and `HeadObject` requests must be allowed. Authenticated requests still require a valid Access Key ID:
 
 ```lua
 PUBLIC_BUCKET="my-public-bucket"
@@ -326,7 +329,9 @@ function authorizeRequest(request)
   end
 
   -- Allow anonymous read access to the public bucket (required for website hosting)
-  if request:isAnonymous() and request.operation == "GetObject" and request.bucket == PUBLIC_BUCKET then
+  if request:isAnonymous()
+      and request.bucket == PUBLIC_BUCKET
+      and request:isOperationIn({"GetObject", "HeadObject"}) then
     return true
   end
 

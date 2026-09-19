@@ -27,17 +27,12 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 		handleError(err, w, r)
 		return
 	}
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListBuckets, nil, nil, r)
+	auth := s.storageAccountID(ctx)
 	listAllMyBucketsResult := ListAllMyBucketsResult{
 		Buckets: []*BucketResult{},
 	}
 	for _, bucket := range buckets {
-		allowed, err := s.authorizeListBucket(ctx, baseRequest, bucket.Name.String())
-		if err != nil {
-			handleError(err, w, r)
-			return
-		}
-		if !allowed {
+		if !s.authenticationDisabled && bucket.OwnerAccountID != auth {
 			continue
 		}
 		listAllMyBucketsResult.Buckets = append(listAllMyBucketsResult.Buckets, &BucketResult{
@@ -98,6 +93,10 @@ func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if query.Has(websiteQuery) {
 		s.getBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(taggingQuery) {
+		s.getBucketTaggingHandler(w, r)
 		return
 	}
 	if query.Has(uploadsQuery) {
@@ -186,7 +185,6 @@ func (s *Server) listAndFilterMultipartUploads(ctx context.Context, r *http.Requ
 	seenPrefixes := map[string]struct{}{}
 	keyMarker := opts.KeyMarker
 	uploadIDMarker := opts.UploadIdMarker
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListMultipartUploads, ptrutils.ToPtr(bucketName.String()), nil, r)
 	var nextKeyMarker *string
 	var nextUploadIDMarker *string
 
@@ -209,13 +207,6 @@ func (s *Server) listAndFilterMultipartUploads(ctx context.Context, r *http.Requ
 			uploadID := upload.UploadId.String()
 			lastKeyMarker = &uploadKey
 			lastUploadIDMarker = &uploadID
-			allowed, err := s.authorizeListMultipartUpload(ctx, baseRequest, uploadKey, uploadID)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if !allowed {
-				continue
-			}
 			collectedUploads = append(collectedUploads, upload)
 			if int32(len(collectedUploads)) >= maxUploads {
 				hasMore := uploadIndex < len(result.Uploads)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
@@ -230,13 +221,6 @@ func (s *Server) listAndFilterMultipartUploads(ctx context.Context, r *http.Requ
 		for _, commonPrefix := range result.CommonPrefixes {
 			lastKeyMarker = &commonPrefix
 			lastUploadIDMarker = ptrutils.ToPtr("")
-			allowed, err := s.authorizeListMultipartUpload(ctx, baseRequest, commonPrefix, "")
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if !allowed {
-				continue
-			}
 			if _, exists := seenPrefixes[commonPrefix]; exists {
 				continue
 			}
@@ -343,7 +327,6 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 	seenPrefixes := map[string]struct{}{}
 	startAfter := opts.StartAfter
 	var nextMarker *string
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationListObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
 
 	for {
 		result, err := s.storage.ListObjects(ctx, bucketName, storage.ListObjectsOptions{
@@ -360,13 +343,6 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		for objectIndex, object := range result.Objects {
 			key := object.Key.String()
 			lastScanned = &key
-			allowed, err := s.authorizeListObject(ctx, baseRequest, key, object.Tags)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !allowed {
-				continue
-			}
 			collectedObjects = append(collectedObjects, object)
 			if int32(len(collectedObjects)) >= maxKeys {
 				hasMore := objectIndex < len(result.Objects)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
@@ -379,13 +355,6 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 		}
 		for _, commonPrefix := range result.CommonPrefixes {
 			lastScanned = &commonPrefix
-			allowed, err := s.authorizeListObject(ctx, baseRequest, commonPrefix, nil)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !allowed {
-				continue
-			}
 			if _, exists := seenPrefixes[commonPrefix]; exists {
 				continue
 			}
@@ -511,6 +480,10 @@ func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 		s.putBucketWebsiteHandler(w, r)
 		return
 	}
+	if query.Has(taggingQuery) {
+		s.putBucketTaggingHandler(w, r)
+		return
+	}
 	s.createBucketHandler(w, r)
 }
 
@@ -538,7 +511,7 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		lockEnabled = *value == "true"
 	}
-	err = s.storage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{ObjectLockEnabled: lockEnabled})
+	err = s.storage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{ObjectLockEnabled: lockEnabled, OwnerAccountID: s.storageAccountID(ctx)})
 	if err != nil {
 		handleError(err, w, r)
 		return
@@ -560,6 +533,10 @@ func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request
 	}
 	if query.Has(websiteQuery) {
 		s.deleteBucketWebsiteHandler(w, r)
+		return
+	}
+	if query.Has(taggingQuery) {
+		s.deleteBucketTaggingHandler(w, r)
 		return
 	}
 	s.deleteBucketHandler(w, r)

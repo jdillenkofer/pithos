@@ -365,12 +365,12 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	r.URL.RawQuery = query.Encode()
 
 	identity, authenticated, providerErr := checkAuthentication(staticCredentialProvider{
-		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, PrincipalID: "client"},
+		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, AccountID: "account", PrincipalID: "client"},
 	}, region, r)
 	assert.NoError(t, providerErr)
 	assert.True(t, authenticated)
 	if assert.NotNil(t, identity) {
-		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, PrincipalID: "client"}, *identity)
+		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: "account", PrincipalID: "client"}, *identity)
 	}
 }
 
@@ -723,5 +723,5 @@ func (p staticCredentialProvider) Lookup(_ context.Context, accessKeyID string) 
 }
 
 func sigV4aTestCredentials() staticCredentialProvider {
-	return staticCredentialProvider{sigV4aTestAccessKey: {AccessKeyID: sigV4aTestAccessKey, SecretAccessKey: sigV4aTestSecretKey}}
+	return staticCredentialProvider{sigV4aTestAccessKey: {AccessKeyID: sigV4aTestAccessKey, SecretAccessKey: sigV4aTestSecretKey, AccountID: "account", PrincipalID: "principal"}}
 }
