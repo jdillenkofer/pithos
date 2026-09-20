@@ -36,12 +36,24 @@ func MigrateStorage(ctx context.Context, source storage.Storage, destination sto
 	}
 	for i, sourceBucket := range allSourceBuckets {
 		slog.Info(fmt.Sprintf("Migrating bucket \"%s\" (%d/%d items [%.2f%%])", sourceBucket.Name, i, len(allSourceBuckets), float64(i)/float64(len(allSourceBuckets))*100.0))
+		err = migrateBucketTags(ctx, source, destination, sourceBucket.Name)
+		if err != nil {
+			return err
+		}
 		err = migrateObjectsOfBucketFromSourceStorageToDestinationStorage(ctx, source, destination, sourceBucket.Name)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func migrateBucketTags(ctx context.Context, source, destination storage.Storage, bucketName storage.BucketName) error {
+	tags, err := source.GetBucketTagging(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	return destination.PutBucketTagging(ctx, bucketName, tags)
 }
 
 func determineMissingBuckets(ctx context.Context, source, destination storage.Storage) ([]storage.Bucket, error) {

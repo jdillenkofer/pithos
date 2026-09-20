@@ -92,6 +92,8 @@ func TestStorageMigrator(t *testing.T) {
 
 	err = sourceStorage.CreateBucket(ctx, bucketName, storage.CreateBucketOptions{OwnerAccountID: "account-a"})
 	assert.Nil(t, err)
+	err = sourceStorage.PutBucketTagging(ctx, bucketName, map[string]string{"environment": "production"})
+	assert.Nil(t, err)
 
 	// @TODO: Use checksumInput
 	_, err = sourceStorage.PutObject(ctx, bucketName, objectKey, nil, bytes.NewReader(objectData), nil, nil)
@@ -139,6 +141,9 @@ func TestStorageMigrator(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, bucketName, buckets[0].Name)
 	assert.Equal(t, "account-a", buckets[0].OwnerAccountID)
+	bucketTags, err := storage2.GetBucketTagging(ctx, bucketName)
+	assert.Nil(t, err)
+	assert.Equal(t, map[string]string{"environment": "production"}, bucketTags)
 	_, readers, err := storage2.GetObject(ctx, bucketName, objectKey, nil, nil)
 	assert.Nil(t, err)
 	assert.True(t, len(readers) > 0)
