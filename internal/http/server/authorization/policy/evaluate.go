@@ -52,7 +52,6 @@ func (s *Snapshot) AuthorizeRequest(ctx context.Context, r *authorization.Reques
 	}
 	return result, nil
 }
-func (s *Snapshot) SupportsAnonymousAccess() bool { return true }
 func evaluateCheck(ctx context.Context, ss []compiledStatement, r *authorization.Request, c check) (authorization.Decision, error) {
 	d := authorization.Decision{Effect: authorization.ImplicitDeny, Action: c.action, Resource: c.resource}
 	allowed := false

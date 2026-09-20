@@ -122,11 +122,6 @@ type RequestAuthorizer interface {
 	AuthorizeRequest(ctx context.Context, request *Request) (Decision, error)
 }
 
-// AnonymousAccessAuthorizer marks backends that can explicitly grant
-// anonymous bucket and write operations. Lua intentionally does not implement
-// it, preserving its historical anonymous-operation boundary.
-type AnonymousAccessAuthorizer interface{ SupportsAnonymousAccess() bool }
-
 type Effect string
 
 const (

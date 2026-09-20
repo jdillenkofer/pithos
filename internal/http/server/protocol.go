@@ -369,13 +369,14 @@ func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, 
 func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
 	// Disabling authentication is an explicit permissive development mode. In
 	// that mode there is no caller account against which ownership could be
-	// checked, so leave the complete decision to the configured Lua authorizer.
+	// checked, so leave the complete decision to the configured authorizer.
 	if s.authenticationDisabled {
-		return s.runLuaAuthorization(ctx, request, isAuthenticated, w, r)
+		return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 	}
 
 	// Account ownership is a hard boundary evaluated before the programmable
-	// authorizer. Lua can further restrict access, but can never cross it.
+	// authorizer. The configured backend can further restrict access, but can
+	// never cross it.
 	if request.Operation == authorization.OperationListBuckets && !isAuthenticated {
 		w.WriteHeader(http.StatusUnauthorized)
 		return true
@@ -383,18 +384,6 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 	if request.Operation == authorization.OperationCreateBucket && !isAuthenticated {
 		w.WriteHeader(http.StatusUnauthorized)
 		return true
-	}
-	if !isAuthenticated {
-		_, policyAnonymous := s.requestAuthorizer.(authorization.AnonymousAccessAuthorizer)
-		if !policyAnonymous {
-			switch request.Operation {
-			case authorization.OperationGetObject, authorization.OperationGetObjectVersion,
-				authorization.OperationHeadObject, authorization.OperationHeadObjectVersion:
-			default:
-				w.WriteHeader(http.StatusUnauthorized)
-				return true
-			}
-		}
 	}
 	if request.Operation == authorization.OperationCreateBucket && request.Authorization.AccountId != nil && request.Bucket != nil {
 		bucketName, err := storage.NewBucketName(*request.Bucket)
@@ -454,10 +443,10 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 			return true
 		}
 	}
-	return s.runLuaAuthorization(ctx, request, isAuthenticated, w, r)
+	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
-func (s *Server) runLuaAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) runAuthorizerAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
 	decision, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))

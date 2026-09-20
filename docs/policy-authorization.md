@@ -60,3 +60,6 @@ ID, auth/signature type, request/existing object tags and object-lock values.
 Tag and object-lock headers add their tagging, retention or legal-hold action.
 Multi-delete is checked exclusively per entry. Lua remains the default backend;
 its existing boolean result maps `true` to Allow and `false` to ExplicitDeny.
+Both backends evaluate anonymous operations; `ListBuckets` and `CreateBucket`
+still require authentication because their ownership semantics require an
+account identity.

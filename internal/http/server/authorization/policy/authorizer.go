@@ -69,7 +69,6 @@ func (a *Authorizer) Close() error {
 	}
 	return nil
 }
-func (a *Authorizer) SupportsAnonymousAccess() bool { return true }
 func (a *Authorizer) AuthorizeRequest(ctx context.Context, r *authorization.Request) (authorization.Decision, error) {
 	started := time.Now()
 	d, err := a.snapshot.Load().AuthorizeRequest(ctx, r)
