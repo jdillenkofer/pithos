@@ -224,9 +224,13 @@ func query(r *authorization.Request, k string) ([]string, bool, error) {
 }
 
 func compareCondition(operator string, actual, expected []string, present bool) (bool, error) {
-	setAll := strings.HasPrefix(operator, "ForAllValues:")
-	setAny := strings.HasPrefix(operator, "ForAnyValue:")
-	op := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(operator, "IfExists"), "ForAllValues:"), "ForAnyValue:")
+	parts, err := parseConditionOperator(operator)
+	if err != nil {
+		return false, err
+	}
+	setAll := parts.setAll
+	setAny := parts.setAny
+	op := parts.base
 	if op == "Null" {
 		want, err := strconv.ParseBool(expected[0])
 		return want == !present, err

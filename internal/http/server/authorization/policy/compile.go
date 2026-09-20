@@ -3,8 +3,12 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var allowedConditionKeys = []string{
@@ -137,11 +141,9 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 	}
 	cs := compiledStatement{policy: policy, sid: s.Sid, effect: s.Effect, actions: s.Action, resources: s.Resource}
 	for op, entries := range s.Condition {
-		base := strings.TrimSuffix(op, "IfExists")
-		base = strings.TrimPrefix(base, "ForAnyValue:")
-		base = strings.TrimPrefix(base, "ForAllValues:")
-		if !baseOperators[base] {
-			return compiledStatement{}, fmt.Errorf("Condition.%s: unsupported operator", op)
+		parts, err := parseConditionOperator(op)
+		if err != nil {
+			return compiledStatement{}, fmt.Errorf("Condition.%s: %w", op, err)
 		}
 		for key, raw := range entries {
 			if !validConditionKey(key) {
@@ -154,11 +156,76 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 			if len(vals) == 0 {
 				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: empty values", op, key)
 			}
+			if err := validateConditionValues(parts, vals); err != nil {
+				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
+			}
 			cs.conditions = append(cs.conditions, condition{op, key, vals})
 		}
 	}
 	return cs, nil
 }
+
+type conditionOperator struct {
+	base     string
+	setAll   bool
+	setAny   bool
+	ifExists bool
+}
+
+func parseConditionOperator(operator string) (conditionOperator, error) {
+	parts := conditionOperator{}
+	remainder := operator
+	if strings.HasPrefix(remainder, "ForAllValues:") {
+		parts.setAll = true
+		remainder = strings.TrimPrefix(remainder, "ForAllValues:")
+	} else if strings.HasPrefix(remainder, "ForAnyValue:") {
+		parts.setAny = true
+		remainder = strings.TrimPrefix(remainder, "ForAnyValue:")
+	}
+	if strings.HasSuffix(remainder, "IfExists") {
+		parts.ifExists = true
+		remainder = strings.TrimSuffix(remainder, "IfExists")
+	}
+	if !baseOperators[remainder] {
+		return conditionOperator{}, fmt.Errorf("unsupported operator")
+	}
+	parts.base = remainder
+	if parts.base == "Null" && (parts.setAll || parts.setAny || parts.ifExists) {
+		return conditionOperator{}, fmt.Errorf("Null cannot use set operators or IfExists")
+	}
+	return parts, nil
+}
+
+func validateConditionValues(operator conditionOperator, values []string) error {
+	if operator.base == "Null" && len(values) != 1 {
+		return fmt.Errorf("Null requires exactly one value")
+	}
+	for _, value := range values {
+		switch {
+		case strings.HasPrefix(operator.base, "Numeric"):
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return fmt.Errorf("invalid numeric value %q", value)
+			}
+		case strings.HasPrefix(operator.base, "Date"):
+			if _, err := time.Parse(time.RFC3339, value); err != nil {
+				return fmt.Errorf("invalid RFC3339 date %q", value)
+			}
+		case operator.base == "Bool" || operator.base == "Null":
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean value %q", value)
+			}
+		case operator.base == "IpAddress" || operator.base == "NotIpAddress":
+			if net.ParseIP(value) == nil {
+				if _, _, err := net.ParseCIDR(value); err != nil {
+					return fmt.Errorf("invalid IP address or CIDR %q", value)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func validConditionKey(k string) bool {
 	for _, v := range allowedConditionKeys {
 		if strings.EqualFold(k, v) {

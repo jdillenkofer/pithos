@@ -151,3 +151,34 @@ func TestPositiveConditionDoesNotMatchMissingContextKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, authorization.ImplicitDeny, d.Effect)
 }
+
+func TestCompileRejectsInvalidConditionValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	for _, tc := range []struct {
+		name, operator, key, value string
+	}{
+		{"numeric", "NumericLessThan", "s3:max-keys", `"many"`},
+		{"non-finite numeric", "NumericLessThan", "s3:max-keys", `"NaN"`},
+		{"date", "DateGreaterThan", "aws:CurrentTime", `"tomorrow"`},
+		{"boolean", "Bool", "aws:SecureTransport", `"yes"`},
+		{"IP address", "IpAddress", "aws:SourceIp", `"localhost"`},
+		{"Null value count", "Null", "s3:VersionId", `["true","false"]`},
+		{"Null IfExists", "NullIfExists", "s3:VersionId", `"true"`},
+		{"Null set operator", "ForAnyValue:Null", "s3:VersionId", `"true"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(`{"schemaVersion":1,"policies":{"test":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"` + tc.operator + `":{"` + tc.key + `":` + tc.value + `}}}}},"bindings":[]}`)
+			_, err := Compile(data)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestCompileAcceptsValidTypedConditionValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	data := []byte(`{"schemaVersion":1,"policies":{"test":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"NumericLessThan":{"s3:max-keys":"100"},"DateGreaterThan":{"aws:CurrentTime":"2026-01-01T00:00:00Z"},"Bool":{"aws:SecureTransport":"true"},"IpAddress":{"aws:SourceIp":["192.0.2.1","2001:db8::/32"]},"Null":{"s3:VersionId":"false"}}}}},"bindings":[]}`)
+	_, err := Compile(data)
+	require.NoError(t, err)
+}
