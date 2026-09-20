@@ -22,6 +22,9 @@ const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
+const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
+const policyPathEnvKey = envKeyPrefix + "_POLICY_PATH"
+const policyReloadIntervalSecondsEnvKey = envKeyPrefix + "_POLICY_RELOAD_INTERVAL_SECONDS"
 const spoolDirEnvKey = envKeyPrefix + "_SPOOL_DIR"
 const trustForwardedHeadersEnvKey = envKeyPrefix + "_TRUST_FORWARDED_HEADERS"
 const trustedProxyCIDRsEnvKey = envKeyPrefix + "_TRUSTED_PROXY_CIDRS"
@@ -93,6 +96,9 @@ func loadSettingsFromEnv() (*Settings, error) {
 	monitoringPortEnabled := getBoolFromEnv(monitoringPortEnabledEnvKey)
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
+	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
+	policyPath := getStringFromEnv(policyPathEnvKey)
+	policyReloadIntervalSeconds := getIntFromEnv(policyReloadIntervalSecondsEnvKey)
 	spoolDir := getStringFromEnv(spoolDirEnvKey)
 	trustForwardedHeaders := getBoolFromEnv(trustForwardedHeadersEnvKey)
 	trustedProxyCIDRs := getStringSliceFromEnv(trustedProxyCIDRsEnvKey)
@@ -117,6 +123,9 @@ func loadSettingsFromEnv() (*Settings, error) {
 		monitoringPortEnabled:            monitoringPortEnabled,
 		storageJsonPath:                  storageJsonPath,
 		authorizerPath:                   authorizerPath,
+		authorizerType:                   authorizerType,
+		policyPath:                       policyPath,
+		policyReloadIntervalSeconds:      policyReloadIntervalSeconds,
 		spoolDir:                         spoolDir,
 		trustForwardedHeaders:            trustForwardedHeaders,
 		trustedProxyCIDRs:                trustedProxyCIDRs,

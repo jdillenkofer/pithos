@@ -385,12 +385,15 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 		return true
 	}
 	if !isAuthenticated {
-		switch request.Operation {
-		case authorization.OperationGetObject, authorization.OperationGetObjectVersion,
-			authorization.OperationHeadObject, authorization.OperationHeadObjectVersion:
-		default:
-			w.WriteHeader(http.StatusUnauthorized)
-			return true
+		_, policyAnonymous := s.requestAuthorizer.(authorization.AnonymousAccessAuthorizer)
+		if !policyAnonymous {
+			switch request.Operation {
+			case authorization.OperationGetObject, authorization.OperationGetObjectVersion,
+				authorization.OperationHeadObject, authorization.OperationHeadObjectVersion:
+			default:
+				w.WriteHeader(http.StatusUnauthorized)
+				return true
+			}
 		}
 	}
 	if request.Operation == authorization.OperationCreateBucket && request.Authorization.AccountId != nil && request.Bucket != nil {
@@ -446,7 +449,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 			handleError(storage.ErrNoSuchBucket, w, r)
 			return true
 		}
-		if err != nil || request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID {
+		if err != nil || (isAuthenticated && (request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID)) {
 			w.WriteHeader(http.StatusForbidden)
 			return true
 		}
@@ -455,15 +458,15 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 }
 
 func (s *Server) runLuaAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
+	decision, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
 		handleError(err, w, r)
 		return true
 	}
-	if !authorized {
+	if decision.Effect != authorization.Allow {
 		s.recordAuthorizationDenied(ctx, request)
-		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
+		slog.DebugContext(ctx, "Unauthorized request", "operation", request.Operation, "action", decision.Action, "resource", decision.Resource, "effect", decision.Effect, "references", decision.References)
 		if !isAuthenticated {
 			w.WriteHeader(401)
 		} else {

@@ -26,6 +26,9 @@
 | `PITHOS_CREDENTIALS_[N]_ACCOUNT_ID` | Required account ID for the Nth credential; determines bucket ownership | - |
 | `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Required stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
+| `PITHOS_AUTHORIZER_TYPE` | Authorization backend: `lua` or `policy` | `lua` |
+| `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
+| `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
 | `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
 
@@ -35,6 +38,11 @@ The provider settings may also be set with the `-credentialsProvider`,
 `-credentialsPath`, `-credentialsReloadIntervalSeconds`, and
 `-credentialsDatabaseIndex` command-line flags.
 The credential values themselves are never accepted as arguments.
+
+Authorization settings have matching `-authorizerType`, `-authorizerPath`,
+`-policyPath`, and `-policyReloadIntervalSeconds` flags. See
+[Policy Authorization](policy-authorization.md) for the supported language and
+operation matrix.
 
 Pithos reads these variables once when the environment credential provider is
 created at startup and caches the resulting credential set. Environment

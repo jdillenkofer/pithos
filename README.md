@@ -14,7 +14,7 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 - Object metadata, object tagging, delete markers, and S3-style bucket versioning
 - [S3 Object Lock](docs/object-lock.md): governance/compliance retention, legal hold, synchronous replication recovery and audit
 - Authentication using AWS Signature Version 4
-- Authorization support via Lua scripts
+- Authorization through Lua scripts or IAM-inspired JSON policies
 - Configurable storage backends (local filesystem, S3, etc.)
 - Prometheus metrics endpoint for monitoring
 - Health monitoring endpoints

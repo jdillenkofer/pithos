@@ -326,8 +326,8 @@ func (s *Server) setObjectLockHeaders(w http.ResponseWriter, r *http.Request, ob
 		request, _ := makeAuthorizationRequest(r.Context(), operation, &bucket, &key, r)
 		request.VersionID = object.VersionID
 		s.bindExistingObjectTagsResolver(request, &bucket, &key, object.VersionID)
-		ok, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), request)
-		return err == nil && ok
+		decision, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), request)
+		return err == nil && decision.Effect == authorization.Allow
 	}
 	if rt := object.ObjectLock.Retention; rt != nil && allowed(authorization.OperationGetObjectRetention) {
 		w.Header().Set("x-amz-object-lock-mode", string(rt.Mode))

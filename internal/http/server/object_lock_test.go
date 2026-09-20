@@ -62,9 +62,9 @@ func TestObjectLockAuthorizationAndDeniedAudit(t *testing.T) {
 	require.False(t, stop)
 	request.Header.Set("x-amz-object-lock-mode", "GOVERNANCE")
 	auth, _ := makeAuthorizationRequest(request.Context(), authorization.OperationPutObjectRetention, nil, nil, request)
-	allowed, err = authorizer.AuthorizeRequest(request.Context(), auth)
+	decision, err := authorizer.AuthorizeRequest(request.Context(), auth)
 	require.NoError(t, err)
-	require.True(t, allowed)
+	require.Equal(t, authorization.Allow, decision.Effect)
 }
 func TestObjectLockReadPermissionsAndValidation(t *testing.T) {
 	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(request) return request.operation == "GetObjectLegalHold" and request.versionID == "version" end`)

@@ -72,14 +72,14 @@ func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
 
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
-		assert.False(t, allowed)
+		assert.NotEqual(t, authorization.Allow, allowed.Effect)
 
 		accessKeyID := "key"
 		allowed, err = authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
 			Authorization: authorization.Authorization{AccessKeyId: &accessKeyID},
 		})
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		assert.Equal(t, authorization.Allow, allowed.Effect)
 	})
 
 	t.Run("disabled remains permissive", func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
 		require.NoError(t, err)
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		assert.Equal(t, authorization.Allow, allowed.Effect)
 	})
 }
 

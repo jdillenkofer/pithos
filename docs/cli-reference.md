@@ -65,6 +65,15 @@ pithos validate-storage <config.json> [options]
 - `-json`: Output results in JSON format
 - `-output <path>`: Write the validation report to a file
 
+## `validate-policy`
+
+Strictly parses, validates and compiles an authorization policy without
+starting the server. Errors include the relevant JSON path.
+
+```sh
+pithos validate-policy <policies.json>
+```
+
 ## `audit-log`
 
 Provides tools for verifying, dumping, analyzing, and generating keys for audit logs.

@@ -31,9 +31,13 @@ type captureAuthorizer struct {
 	allowed bool
 }
 
-func (a *captureAuthorizer) AuthorizeRequest(_ context.Context, request *authorization.Request) (bool, error) {
+func (a *captureAuthorizer) AuthorizeRequest(_ context.Context, request *authorization.Request) (authorization.Decision, error) {
 	a.called, a.request = true, request
-	return a.allowed, nil
+	effect := authorization.ExplicitDeny
+	if a.allowed {
+		effect = authorization.Allow
+	}
+	return authorization.Decision{Effect: effect}, nil
 }
 
 func TestAccountBoundaryPrecedesLuaAuthorization(t *testing.T) {

@@ -25,7 +25,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	authenticationsql "github.com/jdillenkofer/pithos/internal/http/server/authentication/sql"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/logging"
 	"github.com/jdillenkofer/pithos/internal/settings"
@@ -91,6 +93,7 @@ const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
 const subcommandBenchmarkStorage = "benchmark-storage"
 const subcommandValidateStorage = "validate-storage"
+const subcommandValidatePolicy = "validate-policy"
 const subcommandAuditLog = "audit-log"
 const subcommandTPMInfo = "tpm-info"
 const subcommandGdriveAuth = "gdrive-auth"
@@ -107,7 +110,7 @@ const gracefulShutdownTimeout = 30 * time.Second
 func main() {
 	ctx := context.Background()
 	if len(os.Args) < 2 {
-		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
+		slog.Info(fmt.Sprintf("Usage: %s %s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s [options]", os.Args[0], subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandValidatePolicy, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
 		os.Exit(1)
 	}
 
@@ -133,6 +136,11 @@ func main() {
 		benchmarkStorage(ctx)
 	case subcommandValidateStorage:
 		validateStorage(ctx)
+	case subcommandValidatePolicy:
+		if err := validatePolicy(os.Args[2:]); err != nil {
+			slog.Error("Policy is invalid", "error", err)
+			os.Exit(1)
+		}
 	case subcommandAuditLog:
 		auditLogTool()
 	case subcommandTPMInfo:
@@ -144,7 +152,7 @@ func main() {
 	case subcommandVersion:
 		printVersion(os.Stdout, currentBuildInfo)
 	default:
-		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
+		slog.Error(fmt.Sprintf("Invalid subcommand: %s. Expected one of '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'.", subcommand, subcommandServe, subcommandMigrateStorage, subcommandBenchmarkStorage, subcommandValidateStorage, subcommandValidatePolicy, subcommandAuditLog, subcommandTPMInfo, subcommandGdriveAuth, subcommandOnedriveAuth, subcommandVersion, subcommandReconcileReplication))
 		os.Exit(1)
 	}
 }
@@ -255,9 +263,12 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	}()
 
 	authenticationEnabled := settings.AuthenticationEnabled()
-	requestAuthorizer, err := loadRequestAuthorizer(settings.AuthorizerPath(), authenticationEnabled, settings.TrustForwardedHeaders(), settings.TrustedProxyCIDRs())
+	requestAuthorizer, err := loadConfiguredRequestAuthorizer(settings, authenticationEnabled)
 	if err != nil {
-		return fmt.Errorf("create Lua authorizer: %w", err)
+		return fmt.Errorf("create request authorizer: %w", err)
+	}
+	if closer, ok := requestAuthorizer.(io.Closer); ok {
+		defer closer.Close()
 	}
 
 	var credentialProvider authentication.CredentialProvider
@@ -386,7 +397,17 @@ func loadCredentialProvider(ctx context.Context, configured *settings.Settings, 
 	}
 }
 
-func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (*lua.LuaAuthorizer, error) {
+func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticationEnabled bool) (authorization.RequestAuthorizer, error) {
+	if strings.EqualFold(configured.AuthorizerType(), "policy") {
+		return policy.NewAuthorizer(configured.PolicyPath(), time.Duration(configured.PolicyReloadIntervalSeconds())*time.Second)
+	}
+	if !strings.EqualFold(configured.AuthorizerType(), "lua") {
+		return nil, fmt.Errorf("unknown authorizer type %q", configured.AuthorizerType())
+	}
+	return loadRequestAuthorizer(configured.AuthorizerPath(), authenticationEnabled, configured.TrustForwardedHeaders(), configured.TrustedProxyCIDRs())
+}
+
+func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (authorization.RequestAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
@@ -402,6 +423,17 @@ func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, tr
 		TrustForwardedHeaders: trustForwardedHeaders,
 		TrustedProxyCIDRs:     trustedProxyCIDRs,
 	})
+}
+
+func validatePolicy(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: %s %s <path>", os.Args[0], subcommandValidatePolicy)
+	}
+	if _, err := policy.Load(args[0]); err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stdout, "Policy is valid")
+	return nil
 }
 
 func loadStorageConfiguration(storageJsonPath string) (*config.DbContainer, storage.Storage) {

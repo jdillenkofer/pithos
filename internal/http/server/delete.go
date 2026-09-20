@@ -200,16 +200,16 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		if ve.versionID != nil {
 			entryRequest.Operation = authorization.OperationDeleteObjectVersion
 		}
-		allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
-		if err == nil && allowed && bypass {
+		decision, err := s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+		if err == nil && decision.Effect == authorization.Allow && bypass {
 			entryRequest.Operation = authorization.OperationBypassGovernanceRetention
-			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+			decision, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
 		}
 		if err != nil {
 			handleError(err, w, r)
 			return
 		}
-		if !allowed {
+		if decision.Effect != authorization.Allow {
 			s.recordAuthorizationDenied(ctx, &entryRequest)
 			result.Errors = append(result.Errors, &DeleteErrorEntry{
 				Key:       ve.rawKey,

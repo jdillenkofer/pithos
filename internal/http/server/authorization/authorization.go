@@ -119,5 +119,32 @@ type Request struct {
 }
 
 type RequestAuthorizer interface {
-	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
+	AuthorizeRequest(ctx context.Context, request *Request) (Decision, error)
+}
+
+// AnonymousAccessAuthorizer marks backends that can explicitly grant
+// anonymous bucket and write operations. Lua intentionally does not implement
+// it, preserving its historical anonymous-operation boundary.
+type AnonymousAccessAuthorizer interface{ SupportsAnonymousAccess() bool }
+
+type Effect string
+
+const (
+	Allow        Effect = "Allow"
+	ImplicitDeny Effect = "ImplicitDeny"
+	ExplicitDeny Effect = "ExplicitDeny"
+)
+
+// Decision contains diagnostic details for logs and audit records. References
+// are deliberately internal and must never be included in an S3 response.
+type Decision struct {
+	Effect     Effect
+	Action     string
+	Resource   string
+	References []StatementReference
+}
+
+type StatementReference struct {
+	Policy string
+	Sid    string
 }

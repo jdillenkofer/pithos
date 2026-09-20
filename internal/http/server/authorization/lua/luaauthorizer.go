@@ -333,11 +333,14 @@ func pushGoType(L *lua.State, obj interface{}) {
 	}
 }
 
-func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
+func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (authorization.Decision, error) {
+	started := time.Now()
+	effect, err := authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
+	authorization.ObserveDecision("lua", effect, started)
+	return authorization.Decision{Effect: effect}, err
 }
 
-func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (bool, error) {
+func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (authorization.Effect, error) {
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
 
@@ -354,15 +357,15 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
-		return false, err
+		return authorization.ImplicitDeny, err
 	}
 	L.Global(functionName)
 	if !L.IsFunction(-1) {
 		if functionName == authorizationFunctionName {
 			slog.ErrorContext(ctx, "Authorization function not found in Lua code", "functionName", authorizationFunctionName)
-			return false, errAuthorizationFunctionNotFound
+			return authorization.ImplicitDeny, errAuthorizationFunctionNotFound
 		}
-		return true, nil
+		return authorization.Allow, nil
 	}
 	authorizer.pushRequest(ctx, L, request)
 	argCount := 1 + len(args)
@@ -372,12 +375,16 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	err = L.ProtectedCall(argCount, 1, 0)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while calling authorization function", "error", err)
-		return false, err
+		return authorization.ImplicitDeny, err
 	}
-	res := L.ToBoolean(1)
+	allowed := L.ToBoolean(1)
+	effect := authorization.ExplicitDeny
+	if allowed {
+		effect = authorization.Allow
+	}
 	L.Pop(1)
-	slog.DebugContext(ctx, "Authorization result", "operation", request.Operation, "isAuthorized", res)
-	return res, nil
+	slog.DebugContext(ctx, "Authorization result", "operation", request.Operation, "effect", effect)
+	return effect, nil
 }
 
 func isReadOnly(operation string) bool {
