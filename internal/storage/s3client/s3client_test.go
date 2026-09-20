@@ -2,6 +2,7 @@ package s3client
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -72,6 +73,20 @@ func TestBucketTagSetWithOwnerPreservesAuthoritativeOwner(t *testing.T) {
 	require.Contains(t, tagSet, types.Tag{Key: aws.String("environment"), Value: aws.String("production")})
 	require.Contains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-a")})
 	require.NotContains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-b")})
+}
+
+func TestS3ClientUserBucketTagLimitReservesSystemTags(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	require.Equal(t, 45, maxUserBucketTags)
+	tags := make(map[string]string, maxUserBucketTags)
+	for i := range maxUserBucketTags {
+		tags[fmt.Sprintf("tag-%d", i)] = "value"
+	}
+	require.NoError(t, validateUserBucketTags(tags))
+
+	tags["one-too-many"] = "value"
+	require.ErrorIs(t, validateUserBucketTags(tags), storage.ErrInvalidTag)
 }
 
 func TestCopySourceValueEscapesSourceKey(t *testing.T) {

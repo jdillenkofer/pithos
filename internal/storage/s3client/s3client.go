@@ -32,7 +32,11 @@ type s3ClientStorage struct {
 	tracer   trace.Tracer
 }
 
-const ownerAccountIDBucketTag = "pithos:owner-account-id"
+const (
+	ownerAccountIDBucketTag      = "pithos:owner-account-id"
+	reservedSystemBucketTagCount = 5
+	maxUserBucketTags            = storage.MaxBucketTags - reservedSystemBucketTagCount
+)
 
 // Compile-time check to ensure s3ClientStorage implements storage.Storage
 var _ storage.Storage = (*s3ClientStorage)(nil)
@@ -167,6 +171,9 @@ func bucketTagSetWithOwner(tags map[string]string, ownerAccountID string) []type
 }
 
 func (rs *s3ClientStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	if err := validateUserBucketTags(tags); err != nil {
+		return err
+	}
 	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
 	if err != nil {
 		return err
@@ -174,6 +181,13 @@ func (rs *s3ClientStorage) PutBucketTagging(ctx context.Context, bucketName stor
 	tagSet := bucketTagSetWithOwner(tags, ownerAccountID)
 	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucketName.String()), Tagging: &types.Tagging{TagSet: tagSet}})
 	return err
+}
+
+func validateUserBucketTags(tags map[string]string) error {
+	if len(tags) > maxUserBucketTags {
+		return storage.ErrInvalidTag
+	}
+	return nil
 }
 
 func (rs *s3ClientStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
