@@ -71,7 +71,7 @@ func (s *Server) putBucketTaggingHandler(w http.ResponseWriter, r *http.Request)
 		tags, validationErr = tagSetToMap(&request)
 	}
 	if validationErr == nil && !malformed {
-		validationErr = storage.ValidateTags(tags)
+		validationErr = storage.ValidateBucketTags(tags)
 	}
 	if s.authorizeRequestWithRequestTags(ctx, authorization.OperationPutBucketTagging, ptrutils.ToPtr(bucketName.String()), nil, tags, w, r) {
 		return

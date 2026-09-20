@@ -10,6 +10,9 @@ const (
 	// MaxObjectTags is the maximum number of tags that may be associated with a
 	// single object.
 	MaxObjectTags = 10
+	// MaxBucketTags is the maximum number of tags that may be associated with a
+	// single bucket.
+	MaxBucketTags = 50
 	// MaxTagKeyLength is the maximum length of a tag key in characters.
 	MaxTagKeyLength = 128
 	// MaxTagValueLength is the maximum length of a tag value in characters.
@@ -24,7 +27,17 @@ var ErrInvalidTag error = errors.New("InvalidTag")
 // restrictions. It returns ErrInvalidTag if any restriction is violated.
 // A nil or empty map is valid.
 func ValidateTags(tags map[string]string) error {
-	if len(tags) > MaxObjectTags {
+	return validateTags(tags, MaxObjectTags)
+}
+
+// ValidateBucketTags checks that the given tag set satisfies the S3 bucket
+// tagging restrictions.
+func ValidateBucketTags(tags map[string]string) error {
+	return validateTags(tags, MaxBucketTags)
+}
+
+func validateTags(tags map[string]string, maxTags int) error {
+	if len(tags) > maxTags {
 		return ErrInvalidTag
 	}
 	for key, value := range tags {

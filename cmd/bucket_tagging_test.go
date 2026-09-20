@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,6 +28,16 @@ func TestBucketTaggingSDK(t *testing.T) {
 		result, err := client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String(bucket)})
 		require.NoError(t, err)
 		require.Contains(t, result.TagSet, types.Tag{Key: aws.String("environment"), Value: aws.String("test")})
+
+		maxTags := make([]types.Tag, 50)
+		for i := range maxTags {
+			maxTags[i] = types.Tag{Key: aws.String(fmt.Sprintf("key-%02d", i)), Value: aws.String("value")}
+		}
+		_, err = client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucket), Tagging: &types.Tagging{TagSet: maxTags}})
+		require.NoError(t, err)
+		result, err = client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String(bucket)})
+		require.NoError(t, err)
+		require.Len(t, result.TagSet, 50)
 
 		_, err = client.DeleteBucketTagging(ctx, &s3.DeleteBucketTaggingInput{Bucket: aws.String(bucket)})
 		require.NoError(t, err)
