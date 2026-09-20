@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +20,8 @@ func compileTestPolicy(t *testing.T, statements string) *Snapshot {
 }
 
 func TestReloadRetainsLastValidSnapshot(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	path := filepath.Join(t.TempDir(), "policies.json")
 	valid := `{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
 	require.NoError(t, os.WriteFile(path, []byte(valid), 0600))
@@ -39,6 +42,8 @@ func request(operation, bucket, key string) *authorization.Request {
 func stringPointer(v string) *string { return &v }
 
 func TestDecisionMatrix(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	allow := `{"Sid":"allow","Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`
 	deny := `{"Sid":"deny","Effect":"Deny","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/private/*"}`
 	for _, tc := range []struct {
@@ -62,6 +67,8 @@ func TestDecisionMatrix(t *testing.T) {
 }
 
 func TestCopyRequiresSourceAndDestination(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	s := compileTestPolicy(t, `[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::source/*"},{"Effect":"Allow","Action":"s3:PutObject","Resource":"arn:aws:s3:::destination/*"}]`)
 	r := request(authorization.OperationCopyObject, "destination", "copy")
 	r.SourceBucket = stringPointer("source")
@@ -77,6 +84,8 @@ func TestCopyRequiresSourceAndDestination(t *testing.T) {
 }
 
 func TestStrictJSONAndReferences(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	_, err := Compile([]byte(`{"schemaVersion":1,"schemaVersion":1,"policies":{},"bindings":[]}`))
 	require.ErrorContains(t, err, "duplicate")
 	_, err = Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Principal":"*"}}},"bindings":[]}`))
@@ -86,6 +95,8 @@ func TestStrictJSONAndReferences(t *testing.T) {
 }
 
 func TestConditionIfExistsAndExplicitDeny(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
 	s := compileTestPolicy(t, `[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"},{"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"StringNotEqualsIfExists":{"s3:ExistingObjectTag/team":"storage"}}}]`)
 	r := request(authorization.OperationGetObject, "bucket", "key")
 	r.ResolveExistingObjectTags = func(context.Context) (map[string]string, error) { return map[string]string{"team": "finance"}, nil }
