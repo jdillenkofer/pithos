@@ -133,3 +133,21 @@ func TestStringLikeMatchingIsCaseSensitive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, authorization.ImplicitDeny, d.Effect)
 }
+
+func TestNegatedConditionMatchesMissingContextKey(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	s := compileTestPolicy(t, `[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"},{"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"StringNotEquals":{"s3:ExistingObjectTag/team":"storage"}}}]`)
+	d, err := s.AuthorizeRequest(context.Background(), request(authorization.OperationGetObject, "bucket", "key"))
+	require.NoError(t, err)
+	require.Equal(t, authorization.ExplicitDeny, d.Effect)
+}
+
+func TestPositiveConditionDoesNotMatchMissingContextKey(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":{"s3:ExistingObjectTag/team":"storage"}}}`)
+	d, err := s.AuthorizeRequest(context.Background(), request(authorization.OperationGetObject, "bucket", "key"))
+	require.NoError(t, err)
+	require.Equal(t, authorization.ImplicitDeny, d.Effect)
+}

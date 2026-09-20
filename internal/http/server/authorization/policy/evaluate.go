@@ -231,13 +231,13 @@ func compareCondition(operator string, actual, expected []string, present bool) 
 		want, err := strconv.ParseBool(expected[0])
 		return want == !present, err
 	}
+	negative := strings.Contains(op, "Not") || op == "NotIpAddress"
 	if !present {
 		if setAll {
 			return true, nil
 		}
-		return false, nil
+		return negative, nil
 	}
-	negative := strings.Contains(op, "Not") || op == "NotIpAddress"
 	positiveOp := strings.ReplaceAll(op, "Not", "")
 	matchOne := func(a, e string) (bool, error) { return scalarCompare(positiveOp, a, e) }
 	matchActual := func(a string) (bool, error) {
