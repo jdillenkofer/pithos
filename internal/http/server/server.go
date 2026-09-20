@@ -24,14 +24,16 @@ import (
 )
 
 type Server struct {
-	requestAuthorizer authorization.RequestAuthorizer
-	storage           storage.Storage
-	tracer            trace.Tracer
+	requestAuthorizer      authorization.RequestAuthorizer
+	storage                storage.Storage
+	tracer                 trace.Tracer
+	authenticationDisabled bool
 }
 
 func SetupServer(credentialProvider authentication.CredentialProvider, region string, apiEndpoint string, websiteEndpoint string, requestAuthorizer authorization.RequestAuthorizer, storage storage.Storage) http.Handler {
 	server := &Server{
-		requestAuthorizer: requestAuthorizer,
+		requestAuthorizer:      requestAuthorizer,
+		authenticationDisabled: credentialProvider == nil,
 		// CORS configuration is resolved on every Origin-bearing request, so wrap
 		// the storage in a cache that serves those reads without re-hitting the
 		// backend (and without flooding audit/metrics). Writes flow through the

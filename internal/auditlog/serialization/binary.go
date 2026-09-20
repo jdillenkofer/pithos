@@ -70,6 +70,11 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 		if err := writeString(w, d.Actor.CredentialID); err != nil {
 			return err
 		}
+		if e.Version >= 6 {
+			if err := writeString(w, d.Actor.AccountID); err != nil {
+				return err
+			}
+		}
 		if e.Version >= 5 {
 			if err := writeString(w, d.Actor.PrincipalID); err != nil {
 				return err
@@ -240,6 +245,11 @@ func (d *BinaryDecoder) Decode() (*auditlog.Entry, error) {
 		} else {
 			if dls.Actor.CredentialID, err = readString(d.r); err != nil {
 				return nil, err
+			}
+			if e.Version >= 6 {
+				if dls.Actor.AccountID, err = readString(d.r); err != nil {
+					return nil, err
+				}
 			}
 			if e.Version >= 5 {
 				if dls.Actor.PrincipalID, err = readString(d.r); err != nil {

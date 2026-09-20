@@ -115,6 +115,18 @@ func (d *DelegatingStorage) GetObjectTagging(ctx context.Context, bucketName sto
 	return d.Next.GetObjectTagging(ctx, bucketName, key, opts)
 }
 
+func (d *DelegatingStorage) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	return d.Next.GetBucketTagging(ctx, bucketName)
+}
+
+func (d *DelegatingStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	return d.Next.PutBucketTagging(ctx, bucketName, tags)
+}
+
+func (d *DelegatingStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	return d.Next.DeleteBucketTagging(ctx, bucketName)
+}
+
 func (d *DelegatingStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {
 	return d.Next.PutObjectTagging(ctx, bucketName, key, tags, opts)
 }

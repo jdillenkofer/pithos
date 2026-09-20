@@ -5,6 +5,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	postgresBucket "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/bucket"
+	postgresBucketTag "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/buckettag"
 	postgresObject "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/object"
 	postgresPart "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/part"
 	postgresPartContent "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/partcontent"
@@ -15,6 +16,7 @@ import (
 	postgresTag "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/tag"
 	postgresUserMetadata "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/usermetadata"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/buckettag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
@@ -25,6 +27,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/tag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/usermetadata"
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
+	sqliteBucketTag "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/buckettag"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
 	sqlitePart "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/part"
 	sqlitePartContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partcontent"
@@ -67,6 +70,16 @@ func NewBucketRepository(db database.Database) (bucket.Repository, error) {
 		return postgresBucket.NewRepository()
 	case database.DB_TYPE_SQLITE:
 		return sqliteBucket.NewRepository()
+	}
+	return nil, errUnknownDatabaseType
+}
+
+func NewBucketTagRepository(db database.Database) (buckettag.Repository, error) {
+	switch db.GetDatabaseType() {
+	case database.DB_TYPE_POSTGRES:
+		return postgresBucketTag.NewRepository()
+	case database.DB_TYPE_SQLITE:
+		return sqliteBucketTag.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }

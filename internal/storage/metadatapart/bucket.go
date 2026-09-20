@@ -28,8 +28,9 @@ func (mbs *metadataPartStorage) DeleteBucket(ctx context.Context, bucketName sto
 
 func convertBucket(mBucket metadatastore.Bucket) storage.Bucket {
 	return storage.Bucket{
-		Name:         mBucket.Name,
-		CreationDate: mBucket.CreationDate,
+		Name:           mBucket.Name,
+		OwnerAccountID: mBucket.OwnerAccountID,
+		CreationDate:   mBucket.CreationDate,
 	}
 }
 

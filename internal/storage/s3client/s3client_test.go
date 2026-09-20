@@ -2,16 +2,92 @@ package s3client
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsExistingBucketError(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "access denied API error",
+			err:  &smithy.GenericAPIError{Code: "AccessDenied", Message: "access denied"},
+			want: true,
+		},
+		{
+			name: "forbidden HTTP response",
+			err: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusForbidden}},
+				Err:      errors.New("forbidden"),
+			},
+			want: true,
+		},
+		{
+			name: "unrelated API error",
+			err:  &smithy.GenericAPIError{Code: "InternalError", Message: "remote failure"},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isExistingBucketError(tc.err))
+		})
+	}
+}
+
+func TestPublicBucketTagsHidesOwnerAccountID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tags := publicBucketTags([]types.Tag{
+		{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-a")},
+		{Key: aws.String("environment"), Value: aws.String("production")},
+	})
+
+	require.Equal(t, map[string]string{"environment": "production"}, tags)
+}
+
+func TestBucketTagSetWithOwnerPreservesAuthoritativeOwner(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tagSet := bucketTagSetWithOwner(map[string]string{
+		ownerAccountIDBucketTag: "account-b",
+		"environment":           "production",
+	}, "account-a")
+
+	require.Contains(t, tagSet, types.Tag{Key: aws.String("environment"), Value: aws.String("production")})
+	require.Contains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-a")})
+	require.NotContains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-b")})
+}
+
+func TestS3ClientUserBucketTagLimitReservesSystemTags(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	require.Equal(t, 45, maxUserBucketTags)
+	tags := make(map[string]string, maxUserBucketTags)
+	for i := range maxUserBucketTags {
+		tags[fmt.Sprintf("tag-%d", i)] = "value"
+	}
+	require.NoError(t, validateUserBucketTags(tags))
+
+	tags["one-too-many"] = "value"
+	require.ErrorIs(t, validateUserBucketTags(tags), storage.ErrInvalidTag)
+}
 
 func TestCopySourceValueEscapesSourceKey(t *testing.T) {
 	testutils.SkipIfIntegration(t)

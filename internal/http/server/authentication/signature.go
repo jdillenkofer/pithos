@@ -794,7 +794,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
-	return &AuthenticatedIdentity{AccessKeyID: accessKeyID, PrincipalID: expectedCredential.PrincipalID}, isSignatureValid, nil
+	return &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID}, isSignatureValid, nil
 }
 
 type awsChunkReadCloser struct {

@@ -337,26 +337,6 @@ func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *
 	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
 }
 
-func (authorizer *LuaAuthorizer) AuthorizeListBucket(ctx context.Context, request *authorization.Request, bucketName string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListBucket", request, bucketName)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListObject(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListObject", request, key)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeDeleteObjectEntry(ctx context.Context, request *authorization.Request, key string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeDeleteObjectEntry", request, key)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListMultipartUpload(ctx context.Context, request *authorization.Request, key string, uploadID string) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListMultipartUpload", request, key, uploadID)
-}
-
-func (authorizer *LuaAuthorizer) AuthorizeListPart(ctx context.Context, request *authorization.Request, partNumber int32) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, "authorizeListPart", request, int(partNumber))
-}
-
 func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (bool, error) {
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
@@ -403,9 +383,9 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 func isReadOnly(operation string) bool {
 	var isReadOnly bool
 	switch operation {
-	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationHeadObjectVersion, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetObjectVersion, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketCORS, authorization.OperationGetBucketNotification, authorization.OperationGetObjectTagging, authorization.OperationGetObjectVersionTagging:
+	case authorization.OperationListBuckets, authorization.OperationHeadBucket, authorization.OperationHeadObject, authorization.OperationHeadObjectVersion, authorization.OperationListMultipartUploads, authorization.OperationListObjects, authorization.OperationListParts, authorization.OperationGetObject, authorization.OperationGetObjectVersion, authorization.OperationGetBucketWebsite, authorization.OperationGetBucketCORS, authorization.OperationGetBucketNotification, authorization.OperationGetBucketTagging, authorization.OperationGetObjectTagging, authorization.OperationGetObjectVersionTagging:
 		isReadOnly = true
-	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationPutObject, authorization.OperationCopyObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjectVersion, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketCORS, authorization.OperationDeleteBucketCORS, authorization.OperationPutBucketNotification, authorization.OperationPutObjectTagging, authorization.OperationPutObjectVersionTagging, authorization.OperationDeleteObjectTagging, authorization.OperationDeleteObjectVersionTagging:
+	case authorization.OperationCreateBucket, authorization.OperationDeleteBucket, authorization.OperationCreateMultipartUpload, authorization.OperationCompleteMultipartUpload, authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationPutObject, authorization.OperationCopyObject, authorization.OperationAppendObject, authorization.OperationAbortMultipartUpload, authorization.OperationDeleteObject, authorization.OperationDeleteObjectVersion, authorization.OperationDeleteObjects, authorization.OperationPutBucketWebsite, authorization.OperationDeleteBucketWebsite, authorization.OperationPutBucketCORS, authorization.OperationDeleteBucketCORS, authorization.OperationPutBucketNotification, authorization.OperationPutBucketTagging, authorization.OperationDeleteBucketTagging, authorization.OperationPutObjectTagging, authorization.OperationPutObjectVersionTagging, authorization.OperationDeleteObjectTagging, authorization.OperationDeleteObjectVersionTagging:
 		isReadOnly = false
 	}
 	return isReadOnly

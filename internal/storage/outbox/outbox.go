@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -159,7 +160,7 @@ func (os *outboxStorage) claimNextOutboxEntry(ctx context.Context) (*storageOutb
 }
 
 func (os *outboxStorage) readStorageOutboxChunks(ctx context.Context, entry *storageOutboxEntry.Entity) ([]io.Reader, error) {
-	if entry.Operation != storageOutboxEntry.PutObjectStorageOperation {
+	if entry.Operation != storageOutboxEntry.PutObjectStorageOperation && entry.Operation != storageOutboxEntry.PutBucketTaggingStorageOperation {
 		return nil, nil
 	}
 	var chunks []*storageOutboxEntry.ContentChunk
@@ -198,6 +199,22 @@ func (os *outboxStorage) readStorageOutboxPutOptions(ctx context.Context, entry 
 		Metadata:     putOptions.Metadata,
 		StorageClass: putOptions.StorageClass,
 	}, nil
+}
+
+func (os *outboxStorage) readStorageOutboxCreateBucketOptions(ctx context.Context, entry *storageOutboxEntry.Entity) (*storage.CreateBucketOptions, error) {
+	if entry.Operation != storageOutboxEntry.CreateBucketStorageOperation {
+		return nil, nil
+	}
+	var persisted *storageOutboxEntry.CreateBucketOptions
+	err := database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		persisted, err = os.storageOutboxEntryRepository.FindStorageOutboxEntryCreateBucketOptionsById(ctx, tx.SqlTx(), os.outboxId, *entry.Id)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &storage.CreateBucketOptions{OwnerAccountID: persisted.OwnerAccountID}, nil
 }
 
 func (os *outboxStorage) finalizeStorageOutboxEntry(ctx context.Context, entry *storageOutboxEntry.Entity) (bool, error) {
@@ -330,6 +347,7 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 		var entry *storageOutboxEntry.Entity
 		var putObjectReaders []io.Reader
 		var putObjectOpts *storage.PutObjectOptions
+		var createBucketOpts *storage.CreateBucketOptions
 
 		entry, claimed, err := os.claimNextOutboxEntry(ctx)
 		if err != nil {
@@ -362,13 +380,34 @@ func (os *outboxStorage) maybeProcessOutboxEntries(ctx context.Context) {
 			time.Sleep(5 * time.Second)
 			return
 		}
+		createBucketOpts, err = os.readStorageOutboxCreateBucketOptions(ctx, entry)
+		if err != nil {
+			os.metrics.inFlightEntries.Dec()
+			os.metrics.errorsCounter.Inc()
+			os.metrics.retryCounter.Inc()
+			_, _ = os.releaseStorageOutboxEntry(ctx, entry)
+			waitForStorageOutboxRetry(ctx)
+			return
+		}
 
 		stopHeartbeat := os.startStorageOutboxHeartbeat(ctx, entry)
 		switch entry.Operation {
 		case storageOutboxEntry.CreateBucketStorageOperation:
-			err = os.innerStorage.CreateBucket(ctx, entry.Bucket)
+			err = os.innerStorage.CreateBucket(ctx, entry.Bucket, *createBucketOpts)
 		case storageOutboxEntry.DeleteBucketStorageOperation:
 			err = os.innerStorage.DeleteBucket(ctx, entry.Bucket)
+		case storageOutboxEntry.PutBucketTaggingStorageOperation:
+			var tags map[string]string
+			data, readErr := io.ReadAll(io.MultiReader(putObjectReaders...))
+			if readErr != nil {
+				err = readErr
+			} else if decodeErr := json.Unmarshal(data, &tags); decodeErr != nil {
+				err = decodeErr
+			} else {
+				err = os.innerStorage.PutBucketTagging(ctx, entry.Bucket, tags)
+			}
+		case storageOutboxEntry.DeleteBucketTaggingStorageOperation:
+			err = os.innerStorage.DeleteBucketTagging(ctx, entry.Bucket)
 		case storageOutboxEntry.PutObjectStorageOperation:
 			// Wrap the concatenated chunks in a seekable reader: an S3 backend (s3client)
 			// needs to seek the body to compute the request checksum when the connection
@@ -524,8 +563,15 @@ func (os *outboxStorage) CreateBucket(ctx context.Context, bucketName storage.Bu
 	}
 
 	return database.WithTx(ctx, os.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
-		return err
+		id, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.CreateBucketStorageOperation, bucketName, "", nil, nil)
+		if err != nil {
+			return err
+		}
+		ownerAccountID := "system"
+		if len(options) == 1 {
+			ownerAccountID = options[0].OwnerAccountID
+		}
+		return os.storageOutboxEntryRepository.SaveStorageOutboxEntryCreateBucketOptions(ctx, tx.SqlTx(), os.outboxId, *id, storageOutboxEntry.CreateBucketOptions{OwnerAccountID: ownerAccountID})
 	})
 }
 
@@ -1219,6 +1265,34 @@ func (os *outboxStorage) GetObjectTagging(ctx context.Context, bucketName storag
 	}
 
 	return os.innerStorage.GetObjectTagging(ctx, bucketName, key, opts)
+}
+
+func (os *outboxStorage) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	if err := os.waitForGlobalOutboxEntriesOfBucket(ctx, bucketName); err != nil {
+		return nil, err
+	}
+	return os.innerStorage.GetBucketTagging(ctx, bucketName)
+}
+
+func (os *outboxStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	data, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	return database.WithTx(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
+		id, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.PutBucketTaggingStorageOperation, bucketName, "", nil, nil)
+		if err != nil {
+			return err
+		}
+		return os.storageOutboxEntryRepository.SaveStorageOutboxContentChunk(ctx, tx.SqlTx(), &storageOutboxEntry.ContentChunk{OutboxEntryId: *id, ChunkIndex: 0, Content: data})
+	})
+}
+
+func (os *outboxStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	return database.WithTx(ctx, os.db, nil, func(ctx context.Context, tx database.Tx) error {
+		_, err := os.storeStorageOutboxEntry(ctx, tx, storageOutboxEntry.DeleteBucketTaggingStorageOperation, bucketName, "", nil, nil)
+		return err
+	})
 }
 
 func (os *outboxStorage) PutObjectTagging(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, tags map[string]string, opts *storage.ObjectTaggingOptions) error {

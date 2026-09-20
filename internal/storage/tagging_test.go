@@ -32,6 +32,26 @@ func TestValidateTagsRejectsTooManyTags(t *testing.T) {
 	require.ErrorIs(t, ValidateTags(tags), ErrInvalidTag)
 }
 
+func TestValidateBucketTagsAcceptsBucketLimit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tags := make(map[string]string, MaxBucketTags)
+	for i := 0; i < MaxBucketTags; i++ {
+		tags[string(rune(i+1))] = "v"
+	}
+	require.NoError(t, ValidateBucketTags(tags))
+}
+
+func TestValidateBucketTagsRejectsTooManyTags(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tags := make(map[string]string, MaxBucketTags+1)
+	for i := 0; i < MaxBucketTags+1; i++ {
+		tags[string(rune(i+1))] = "v"
+	}
+	require.ErrorIs(t, ValidateBucketTags(tags), ErrInvalidTag)
+}
+
 func TestValidateTagsRejectsEmptyKey(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

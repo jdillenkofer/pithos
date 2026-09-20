@@ -144,6 +144,10 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 	if err != nil {
 		return err
 	}
+	sourceBucket, err := rs.Next.HeadBucket(ctx, bucket)
+	if err != nil {
+		return err
+	}
 	restore := make(map[string]*storage.ObjectLockConfiguration)
 	for i, id := range rs.options.SecondaryIDs {
 		targetConfig, err := rs.secondaryStorages[i].GetObjectLockConfiguration(ctx, bucket)
@@ -189,7 +193,7 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 			return nil
 		}
 		for _, id := range rs.options.SecondaryIDs {
-			if err := save("PrepareReconcileBucket", operationPayload{Bucket: bucket.String(), LockConfiguration: restore[id], Versioning: sourceVersioning}, operationResult{}, map[string]bool{id: true}, nil); err != nil {
+			if err := save("PrepareReconcileBucket", operationPayload{Bucket: bucket.String(), OwnerAccountID: sourceBucket.OwnerAccountID, LockConfiguration: restore[id], Versioning: sourceVersioning}, operationResult{}, map[string]bool{id: true}, nil); err != nil {
 				return err
 			}
 		}

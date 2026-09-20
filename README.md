@@ -20,6 +20,12 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 - Health monitoring endpoints
 - Docker support for easy deployment
 
+> [!NOTE]
+> Bucket tagging supports up to 50 user-defined tags. Configurations that use
+> `S3ClientStorage`, including it as a replication target, support up to 45
+> user-defined bucket tags because five upstream tag slots are reserved for
+> Pithos system metadata.
+
 ## Quick Start
 
 ```sh
@@ -46,6 +52,7 @@ For detailed documentation, see the [docs](docs/) directory:
 - [Getting Started](docs/getting-started.md) – Installation, build, and Docker setup
 - [CLI Reference](docs/cli-reference.md) – All commands and options
 - [Configuration](docs/configuration.md) – Environment variables and authorization
+- [Account Ownership Update](docs/account-ownership-update.md) – One-time upgrade procedure for existing databases
 - [S3 API Behavior](docs/s3-api.md) – Object metadata, versioning, and SDK-facing semantics
 - [Storage Backends](docs/storage-backends.md) – Storage types and configuration examples
 - [Audit Logging](docs/audit-logging.md) – Audit middleware and verification

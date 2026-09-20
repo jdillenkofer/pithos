@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/jdillenkofer/pithos/internal/lifecycle"
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -30,6 +31,12 @@ type s3ClientStorage struct {
 	s3Client *s3.Client
 	tracer   trace.Tracer
 }
+
+const (
+	ownerAccountIDBucketTag      = "pithos:owner-account-id"
+	reservedSystemBucketTagCount = 5
+	maxUserBucketTags            = storage.MaxBucketTags - reservedSystemBucketTagCount
+)
 
 // Compile-time check to ensure s3ClientStorage implements storage.Storage
 var _ storage.Storage = (*s3ClientStorage)(nil)
@@ -62,7 +69,17 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 	if len(options) > 1 {
 		return storage.ErrInvalidObjectLockConfiguration
 	}
-	_, err := rs.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+	_, err := rs.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucketName.String())})
+	if err == nil {
+		return storage.ErrBucketAlreadyExists
+	}
+	if isExistingBucketError(err) {
+		return storage.ErrBucketAlreadyExists
+	}
+	if !isNoSuchBucketError(err) {
+		return err
+	}
+	_, err = rs.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 		ObjectLockEnabledForBucket: aws.Bool(len(options) == 1 && options[0].ObjectLockEnabled),
 		Bucket:                     aws.String(bucketName.String()),
 	})
@@ -73,7 +90,141 @@ func (rs *s3ClientStorage) CreateBucket(ctx context.Context, bucketName storage.
 	if err != nil {
 		return err
 	}
+	ownerAccountID := "system"
+	if len(options) == 1 && options[0].OwnerAccountID != "" {
+		ownerAccountID = options[0].OwnerAccountID
+	}
+	tags, err := rs.bucketTags(ctx, bucketName)
+	if err != nil {
+		_, _ = rs.s3Client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName.String())})
+		return err
+	}
+	tags = setBucketTag(tags, ownerAccountIDBucketTag, ownerAccountID)
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket:  aws.String(bucketName.String()),
+		Tagging: &types.Tagging{TagSet: tags},
+	})
+	if err != nil {
+		_, _ = rs.s3Client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucketName.String())})
+		return err
+	}
 	return nil
+}
+
+func isExistingBucketError(err error) bool {
+	var apiError smithy.APIError
+	if errors.As(err, &apiError) && apiError.ErrorCode() == "AccessDenied" {
+		return true
+	}
+	var responseError *smithyhttp.ResponseError
+	return errors.As(err, &responseError) && responseError.HTTPStatusCode() == http.StatusForbidden
+}
+
+func isNoSuchBucketError(err error) bool {
+	var notFoundError *types.NotFound
+	var noSuchBucketError *types.NoSuchBucket
+	var apiError smithy.APIError
+	return errors.As(err, &notFoundError) || errors.As(err, &noSuchBucketError) ||
+		(errors.As(err, &apiError) && (apiError.ErrorCode() == "NoSuchBucket" || apiError.ErrorCode() == "NotFound"))
+}
+
+func (rs *s3ClientStorage) bucketTags(ctx context.Context, bucketName storage.BucketName) ([]types.Tag, error) {
+	result, err := rs.s3Client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String(bucketName.String())})
+	var apiError smithy.APIError
+	if err != nil && errors.As(err, &apiError) && (apiError.ErrorCode() == "NoSuchTagSet" || apiError.ErrorCode() == "NoSuchTagging") {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result.TagSet, nil
+}
+
+func (rs *s3ClientStorage) GetBucketTagging(ctx context.Context, bucketName storage.BucketName) (map[string]string, error) {
+	tagSet, err := rs.bucketTags(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return publicBucketTags(tagSet), nil
+}
+
+func publicBucketTags(tagSet []types.Tag) map[string]string {
+	tags := make(map[string]string, len(tagSet))
+	for _, tag := range tagSet {
+		key := aws.ToString(tag.Key)
+		if key != ownerAccountIDBucketTag {
+			tags[key] = aws.ToString(tag.Value)
+		}
+	}
+	return tags
+}
+
+func bucketTagSetWithOwner(tags map[string]string, ownerAccountID string) []types.Tag {
+	tagSet := make([]types.Tag, 0, len(tags)+1)
+	for key, value := range tags {
+		if key == ownerAccountIDBucketTag {
+			continue
+		}
+		tagSet = append(tagSet, types.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+	return append(tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String(ownerAccountID)})
+}
+
+func (rs *s3ClientStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
+	if err := validateUserBucketTags(tags); err != nil {
+		return err
+	}
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	tagSet := bucketTagSetWithOwner(tags, ownerAccountID)
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucketName.String()), Tagging: &types.Tagging{TagSet: tagSet}})
+	return err
+}
+
+func validateUserBucketTags(tags map[string]string) error {
+	if len(tags) > maxUserBucketTags {
+		return storage.ErrInvalidTag
+	}
+	return nil
+}
+
+func (rs *s3ClientStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket: aws.String(bucketName.String()),
+		Tagging: &types.Tagging{TagSet: []types.Tag{{
+			Key: aws.String(ownerAccountIDBucketTag), Value: aws.String(ownerAccountID),
+		}}},
+	})
+	return err
+}
+
+func setBucketTag(tags []types.Tag, key, value string) []types.Tag {
+	for i := range tags {
+		if aws.ToString(tags[i].Key) == key {
+			tags[i].Value = aws.String(value)
+			return tags
+		}
+	}
+	return append(tags, types.Tag{Key: aws.String(key), Value: aws.String(value)})
+}
+
+func (rs *s3ClientStorage) bucketOwnerAccountID(ctx context.Context, bucketName storage.BucketName) (string, error) {
+	result, err := rs.s3Client.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{Bucket: aws.String(bucketName.String())})
+	if err != nil {
+		return "", err
+	}
+	for _, tag := range result.TagSet {
+		if aws.ToString(tag.Key) == ownerAccountIDBucketTag {
+			return aws.ToString(tag.Value), nil
+		}
+	}
+	return "", fmt.Errorf("bucket %q has no owner account", bucketName.String())
 }
 
 func (rs *s3ClientStorage) DeleteBucket(ctx context.Context, bucketName storage.BucketName) error {
@@ -104,12 +255,19 @@ func (rs *s3ClientStorage) ListBuckets(ctx context.Context) ([]storage.Bucket, e
 	if err != nil {
 		return nil, err
 	}
-	buckets := sliceutils.Map(func(bucket types.Bucket) storage.Bucket {
-		return storage.Bucket{
-			Name:         storage.MustNewBucketName(*bucket.Name),
-			CreationDate: *bucket.CreationDate,
+	buckets := make([]storage.Bucket, 0, len(listBucketsResult.Buckets))
+	for _, bucket := range listBucketsResult.Buckets {
+		name := storage.MustNewBucketName(*bucket.Name)
+		ownerAccountID, err := rs.bucketOwnerAccountID(ctx, name)
+		if err != nil {
+			return nil, err
 		}
-	}, listBucketsResult.Buckets)
+		buckets = append(buckets, storage.Bucket{
+			Name:           storage.MustNewBucketName(*bucket.Name),
+			OwnerAccountID: ownerAccountID,
+			CreationDate:   *bucket.CreationDate,
+		})
+	}
 	return buckets, nil
 }
 
@@ -127,9 +285,14 @@ func (rs *s3ClientStorage) HeadBucket(ctx context.Context, bucketName storage.Bu
 	if err != nil {
 		return nil, err
 	}
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return nil, err
+	}
 	return &storage.Bucket{
-		Name:         bucketName,
-		CreationDate: time.Time{},
+		Name:           bucketName,
+		OwnerAccountID: ownerAccountID,
+		CreationDate:   time.Time{},
 	}, nil
 }
 
