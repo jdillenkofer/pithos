@@ -141,24 +141,52 @@ func (rs *s3ClientStorage) GetBucketTagging(ctx context.Context, bucketName stor
 	if err != nil {
 		return nil, err
 	}
+	return publicBucketTags(tagSet), nil
+}
+
+func publicBucketTags(tagSet []types.Tag) map[string]string {
 	tags := make(map[string]string, len(tagSet))
 	for _, tag := range tagSet {
-		tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+		key := aws.ToString(tag.Key)
+		if key != ownerAccountIDBucketTag {
+			tags[key] = aws.ToString(tag.Value)
+		}
 	}
-	return tags, nil
+	return tags
+}
+
+func bucketTagSetWithOwner(tags map[string]string, ownerAccountID string) []types.Tag {
+	tagSet := make([]types.Tag, 0, len(tags)+1)
+	for key, value := range tags {
+		if key == ownerAccountIDBucketTag {
+			continue
+		}
+		tagSet = append(tagSet, types.Tag{Key: aws.String(key), Value: aws.String(value)})
+	}
+	return append(tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String(ownerAccountID)})
 }
 
 func (rs *s3ClientStorage) PutBucketTagging(ctx context.Context, bucketName storage.BucketName, tags map[string]string) error {
-	tagSet := make([]types.Tag, 0, len(tags))
-	for key, value := range tags {
-		tagSet = append(tagSet, types.Tag{Key: aws.String(key), Value: aws.String(value)})
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return err
 	}
-	_, err := rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucketName.String()), Tagging: &types.Tagging{TagSet: tagSet}})
+	tagSet := bucketTagSetWithOwner(tags, ownerAccountID)
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{Bucket: aws.String(bucketName.String()), Tagging: &types.Tagging{TagSet: tagSet}})
 	return err
 }
 
 func (rs *s3ClientStorage) DeleteBucketTagging(ctx context.Context, bucketName storage.BucketName) error {
-	_, err := rs.s3Client.DeleteBucketTagging(ctx, &s3.DeleteBucketTaggingInput{Bucket: aws.String(bucketName.String())})
+	ownerAccountID, err := rs.bucketOwnerAccountID(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+	_, err = rs.s3Client.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket: aws.String(bucketName.String()),
+		Tagging: &types.Tagging{TagSet: []types.Tag{{
+			Key: aws.String(ownerAccountIDBucketTag), Value: aws.String(ownerAccountID),
+		}}},
+	})
 	return err
 }
 

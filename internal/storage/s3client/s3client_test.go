@@ -50,6 +50,30 @@ func TestIsExistingBucketError(t *testing.T) {
 	}
 }
 
+func TestPublicBucketTagsHidesOwnerAccountID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tags := publicBucketTags([]types.Tag{
+		{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-a")},
+		{Key: aws.String("environment"), Value: aws.String("production")},
+	})
+
+	require.Equal(t, map[string]string{"environment": "production"}, tags)
+}
+
+func TestBucketTagSetWithOwnerPreservesAuthoritativeOwner(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tagSet := bucketTagSetWithOwner(map[string]string{
+		ownerAccountIDBucketTag: "account-b",
+		"environment":           "production",
+	}, "account-a")
+
+	require.Contains(t, tagSet, types.Tag{Key: aws.String("environment"), Value: aws.String("production")})
+	require.Contains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-a")})
+	require.NotContains(t, tagSet, types.Tag{Key: aws.String(ownerAccountIDBucketTag), Value: aws.String("account-b")})
+}
+
 func TestCopySourceValueEscapesSourceKey(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
