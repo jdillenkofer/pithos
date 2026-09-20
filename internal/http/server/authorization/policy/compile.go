@@ -121,7 +121,7 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 	for _, a := range s.Action {
 		valid := false
 		for _, known := range SupportedActions() {
-			if wildcard(a, known) {
+			if wildcard(a, known, true) {
 				valid = true
 				break
 			}

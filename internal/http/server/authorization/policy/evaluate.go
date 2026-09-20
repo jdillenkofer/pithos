@@ -12,10 +12,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 )
 
-func wildcard(pattern, value string) bool {
+func wildcard(pattern, value string, ignoreCase bool) bool {
 	quoted := regexp.QuoteMeta(pattern)
 	quoted = strings.ReplaceAll(strings.ReplaceAll(quoted, `\*`, `.*`), `\?`, `.`)
-	ok, _ := regexp.MatchString("^(?i:"+quoted+")$", value)
+	if ignoreCase {
+		quoted = "(?i:" + quoted + ")"
+	}
+	ok, _ := regexp.MatchString("^(?:"+quoted+")$", value)
 	return ok
 }
 
@@ -56,7 +59,7 @@ func evaluateCheck(ctx context.Context, ss []compiledStatement, r *authorization
 	d := authorization.Decision{Effect: authorization.ImplicitDeny, Action: c.action, Resource: c.resource}
 	allowed := false
 	for _, s := range ss {
-		if !matchesAny(s.actions, c.action) || !matchesAny(s.resources, c.resource) {
+		if !matchesAny(s.actions, c.action, true) || !matchesAny(s.resources, c.resource, false) {
 			continue
 		}
 		ok, err := conditionsMatch(ctx, s.conditions, r, c.source)
@@ -80,9 +83,9 @@ func evaluateCheck(ctx context.Context, ss []compiledStatement, r *authorization
 	}
 	return d, nil
 }
-func matchesAny(patterns []string, v string) bool {
+func matchesAny(patterns []string, v string, ignoreCase bool) bool {
 	for _, p := range patterns {
-		if wildcard(p, v) {
+		if wildcard(p, v, ignoreCase) {
 			return true
 		}
 	}
@@ -284,7 +287,7 @@ func scalarCompare(op, a, e string) (bool, error) {
 		if strings.Contains(base, "IgnoreCase") {
 			ok = strings.EqualFold(a, e)
 		} else if strings.Contains(base, "Like") {
-			ok = wildcard(e, a)
+			ok = wildcard(e, a, false)
 		} else {
 			ok = a == e
 		}

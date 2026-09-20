@@ -104,3 +104,32 @@ func TestConditionIfExistsAndExplicitDeny(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, authorization.ExplicitDeny, d.Effect)
 }
+
+func TestActionMatchingIsCaseInsensitive(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"S3:gEtObJeCt","Resource":"*"}`)
+	d, err := s.AuthorizeRequest(context.Background(), request(authorization.OperationGetObject, "bucket", "key"))
+	require.NoError(t, err)
+	require.Equal(t, authorization.Allow, d.Effect)
+}
+
+func TestResourceMatchingIsCaseSensitive(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/private/*"}`)
+	d, err := s.AuthorizeRequest(context.Background(), request(authorization.OperationGetObject, "bucket", "Private/key"))
+	require.NoError(t, err)
+	require.Equal(t, authorization.ImplicitDeny, d.Effect)
+}
+
+func TestStringLikeMatchingIsCaseSensitive(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"StringLike":{"aws:UserAgent":"Pithos/*"}}}`)
+	r := request(authorization.OperationGetObject, "bucket", "key")
+	r.HttpRequest.Headers = map[string][]string{"User-Agent": {"pithos/client"}}
+	d, err := s.AuthorizeRequest(context.Background(), r)
+	require.NoError(t, err)
+	require.Equal(t, authorization.ImplicitDeny, d.Effect)
+}
