@@ -22,31 +22,14 @@ const authorizationFunctionName = "authorizeRequest"
 var errAuthorizationFunctionNotFound = errors.New("authorization function " + authorizationFunctionName + " not found in Lua code")
 
 type LuaAuthorizer struct {
-	code                  string
-	trustForwardedHeaders bool
-	trustedProxyCIDRs     []*net.IPNet
-	tracer                trace.Tracer
+	code          string
+	proxyResolver *authorization.ProxyResolver
+	tracer        trace.Tracer
 }
 
 type Options struct {
 	TrustForwardedHeaders bool
 	TrustedProxyCIDRs     []string
-}
-
-func parseTrustedProxyCIDRs(cidrStrings []string) []*net.IPNet {
-	if len(cidrStrings) == 0 {
-		return nil
-	}
-	parsed := make([]*net.IPNet, 0, len(cidrStrings))
-	for _, cidrStr := range cidrStrings {
-		_, ipNet, err := net.ParseCIDR(cidrStr)
-		if err != nil {
-			slog.Warn("Ignoring invalid trusted proxy CIDR", "cidr", cidrStr, "error", err)
-			continue
-		}
-		parsed = append(parsed, ipNet)
-	}
-	return parsed
 }
 
 func (authorizer *LuaAuthorizer) dryRun() error {
@@ -67,35 +50,18 @@ func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
 
 func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, error) {
 	luaAuthorizer := &LuaAuthorizer{
-		code:                  code,
-		trustForwardedHeaders: options.TrustForwardedHeaders,
-		trustedProxyCIDRs:     parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
-		tracer:                otel.Tracer("internal/http/server/authorization/lua"),
+		code: code,
+		proxyResolver: authorization.NewProxyResolver(authorization.ProxyOptions{
+			TrustForwardedHeaders: options.TrustForwardedHeaders,
+			TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
+		}),
+		tracer: otel.Tracer("internal/http/server/authorization/lua"),
 	}
 	err := luaAuthorizer.dryRun()
 	if err != nil {
 		return nil, err
 	}
 	return luaAuthorizer, nil
-}
-
-func isTrustedProxy(remoteIP *string, trustedProxyCIDRs []*net.IPNet) bool {
-	if remoteIP == nil {
-		return false
-	}
-	ip := net.ParseIP(*remoteIP)
-	if ip == nil {
-		return false
-	}
-	if len(trustedProxyCIDRs) == 0 {
-		return true
-	}
-	for _, cidr := range trustedProxyCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
@@ -119,32 +85,6 @@ func getHeaderIgnoreCase(headers map[string][]string, key string) *string {
 	}
 	value := values[0]
 	return &value
-}
-
-func parseForwardedClientIP(forwardedFor string) *string {
-	parts := strings.Split(forwardedFor, ",")
-	if len(parts) == 0 {
-		return nil
-	}
-	first := strings.TrimSpace(parts[0])
-	ip := net.ParseIP(first)
-	if ip == nil {
-		return nil
-	}
-	parsedIP := ip.String()
-	return &parsedIP
-}
-
-func parseForwardedScheme(forwardedProto string) *string {
-	parts := strings.Split(forwardedProto, ",")
-	if len(parts) == 0 {
-		return nil
-	}
-	first := strings.ToLower(strings.TrimSpace(parts[0]))
-	if first == "http" || first == "https" {
-		return &first
-	}
-	return nil
 }
 
 func stringInSlice(value string, values []string) bool {
@@ -190,34 +130,7 @@ func ipInCIDR(ipStr string, cidr string) bool {
 }
 
 func (authorizer *LuaAuthorizer) resolveClientIPAndScheme(httpRequest authorization.HTTPRequest) (*string, string) {
-	clientIP := httpRequest.RemoteIP
-	scheme := httpRequest.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
-
-	if !authorizer.trustForwardedHeaders || !isTrustedProxy(httpRequest.RemoteIP, authorizer.trustedProxyCIDRs) {
-		return clientIP, scheme
-	}
-
-	if cfConnectingIP := getHeaderIgnoreCase(httpRequest.Headers, "CF-Connecting-IP"); cfConnectingIP != nil {
-		if ip := net.ParseIP(strings.TrimSpace(*cfConnectingIP)); ip != nil {
-			parsedIP := ip.String()
-			clientIP = &parsedIP
-		}
-	} else if xForwardedFor := getHeaderIgnoreCase(httpRequest.Headers, "X-Forwarded-For"); xForwardedFor != nil {
-		if parsed := parseForwardedClientIP(*xForwardedFor); parsed != nil {
-			clientIP = parsed
-		}
-	}
-
-	if xForwardedProto := getHeaderIgnoreCase(httpRequest.Headers, "X-Forwarded-Proto"); xForwardedProto != nil {
-		if parsedScheme := parseForwardedScheme(*xForwardedProto); parsedScheme != nil {
-			scheme = *parsedScheme
-		}
-	}
-
-	return clientIP, scheme
+	return authorizer.proxyResolver.Resolve(httpRequest)
 }
 
 func pushNullableString(L *lua.State, str *string) {

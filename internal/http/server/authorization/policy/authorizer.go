@@ -16,14 +16,30 @@ type Authorizer struct {
 	snapshot atomic.Pointer[Snapshot]
 	cancel   context.CancelFunc
 	loadedAt atomic.Int64
+	proxy    *authorization.ProxyResolver
 }
 
 func NewAuthorizer(path string, interval time.Duration) (*Authorizer, error) {
+	return NewAuthorizerWithOptions(path, interval, Options{})
+}
+
+type Options struct {
+	TrustForwardedHeaders bool
+	TrustedProxyCIDRs     []string
+}
+
+func NewAuthorizerWithOptions(path string, interval time.Duration, options Options) (*Authorizer, error) {
 	s, err := Load(path)
 	if err != nil {
 		return nil, err
 	}
-	a := &Authorizer{path: path}
+	a := &Authorizer{
+		path: path,
+		proxy: authorization.NewProxyResolver(authorization.ProxyOptions{
+			TrustForwardedHeaders: options.TrustForwardedHeaders,
+			TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
+		}),
+	}
 	a.snapshot.Store(s)
 	a.loadedAt.Store(time.Now().UnixNano())
 	authorization.ObserveReload("policy", true)
@@ -71,6 +87,7 @@ func (a *Authorizer) Close() error {
 }
 func (a *Authorizer) AuthorizeRequest(ctx context.Context, r *authorization.Request) (authorization.Decision, error) {
 	started := time.Now()
+	r.HttpRequest.ClientIP, r.HttpRequest.Scheme = a.proxy.Resolve(r.HttpRequest)
 	d, err := a.snapshot.Load().AuthorizeRequest(ctx, r)
 	authorization.ObserveDecision("policy", d.Effect, started)
 	authorization.SetSnapshotAge("policy", time.Since(time.Unix(0, a.loadedAt.Load())))

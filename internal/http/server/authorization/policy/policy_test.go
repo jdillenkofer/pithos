@@ -182,3 +182,48 @@ func TestCompileAcceptsValidTypedConditionValues(t *testing.T) {
 	_, err := Compile(data)
 	require.NoError(t, err)
 }
+
+func TestAuthorizerAppliesTrustedForwardedHeaders(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	path := filepath.Join(t.TempDir(), "policies.json")
+	data := `{"schemaVersion":1,"policies":{"test":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"IpAddress":{"aws:SourceIp":"198.51.100.0/24"},"Bool":{"aws:SecureTransport":"true"}}}}},"bindings":[{"policy":"test","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+	a, err := NewAuthorizerWithOptions(path, 0, Options{TrustForwardedHeaders: true, TrustedProxyCIDRs: []string{"10.0.0.0/8"}})
+	require.NoError(t, err)
+	defer a.Close()
+
+	r := request(authorization.OperationGetObject, "bucket", "key")
+	r.HttpRequest = authorization.HTTPRequest{
+		RemoteIP: stringPointer("10.1.2.3"),
+		Scheme:   "http",
+		Headers: map[string][]string{
+			"X-Forwarded-For":   {"198.51.100.7"},
+			"X-Forwarded-Proto": {"https"},
+		},
+	}
+	d, err := a.AuthorizeRequest(context.Background(), r)
+	require.NoError(t, err)
+	require.Equal(t, authorization.Allow, d.Effect)
+}
+
+func TestAuthorizerIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	path := filepath.Join(t.TempDir(), "policies.json")
+	data := `{"schemaVersion":1,"policies":{"test":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"IpAddress":{"aws:SourceIp":"198.51.100.0/24"}}}}},"bindings":[{"policy":"test","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+	a, err := NewAuthorizerWithOptions(path, 0, Options{TrustForwardedHeaders: true, TrustedProxyCIDRs: []string{"10.0.0.0/8"}})
+	require.NoError(t, err)
+	defer a.Close()
+
+	r := request(authorization.OperationGetObject, "bucket", "key")
+	r.HttpRequest = authorization.HTTPRequest{
+		RemoteIP: stringPointer("192.0.2.5"),
+		Scheme:   "http",
+		Headers:  map[string][]string{"X-Forwarded-For": {"198.51.100.7"}},
+	}
+	d, err := a.AuthorizeRequest(context.Background(), r)
+	require.NoError(t, err)
+	require.Equal(t, authorization.ImplicitDeny, d.Effect)
+}

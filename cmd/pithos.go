@@ -399,7 +399,10 @@ func loadCredentialProvider(ctx context.Context, configured *settings.Settings, 
 
 func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticationEnabled bool) (authorization.RequestAuthorizer, error) {
 	if strings.EqualFold(configured.AuthorizerType(), "policy") {
-		return policy.NewAuthorizer(configured.PolicyPath(), time.Duration(configured.PolicyReloadIntervalSeconds())*time.Second)
+		return policy.NewAuthorizerWithOptions(configured.PolicyPath(), time.Duration(configured.PolicyReloadIntervalSeconds())*time.Second, policy.Options{
+			TrustForwardedHeaders: configured.TrustForwardedHeaders(),
+			TrustedProxyCIDRs:     configured.TrustedProxyCIDRs(),
+		})
 	}
 	if !strings.EqualFold(configured.AuthorizerType(), "lua") {
 		return nil, fmt.Errorf("unknown authorizer type %q", configured.AuthorizerType())
