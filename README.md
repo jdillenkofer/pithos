@@ -20,6 +20,12 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 - Health monitoring endpoints
 - Docker support for easy deployment
 
+> [!NOTE]
+> Bucket tagging supports up to 50 user-defined tags. Configurations that use
+> `S3ClientStorage`, including it as a replication target, support up to 45
+> user-defined bucket tags because five upstream tag slots are reserved for
+> Pithos system metadata.
+
 ## Quick Start
 
 ```sh
