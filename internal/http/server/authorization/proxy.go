@@ -1,7 +1,7 @@
 package authorization
 
 import (
-	"log/slog"
+	"fmt"
 	"net"
 	"net/textproto"
 	"strings"
@@ -17,17 +17,19 @@ type ProxyResolver struct {
 	trustedProxyCIDRs     []*net.IPNet
 }
 
-func NewProxyResolver(options ProxyOptions) *ProxyResolver {
+func NewProxyResolver(options ProxyOptions) (*ProxyResolver, error) {
+	if options.TrustForwardedHeaders && len(options.TrustedProxyCIDRs) == 0 {
+		return nil, fmt.Errorf("trusted proxy CIDRs are required when trusting forwarded headers")
+	}
 	resolver := &ProxyResolver{trustForwardedHeaders: options.TrustForwardedHeaders}
 	for _, cidrString := range options.TrustedProxyCIDRs {
 		_, cidr, err := net.ParseCIDR(cidrString)
 		if err != nil {
-			slog.Warn("Ignoring invalid trusted proxy CIDR", "cidr", cidrString, "error", err)
-			continue
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", cidrString, err)
 		}
 		resolver.trustedProxyCIDRs = append(resolver.trustedProxyCIDRs, cidr)
 	}
-	return resolver
+	return resolver, nil
 }
 
 func (r *ProxyResolver) Resolve(request HTTPRequest) (*string, string) {
@@ -40,14 +42,14 @@ func (r *ProxyResolver) Resolve(request HTTPRequest) (*string, string) {
 		return clientIP, scheme
 	}
 
-	if connectingIP := headerValue(request.Headers, "CF-Connecting-IP"); connectingIP != nil {
+	if forwardedFor := headerValues(request.Headers, "X-Forwarded-For"); len(forwardedFor) > 0 {
+		if parsed := r.parseForwardedClientIP(strings.Join(forwardedFor, ",")); parsed != nil {
+			clientIP = parsed
+		}
+	} else if connectingIP := headerValue(request.Headers, "CF-Connecting-IP"); connectingIP != nil {
 		if ip := net.ParseIP(strings.TrimSpace(*connectingIP)); ip != nil {
 			parsed := ip.String()
 			clientIP = &parsed
-		}
-	} else if forwardedFor := headerValue(request.Headers, "X-Forwarded-For"); forwardedFor != nil {
-		if parsed := parseForwardedClientIP(*forwardedFor); parsed != nil {
-			clientIP = parsed
 		}
 	}
 	if forwardedProto := headerValue(request.Headers, "X-Forwarded-Proto"); forwardedProto != nil {
@@ -66,9 +68,6 @@ func (r *ProxyResolver) isTrustedProxy(remoteIP *string) bool {
 	if ip == nil {
 		return false
 	}
-	if len(r.trustedProxyCIDRs) == 0 {
-		return true
-	}
 	for _, cidr := range r.trustedProxyCIDRs {
 		if cidr.Contains(ip) {
 			return true
@@ -77,7 +76,7 @@ func (r *ProxyResolver) isTrustedProxy(remoteIP *string) bool {
 	return false
 }
 
-func headerValue(headers map[string][]string, key string) *string {
+func headerValues(headers map[string][]string, key string) []string {
 	canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
 	values, ok := headers[canonicalKey]
 	if !ok {
@@ -88,26 +87,39 @@ func headerValue(headers map[string][]string, key string) *string {
 			}
 		}
 	}
-	if len(values) == 0 {
+	return values
+}
+
+func headerValue(headers map[string][]string, key string) *string {
+	values := headerValues(headers, key)
+	if len(values) != 1 {
 		return nil
 	}
 	value := values[0]
 	return &value
 }
 
-func parseForwardedClientIP(forwardedFor string) *string {
-	first, _, _ := strings.Cut(forwardedFor, ",")
-	ip := net.ParseIP(strings.TrimSpace(first))
-	if ip == nil {
-		return nil
+func (r *ProxyResolver) parseForwardedClientIP(forwardedFor string) *string {
+	chain := strings.Split(forwardedFor, ",")
+	var candidate *string
+	for i := len(chain) - 1; i >= 0; i-- {
+		ip := net.ParseIP(strings.TrimSpace(chain[i]))
+		if ip == nil {
+			return nil
+		}
+		parsed := ip.String()
+		candidate = &parsed
+		if !r.isTrustedProxy(candidate) {
+			return candidate
+		}
 	}
-	parsed := ip.String()
-	return &parsed
+	return candidate
 }
 
 func parseForwardedScheme(forwardedProto string) *string {
-	first, _, _ := strings.Cut(forwardedProto, ",")
-	parsed := strings.ToLower(strings.TrimSpace(first))
+	// The trusted ingress must overwrite this header. A list of schemes has
+	// no reliable correspondence to the client-IP chain and is not trusted.
+	parsed := strings.ToLower(strings.TrimSpace(forwardedProto))
 	if parsed != "http" && parsed != "https" {
 		return nil
 	}

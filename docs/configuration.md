@@ -30,7 +30,7 @@
 | `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
 | `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
-| `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
+| `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; required when forwarded headers are trusted; invalid CIDRs reject startup | - |
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
 
@@ -188,6 +188,23 @@ export PITHOS_CREDENTIALS_3_PRINCIPAL_ID="bucket-reader"
 ```
 
 ## Lua Authorizer Script
+
+Both authorizers ignore forwarding headers unless `PITHOS_TRUST_FORWARDED_HEADERS`
+is enabled and the direct peer belongs to an explicitly configured trusted CIDR.
+Enabling trust without CIDRs, or configuring any invalid CIDR, prevents startup.
+Configure only proxy addresses under your control, not client networks.
+
+`X-Forwarded-For` is read from right to left, skipping trusted proxy hops and
+stopping at the first untrusted address. Values further left cannot override
+that client address. Multiple header lines are processed as one chain. A
+malformed hop encountered during traversal falls back to the direct peer.
+`CF-Connecting-IP` is used only when `X-Forwarded-For` is absent.
+
+The trusted ingress must remove or overwrite client-supplied `CF-Connecting-IP`
+and `X-Forwarded-Proto`; merely forwarding those headers is unsafe.
+`X-Forwarded-Proto` must contain a single `http` or `https` value. Repeated or
+comma-separated scheme values are ignored in favor of the direct connection's
+scheme. These rules apply equally to Lua and policy authorization.
 
 The Lua authorizer script controls access to all operations, including anonymous requests from the website endpoint. The `authorizeRequest` function receives a `request` object and must return `true` to allow or `false` to deny.
 

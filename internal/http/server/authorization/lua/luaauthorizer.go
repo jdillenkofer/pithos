@@ -50,15 +50,19 @@ func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
 }
 
 func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, error) {
-	luaAuthorizer := &LuaAuthorizer{
-		code: code,
-		proxyResolver: authorization.NewProxyResolver(authorization.ProxyOptions{
-			TrustForwardedHeaders: options.TrustForwardedHeaders,
-			TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
-		}),
-		tracer: otel.Tracer("internal/http/server/authorization/lua"),
+	proxyResolver, err := authorization.NewProxyResolver(authorization.ProxyOptions{
+		TrustForwardedHeaders: options.TrustForwardedHeaders,
+		TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
+	})
+	if err != nil {
+		return nil, err
 	}
-	err := luaAuthorizer.dryRun()
+	luaAuthorizer := &LuaAuthorizer{
+		code:          code,
+		proxyResolver: proxyResolver,
+		tracer:        otel.Tracer("internal/http/server/authorization/lua"),
+	}
+	err = luaAuthorizer.dryRun()
 	if err != nil {
 		return nil, err
 	}

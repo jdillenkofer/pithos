@@ -77,7 +77,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	policyReloadIntervalSecondsAccessor := registerIntFlag(serveCommand, "policyReloadIntervalSeconds", defaultPolicyReloadIntervalSeconds, "interval between policy reloads; zero disables reload")
 	spoolDirAccessor := registerStringFlag(serveCommand, "spoolDir", defaultSpoolDir, "the directory for temporary spool files")
 	trustForwardedHeadersAccessor := registerBoolFlag(serveCommand, "trustForwardedHeaders", defaultTrustForwardedHeaders, "trust client forwarding headers (X-Forwarded-For, X-Forwarded-Proto, CF-Connecting-IP)")
-	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; empty means all proxies when trustForwardedHeaders is enabled")
+	trustedProxyCIDRsAccessor := registerStringFlag(serveCommand, "trustedProxyCIDRs", "", "comma-separated trusted proxy CIDR ranges; required when trustForwardedHeaders is enabled")
 	logLevelAccessor := registerStringFlag(serveCommand, "logLevel", "info", "the log level for the application (debug, info, warn, error, fatal)")
 	otelEnabledAccessor := registerBoolFlag(serveCommand, "otelEnabled", defaultOtelEnabled, "determines if opentelemetry is enabled or not")
 	otelExporterAccessor := registerStringFlag(serveCommand, "otelExporter", defaultOtelExporter, "the exporter for opentelemetry (stdout, otlp)")

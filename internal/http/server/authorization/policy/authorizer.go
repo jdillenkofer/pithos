@@ -33,12 +33,16 @@ func NewAuthorizerWithOptions(path string, interval time.Duration, options Optio
 	if err != nil {
 		return nil, err
 	}
+	proxy, err := authorization.NewProxyResolver(authorization.ProxyOptions{
+		TrustForwardedHeaders: options.TrustForwardedHeaders,
+		TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
+	})
+	if err != nil {
+		return nil, err
+	}
 	a := &Authorizer{
-		path: path,
-		proxy: authorization.NewProxyResolver(authorization.ProxyOptions{
-			TrustForwardedHeaders: options.TrustForwardedHeaders,
-			TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
-		}),
+		path:  path,
+		proxy: proxy,
 	}
 	a.snapshot.Store(s)
 	a.loadedAt.Store(time.Now().UnixNano())
