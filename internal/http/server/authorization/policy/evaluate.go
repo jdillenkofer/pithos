@@ -304,6 +304,9 @@ func scalarCompare(op, a, e string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		if math.IsNaN(av) || math.IsInf(av, 0) {
+			return false, fmt.Errorf("non-finite numeric context value %q", a)
+		}
 		ev, err := strconv.ParseFloat(e, 64)
 		if err != nil {
 			return false, err
