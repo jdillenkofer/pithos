@@ -37,6 +37,7 @@ func (authorizer *LuaAuthorizer) dryRun() error {
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
 			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+			AuthType:    "REST-HEADER",
 		},
 		Bucket: nil,
 		Key:    nil,

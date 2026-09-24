@@ -7,10 +7,42 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLuaReceivesAuthenticatedAuthType(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		name          string
+		authType      authentication.AuthType
+		authenticated bool
+		want          string
+	}{
+		{"anonymous", authentication.AuthTypeAnonymous, false, "Anonymous"},
+		{"header", authentication.AuthTypeSigV4Header, true, "REST-HEADER"},
+		{"presigned", authentication.AuthTypeSigV4Presign, true, "REST-QUERY-STRING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(r) return r.authorization.authType == "` + tc.want + `" end`)
+			require.NoError(t, err)
+			auth := authentication.RequestAuthentication{Type: tc.authType, Authenticated: tc.authenticated}
+			if tc.authenticated {
+				auth.Identity = &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "a", PrincipalID: "p"}
+			}
+			ctx := authentication.WithRequestAuthentication(context.Background(), auth)
+			// Raw query/header values must not override the middleware's result.
+			r := httptest.NewRequest("GET", "/bucket/key?X-Amz-Credential=untrusted", nil).WithContext(ctx)
+			r.Header.Set("Authorization", "untrusted")
+			request, _ := makeAuthorizationRequest(ctx, authorization.OperationGetObject, stringPtr("bucket"), stringPtr("key"), r)
+			d, err := authorizer.AuthorizeRequest(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, authorization.Allow, d.Effect)
+		})
+	}
+}
 
 func TestPolicyDistinguishesPresignedRequests(t *testing.T) {
 	testutils.SkipIfIntegration(t)

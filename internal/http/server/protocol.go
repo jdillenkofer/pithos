@@ -544,7 +544,7 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 
 func authorizationFromAuthentication(auth authentication.RequestAuthentication) authorization.Authorization {
 	if !auth.Authenticated || auth.Identity == nil {
-		return authorization.Authorization{}
+		return authorization.Authorization{AuthType: "Anonymous"}
 	}
 
 	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID, AccountId: &auth.Identity.AccountID}

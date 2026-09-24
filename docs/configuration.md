@@ -225,6 +225,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
 | `request.authorization.accountId` | `string\|nil` | The caller's account ID, or `nil` for anonymous requests |
 | `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` for anonymous requests |
+| `request.authorization.authType` | `string` | `Anonymous`, `REST-HEADER`, or `REST-QUERY-STRING`, from the server's authentication result; use this to distinguish signed headers from presigned URLs |
 | `request.resourceAccountId` | `string\|nil` | The owning account of the target bucket; for `CreateBucket`, the caller's account |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |
