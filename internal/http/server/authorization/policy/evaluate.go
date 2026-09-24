@@ -91,9 +91,6 @@ func conditionsMatch(ctx context.Context, conditions []condition, r *authorizati
 		if err != nil {
 			return false, err
 		}
-		if !present && strings.HasSuffix(c.operator, "IfExists") {
-			continue
-		}
 		ok, err := compareCondition(c, vals, present)
 		if err != nil {
 			return false, err
@@ -240,8 +237,12 @@ func compareCondition(c condition, actual []string, present bool) (bool, error) 
 		return want == !present, err
 	}
 	negative := strings.Contains(op, "Not") || op == "NotIpAddress"
+	// An existential set comparison requires a value, even with IfExists.
+	if setAny && (!present || len(actual) == 0) {
+		return false, nil
+	}
 	if !present {
-		if setAll {
+		if setAll || parts.ifExists {
 			return true, nil
 		}
 		return negative, nil

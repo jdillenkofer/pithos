@@ -77,12 +77,12 @@ multivalued context such as tag keys:
 Except for `Null`, operators may have the `IfExists` suffix and the
 `ForAnyValue:` or `ForAllValues:` prefix, including both together.
 `IfExists` makes an absent key satisfy the condition, including in a Deny
-statement. `ForAllValues:` requires every context value to match and is true
+statement, except with `ForAnyValue:`. `ForAllValues:` requires every context value to match and is true
 when the key is absent. `ForAnyValue:` requires at least one matching context
-value when the key is present. Without a set prefix, present multivalued
+value and is false for absent keys or empty sets, including with negated
+operators and `IfExists`. Without a set prefix, present multivalued
 context also uses any-value matching. An absent key otherwise fails positive
-comparisons and satisfies negated comparisons, including negated
-`ForAnyValue:` comparisons. These are Pithos subset semantics, not a promise of
+comparisons and satisfies negated comparisons. These are Pithos subset semantics, not a promise of
 full IAM equivalence. Pair conditions with `Null: {"key": "false"}` when the key
 must be present.
 
