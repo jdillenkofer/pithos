@@ -130,7 +130,10 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	// Retain the resolved resource account and authorizer context for each
+	// entry, including its governance-bypass authorization when requested.
+	baseRequest, isAuthenticated := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
+	shouldReturn := s.runAuthorization(ctx, baseRequest, isAuthenticated, w, r)
 	if shouldReturn {
 		return
 	}
@@ -167,7 +170,6 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		etag      *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
 
 	for _, obj := range req.Objects {
 		key, err := storage.NewObjectKey(obj.Key)
