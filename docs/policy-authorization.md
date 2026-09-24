@@ -42,6 +42,93 @@ and Date comparisons and negations, `Bool`, `IpAddress`, `NotIpAddress`,
 `Null`, `IfExists`, `ForAnyValue` and `ForAllValues`. Supported context covers
 the documented global `aws:*` keys, Pithos identity, list parameters, version
 ID, auth/signature type, request/existing object tags and object-lock values.
+Action names match case-insensitively; resource names and `Like` condition
+values match case-sensitively. `*` matches zero or more Unicode characters and
+`?` matches one, including newlines. Other characters are literal, not regular
+expression syntax. Wildcard patterns are compiled when loading the file and
+reused by requests until the next successful reload.
+
+## Conditions
+
+Condition values must be a JSON string or a nonempty array of strings, including
+numeric and boolean values: use `"30"` and `"true"`, not `30` and `true`.
+Numeric values must be finite, dates must use RFC3339 (fractional seconds are
+accepted), and IP values must be IP addresses or CIDRs. Invalid values reject
+the file at startup or leave the previous snapshot active during reload.
+
+All condition entries in a statement must match. For one context value,
+positive operators match any of the supplied policy values; negated operators
+match only when none of those values match. Use explicit set operators for
+multivalued context such as tag keys:
+
+| Operator | Comparison |
+|---|---|
+| `StringEquals`, `StringNotEquals` | Literal, case-sensitive equality or inequality |
+| `StringEqualsIgnoreCase`, `StringNotEqualsIgnoreCase` | Case-insensitive equality or inequality |
+| `StringLike`, `StringNotLike` | Wildcard match or its negation |
+| `ArnEquals`, `ArnNotEquals` | Literal, case-sensitive equality or inequality; no ARN-specific expansion |
+| `ArnLike`, `ArnNotLike` | The same wildcard matching as `StringLike` / `StringNotLike` |
+| `NumericEquals`, `NumericNotEquals`, `NumericLessThan`, `NumericLessThanEquals`, `NumericGreaterThan`, `NumericGreaterThanEquals` | Numeric comparison using floating-point values |
+| `DateEquals`, `DateNotEquals`, `DateLessThan`, `DateLessThanEquals`, `DateGreaterThan`, `DateGreaterThanEquals` | Comparison of RFC3339 timestamps |
+| `Bool` | Boolean equality |
+| `IpAddress`, `NotIpAddress` | IP equality or CIDR membership, or their negation |
+| `Null` | `"true"` requires an absent key; `"false"` requires a present key; exactly one value |
+
+Except for `Null`, operators may have the `IfExists` suffix and the
+`ForAnyValue:` or `ForAllValues:` prefix, including both together.
+`IfExists` makes an absent key satisfy the condition, including in a Deny
+statement. `ForAllValues:` requires every context value to match and is true
+when the key is absent. `ForAnyValue:` requires at least one matching context
+value when the key is present. Without a set prefix, present multivalued
+context also uses any-value matching. An absent key otherwise fails positive
+comparisons and satisfies negated comparisons, including negated
+`ForAnyValue:` comparisons. These are Pithos subset semantics, not a promise of
+full IAM equivalence. Pair conditions with `Null: {"key": "false"}` when the key
+must be present.
+
+Condition key names are case-insensitive, but the tag-name suffix after `/`
+is case-sensitive. These are all supported keys:
+
+| Key | Value and availability |
+|---|---|
+| `aws:CurrentTime` | Current UTC time as RFC3339, with second precision |
+| `aws:EpochTime` | Current Unix time in seconds |
+| `aws:PrincipalAccount` | Authenticated caller's account ID; absent for anonymous requests |
+| `aws:ResourceAccount` | Target bucket owner's account ID when resolved by the server; copy checks use the destination account |
+| `aws:SourceIp` | Resolved client IP, falling back to the direct peer IP |
+| `aws:SecureTransport` | `"true"` for HTTPS, `"false"` otherwise |
+| `aws:UserAgent` | Values of the `User-Agent` header; absent when omitted |
+| `aws:Referer` | Values of the `Referer` header; absent when omitted |
+| `pithos:PrincipalId` | Authenticated principal ID; absent for anonymous requests |
+| `pithos:AccessKeyId` | Authenticated access-key ID; absent for anonymous requests |
+| `pithos:AuthType`, `s3:authType` | `Anonymous`, `REST-HEADER`, or `REST-QUERY-STRING`, based on the authentication result |
+| `s3:signatureversion` | Currently `AWS4-HMAC-SHA256` for every authenticated request, including SigV4a; absent for anonymous requests; does not distinguish signature algorithms |
+| `s3:prefix` | Raw `prefix` query values; absent when omitted, not implicitly an empty string |
+| `s3:delimiter` | Raw `delimiter` query values; absent when omitted |
+| `s3:max-keys` | Raw `max-keys` query values; absent when omitted, not the listing default |
+| `s3:VersionId` | Explicitly requested version ID; for copy operations this is the source version; absent when omitted |
+| `s3:RequestObjectTagKeys` | Keys of supplied object tags; absent for an empty tag set |
+| `s3:RequestObjectTag/<tag-name>` | Supplied tag value, if present; an empty string is still present |
+| `s3:ExistingObjectTag/<tag-name>` | Stored target-object tag value; uses source-object tags for the read side of a copy; absent if the tag/object is missing |
+| `s3:object-lock-mode` | Requested mode (`GOVERNANCE` or `COMPLIANCE`), or the mode of a supplied bucket default retention |
+| `s3:object-lock-retain-until-date` | Requested object-retention expiry as RFC3339 |
+| `s3:object-lock-legal-hold` | Requested legal-hold status (`ON` or `OFF`) |
+| `s3:object-lock-remaining-retention-days` | Days from the current time to the requested object-retention expiry, rounding partial days up; for bucket defaults, supplied days or years multiplied by 365; absent when neither is supplied |
+
+`aws:SourceIp` and `aws:SecureTransport` honor the configured trusted-proxy
+settings. Without forwarded-header trust, they use the direct connection.
+User-Agent and Referer are client-supplied values and are not identity proofs.
+List query keys are exposed as supplied, without operation-specific defaults;
+malformed numeric/date context causes an authorization error and fails closed.
+
+Request tags come from `PutObjectTagging` bodies or applicable `x-amz-tagging`
+headers on `PutObject`, `CreateMultipartUpload`, and `CopyObject` with the
+`REPLACE` tagging directive. Tags inherited by a copy are not request tags.
+Existing tags are fetched lazily only when a matching statement needs them;
+lookup errors fail closed. Object-lock context describes the request, not
+the object's previously stored lock state or an automatically inherited
+bucket default. On object writes, the request's retain-until date takes
+precedence when computing remaining retention days.
 
 ## Operation mapping
 
@@ -57,7 +144,13 @@ ID, auth/signature type, request/existing object tags and object-lock values.
 | AbortMultipartUpload | `s3:AbortMultipartUpload` |
 | ListParts | `s3:ListMultipartUploadParts` |
 
-Tag and object-lock headers add their tagging, retention or legal-hold action.
+Applicable tag headers add `s3:PutObjectTagging`. Explicit retention and
+legal-hold values on `PutObject`, `AppendObject`, `CreateMultipartUpload`, and
+`CopyObject` add `s3:PutObjectRetention` and `s3:PutObjectLegalHold`, respectively.
+Setting bucket default retention requires `s3:PutBucketObjectLockConfiguration`
+on the bucket ARN, without an additional object-retention action. Dedicated
+object-retention and legal-hold operations require only their respective
+primary action (plus a separate governance-bypass check when applicable).
 Multi-delete is checked exclusively per entry. Lua remains the default backend;
 its existing boolean result maps `true` to Allow and `false` to ExplicitDeny.
 Both backends evaluate anonymous operations; `ListBuckets` and `CreateBucket`

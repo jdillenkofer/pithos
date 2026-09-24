@@ -13,16 +13,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 )
 
-func wildcard(pattern, value string, ignoreCase bool) bool {
-	quoted := regexp.QuoteMeta(pattern)
-	quoted = strings.ReplaceAll(strings.ReplaceAll(quoted, `\*`, `.*`), `\?`, `.`)
-	if ignoreCase {
-		quoted = "(?i:" + quoted + ")"
-	}
-	ok, _ := regexp.MatchString("(?s)^(?:"+quoted+")$", value)
-	return ok
-}
-
 func (s *Snapshot) AuthorizeRequest(ctx context.Context, r *authorization.Request) (authorization.Decision, error) {
 	// DeleteObjects is only a container operation. The server performs the real
 	// DeleteObject/DeleteObjectVersion authorization separately for every entry.
@@ -60,7 +50,7 @@ func evaluateCheck(ctx context.Context, ss []compiledStatement, r *authorization
 	d := authorization.Decision{Effect: authorization.ImplicitDeny, Action: c.action, Resource: c.resource}
 	allowed := false
 	for _, s := range ss {
-		if !matchesAny(s.actions, c.action, true) || !matchesAny(s.resources, c.resource, false) {
+		if !matchesAny(s.actions, c.action) || !matchesAny(s.resources, c.resource) {
 			continue
 		}
 		ok, err := conditionsMatch(ctx, s.conditions, r, c.source)
@@ -84,9 +74,9 @@ func evaluateCheck(ctx context.Context, ss []compiledStatement, r *authorization
 	}
 	return d, nil
 }
-func matchesAny(patterns []string, v string, ignoreCase bool) bool {
+func matchesAny(patterns []*regexp.Regexp, v string) bool {
 	for _, p := range patterns {
-		if wildcard(p, v, ignoreCase) {
+		if p.MatchString(v) {
 			return true
 		}
 	}
@@ -104,7 +94,7 @@ func conditionsMatch(ctx context.Context, conditions []condition, r *authorizati
 		if !present && strings.HasSuffix(c.operator, "IfExists") {
 			continue
 		}
-		ok, err := compareCondition(c.operator, vals, c.values, present)
+		ok, err := compareCondition(c, vals, present)
 		if err != nil {
 			return false, err
 		}
@@ -237,8 +227,8 @@ func query(r *authorization.Request, k string) ([]string, bool, error) {
 	return v, ok, nil
 }
 
-func compareCondition(operator string, actual, expected []string, present bool) (bool, error) {
-	parts, err := parseConditionOperator(operator)
+func compareCondition(c condition, actual []string, present bool) (bool, error) {
+	parts, err := parseConditionOperator(c.operator)
 	if err != nil {
 		return false, err
 	}
@@ -246,7 +236,7 @@ func compareCondition(operator string, actual, expected []string, present bool) 
 	setAny := parts.setAny
 	op := parts.base
 	if op == "Null" {
-		want, err := strconv.ParseBool(expected[0])
+		want, err := strconv.ParseBool(c.values[0])
 		return want == !present, err
 	}
 	negative := strings.Contains(op, "Not") || op == "NotIpAddress"
@@ -257,17 +247,20 @@ func compareCondition(operator string, actual, expected []string, present bool) 
 		return negative, nil
 	}
 	positiveOp := strings.ReplaceAll(op, "Not", "")
-	matchOne := func(a, e string) (bool, error) { return scalarCompare(positiveOp, a, e) }
 	matchActual := func(a string) (bool, error) {
 		matched := false
-		for _, e := range expected {
-			ok, err := matchOne(a, e)
-			if err != nil {
-				return false, err
-			}
-			if ok {
-				matched = true
-				break
+		if c.patterns != nil {
+			matched = matchesAny(c.patterns, a)
+		} else {
+			for _, e := range c.values {
+				ok, err := scalarCompare(positiveOp, a, e)
+				if err != nil {
+					return false, err
+				}
+				if ok {
+					matched = true
+					break
+				}
 			}
 		}
 		if negative {
@@ -301,14 +294,10 @@ func scalarCompare(op, a, e string) (bool, error) {
 	base := op
 	var ok bool
 	switch {
-	case strings.HasPrefix(base, "String"), strings.HasPrefix(base, "Arn"):
-		if strings.Contains(base, "IgnoreCase") {
-			ok = strings.EqualFold(a, e)
-		} else if strings.Contains(base, "Like") {
-			ok = wildcard(e, a, false)
-		} else {
-			ok = a == e
-		}
+	case base == "StringEqualsIgnoreCase":
+		ok = strings.EqualFold(a, e)
+	case base == "StringEquals", base == "ArnEquals":
+		ok = a == e
 	case strings.HasPrefix(base, "Numeric"):
 		av, err := strconv.ParseFloat(a, 64)
 		if err != nil {

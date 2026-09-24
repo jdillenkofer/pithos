@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 )
 
 const maxPolicyFileSize = 1 << 20
@@ -58,7 +59,7 @@ type Subject struct {
 
 type compiledStatement struct {
 	policy, sid, effect string
-	actions, resources  []string
+	actions, resources  []*regexp.Regexp
 	conditions          []condition
 }
 
@@ -66,6 +67,7 @@ type condition struct {
 	operator string
 	key      string
 	values   []string
+	patterns []*regexp.Regexp
 }
 
 type Snapshot struct {

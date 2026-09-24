@@ -67,3 +67,28 @@ func TestLikeConditionsMatchNewlines(t *testing.T) {
 		})
 	}
 }
+
+func TestCompiledWildcardSetsPreserveMatchingSemantics(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":["s3:PutObject","S3:gEtObj?ct"],"Resource":["arn:aws:s3:::other/*","arn:aws:s3:::bucket/file[1].*"],"Condition":{"ForAllValues:StringLike":{"s3:RequestObjectTagKeys":["team:*","owner:?"]},"StringNotLike":{"aws:UserAgent":["blocked/*","legacy/*"]}}}`)
+	for _, tc := range []struct {
+		name, key, agent, tag string
+		want                  authorization.Effect
+	}{
+		{"match", "file[1].txt", "client/1", "owner:ä", authorization.Allow},
+		{"literal brackets", "file1.txt", "client/1", "owner:ä", authorization.ImplicitDeny},
+		{"literal dot", "file[1]xtxt", "client/1", "owner:ä", authorization.ImplicitDeny},
+		{"resource case", "File[1].txt", "client/1", "owner:ä", authorization.ImplicitDeny},
+		{"negated alternatives", "file[1].txt", "legacy/1", "owner:ä", authorization.ImplicitDeny},
+		{"all tag keys", "file[1].txt", "client/1", "unapproved", authorization.ImplicitDeny},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := request(authorization.OperationGetObject, "bucket", tc.key)
+			r.HttpRequest.Headers = map[string][]string{"User-Agent": {tc.agent}}
+			r.RequestObjectTags = map[string]string{"team:storage": "yes", tc.tag: "yes"}
+			d, err := s.AuthorizeRequest(context.Background(), r)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, d.Effect)
+		})
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -122,10 +123,14 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 	if len(s.Action) == 0 || len(s.Resource) == 0 {
 		return compiledStatement{}, fmt.Errorf("Action and Resource must not be empty")
 	}
-	for _, a := range s.Action {
+	actions, err := compilePatterns(s.Action, true)
+	if err != nil {
+		return compiledStatement{}, fmt.Errorf("Action: %w", err)
+	}
+	for i, a := range s.Action {
 		valid := false
 		for _, known := range SupportedActions() {
-			if wildcard(a, known, true) {
+			if actions[i].MatchString(known) {
 				valid = true
 				break
 			}
@@ -139,7 +144,11 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 			return compiledStatement{}, fmt.Errorf("Resource: invalid S3 ARN %q", r)
 		}
 	}
-	cs := compiledStatement{policy: policy, sid: s.Sid, effect: s.Effect, actions: s.Action, resources: s.Resource}
+	resources, err := compilePatterns(s.Resource, false)
+	if err != nil {
+		return compiledStatement{}, fmt.Errorf("Resource: %w", err)
+	}
+	cs := compiledStatement{policy: policy, sid: s.Sid, effect: s.Effect, actions: actions, resources: resources}
 	for op, entries := range s.Condition {
 		parts, err := parseConditionOperator(op)
 		if err != nil {
@@ -159,10 +168,34 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 			if err := validateConditionValues(parts, vals); err != nil {
 				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
 			}
-			cs.conditions = append(cs.conditions, condition{op, key, vals})
+			c := condition{operator: op, key: key, values: vals}
+			if strings.Contains(parts.base, "Like") {
+				c.patterns, err = compilePatterns(vals, false)
+				if err != nil {
+					return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
+				}
+			}
+			cs.conditions = append(cs.conditions, c)
 		}
 	}
 	return cs, nil
+}
+
+func compilePatterns(patterns []string, ignoreCase bool) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		quoted := regexp.QuoteMeta(pattern)
+		quoted = strings.ReplaceAll(strings.ReplaceAll(quoted, `\*`, `.*`), `\?`, `.`)
+		if ignoreCase {
+			quoted = "(?i:" + quoted + ")"
+		}
+		matcher, err := regexp.Compile("(?s)^(?:" + quoted + ")$")
+		if err != nil {
+			return nil, fmt.Errorf("invalid wildcard pattern: %w", err)
+		}
+		compiled = append(compiled, matcher)
+	}
+	return compiled, nil
 }
 
 type conditionOperator struct {
