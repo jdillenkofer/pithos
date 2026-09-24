@@ -208,6 +208,12 @@ scheme. These rules apply equally to Lua and policy authorization.
 
 The Lua authorizer script controls access to all operations, including anonymous requests from the website endpoint. The `authorizeRequest` function receives a `request` object and must return `true` to allow or `false` to deny.
 
+Only actual Lua booleans are accepted. Strings (including `"false"`), numbers
+(including `0`), tables, `nil`, and missing return values are authorization
+errors and deny access. Startup validates the script with a sample request;
+the return type is also checked on every real request. Top-level script return
+values never count as authorization decisions.
+
 Malformed query strings and repeated query parameters are rejected with HTTP
 400 (`InvalidArgument`) before authentication and before Lua runs. Each query
 parameter therefore has at most one value, shared by authorization and the
@@ -215,16 +221,31 @@ operation handler. This applies to API and website requests alike.
 
 ### Default Behaviour (no authorizer.lua)
 
-When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether authentication is enabled:
+When the Lua backend is selected, the authentication setting controls whether
+a missing script is allowed:
 
 | Authentication | Default behaviour |
 |----------------|-------------------|
 | Explicitly disabled | All requests are allowed (permissive mode, suitable for local development) |
-| Enabled | Anonymous requests are denied; authenticated requests are allowed |
+| Enabled | Startup fails if the script is missing or unreadable |
 
-The enabled fallback remains deny-anonymous even when the environment provider
-contains no credentials. This prevents an accidentally empty credential
-configuration from enabling anonymous access.
+Unreadable files, invalid scripts, missing `authorizeRequest` functions, and
+invalid return types detected at startup are errors in both modes. The
+development fallback applies only to a missing file with authentication
+explicitly disabled. The policy backend always requires a valid policy file.
+
+Upgrade note: authenticated deployments that previously relied on the built-in
+Lua fallback must now provide an explicit script. To deliberately allow all
+authenticated callers within their own account, use:
+
+```lua
+function authorizeRequest(request)
+  return not request:isAnonymous()
+end
+```
+
+This grants broad access within the caller's account. Use narrower rules when
+principals within an account need different permissions.
 
 Authentication is disabled only when `PITHOS_AUTHENTICATION_ENABLED=false` (or
 the equivalent `-authenticationEnabled=false` flag) is set explicitly. In this
@@ -237,7 +258,8 @@ Anonymous API and website reads still pass through `authorizeRequest`; they are
 served only when Lua allows the corresponding `GetObject`, `HeadObject`,
 `GetObjectVersion`, or `HeadObjectVersion` operation.
 
-To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
+Provide the script at the path set by `PITHOS_AUTHORIZER_PATH` (default
+`./authorizer.lua`).
 
 ### Request Object
 

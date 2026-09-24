@@ -82,12 +82,6 @@ function authorizeRequest(request)
 end
 `
 
-const defaultAuthorizationCodeWithCredentials = `
-function authorizeRequest(request)
-  return not request:isAnonymous()
-end
-`
-
 const subcommandReconcileReplication = "reconcile-replication"
 const subcommandServe = "serve"
 const subcommandMigrateStorage = "migrate-storage"
@@ -413,14 +407,11 @@ func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticati
 func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (authorization.RequestAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
-		slog.Warn(fmt.Sprint("Couldn't load authorizer: ", err))
-		if authenticationEnabled {
-			slog.Warn("No authorizer.lua found and authentication is enabled — using default authorizer (anonymous requests will be denied)")
-			authorizerCode = []byte(defaultAuthorizationCodeWithCredentials)
-		} else {
-			slog.Warn("No authorizer.lua found and authentication is disabled — using permissive default authorizer (all requests will be allowed)")
-			authorizerCode = []byte(defaultAuthorizationCode)
+		if authenticationEnabled || !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("read Lua authorizer %q: %w", authorizerPath, err)
 		}
+		slog.Warn("No authorizer.lua found and authentication is disabled — using permissive development authorizer (all requests will be allowed)")
+		authorizerCode = []byte(defaultAuthorizationCode)
 	}
 	return lua.NewLuaAuthorizerWithOptions(string(authorizerCode), lua.Options{
 		TrustForwardedHeaders: trustForwardedHeaders,

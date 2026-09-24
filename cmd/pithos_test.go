@@ -63,23 +63,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
+func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing-authorizer.lua")
 
-	t.Run("enabled denies anonymous even with no credentials", func(t *testing.T) {
+	t.Run("enabled requires a script", func(t *testing.T) {
 		authorizer, err := loadRequestAuthorizer(missingPath, true, false, nil)
-		require.NoError(t, err)
-
-		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
-		require.NoError(t, err)
-		assert.NotEqual(t, authorization.Allow, allowed.Effect)
-
-		accessKeyID := "key"
-		allowed, err = authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
-			Authorization: authorization.Authorization{AccessKeyId: &accessKeyID},
-		})
-		require.NoError(t, err)
-		assert.Equal(t, authorization.Allow, allowed.Effect)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.Nil(t, authorizer)
 	})
 
 	t.Run("disabled remains permissive", func(t *testing.T) {
@@ -88,6 +78,32 @@ func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
 		assert.Equal(t, authorization.Allow, allowed.Effect)
+	})
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("read error auth=%v", enabled), func(t *testing.T) {
+			authorizer, err := loadRequestAuthorizer(t.TempDir(), enabled, false, nil)
+			require.Error(t, err)
+			require.Nil(t, authorizer)
+		})
+		for _, code := range []string{"", "this is not Lua", `function authorizeRequest(r) return "false" end`} {
+			t.Run(fmt.Sprintf("invalid script auth=%v/%s", enabled, code), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "authorizer.lua")
+				require.NoError(t, os.WriteFile(path, []byte(code), 0600))
+				_, err := loadRequestAuthorizer(path, enabled, false, nil)
+				require.Error(t, err)
+			})
+		}
+	}
+
+	t.Run("explicit deny script remains effective", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "authorizer.lua")
+		require.NoError(t, os.WriteFile(path, []byte(`function authorizeRequest(r) return false end`), 0600))
+		authorizer, err := loadRequestAuthorizer(path, true, false, nil)
+		require.NoError(t, err)
+		d, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		require.Equal(t, authorization.ExplicitDeny, d.Effect)
 	})
 }
 

@@ -16,6 +16,20 @@ cd pithos
 
 ## Build and Run
 
+The default Lua backend requires an explicit `authorizer.lua` when
+authentication is enabled. Create that file in the working directory before
+starting. A minimal configuration that denies all access is:
+
+```lua
+function authorizeRequest(request)
+  return false
+end
+```
+
+Configure credentials and replace this rule with your intended permissions as
+described in [Configuration](configuration.md). Missing or invalid authorization
+scripts prevent startup; they do not silently grant authenticated users access.
+
 ```sh
 go build -o pithos ./cmd
 ./pithos serve
@@ -40,7 +54,9 @@ Container Registry and Docker Hub. Pull and run the GHCR image with:
 
 ```sh
 docker pull ghcr.io/jdillenkofer/pithos:latest
-docker run -p 9000:9000 -v "$(pwd)/data:/data" ghcr.io/jdillenkofer/pithos:latest
+docker run -p 9000:9000 -v "$(pwd)/data:/data" \
+  -v "$(pwd)/authorizer.lua:/app/authorizer.lua:ro" \
+  ghcr.io/jdillenkofer/pithos:latest
 ```
 
 The equivalent Docker Hub image is `jdillenkofer/pithos:latest`. To build the
@@ -54,6 +70,7 @@ The mounted directory must be writable by the image's UID `10001`:
 ```sh
 docker run -p 9000:9000 \
   -v "$(pwd)/data:/data" \
+  -v "$(pwd)/authorizer.lua:/app/authorizer.lua:ro" \
   -v /fast-disk/pithos-spool:/spool \
   -e PITHOS_SPOOL_DIR=/spool \
   ghcr.io/jdillenkofer/pithos:latest
@@ -64,6 +81,7 @@ Alternatively, use a size-limited in-memory temporary filesystem:
 ```sh
 docker run -p 9000:9000 \
   -v "$(pwd)/data:/data" \
+  -v "$(pwd)/authorizer.lua:/app/authorizer.lua:ro" \
   --tmpfs /tmp:rw,nosuid,nodev,size=20g,uid=10001,gid=10001 \
   ghcr.io/jdillenkofer/pithos:latest
 ```

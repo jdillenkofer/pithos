@@ -20,6 +20,7 @@ import (
 const authorizationFunctionName = "authorizeRequest"
 
 var errAuthorizationFunctionNotFound = errors.New("authorization function " + authorizationFunctionName + " not found in Lua code")
+var errAuthorizationResultNotBoolean = errors.New("authorization function " + authorizationFunctionName + " must return a boolean")
 
 type LuaAuthorizer struct {
 	code          string
@@ -277,6 +278,9 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
 		return authorization.ImplicitDeny, err
 	}
+	// Discard top-level chunk results. Only the function's return value is an
+	// authorization decision.
+	L.SetTop(0)
 	L.Global(functionName)
 	if !L.IsFunction(-1) {
 		if functionName == authorizationFunctionName {
@@ -295,7 +299,10 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 		slog.ErrorContext(ctx, "Error while calling authorization function", "error", err)
 		return authorization.ImplicitDeny, err
 	}
-	allowed := L.ToBoolean(1)
+	if !L.IsBoolean(-1) {
+		return authorization.ImplicitDeny, errAuthorizationResultNotBoolean
+	}
+	allowed := L.ToBoolean(-1)
 	effect := authorization.ExplicitDeny
 	if allowed {
 		effect = authorization.Allow
