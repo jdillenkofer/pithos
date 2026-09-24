@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -180,6 +181,16 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 	case "s3:object-lock-legal-hold":
 		return one(r.ObjectLockLegalHold)
 	case "s3:object-lock-remaining-retention-days":
+		if r.ObjectLockRetainUntilDate != nil {
+			until, err := time.Parse(time.RFC3339, *r.ObjectLockRetainUntilDate)
+			if err != nil {
+				return nil, false, fmt.Errorf("parse object retention date: %w", err)
+			}
+			// Count a partial remaining day as a full day, so a maximum-day
+			// condition cannot permit retention beyond its stated limit.
+			days := math.Ceil(until.Sub(now).Hours() / 24)
+			return []string{strconv.FormatFloat(days, 'f', 0, 64)}, true, nil
+		}
 		if r.ObjectLockDays != nil {
 			return []string{strconv.FormatInt(int64(*r.ObjectLockDays), 10)}, true, nil
 		}

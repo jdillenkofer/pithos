@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -40,6 +41,45 @@ func request(operation, bucket, key string) *authorization.Request {
 }
 
 func stringPointer(v string) *string { return &v }
+
+func TestRemainingRetentionDaysEnforcesObjectLimits(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	s := compileTestPolicy(t, `[
+		{"Effect":"Allow","Action":["s3:PutObject","s3:PutObjectRetention"],"Resource":"*"},
+		{"Effect":"Deny","Action":"s3:PutObjectRetention","Resource":"*","Condition":{"NumericGreaterThan":{"s3:object-lock-remaining-retention-days":"30"}}}
+	]`)
+	for _, operation := range []string{authorization.OperationPutObjectRetention, authorization.OperationPutObject, authorization.OperationCreateMultipartUpload} {
+		for _, tc := range []struct {
+			name      string
+			remaining time.Duration
+			want      authorization.Effect
+		}{
+			{"within limit", 29 * 24 * time.Hour, authorization.Allow},
+			{"at limit", 30 * 24 * time.Hour, authorization.Allow},
+			{"partial day over limit", 30*24*time.Hour + time.Hour, authorization.ExplicitDeny},
+			{"over limit", 90 * 24 * time.Hour, authorization.ExplicitDeny},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				r := request(operation, "bucket", "key")
+				r.ObjectLockMode = stringPointer("GOVERNANCE")
+				r.ObjectLockRetainUntilDate = stringPointer(time.Now().Add(tc.remaining).UTC().Format(time.RFC3339Nano))
+				d, err := s.AuthorizeRequest(context.Background(), r)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, d.Effect)
+			})
+		}
+	}
+}
+
+func TestRemainingRetentionDaysFailsClosedOnInvalidDate(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"s3:PutObjectRetention","Resource":"*","Condition":{"NumericLessThanEquals":{"s3:object-lock-remaining-retention-days":"30"}}}`)
+	r := request(authorization.OperationPutObjectRetention, "bucket", "key")
+	r.ObjectLockRetainUntilDate = stringPointer("invalid")
+	d, err := s.AuthorizeRequest(context.Background(), r)
+	require.Error(t, err)
+	require.NotEqual(t, authorization.Allow, d.Effect)
+}
 
 func TestDecisionMatrix(t *testing.T) {
 	testutils.SkipIfIntegration(t)
