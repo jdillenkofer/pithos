@@ -318,7 +318,18 @@ func scalarCompare(op, a, e string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		ok = ordered(base, float64(av.UnixNano()), float64(ev.UnixNano()))
+		switch base {
+		case "DateLessThan":
+			ok = av.Before(ev)
+		case "DateLessThanEquals":
+			ok = !av.After(ev)
+		case "DateGreaterThan":
+			ok = av.After(ev)
+		case "DateGreaterThanEquals":
+			ok = !av.Before(ev)
+		default:
+			ok = av.Equal(ev)
+		}
 	case base == "Bool":
 		av, err := strconv.ParseBool(a)
 		if err != nil {
