@@ -118,7 +118,11 @@ is case-sensitive. These are all supported keys:
 `aws:SourceIp` and `aws:SecureTransport` honor the configured trusted-proxy
 settings. Without forwarded-header trust, they use the direct connection.
 User-Agent and Referer are client-supplied values and are not identity proofs.
-List query keys are exposed as supplied, without operation-specific defaults;
+List query keys are exposed as supplied, without operation-specific defaults.
+Repeated query parameters and malformed query strings are rejected with
+HTTP 400 (`InvalidArgument`) before authentication or authorization, for both
+Lua and policy backends. This also applies to anonymous and website requests.
+Accepted query strings are not rewritten, preserving signature verification;
 malformed numeric/date context causes an authorization error and fails closed.
 
 Request tags come from `PutObjectTagging` bodies or applicable `x-amz-tagging`

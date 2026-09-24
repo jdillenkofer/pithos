@@ -191,6 +191,11 @@ export PITHOS_CREDENTIALS_3_PRINCIPAL_ID="bucket-reader"
 
 The Lua authorizer script controls access to all operations, including anonymous requests from the website endpoint. The `authorizeRequest` function receives a `request` object and must return `true` to allow or `false` to deny.
 
+Malformed query strings and repeated query parameters are rejected with HTTP
+400 (`InvalidArgument`) before authentication and before Lua runs. Each query
+parameter therefore has at most one value, shared by authorization and the
+operation handler. This applies to API and website requests alike.
+
 ### Default Behaviour (no authorizer.lua)
 
 When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether authentication is enabled:
