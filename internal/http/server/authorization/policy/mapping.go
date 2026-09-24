@@ -56,13 +56,7 @@ func checksFor(r *authorization.Request) ([]check, error) {
 		if len(r.RequestObjectTags) > 0 {
 			checks = append(checks, check{"s3:PutObjectTagging", resource, false})
 		}
-		if r.ObjectLockRetainUntilDate != nil || r.ObjectLockMode != nil {
-			checks = append(checks, check{"s3:PutObjectRetention", resource, false})
-		}
-		if r.ObjectLockLegalHold != nil {
-			checks = append(checks, check{"s3:PutObjectLegalHold", resource, false})
-		}
-		return checks, nil
+		return appendObjectLockChecks(checks, r, resource), nil
 	}
 	action, ok := operationActions[r.Operation]
 	if !ok {
@@ -72,13 +66,26 @@ func checksFor(r *authorization.Request) ([]check, error) {
 	if len(r.RequestObjectTags) > 0 && (r.Operation == authorization.OperationPutObject || r.Operation == authorization.OperationCreateMultipartUpload) {
 		checks = append(checks, check{"s3:PutObjectTagging", resource, false})
 	}
+	return appendObjectLockChecks(checks, r, resource), nil
+}
+
+func appendObjectLockChecks(checks []check, r *authorization.Request, resource string) []check {
+	// Only these operations store lock metadata alongside an object write.
+	// Bucket defaults and dedicated retention/legal-hold requests are already
+	// covered by their own primary action.
+	switch r.Operation {
+	case authorization.OperationPutObject, authorization.OperationAppendObject,
+		authorization.OperationCreateMultipartUpload, authorization.OperationCopyObject:
+	default:
+		return checks
+	}
 	if r.ObjectLockRetainUntilDate != nil || r.ObjectLockMode != nil {
 		checks = append(checks, check{"s3:PutObjectRetention", resource, false})
 	}
 	if r.ObjectLockLegalHold != nil {
 		checks = append(checks, check{"s3:PutObjectLegalHold", resource, false})
 	}
-	return checks, nil
+	return checks
 }
 
 func SupportedActions() []string {
