@@ -548,6 +548,7 @@ func authorizationFromAuthentication(auth authentication.RequestAuthentication) 
 	}
 
 	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID, AccountId: &auth.Identity.AccountID}
+	result.SignatureVersion = auth.SignatureVersion
 	switch auth.Type {
 	case authentication.AuthTypeSigV4Header:
 		result.AuthType = "REST-HEADER"

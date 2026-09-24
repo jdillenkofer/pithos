@@ -76,3 +76,38 @@ func TestPolicyDistinguishesPresignedRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicyUsesVerifiedSignatureVersion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, allowed := range []string{"AWS4-HMAC-SHA256", "AWS4-ECDSA-P256-SHA256"} {
+		snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":
+			{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":{"s3:signatureversion":"` + allowed + `"}}}
+		}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"a","principalId":"p"},{"type":"anonymous"}]}]}`))
+		require.NoError(t, err)
+		for _, authType := range []authentication.AuthType{authentication.AuthTypeSigV4Header, authentication.AuthTypeSigV4Presign} {
+			for _, version := range []string{"AWS4-HMAC-SHA256", "AWS4-ECDSA-P256-SHA256", ""} {
+				t.Run(allowed+"/"+string(authType)+"/"+version, func(t *testing.T) {
+					auth := authentication.RequestAuthentication{
+						Authenticated: true, Type: authType, SignatureVersion: version,
+						Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "a", PrincipalID: "p"},
+					}
+					for _, authenticated := range []bool{true, false} {
+						auth.Authenticated = authenticated
+						ctx := authentication.WithRequestAuthentication(context.Background(), auth)
+						// Forged raw metadata must never override the verified result.
+						r := httptest.NewRequest("GET", "/bucket/key?X-Amz-Algorithm="+allowed, nil).WithContext(ctx)
+						r.Header.Set("Authorization", allowed+" untrusted")
+						request, _ := makeAuthorizationRequest(ctx, authorization.OperationGetObject, stringPtr("bucket"), stringPtr("key"), r)
+						d, err := snapshot.AuthorizeRequest(ctx, request)
+						require.NoError(t, err)
+						want := authorization.ImplicitDeny
+						if authenticated && version == allowed {
+							want = authorization.Allow
+						}
+						require.Equal(t, want, d.Effect)
+					}
+				})
+			}
+		}
+	}
+}

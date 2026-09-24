@@ -3,10 +3,11 @@ package authorization
 import "context"
 
 type Authorization struct {
-	AccessKeyId *string
-	AccountId   *string
-	PrincipalId *string
-	AuthType    string
+	AccessKeyId      *string
+	AccountId        *string
+	PrincipalId      *string
+	AuthType         string
+	SignatureVersion string
 }
 
 type HTTPRequest struct {

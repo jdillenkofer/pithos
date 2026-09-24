@@ -102,7 +102,7 @@ is case-sensitive. These are all supported keys:
 | `pithos:PrincipalId` | Authenticated principal ID; absent for anonymous requests |
 | `pithos:AccessKeyId` | Authenticated access-key ID; absent for anonymous requests |
 | `pithos:AuthType`, `s3:authType` | `Anonymous`, `REST-HEADER`, or `REST-QUERY-STRING`, based on the authentication result |
-| `s3:signatureversion` | Currently `AWS4-HMAC-SHA256` for every authenticated request, including SigV4a; absent for anonymous requests; does not distinguish signature algorithms |
+| `s3:signatureversion` | Verified signature algorithm: `AWS4-HMAC-SHA256` for SigV4 or `AWS4-ECDSA-P256-SHA256` for SigV4a (header and presigned requests); absent for anonymous requests or missing verified algorithm metadata |
 | `s3:prefix` | Raw `prefix` query values; absent when omitted, not implicitly an empty string |
 | `s3:delimiter` | Raw `delimiter` query values; absent when omitted |
 | `s3:max-keys` | Raw `max-keys` query values; absent when omitted, not the listing default |

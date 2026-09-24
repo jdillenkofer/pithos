@@ -151,8 +151,8 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 	case "s3:max-keys":
 		return query(r, "max-keys")
 	case "s3:signatureversion":
-		if r.Authorization.AccessKeyId != nil {
-			return []string{"AWS4-HMAC-SHA256"}, true, nil
+		if r.Authorization.AccessKeyId != nil && r.Authorization.SignatureVersion != "" {
+			return []string{r.Authorization.SignatureVersion}, true, nil
 		}
 		return nil, false, nil
 	case "s3:requestobjecttagkeys":
