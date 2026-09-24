@@ -474,6 +474,9 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
 	request.SourceBucket = ptrutils.ToPtr(srcBucket)
 	request.SourceKey = ptrutils.ToPtr(srcKey)
+	// Copy authorization uses the version parsed from x-amz-copy-source,
+	// never a versionId supplied in the destination request's query.
+	request.VersionID = sourceVersionID
 	// objectTag* predicates refer to the destination object being
 	// created/overwritten; sourceObjectTag* predicates refer to the copy source
 	// (matching AWS, which evaluates s3:ExistingObjectTag against the source for
