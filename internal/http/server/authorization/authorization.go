@@ -6,6 +6,7 @@ type Authorization struct {
 	AccessKeyId *string
 	AccountId   *string
 	PrincipalId *string
+	AuthType    string
 }
 
 type HTTPRequest struct {

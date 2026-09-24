@@ -150,7 +150,10 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 		if r.Authorization.AccessKeyId == nil {
 			return []string{"Anonymous"}, true, nil
 		}
-		return []string{"REST-HEADER"}, true, nil
+		if r.Authorization.AuthType == "" {
+			return nil, false, nil
+		}
+		return []string{r.Authorization.AuthType}, true, nil
 	case "s3:versionid":
 		return one(r.VersionID)
 	case "s3:prefix":

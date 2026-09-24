@@ -548,6 +548,12 @@ func authorizationFromAuthentication(auth authentication.RequestAuthentication) 
 	}
 
 	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID, AccountId: &auth.Identity.AccountID}
+	switch auth.Type {
+	case authentication.AuthTypeSigV4Header:
+		result.AuthType = "REST-HEADER"
+	case authentication.AuthTypeSigV4Presign:
+		result.AuthType = "REST-QUERY-STRING"
+	}
 	if auth.Identity.PrincipalID != "" {
 		result.PrincipalId = &auth.Identity.PrincipalID
 	}
