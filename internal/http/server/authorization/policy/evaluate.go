@@ -19,7 +19,7 @@ func wildcard(pattern, value string, ignoreCase bool) bool {
 	if ignoreCase {
 		quoted = "(?i:" + quoted + ")"
 	}
-	ok, _ := regexp.MatchString("^(?:"+quoted+")$", value)
+	ok, _ := regexp.MatchString("(?s)^(?:"+quoted+")$", value)
 	return ok
 }
 
