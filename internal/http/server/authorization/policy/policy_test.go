@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +200,8 @@ func TestCompileRejectsInvalidConditionValues(t *testing.T) {
 		name, operator, key, value string
 	}{
 		{"numeric", "NumericLessThan", "s3:max-keys", `"many"`},
+		{"null string", "StringEquals", "s3:RequestObjectTag/team", `null`},
+		{"null array element", "StringEquals", "s3:RequestObjectTag/team", `["storage",null]`},
 		{"non-finite numeric", "NumericLessThan", "s3:max-keys", `"NaN"`},
 		{"date", "DateGreaterThan", "aws:CurrentTime", `"tomorrow"`},
 		{"boolean", "Bool", "aws:SecureTransport", `"yes"`},
@@ -212,6 +215,26 @@ func TestCompileRejectsInvalidConditionValues(t *testing.T) {
 			_, err := Compile(data)
 			require.Error(t, err)
 		})
+	}
+}
+
+func TestReloadRejectsNullConditionValues(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	path := filepath.Join(t.TempDir(), "policies.json")
+	valid := `{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:PutObject","Resource":"*","Condition":{"StringEquals":{"s3:RequestObjectTag/team":"storage"}}}}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(valid), 0600))
+	a, err := NewAuthorizer(path, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+	for _, value := range []string{`null`, `["storage",null]`} {
+		invalid := strings.Replace(valid, `"s3:RequestObjectTag/team":"storage"`, `"s3:RequestObjectTag/team":`+value, 1)
+		require.NoError(t, os.WriteFile(path, []byte(invalid), 0600))
+		require.Error(t, a.Reload())
+		r := request(authorization.OperationPutObject, "bucket", "key")
+		r.RequestObjectTags = map[string]string{"team": ""}
+		d, err := a.AuthorizeRequest(context.Background(), r)
+		require.NoError(t, err)
+		require.Equal(t, authorization.ImplicitDeny, d.Effect)
 	}
 }
 

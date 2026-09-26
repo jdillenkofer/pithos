@@ -13,14 +13,26 @@ const maxPolicyFileSize = 1 << 20
 type stringList []string
 
 func (s *stringList) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("must be a string or array of strings")
+	}
 	var one string
 	if err := json.Unmarshal(data, &one); err == nil {
 		*s = []string{one}
 		return nil
 	}
-	var many []string
-	if err := json.Unmarshal(data, &many); err != nil {
+	var elements []json.RawMessage
+	if err := json.Unmarshal(data, &elements); err != nil {
 		return fmt.Errorf("must be a string or array of strings")
+	}
+	many := make([]string, len(elements))
+	for i, element := range elements {
+		if bytes.Equal(bytes.TrimSpace(element), []byte("null")) {
+			return fmt.Errorf("array elements must be strings")
+		}
+		if err := json.Unmarshal(element, &many[i]); err != nil {
+			return fmt.Errorf("array elements must be strings")
+		}
 	}
 	*s = many
 	return nil
