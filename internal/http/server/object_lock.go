@@ -189,6 +189,11 @@ func (s *Server) objectLockConfigurationHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 	request, authenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(bucket.String()), nil, r)
+	// Bucket configuration only persists lock values from its XML body.
+	// Object-write headers must not override that body's policy context.
+	request.ObjectLockMode = nil
+	request.ObjectLockRetainUntilDate = nil
+	request.ObjectLockLegalHold = nil
 	if config != nil {
 		request.ObjectLockEnabled = &config.ObjectLockEnabled
 		if d := config.DefaultRetention; d != nil {

@@ -23,6 +23,51 @@ type policyLockReadStorage struct {
 	tagVersions []*string
 }
 
+type policyLockConfigurationStorage struct {
+	accountStorage
+	stored *storage.ObjectLockConfiguration
+}
+
+func (s *policyLockConfigurationStorage) PutObjectLockConfiguration(_ context.Context, _ storage.BucketName, config *storage.ObjectLockConfiguration) error {
+	s.stored = config
+	return nil
+}
+
+func TestBucketRetentionPolicyIgnoresObjectHeaders(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:PutBucketObjectLockConfiguration","Resource":"*","Condition":{"NumericLessThanEquals":{"s3:object-lock-remaining-retention-days":"30"}}}}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"owner","principalId":"writer"}]}]}`))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, retention, header string
+		status                  int
+	}{
+		{"days exceed limit", "<Days>365</Days>", time.Now().Add(24 * time.Hour).Format(time.RFC3339), http.StatusForbidden},
+		{"years exceed limit", "<Years>1</Years>", time.Now().Add(24 * time.Hour).Format(time.RFC3339), http.StatusForbidden},
+		{"allowed days", "<Days>30</Days>", "9999-01-01T00:00:00Z", http.StatusOK},
+		{"ignored malformed header", "<Days>30</Days>", "invalid", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := &policyLockConfigurationStorage{accountStorage: accountStorage{owners: map[string]string{"bucket": "owner"}}}
+			s := &Server{storage: backend, requestAuthorizer: snapshot}
+			r := httptest.NewRequest(http.MethodPut, "/bucket?object-lock", strings.NewReader(`<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention><Mode>COMPLIANCE</Mode>`+tc.retention+`</DefaultRetention></Rule></ObjectLockConfiguration>`))
+			r.SetPathValue(bucketPath, "bucket")
+			r.Header.Set("x-amz-object-lock-retain-until-date", tc.header)
+			r = r.WithContext(authentication.WithRequestAuthentication(r.Context(), authentication.RequestAuthentication{
+				Authenticated: true, Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "owner", PrincipalID: "writer"},
+			}))
+			w := httptest.NewRecorder()
+			s.objectLockConfigurationHandler(w, r)
+			require.Equal(t, tc.status, w.Code, w.Body.String())
+			if tc.status == http.StatusOK {
+				require.NotNil(t, backend.stored)
+				require.EqualValues(t, 30, *backend.stored.DefaultRetention.Days)
+			} else {
+				require.Nil(t, backend.stored)
+			}
+		})
+	}
+}
+
 func (s *policyLockReadStorage) HeadObject(context.Context, storage.BucketName, storage.ObjectKey, *storage.HeadObjectOptions) (*storage.Object, error) {
 	return s.object, nil
 }
