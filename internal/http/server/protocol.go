@@ -324,8 +324,7 @@ func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation 
 	if requestTags != nil {
 		request.RequestObjectTags = requestTags
 	}
-	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
-	s.bindExistingObjectTagsResolver(request, bucket, key, versionID)
+	s.bindExistingObjectTagsResolver(request, bucket, key, request.VersionID)
 	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
@@ -525,7 +524,18 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		HttpRequest:       makeAuthorizationHTTPRequest(r),
 		RequestObjectTags: requestTags,
 	}
-	request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	// Only expose a query version when the operation actually targets it.
+	// Writes and multipart operations always target the current object; copies
+	// set their source version separately in authorizeCopyRequest.
+	switch operation {
+	case authorization.OperationGetObjectVersion, authorization.OperationHeadObjectVersion,
+		authorization.OperationDeleteObjectVersion, authorization.OperationGetObjectVersionTagging,
+		authorization.OperationPutObjectVersionTagging, authorization.OperationDeleteObjectVersionTagging,
+		authorization.OperationGetObjectRetention, authorization.OperationPutObjectRetention,
+		authorization.OperationGetObjectLegalHold, authorization.OperationPutObjectLegalHold,
+		authorization.OperationBypassGovernanceRetention:
+		request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	}
 	request.ObjectLockMode = getHeaderAsPtr(r.Header, "x-amz-object-lock-mode")
 	request.ObjectLockRetainUntilDate = getHeaderAsPtr(r.Header, "x-amz-object-lock-retain-until-date")
 	request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
