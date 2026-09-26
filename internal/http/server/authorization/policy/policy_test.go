@@ -290,3 +290,11 @@ func TestAuthorizerIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, authorization.ImplicitDeny, d.Effect)
 }
+
+func TestCompileRejectsEmptyConditionBodies(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, body := range []string{`null`, `{}`} {
+		_, err := Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":` + body + `}}}},"bindings":[]}`))
+		require.ErrorContains(t, err, "Condition.StringEquals: must contain at least one condition key")
+	}
+}

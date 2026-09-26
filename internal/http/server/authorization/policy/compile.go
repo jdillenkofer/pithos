@@ -150,6 +150,9 @@ func compileStatement(policy string, s Statement) (compiledStatement, error) {
 	}
 	cs := compiledStatement{policy: policy, sid: s.Sid, effect: s.Effect, actions: actions, resources: resources}
 	for op, entries := range s.Condition {
+		if len(entries) == 0 {
+			return compiledStatement{}, fmt.Errorf("Condition.%s: must contain at least one condition key", op)
+		}
 		parts, err := parseConditionOperator(op)
 		if err != nil {
 			return compiledStatement{}, fmt.Errorf("Condition.%s: %w", op, err)
