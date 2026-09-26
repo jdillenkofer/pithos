@@ -320,13 +320,14 @@ func (s *Server) objectProtectionHandler(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *Server) setObjectLockHeaders(w http.ResponseWriter, r *http.Request, object *storage.Object) {
-	bucket, key := r.PathValue(bucketPath), r.PathValue(keyPath)
+func (s *Server) setObjectLockHeaders(w http.ResponseWriter, r *http.Request, object *storage.Object, baseRequest *authorization.Request) {
 	allowed := func(operation string) bool {
-		request, _ := makeAuthorizationRequest(r.Context(), operation, &bucket, &key, r)
+		// Preserve the resource account resolved during the object read.
+		request := *baseRequest
+		request.Operation = operation
 		request.VersionID = object.VersionID
-		s.bindExistingObjectTagsResolver(request, &bucket, &key, object.VersionID)
-		decision, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), request)
+		s.bindExistingObjectTagsResolver(&request, request.Bucket, request.Key, object.VersionID)
+		decision, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), &request)
 		return err == nil && decision.Effect == authorization.Allow
 	}
 	if rt := object.ObjectLock.Retention; rt != nil && allowed(authorization.OperationGetObjectRetention) {
