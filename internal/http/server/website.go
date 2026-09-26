@@ -400,6 +400,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		Key:           keyStr,
 		HttpRequest:   makeAuthorizationHTTPRequest(r),
 	}
+	s.bindExistingObjectTagsResolver(authRequest, &bucketStr, keyStr, nil)
 	if s.runAuthorization(ctx, authRequest, auth.Authenticated, w, r) {
 		return nil, storage.ObjectKey{}, "", false
 	}
