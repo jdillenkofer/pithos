@@ -16,10 +16,11 @@ import (
 
 func TestMultipartPolicyRequiredTags(t *testing.T) {
 	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle, useReplication, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox, usePartStoreCompression bool) {
-		snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:CreateBucket","s3:GetObject","s3:GetObjectTagging","s3:PutObjectTagging"],"Resource":"*"},{"Effect":"Allow","Action":"s3:PutObject","Resource":"*","Condition":{"StringEquals":{"s3:RequestObjectTag/team":"storage"}}}]}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"test-account","principalId":"test-principal"}]}]}`))
+		snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"admin":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":"*"}},"p":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:CreateBucket","s3:GetObject","s3:GetObjectTagging","s3:PutObjectTagging"],"Resource":"*"},{"Effect":"Allow","Action":"s3:PutObject","Resource":"*","Condition":{"StringEquals":{"s3:RequestObjectTag/team":"storage"}}}]}},"bindings":[{"policy":"admin","subjects":[{"type":"principal","accountId":"test-account","principalId":"test-principal"}]},{"policy":"p","subjects":[{"type":"principal","accountId":"test-account","principalId":"policy-test"}]}]}`))
 		require.NoError(t, err)
-		client, _, cleanup := setupTestServerWithAuthorizer(snapshot, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+		_, addr, cleanup := setupTestServerWithAuthorizer(snapshot, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
 		t.Cleanup(cleanup)
+		client := setupS3ClientWithCredentials(testAPIEndpoint, addr, usePathStyle, policyTestAccessKeyId, policyTestSecretAccessKey)
 		ctx := context.Background()
 		_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
 		require.NoError(t, err)

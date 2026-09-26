@@ -43,6 +43,12 @@ import (
 
 const accessKeyId = "AKIAIOSFODNN7EXAMPLE"
 const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+// policyTestAccessKeyId authenticates as a distinct principal that keeps the
+// restrictive, fine-grained permissions a policy test wants to exercise, while
+// accessKeyId remains the privileged principal used for internal replication.
+const policyTestAccessKeyId = "AKIAIOSFODNN7POLICYTEST"
+const policyTestSecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYPOLICYTEST"
 const region = "eu-central-1"
 const partStoreEncryptionPassword = "test"
 const defaultPgContainerPoolSize = 10
@@ -237,6 +243,10 @@ func mustRequestAuthorizer() authorization.RequestAuthorizer {
 }
 
 func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
+	return setupS3ClientWithCredentials(baseEndpoint, listenerAddr, usePathStyle, accessKeyId, secretAccessKey)
+}
+
+func setupS3ClientWithCredentials(baseEndpoint string, listenerAddr string, usePathStyle bool, accessKeyId, secretAccessKey string) *s3.Client {
 	httpClient := buildAwsHttpClient()
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
@@ -251,7 +261,10 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
-	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey, AccountID: "test-account", PrincipalID: "test-principal"}}
+	provider := staticCredentialProvider{
+		accessKeyId:           {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey, AccountID: "test-account", PrincipalID: "test-principal"},
+		policyTestAccessKeyId: {AccessKeyID: policyTestAccessKeyId, SecretAccessKey: policyTestSecretAccessKey, AccountID: "test-account", PrincipalID: "policy-test"},
+	}
 	return httptest.NewServer(server.SetupServer(provider, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
 }
 
