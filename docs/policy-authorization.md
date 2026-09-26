@@ -94,7 +94,7 @@ is case-sensitive. These are all supported keys:
 | `aws:CurrentTime` | Current UTC time as RFC3339, with second precision |
 | `aws:EpochTime` | Current Unix time in seconds |
 | `aws:PrincipalAccount` | Authenticated caller's account ID; absent for anonymous requests |
-| `aws:ResourceAccount` | Target bucket owner's account ID when resolved by the server; copy checks use the destination account |
+| `aws:ResourceAccount` | Target bucket owner's account ID when resolved by the server; copies use the source owner for read checks and the destination owner for write checks |
 | `aws:SourceIp` | Resolved client IP, falling back to the direct peer IP |
 | `aws:SecureTransport` | `"true"` for HTTPS, `"false"` otherwise |
 | `aws:UserAgent` | Values of the `User-Agent` header; absent when omitted |

@@ -101,7 +101,9 @@ type Request struct {
 	// operations. Bucket/Key always refer to the destination.
 	SourceBucket *string
 	SourceKey    *string
-	HttpRequest  HTTPRequest
+	// SourceResourceAccountId is the resolved source bucket owner for copy read checks.
+	SourceResourceAccountId *string
+	HttpRequest             HTTPRequest
 	// ResolveExistingObjectTags lazily returns the tags currently stored on the
 	// object this request targets (the s3:ExistingObjectTag condition). It is nil
 	// when the request has no single target object (e.g. ListBuckets). The server

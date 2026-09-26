@@ -44,3 +44,32 @@ func TestCopyPolicyUsesSourceVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestAnonymousCopyPolicyUsesEachResourceAccount(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, operation := range []string{authorization.OperationCopyObject, authorization.OperationUploadPartCopy} {
+		for _, tc := range []struct {
+			name, sourceOwner, destinationOwner, statements string
+			denied                                          bool
+		}{
+			{"same account", "a", "a", `{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"a"}}}`, false},
+			{"source outside allowed account", "b", "a", `{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"a"}}}`, true},
+			{"destination outside allowed account", "a", "b", `{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"a"}}}`, true},
+			{"explicit source deny", "b", "a", `[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"*"},{"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"b"}}}]`, true},
+			{"separate source and destination grants", "b", "a", `[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"b"}}},{"Effect":"Allow","Action":"s3:PutObject","Resource":"*","Condition":{"StringEquals":{"aws:ResourceAccount":"a"}}}]`, false},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":` + tc.statements + `}},"bindings":[{"policy":"p","subjects":[{"type":"anonymous"}]}]}`))
+				require.NoError(t, err)
+				s := &Server{storage: &accountStorage{owners: map[string]string{"source": tc.sourceOwner, "destination": tc.destinationOwner}}, requestAuthorizer: snapshot}
+				r := httptest.NewRequest(http.MethodPut, "/destination/key", nil)
+				response := httptest.NewRecorder()
+				stopped := s.authorizeCopyRequest(r.Context(), operation, "source", "key", nil, "destination", "key", response, r)
+				require.Equal(t, tc.denied, stopped)
+				if tc.denied {
+					require.Equal(t, http.StatusUnauthorized, response.Code)
+				}
+			})
+		}
+	}
+}

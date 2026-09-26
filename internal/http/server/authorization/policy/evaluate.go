@@ -118,6 +118,9 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 	case "aws:principalaccount":
 		return one(r.Authorization.AccountId)
 	case "aws:resourceaccount":
+		if source {
+			return one(r.SourceResourceAccountId)
+		}
 		return one(r.ResourceAccountId)
 	case "aws:sourceip":
 		if r.HttpRequest.ClientIP != nil {

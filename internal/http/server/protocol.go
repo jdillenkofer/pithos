@@ -441,6 +441,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 			w.WriteHeader(http.StatusForbidden)
 			return true
 		}
+		request.SourceResourceAccountId = ptrutils.ToPtr(sourceBucket.OwnerAccountID)
 	}
 	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 }
