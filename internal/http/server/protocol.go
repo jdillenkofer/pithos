@@ -541,6 +541,11 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 	request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
 	request.BypassGovernanceRetentionRequested = r.Header.Get("x-amz-bypass-governance-retention") == "true"
 	if lock, ok := ctx.Value(requestedLockContextKey{}).(storage.ObjectLock); ok {
+		// The parsed XML body is authoritative, including absent retention
+		// when removing it. Object-write headers have no effect here.
+		request.ObjectLockMode = nil
+		request.ObjectLockRetainUntilDate = nil
+		request.ObjectLockLegalHold = nil
 		if lock.Retention != nil {
 			mode := string(lock.Retention.Mode)
 			until := lock.Retention.RetainUntilDate.UTC().Format(time.RFC3339Nano)

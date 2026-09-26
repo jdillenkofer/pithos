@@ -153,3 +153,56 @@ func TestObjectLockHeadersRespectResourceAccountPolicy(t *testing.T) {
 		}
 	}
 }
+
+type policyRetentionWriteStorage struct {
+	accountStorage
+	called    bool
+	retention *storage.ObjectRetention
+}
+
+func (s *policyRetentionWriteStorage) PutObjectRetention(_ context.Context, _ storage.BucketName, _ storage.ObjectKey, retention *storage.ObjectRetention, _ *storage.ObjectLockOptions) error {
+	s.called = true
+	s.retention = retention
+	return nil
+}
+
+func TestRetentionRemovalPolicyIgnoresObjectHeaders(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	until := time.Now().Add(60 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	for _, tc := range []struct {
+		name, condition, body string
+		status                int
+		removes               bool
+	}{
+		{"cannot spoof minimum retention", `,"Condition":{"NumericGreaterThanEquals":{"s3:object-lock-remaining-retention-days":"30"}}`, `<Retention/>`, http.StatusForbidden, false},
+		{"cannot spoof retention presence", `,"Condition":{"Null":{"s3:object-lock-retain-until-date":"false"}}`, `<Retention/>`, http.StatusForbidden, false},
+		{"explicit removal permission", `,"Condition":{"Null":{"s3:object-lock-retain-until-date":"true","s3:object-lock-mode":"true","s3:object-lock-legal-hold":"true"}}`, `<Retention/>`, http.StatusOK, true},
+		{"body retention is authoritative", `,"Condition":{"NumericGreaterThanEquals":{"s3:object-lock-remaining-retention-days":"30"},"StringEquals":{"s3:object-lock-mode":"COMPLIANCE"},"Null":{"s3:object-lock-legal-hold":"true"}}`, `<Retention><Mode>COMPLIANCE</Mode><RetainUntilDate>` + until + `</RetainUntilDate></Retention>`, http.StatusOK, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:PutObjectRetention","Resource":"*"` + tc.condition + `},{"Effect":"Allow","Action":"s3:BypassGovernanceRetention","Resource":"*"}]}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"owner","principalId":"writer"}]}]}`))
+			require.NoError(t, err)
+			backend := &policyRetentionWriteStorage{accountStorage: accountStorage{owners: map[string]string{"bucket": "owner"}}}
+			s := &Server{storage: backend, requestAuthorizer: snapshot}
+			r := httptest.NewRequest(http.MethodPut, "/bucket/key?retention", strings.NewReader(tc.body))
+			r.SetPathValue(bucketPath, "bucket")
+			r.SetPathValue(keyPath, "key")
+			r.Header.Set("x-amz-object-lock-mode", "GOVERNANCE")
+			r.Header.Set("x-amz-object-lock-retain-until-date", until)
+			r.Header.Set("x-amz-object-lock-legal-hold", "ON")
+			r.Header.Set("x-amz-bypass-governance-retention", "true")
+			r = r.WithContext(authentication.WithRequestAuthentication(r.Context(), authentication.RequestAuthentication{Authenticated: true, Identity: &authentication.AuthenticatedIdentity{AccessKeyID: "key", AccountID: "owner", PrincipalID: "writer"}}))
+			w := httptest.NewRecorder()
+			s.objectProtectionHandler(w, r)
+			require.Equal(t, tc.status, w.Code, w.Body.String())
+			require.Equal(t, tc.status == http.StatusOK, backend.called)
+			if tc.status == http.StatusOK && !tc.removes {
+				require.NotNil(t, backend.retention)
+				require.Equal(t, storage.RetentionModeCompliance, backend.retention.Mode)
+				require.Equal(t, until, backend.retention.RetainUntilDate.Format(time.RFC3339Nano))
+			} else {
+				require.Nil(t, backend.retention)
+			}
+		})
+	}
+}
