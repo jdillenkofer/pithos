@@ -104,6 +104,13 @@ func conditionsMatch(ctx context.Context, conditions []condition, r *authorizati
 func contextValues(ctx context.Context, key string, r *authorization.Request, source bool, tags *map[string]string, resolved *bool) ([]string, bool, error) {
 	now := time.Now().UTC()
 	lower := strings.ToLower(key)
+	if (lower == "s3:requestobjecttagkeys" || strings.HasPrefix(lower, "s3:requestobjecttag/")) && r.ResolveRequestObjectTags != nil {
+		values, err := r.ResolveRequestObjectTags(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("resolve multipart request tags: %w", err)
+		}
+		r.RequestObjectTags = values
+	}
 	one := func(p *string) ([]string, bool, error) {
 		if p == nil {
 			return nil, false, nil

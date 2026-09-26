@@ -120,6 +120,9 @@ type Request struct {
 	// s3:RequestObjectTag condition) via the x-amz-tagging header or the
 	// PutObjectTagging body. Nil when the request carries no tags.
 	RequestObjectTags map[string]string
+	// ResolveRequestObjectTags supplies immutable initiation tags for subsequent
+	// multipart writes. Lookup errors must fail closed.
+	ResolveRequestObjectTags func(context.Context) (map[string]string, error)
 }
 
 type RequestAuthorizer interface {

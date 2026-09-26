@@ -128,6 +128,11 @@ malformed numeric/date context causes an authorization error and fails closed.
 Request tags come from `PutObjectTagging` bodies or applicable `x-amz-tagging`
 headers on `PutObject`, `CreateMultipartUpload`, and `CopyObject` with the
 `REPLACE` tagging directive. Tags inherited by a copy are not request tags.
+For `UploadPart`, `UploadPartCopy`, and `CompleteMultipartUpload`, request-tag
+conditions use the tags stored at multipart initiation. Headers on these later
+requests cannot replace those tags. The lookup is lazy and fails closed on
+errors or when the storage backend cannot expose initiation tags (including
+the S3-client backend, whose upstream ListParts API does not return tags).
 Existing tags are fetched lazily only when a matching statement needs them;
 lookup errors fail closed. Object-lock context describes the request, not
 the object's previously stored lock state or an automatically inherited

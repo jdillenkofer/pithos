@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -366,6 +367,7 @@ func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, 
 // error/deny response. It returns true when the caller should stop handling the
 // request (error or denied).
 func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
+	s.bindMultipartRequestTagsResolver(request, r)
 	// Disabling authentication is an explicit permissive development mode. In
 	// that mode there is no caller account against which ownership could be
 	// checked, so leave the complete decision to the configured authorizer.
@@ -444,6 +446,54 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 		request.SourceResourceAccountId = ptrutils.ToPtr(sourceBucket.OwnerAccountID)
 	}
 	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// Subsequent multipart writes use the initiation tags, never headers supplied
+// on a part or completion request. Resolve lazily so unrelated policies and
+// storage backends do not incur an extra lookup.
+func (s *Server) bindMultipartRequestTagsResolver(request *authorization.Request, r *http.Request) {
+	switch request.Operation {
+	case authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationCompleteMultipartUpload:
+	default:
+		return
+	}
+	var once sync.Once
+	var tags map[string]string
+	var lookupErr error
+	request.ResolveRequestObjectTags = func(ctx context.Context) (map[string]string, error) {
+		once.Do(func() {
+			if request.Bucket == nil || request.Key == nil {
+				lookupErr = ErrInvalidArgument
+				return
+			}
+			bucket, err := storage.NewBucketName(*request.Bucket)
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			key, err := storage.NewObjectKey(*request.Key)
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			uploadID, err := storage.NewUploadId(r.URL.Query().Get(uploadIdQuery))
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			result, err := s.storage.ListParts(ctx, bucket, key, uploadID, storage.ListPartsOptions{MaxParts: 1})
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			if result == nil || result.Tags == nil {
+				lookupErr = fmt.Errorf("storage does not expose multipart initiation tags")
+				return
+			}
+			tags = result.Tags
+		})
+		return tags, lookupErr
+	}
 }
 
 func (s *Server) runAuthorizerAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
