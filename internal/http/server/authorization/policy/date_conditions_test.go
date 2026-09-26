@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -33,6 +34,53 @@ func TestDateConditionsPreserveRangeAndPrecision(t *testing.T) {
 					require.Equal(t, want, got)
 				})
 			}
+		})
+	}
+}
+
+func TestRemainingRetentionDaysPreservesRangeAndRounding(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		name, now, until string
+		want             int64
+	}{
+		{"full date range", "0001-01-01T00:00:00Z", "9999-12-31T23:59:59.999999999Z", 3652059},
+		{"full negative range", "9999-12-31T23:59:59.999999999Z", "0001-01-01T00:00:00Z", -3652058},
+		{"exact day", "2030-01-01T00:00:00.000000001Z", "2030-01-02T00:00:00.000000001Z", 1},
+		{"nanosecond beyond day", "2030-01-01T00:00:00.000000001Z", "2030-01-02T00:00:00.000000002Z", 2},
+		{"nanosecond before day", "2030-01-01T00:00:00.000000002Z", "2030-01-02T00:00:00.000000001Z", 1},
+		{"partial day", "2030-01-01T00:00:00Z", "2030-01-01T12:00:00Z", 1},
+		{"expired partial day", "2030-01-01T12:00:00Z", "2030-01-01T00:00:00Z", 0},
+		{"expired exact day", "2030-01-02T00:00:00Z", "2030-01-01T00:00:00Z", -1},
+		{"expired just under day", "2030-01-02T00:00:00Z", "2030-01-01T00:00:00.000000001Z", 0},
+		{"equal with offset", "2030-01-01T01:00:00+01:00", "2030-01-01T00:00:00Z", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339Nano, tc.now)
+			require.NoError(t, err)
+			until, err := time.Parse(time.RFC3339Nano, tc.until)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, remainingRetentionDays(until, now))
+		})
+	}
+}
+
+func TestNumericRetentionLimitBeyondDurationRange(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		name, statements string
+		want             authorization.Effect
+	}{
+		{"conditional allow", `{"Effect":"Allow","Action":"s3:PutObjectRetention","Resource":"*","Condition":{"NumericLessThanEquals":{"s3:object-lock-remaining-retention-days":"110000"}}}`, authorization.ImplicitDeny},
+		{"explicit deny", `[{"Effect":"Allow","Action":"s3:PutObjectRetention","Resource":"*"},{"Effect":"Deny","Action":"s3:PutObjectRetention","Resource":"*","Condition":{"NumericGreaterThan":{"s3:object-lock-remaining-retention-days":"110000"}}}]`, authorization.ExplicitDeny},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := compileTestPolicy(t, tc.statements)
+			r := request(authorization.OperationPutObjectRetention, "bucket", "key")
+			r.ObjectLockRetainUntilDate = stringPointer("9999-12-31T23:59:59Z")
+			d, err := s.AuthorizeRequest(context.Background(), r)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, d.Effect)
 		})
 	}
 }

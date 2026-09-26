@@ -175,8 +175,8 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 			}
 			// Count a partial remaining day as a full day, so a maximum-day
 			// condition cannot permit retention beyond its stated limit.
-			days := math.Ceil(until.Sub(now).Hours() / 24)
-			return []string{strconv.FormatFloat(days, 'f', 0, 64)}, true, nil
+			days := remainingRetentionDays(until, now)
+			return []string{strconv.FormatInt(days, 10)}, true, nil
 		}
 		if r.ObjectLockDays != nil {
 			return []string{strconv.FormatInt(int64(*r.ObjectLockDays), 10)}, true, nil
@@ -211,6 +211,20 @@ func contextValues(ctx context.Context, key string, r *authorization.Request, so
 	}
 	return nil, false, nil
 }
+
+func remainingRetentionDays(until, now time.Time) int64 {
+	// Unix seconds cover the entire RFC3339 range, unlike time.Duration.
+	// Keep fractional seconds separate so rounding stays exact at day boundaries.
+	const secondsPerDay = 24 * 60 * 60
+	seconds := until.Unix() - now.Unix()
+	days, remainder := seconds/secondsPerDay, seconds%secondsPerDay
+	// Integer division already rounds negative remainders up toward zero.
+	if remainder > 0 || (remainder == 0 && until.Nanosecond() > now.Nanosecond()) {
+		days++
+	}
+	return days
+}
+
 func header(r *authorization.Request, k string) ([]string, bool, error) {
 	for n, v := range r.HttpRequest.Headers {
 		if strings.EqualFold(n, k) {
