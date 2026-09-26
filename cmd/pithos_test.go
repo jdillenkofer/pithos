@@ -43,6 +43,12 @@ import (
 
 const accessKeyId = "AKIAIOSFODNN7EXAMPLE"
 const secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+// policyTestAccessKeyId authenticates as a distinct principal that keeps the
+// restrictive, fine-grained permissions a policy test wants to exercise, while
+// accessKeyId remains the privileged principal used for internal replication.
+const policyTestAccessKeyId = "AKIAIOSFODNN7POLICYTEST"
+const policyTestSecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYPOLICYTEST"
 const region = "eu-central-1"
 const partStoreEncryptionPassword = "test"
 const defaultPgContainerPoolSize = 10
@@ -63,23 +69,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
+func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing-authorizer.lua")
 
-	t.Run("enabled denies anonymous even with no credentials", func(t *testing.T) {
+	t.Run("enabled requires a script", func(t *testing.T) {
 		authorizer, err := loadRequestAuthorizer(missingPath, true, false, nil)
-		require.NoError(t, err)
-
-		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
-		require.NoError(t, err)
-		assert.False(t, allowed)
-
-		accessKeyID := "key"
-		allowed, err = authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
-			Authorization: authorization.Authorization{AccessKeyId: &accessKeyID},
-		})
-		require.NoError(t, err)
-		assert.True(t, allowed)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.Nil(t, authorizer)
 	})
 
 	t.Run("disabled remains permissive", func(t *testing.T) {
@@ -87,7 +83,33 @@ func TestLoadRequestAuthorizerFallbackUsesAuthenticationState(t *testing.T) {
 		require.NoError(t, err)
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
-		assert.True(t, allowed)
+		assert.Equal(t, authorization.Allow, allowed.Effect)
+	})
+
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("read error auth=%v", enabled), func(t *testing.T) {
+			authorizer, err := loadRequestAuthorizer(t.TempDir(), enabled, false, nil)
+			require.Error(t, err)
+			require.Nil(t, authorizer)
+		})
+		for _, code := range []string{"", "this is not Lua", `function authorizeRequest(r) return "false" end`} {
+			t.Run(fmt.Sprintf("invalid script auth=%v/%s", enabled, code), func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "authorizer.lua")
+				require.NoError(t, os.WriteFile(path, []byte(code), 0600))
+				_, err := loadRequestAuthorizer(path, enabled, false, nil)
+				require.Error(t, err)
+			})
+		}
+	}
+
+	t.Run("explicit deny script remains effective", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "authorizer.lua")
+		require.NoError(t, os.WriteFile(path, []byte(`function authorizeRequest(r) return false end`), 0600))
+		authorizer, err := loadRequestAuthorizer(path, true, false, nil)
+		require.NoError(t, err)
+		d, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
+		require.NoError(t, err)
+		require.Equal(t, authorization.ExplicitDeny, d.Effect)
 	})
 }
 
@@ -221,6 +243,10 @@ func mustRequestAuthorizer() authorization.RequestAuthorizer {
 }
 
 func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) *s3.Client {
+	return setupS3ClientWithCredentials(baseEndpoint, listenerAddr, usePathStyle, accessKeyId, secretAccessKey)
+}
+
+func setupS3ClientWithCredentials(baseEndpoint string, listenerAddr string, usePathStyle bool, accessKeyId, secretAccessKey string) *s3.Client {
 	httpClient := buildAwsHttpClient()
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region), config.WithHTTPClient(httpClient), config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKeyId, secretAccessKey, "")))
@@ -235,7 +261,10 @@ func setupS3Client(baseEndpoint string, listenerAddr string, usePathStyle bool) 
 }
 
 func newHTTPTestServer(baseEndpoint string, requestAuthorizer authorization.RequestAuthorizer, store storage.Storage) *httptest.Server {
-	provider := staticCredentialProvider{accessKeyId: {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey, AccountID: "test-account", PrincipalID: "test-principal"}}
+	provider := staticCredentialProvider{
+		accessKeyId:           {AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey, AccountID: "test-account", PrincipalID: "test-principal"},
+		policyTestAccessKeyId: {AccessKeyID: policyTestAccessKeyId, SecretAccessKey: policyTestSecretAccessKey, AccountID: "test-account", PrincipalID: "policy-test"},
+	}
 	return httptest.NewServer(server.SetupServer(provider, region, baseEndpoint, testWebsiteEndpoint, requestAuthorizer, store))
 }
 

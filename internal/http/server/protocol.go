@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -324,8 +325,7 @@ func (s *Server) authorizeRequestWithRequestTags(ctx context.Context, operation 
 	if requestTags != nil {
 		request.RequestObjectTags = requestTags
 	}
-	versionID := httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
-	s.bindExistingObjectTagsResolver(request, bucket, key, versionID)
+	s.bindExistingObjectTagsResolver(request, bucket, key, request.VersionID)
 	return s.runAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
@@ -367,15 +367,17 @@ func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, 
 // error/deny response. It returns true when the caller should stop handling the
 // request (error or denied).
 func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
+	s.bindMultipartRequestTagsResolver(request, r)
 	// Disabling authentication is an explicit permissive development mode. In
 	// that mode there is no caller account against which ownership could be
-	// checked, so leave the complete decision to the configured Lua authorizer.
+	// checked, so leave the complete decision to the configured authorizer.
 	if s.authenticationDisabled {
-		return s.runLuaAuthorization(ctx, request, isAuthenticated, w, r)
+		return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 	}
 
 	// Account ownership is a hard boundary evaluated before the programmable
-	// authorizer. Lua can further restrict access, but can never cross it.
+	// authorizer. The configured backend can further restrict access, but can
+	// never cross it.
 	if request.Operation == authorization.OperationListBuckets && !isAuthenticated {
 		w.WriteHeader(http.StatusUnauthorized)
 		return true
@@ -383,15 +385,6 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 	if request.Operation == authorization.OperationCreateBucket && !isAuthenticated {
 		w.WriteHeader(http.StatusUnauthorized)
 		return true
-	}
-	if !isAuthenticated {
-		switch request.Operation {
-		case authorization.OperationGetObject, authorization.OperationGetObjectVersion,
-			authorization.OperationHeadObject, authorization.OperationHeadObjectVersion:
-		default:
-			w.WriteHeader(http.StatusUnauthorized)
-			return true
-		}
 	}
 	if request.Operation == authorization.OperationCreateBucket && request.Authorization.AccountId != nil && request.Bucket != nil {
 		bucketName, err := storage.NewBucketName(*request.Bucket)
@@ -446,24 +439,73 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 			handleError(storage.ErrNoSuchBucket, w, r)
 			return true
 		}
-		if err != nil || request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID {
+		if err != nil || (isAuthenticated && (request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID)) {
 			w.WriteHeader(http.StatusForbidden)
 			return true
 		}
+		request.SourceResourceAccountId = ptrutils.ToPtr(sourceBucket.OwnerAccountID)
 	}
-	return s.runLuaAuthorization(ctx, request, isAuthenticated, w, r)
+	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
-func (s *Server) runLuaAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
-	authorized, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
+// Subsequent multipart writes use the initiation tags, never headers supplied
+// on a part or completion request. Resolve lazily so unrelated policies and
+// storage backends do not incur an extra lookup.
+func (s *Server) bindMultipartRequestTagsResolver(request *authorization.Request, r *http.Request) {
+	switch request.Operation {
+	case authorization.OperationUploadPart, authorization.OperationUploadPartCopy, authorization.OperationCompleteMultipartUpload:
+	default:
+		return
+	}
+	var once sync.Once
+	var tags map[string]string
+	var lookupErr error
+	request.ResolveRequestObjectTags = func(ctx context.Context) (map[string]string, error) {
+		once.Do(func() {
+			if request.Bucket == nil || request.Key == nil {
+				lookupErr = ErrInvalidArgument
+				return
+			}
+			bucket, err := storage.NewBucketName(*request.Bucket)
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			key, err := storage.NewObjectKey(*request.Key)
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			uploadID, err := storage.NewUploadId(r.URL.Query().Get(uploadIdQuery))
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			result, err := s.storage.ListParts(ctx, bucket, key, uploadID, storage.ListPartsOptions{MaxParts: 1})
+			if err != nil {
+				lookupErr = err
+				return
+			}
+			if result == nil || result.Tags == nil {
+				lookupErr = fmt.Errorf("storage does not expose multipart initiation tags")
+				return
+			}
+			tags = result.Tags
+		})
+		return tags, lookupErr
+	}
+}
+
+func (s *Server) runAuthorizerAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
+	decision, err := s.requestAuthorizer.AuthorizeRequest(ctx, request)
 	if err != nil {
 		slog.ErrorContext(ctx, fmt.Sprintf("Authorization error: %v", err))
 		handleError(err, w, r)
 		return true
 	}
-	if !authorized {
+	if decision.Effect != authorization.Allow {
 		s.recordAuthorizationDenied(ctx, request)
-		slog.DebugContext(ctx, fmt.Sprintf("Unauthorized request: %v", request))
+		slog.DebugContext(ctx, "Unauthorized request", "operation", request.Operation, "action", decision.Action, "resource", decision.Resource, "effect", decision.Effect, "references", decision.References)
 		if !isAuthenticated {
 			w.WriteHeader(401)
 		} else {
@@ -482,6 +524,9 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	request, isAuthenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(dstBucket), ptrutils.ToPtr(dstKey), r)
 	request.SourceBucket = ptrutils.ToPtr(srcBucket)
 	request.SourceKey = ptrutils.ToPtr(srcKey)
+	// Copy authorization uses the version parsed from x-amz-copy-source,
+	// never a versionId supplied in the destination request's query.
+	request.VersionID = sourceVersionID
 	// objectTag* predicates refer to the destination object being
 	// created/overwritten; sourceObjectTag* predicates refer to the copy source
 	// (matching AWS, which evaluates s3:ExistingObjectTag against the source for
@@ -530,12 +575,28 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		HttpRequest:       makeAuthorizationHTTPRequest(r),
 		RequestObjectTags: requestTags,
 	}
-	request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	// Only expose a query version when the operation actually targets it.
+	// Writes and multipart operations always target the current object; copies
+	// set their source version separately in authorizeCopyRequest.
+	switch operation {
+	case authorization.OperationGetObjectVersion, authorization.OperationHeadObjectVersion,
+		authorization.OperationDeleteObjectVersion, authorization.OperationGetObjectVersionTagging,
+		authorization.OperationPutObjectVersionTagging, authorization.OperationDeleteObjectVersionTagging,
+		authorization.OperationGetObjectRetention, authorization.OperationPutObjectRetention,
+		authorization.OperationGetObjectLegalHold, authorization.OperationPutObjectLegalHold,
+		authorization.OperationBypassGovernanceRetention:
+		request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
+	}
 	request.ObjectLockMode = getHeaderAsPtr(r.Header, "x-amz-object-lock-mode")
 	request.ObjectLockRetainUntilDate = getHeaderAsPtr(r.Header, "x-amz-object-lock-retain-until-date")
 	request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
 	request.BypassGovernanceRetentionRequested = r.Header.Get("x-amz-bypass-governance-retention") == "true"
 	if lock, ok := ctx.Value(requestedLockContextKey{}).(storage.ObjectLock); ok {
+		// The parsed XML body is authoritative, including absent retention
+		// when removing it. Object-write headers have no effect here.
+		request.ObjectLockMode = nil
+		request.ObjectLockRetainUntilDate = nil
+		request.ObjectLockLegalHold = nil
 		if lock.Retention != nil {
 			mode := string(lock.Retention.Mode)
 			until := lock.Retention.RetainUntilDate.UTC().Format(time.RFC3339Nano)
@@ -552,10 +613,17 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 
 func authorizationFromAuthentication(auth authentication.RequestAuthentication) authorization.Authorization {
 	if !auth.Authenticated || auth.Identity == nil {
-		return authorization.Authorization{}
+		return authorization.Authorization{AuthType: "Anonymous"}
 	}
 
 	result := authorization.Authorization{AccessKeyId: &auth.Identity.AccessKeyID, AccountId: &auth.Identity.AccountID}
+	result.SignatureVersion = auth.SignatureVersion
+	switch auth.Type {
+	case authentication.AuthTypeSigV4Header:
+		result.AuthType = "REST-HEADER"
+	case authentication.AuthTypeSigV4Presign:
+		result.AuthType = "REST-QUERY-STRING"
+	}
 	if auth.Identity.PrincipalID != "" {
 		result.PrincipalId = &auth.Identity.PrincipalID
 	}

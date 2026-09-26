@@ -20,12 +20,12 @@ import (
 const authorizationFunctionName = "authorizeRequest"
 
 var errAuthorizationFunctionNotFound = errors.New("authorization function " + authorizationFunctionName + " not found in Lua code")
+var errAuthorizationResultNotBoolean = errors.New("authorization function " + authorizationFunctionName + " must return a boolean")
 
 type LuaAuthorizer struct {
-	code                  string
-	trustForwardedHeaders bool
-	trustedProxyCIDRs     []*net.IPNet
-	tracer                trace.Tracer
+	code          string
+	proxyResolver *authorization.ProxyResolver
+	tracer        trace.Tracer
 }
 
 type Options struct {
@@ -33,27 +33,12 @@ type Options struct {
 	TrustedProxyCIDRs     []string
 }
 
-func parseTrustedProxyCIDRs(cidrStrings []string) []*net.IPNet {
-	if len(cidrStrings) == 0 {
-		return nil
-	}
-	parsed := make([]*net.IPNet, 0, len(cidrStrings))
-	for _, cidrStr := range cidrStrings {
-		_, ipNet, err := net.ParseCIDR(cidrStr)
-		if err != nil {
-			slog.Warn("Ignoring invalid trusted proxy CIDR", "cidr", cidrStr, "error", err)
-			continue
-		}
-		parsed = append(parsed, ipNet)
-	}
-	return parsed
-}
-
 func (authorizer *LuaAuthorizer) dryRun() error {
 	_, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{
 		Operation: authorization.OperationPutObject,
 		Authorization: authorization.Authorization{
 			AccessKeyId: ptrutils.ToPtr("AKIAIOSFODNN7EXAMPLE"),
+			AuthType:    "REST-HEADER",
 		},
 		Bucket: nil,
 		Key:    nil,
@@ -66,36 +51,23 @@ func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
 }
 
 func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, error) {
-	luaAuthorizer := &LuaAuthorizer{
-		code:                  code,
-		trustForwardedHeaders: options.TrustForwardedHeaders,
-		trustedProxyCIDRs:     parseTrustedProxyCIDRs(options.TrustedProxyCIDRs),
-		tracer:                otel.Tracer("internal/http/server/authorization/lua"),
+	proxyResolver, err := authorization.NewProxyResolver(authorization.ProxyOptions{
+		TrustForwardedHeaders: options.TrustForwardedHeaders,
+		TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
+	})
+	if err != nil {
+		return nil, err
 	}
-	err := luaAuthorizer.dryRun()
+	luaAuthorizer := &LuaAuthorizer{
+		code:          code,
+		proxyResolver: proxyResolver,
+		tracer:        otel.Tracer("internal/http/server/authorization/lua"),
+	}
+	err = luaAuthorizer.dryRun()
 	if err != nil {
 		return nil, err
 	}
 	return luaAuthorizer, nil
-}
-
-func isTrustedProxy(remoteIP *string, trustedProxyCIDRs []*net.IPNet) bool {
-	if remoteIP == nil {
-		return false
-	}
-	ip := net.ParseIP(*remoteIP)
-	if ip == nil {
-		return false
-	}
-	if len(trustedProxyCIDRs) == 0 {
-		return true
-	}
-	for _, cidr := range trustedProxyCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
@@ -119,32 +91,6 @@ func getHeaderIgnoreCase(headers map[string][]string, key string) *string {
 	}
 	value := values[0]
 	return &value
-}
-
-func parseForwardedClientIP(forwardedFor string) *string {
-	parts := strings.Split(forwardedFor, ",")
-	if len(parts) == 0 {
-		return nil
-	}
-	first := strings.TrimSpace(parts[0])
-	ip := net.ParseIP(first)
-	if ip == nil {
-		return nil
-	}
-	parsedIP := ip.String()
-	return &parsedIP
-}
-
-func parseForwardedScheme(forwardedProto string) *string {
-	parts := strings.Split(forwardedProto, ",")
-	if len(parts) == 0 {
-		return nil
-	}
-	first := strings.ToLower(strings.TrimSpace(parts[0]))
-	if first == "http" || first == "https" {
-		return &first
-	}
-	return nil
 }
 
 func stringInSlice(value string, values []string) bool {
@@ -190,34 +136,7 @@ func ipInCIDR(ipStr string, cidr string) bool {
 }
 
 func (authorizer *LuaAuthorizer) resolveClientIPAndScheme(httpRequest authorization.HTTPRequest) (*string, string) {
-	clientIP := httpRequest.RemoteIP
-	scheme := httpRequest.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
-
-	if !authorizer.trustForwardedHeaders || !isTrustedProxy(httpRequest.RemoteIP, authorizer.trustedProxyCIDRs) {
-		return clientIP, scheme
-	}
-
-	if cfConnectingIP := getHeaderIgnoreCase(httpRequest.Headers, "CF-Connecting-IP"); cfConnectingIP != nil {
-		if ip := net.ParseIP(strings.TrimSpace(*cfConnectingIP)); ip != nil {
-			parsedIP := ip.String()
-			clientIP = &parsedIP
-		}
-	} else if xForwardedFor := getHeaderIgnoreCase(httpRequest.Headers, "X-Forwarded-For"); xForwardedFor != nil {
-		if parsed := parseForwardedClientIP(*xForwardedFor); parsed != nil {
-			clientIP = parsed
-		}
-	}
-
-	if xForwardedProto := getHeaderIgnoreCase(httpRequest.Headers, "X-Forwarded-Proto"); xForwardedProto != nil {
-		if parsedScheme := parseForwardedScheme(*xForwardedProto); parsedScheme != nil {
-			scheme = *parsedScheme
-		}
-	}
-
-	return clientIP, scheme
+	return authorizer.proxyResolver.Resolve(httpRequest)
 }
 
 func pushNullableString(L *lua.State, str *string) {
@@ -333,11 +252,14 @@ func pushGoType(L *lua.State, obj interface{}) {
 	}
 }
 
-func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (bool, error) {
-	return authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
+func (authorizer *LuaAuthorizer) AuthorizeRequest(ctx context.Context, request *authorization.Request) (authorization.Decision, error) {
+	started := time.Now()
+	effect, err := authorizer.callAuthorizerFunction(ctx, authorizationFunctionName, request)
+	authorization.ObserveDecision("lua", effect, started)
+	return authorization.Decision{Effect: effect}, err
 }
 
-func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (bool, error) {
+func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, functionName string, request *authorization.Request, args ...interface{}) (authorization.Effect, error) {
 	_, span := authorizer.tracer.Start(ctx, "LuaAuthorizer.AuthorizeRequest")
 	defer span.End()
 
@@ -354,15 +276,18 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	err := lua.DoString(L, authorizer.code)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
-		return false, err
+		return authorization.ImplicitDeny, err
 	}
+	// Discard top-level chunk results. Only the function's return value is an
+	// authorization decision.
+	L.SetTop(0)
 	L.Global(functionName)
 	if !L.IsFunction(-1) {
 		if functionName == authorizationFunctionName {
 			slog.ErrorContext(ctx, "Authorization function not found in Lua code", "functionName", authorizationFunctionName)
-			return false, errAuthorizationFunctionNotFound
+			return authorization.ImplicitDeny, errAuthorizationFunctionNotFound
 		}
-		return true, nil
+		return authorization.Allow, nil
 	}
 	authorizer.pushRequest(ctx, L, request)
 	argCount := 1 + len(args)
@@ -372,12 +297,19 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	err = L.ProtectedCall(argCount, 1, 0)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while calling authorization function", "error", err)
-		return false, err
+		return authorization.ImplicitDeny, err
 	}
-	res := L.ToBoolean(1)
+	if !L.IsBoolean(-1) {
+		return authorization.ImplicitDeny, errAuthorizationResultNotBoolean
+	}
+	allowed := L.ToBoolean(-1)
+	effect := authorization.ExplicitDeny
+	if allowed {
+		effect = authorization.Allow
+	}
 	L.Pop(1)
-	slog.DebugContext(ctx, "Authorization result", "operation", request.Operation, "isAuthorized", res)
-	return res, nil
+	slog.DebugContext(ctx, "Authorization result", "operation", request.Operation, "effect", effect)
+	return effect, nil
 }
 
 func isReadOnly(operation string) bool {

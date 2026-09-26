@@ -62,9 +62,9 @@ func TestObjectLockAuthorizationAndDeniedAudit(t *testing.T) {
 	require.False(t, stop)
 	request.Header.Set("x-amz-object-lock-mode", "GOVERNANCE")
 	auth, _ := makeAuthorizationRequest(request.Context(), authorization.OperationPutObjectRetention, nil, nil, request)
-	allowed, err = authorizer.AuthorizeRequest(request.Context(), auth)
+	decision, err := authorizer.AuthorizeRequest(request.Context(), auth)
 	require.NoError(t, err)
-	require.True(t, allowed)
+	require.Equal(t, authorization.Allow, decision.Effect)
 }
 func TestObjectLockReadPermissionsAndValidation(t *testing.T) {
 	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(request) return request.operation == "GetObjectLegalHold" and request.versionID == "version" end`)
@@ -76,7 +76,8 @@ func TestObjectLockReadPermissionsAndValidation(t *testing.T) {
 	request.SetPathValue(bucketPath, "bucket")
 	request.SetPathValue(keyPath, "key")
 	response := httptest.NewRecorder()
-	server.setObjectLockHeaders(response, request, &storage.Object{VersionID: &version, ObjectLock: storage.ObjectLock{LegalHold: &hold, Retention: &storage.ObjectRetention{Mode: storage.RetentionModeCompliance, RetainUntilDate: time.Now().Add(time.Hour)}}})
+	baseRequest, _ := makeAuthorizationRequest(request.Context(), authorization.OperationHeadObject, stringPtr("bucket"), stringPtr("key"), request)
+	server.setObjectLockHeaders(response, request, &storage.Object{VersionID: &version, ObjectLock: storage.ObjectLock{LegalHold: &hold, Retention: &storage.ObjectRetention{Mode: storage.RetentionModeCompliance, RetainUntilDate: time.Now().Add(time.Hour)}}}, baseRequest)
 	require.Equal(t, "ON", response.Header().Get("x-amz-object-lock-legal-hold"))
 	require.Empty(t, response.Header().Get("x-amz-object-lock-mode"))
 	for _, name := range []string{"x-amz-object-lock-mode", "x-amz-object-lock-retain-until-date", "x-amz-object-lock-legal-hold"} {

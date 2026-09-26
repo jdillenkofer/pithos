@@ -19,9 +19,10 @@ type AuthenticatedIdentity struct {
 // RequestAuthentication is the authentication result attached to a request.
 // Identity is non-nil exactly when Authenticated is true.
 type RequestAuthentication struct {
-	Authenticated bool
-	Identity      *AuthenticatedIdentity
-	Type          AuthType
+	Authenticated    bool
+	Identity         *AuthenticatedIdentity
+	Type             AuthType
+	SignatureVersion string
 }
 
 type requestAuthenticationContextKey struct{}

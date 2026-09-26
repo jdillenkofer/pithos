@@ -20,6 +20,9 @@ const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = true
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
+const defaultAuthorizerType = "lua"
+const defaultPolicyPath = "./policies.json"
+const defaultPolicyReloadIntervalSeconds = 5
 const defaultSpoolDir = ""
 const defaultTrustForwardedHeaders = false
 const defaultOtelEnabled = false
@@ -45,6 +48,9 @@ type Settings struct {
 	monitoringPortEnabled            *bool    `mergable:""`
 	storageJsonPath                  *string  `mergable:""`
 	authorizerPath                   *string  `mergable:""`
+	authorizerType                   *string  `mergable:""`
+	policyPath                       *string  `mergable:""`
+	policyReloadIntervalSeconds      *int     `mergable:""`
 	spoolDir                         *string  `mergable:""`
 	trustForwardedHeaders            *bool    `mergable:""`
 	trustedProxyCIDRs                []string `mergable:""`
@@ -116,6 +122,13 @@ func (s *Settings) StorageJsonPath() string {
 
 func (s *Settings) AuthorizerPath() string {
 	return valueOrDefault(s.authorizerPath, defaultAuthorizerPath)
+}
+func (s *Settings) AuthorizerType() string {
+	return valueOrDefault(s.authorizerType, defaultAuthorizerType)
+}
+func (s *Settings) PolicyPath() string { return valueOrDefault(s.policyPath, defaultPolicyPath) }
+func (s *Settings) PolicyReloadIntervalSeconds() int {
+	return valueOrDefault(s.policyReloadIntervalSeconds, defaultPolicyReloadIntervalSeconds)
 }
 
 func (s *Settings) SpoolDir() string {

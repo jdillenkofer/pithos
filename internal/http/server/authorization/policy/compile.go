@@ -1,0 +1,272 @@
+package policy
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"net"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var allowedConditionKeys = []string{
+	"aws:CurrentTime", "aws:EpochTime", "aws:PrincipalAccount", "aws:ResourceAccount", "aws:SourceIp", "aws:SecureTransport", "aws:UserAgent", "aws:Referer",
+	"pithos:PrincipalId", "pithos:AccessKeyId", "pithos:AuthType", "s3:prefix", "s3:delimiter", "s3:max-keys", "s3:VersionId", "s3:authType", "s3:signatureversion",
+	"s3:RequestObjectTagKeys", "s3:object-lock-mode", "s3:object-lock-retain-until-date", "s3:object-lock-legal-hold", "s3:object-lock-remaining-retention-days",
+}
+
+var baseOperators = map[string]bool{
+	"StringEquals": true, "StringNotEquals": true, "StringEqualsIgnoreCase": true, "StringNotEqualsIgnoreCase": true, "StringLike": true, "StringNotLike": true,
+	"ArnEquals": true, "ArnLike": true, "ArnNotEquals": true, "ArnNotLike": true,
+	"NumericEquals": true, "NumericNotEquals": true, "NumericLessThan": true, "NumericLessThanEquals": true, "NumericGreaterThan": true, "NumericGreaterThanEquals": true,
+	"DateEquals": true, "DateNotEquals": true, "DateLessThan": true, "DateLessThanEquals": true, "DateGreaterThan": true, "DateGreaterThanEquals": true,
+	"Bool": true, "IpAddress": true, "NotIpAddress": true, "Null": true,
+}
+
+func Load(path string) (*Snapshot, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxPolicyFileSize {
+		return nil, fmt.Errorf("policy file exceeds 1 MiB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return Compile(data)
+}
+
+func Compile(data []byte) (*Snapshot, error) {
+	if len(data) > maxPolicyFileSize {
+		return nil, fmt.Errorf("policy file exceeds 1 MiB")
+	}
+	var f File
+	if err := strictDecode(data, &f); err != nil {
+		return nil, fmt.Errorf("$: %w", err)
+	}
+	if f.SchemaVersion != 1 {
+		return nil, fmt.Errorf("$.schemaVersion: expected 1")
+	}
+	if len(f.Policies) == 0 {
+		return nil, fmt.Errorf("$.policies: must not be empty")
+	}
+	compiled := map[string][]compiledStatement{}
+	for name, doc := range f.Policies {
+		if doc.Version != "2012-10-17" {
+			return nil, fmt.Errorf("$.policies.%s.Version: unsupported version", name)
+		}
+		var statements []Statement
+		if err := strictDecode(doc.Statement, &statements); err != nil {
+			var one Statement
+			if err2 := strictDecode(doc.Statement, &one); err2 != nil {
+				return nil, fmt.Errorf("$.policies.%s.Statement: %w", name, err)
+			}
+			statements = []Statement{one}
+		}
+		if len(statements) == 0 {
+			return nil, fmt.Errorf("$.policies.%s.Statement: must not be empty", name)
+		}
+		for i, s := range statements {
+			cs, err := compileStatement(name, s)
+			if err != nil {
+				return nil, fmt.Errorf("$.policies.%s.Statement[%d]: %w", name, i, err)
+			}
+			compiled[name] = append(compiled[name], cs)
+		}
+	}
+	s := &Snapshot{bySubject: map[string][]compiledStatement{}}
+	for i, b := range f.Bindings {
+		statements, ok := compiled[b.Policy]
+		if !ok {
+			return nil, fmt.Errorf("$.bindings[%d].policy: unknown policy %q", i, b.Policy)
+		}
+		if len(b.Subjects) == 0 {
+			return nil, fmt.Errorf("$.bindings[%d].subjects: must not be empty", i)
+		}
+		for j, subject := range b.Subjects {
+			key, err := subjectKey(subject)
+			if err != nil {
+				return nil, fmt.Errorf("$.bindings[%d].subjects[%d]: %w", i, j, err)
+			}
+			s.bySubject[key] = append(s.bySubject[key], statements...)
+		}
+	}
+	return s, nil
+}
+
+func subjectKey(s Subject) (string, error) {
+	switch s.Type {
+	case "anonymous":
+		if s.AccountID != "" || s.PrincipalID != "" {
+			return "", fmt.Errorf("anonymous subject has principal fields")
+		}
+		return "anonymous", nil
+	case "principal":
+		if s.AccountID == "" || s.PrincipalID == "" {
+			return "", fmt.Errorf("principal requires accountId and principalId")
+		}
+		return "principal\x00" + s.AccountID + "\x00" + s.PrincipalID, nil
+	default:
+		return "", fmt.Errorf("unsupported type %q", s.Type)
+	}
+}
+
+func compileStatement(policy string, s Statement) (compiledStatement, error) {
+	if s.Effect != "Allow" && s.Effect != "Deny" {
+		return compiledStatement{}, fmt.Errorf("Effect must be Allow or Deny")
+	}
+	if len(s.Action) == 0 || len(s.Resource) == 0 {
+		return compiledStatement{}, fmt.Errorf("Action and Resource must not be empty")
+	}
+	actions, err := compilePatterns(s.Action, true)
+	if err != nil {
+		return compiledStatement{}, fmt.Errorf("Action: %w", err)
+	}
+	for i, a := range s.Action {
+		valid := false
+		for _, known := range SupportedActions() {
+			if actions[i].MatchString(known) {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return compiledStatement{}, fmt.Errorf("Action: unsupported action %q", a)
+		}
+	}
+	for _, r := range s.Resource {
+		if r != "*" && !strings.HasPrefix(r, "arn:aws:s3:::") {
+			return compiledStatement{}, fmt.Errorf("Resource: invalid S3 ARN %q", r)
+		}
+	}
+	resources, err := compilePatterns(s.Resource, false)
+	if err != nil {
+		return compiledStatement{}, fmt.Errorf("Resource: %w", err)
+	}
+	cs := compiledStatement{policy: policy, sid: s.Sid, effect: s.Effect, actions: actions, resources: resources}
+	for op, entries := range s.Condition {
+		if len(entries) == 0 {
+			return compiledStatement{}, fmt.Errorf("Condition.%s: must contain at least one condition key", op)
+		}
+		parts, err := parseConditionOperator(op)
+		if err != nil {
+			return compiledStatement{}, fmt.Errorf("Condition.%s: %w", op, err)
+		}
+		for key, raw := range entries {
+			if !validConditionKey(key) {
+				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: unsupported key", op, key)
+			}
+			var vals stringList
+			if err := json.Unmarshal(raw, &vals); err != nil {
+				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
+			}
+			if len(vals) == 0 {
+				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: empty values", op, key)
+			}
+			if err := validateConditionValues(parts, vals); err != nil {
+				return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
+			}
+			c := condition{operator: op, key: key, values: vals}
+			if strings.Contains(parts.base, "Like") {
+				c.patterns, err = compilePatterns(vals, false)
+				if err != nil {
+					return compiledStatement{}, fmt.Errorf("Condition.%s.%s: %w", op, key, err)
+				}
+			}
+			cs.conditions = append(cs.conditions, c)
+		}
+	}
+	return cs, nil
+}
+
+func compilePatterns(patterns []string, ignoreCase bool) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		quoted := regexp.QuoteMeta(pattern)
+		quoted = strings.ReplaceAll(strings.ReplaceAll(quoted, `\*`, `.*`), `\?`, `.`)
+		if ignoreCase {
+			quoted = "(?i:" + quoted + ")"
+		}
+		matcher, err := regexp.Compile("(?s)^(?:" + quoted + ")$")
+		if err != nil {
+			return nil, fmt.Errorf("invalid wildcard pattern: %w", err)
+		}
+		compiled = append(compiled, matcher)
+	}
+	return compiled, nil
+}
+
+type conditionOperator struct {
+	base     string
+	setAll   bool
+	setAny   bool
+	ifExists bool
+}
+
+func parseConditionOperator(operator string) (conditionOperator, error) {
+	parts := conditionOperator{}
+	remainder := operator
+	if strings.HasPrefix(remainder, "ForAllValues:") {
+		parts.setAll = true
+		remainder = strings.TrimPrefix(remainder, "ForAllValues:")
+	} else if strings.HasPrefix(remainder, "ForAnyValue:") {
+		parts.setAny = true
+		remainder = strings.TrimPrefix(remainder, "ForAnyValue:")
+	}
+	if strings.HasSuffix(remainder, "IfExists") {
+		parts.ifExists = true
+		remainder = strings.TrimSuffix(remainder, "IfExists")
+	}
+	if !baseOperators[remainder] {
+		return conditionOperator{}, fmt.Errorf("unsupported operator")
+	}
+	parts.base = remainder
+	if parts.base == "Null" && (parts.setAll || parts.setAny || parts.ifExists) {
+		return conditionOperator{}, fmt.Errorf("Null cannot use set operators or IfExists")
+	}
+	return parts, nil
+}
+
+func validateConditionValues(operator conditionOperator, values []string) error {
+	if operator.base == "Null" && len(values) != 1 {
+		return fmt.Errorf("Null requires exactly one value")
+	}
+	for _, value := range values {
+		switch {
+		case strings.HasPrefix(operator.base, "Numeric"):
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return fmt.Errorf("invalid numeric value %q", value)
+			}
+		case strings.HasPrefix(operator.base, "Date"):
+			if _, err := time.Parse(time.RFC3339, value); err != nil {
+				return fmt.Errorf("invalid RFC3339 date %q", value)
+			}
+		case operator.base == "Bool" || operator.base == "Null":
+			if _, err := strconv.ParseBool(value); err != nil {
+				return fmt.Errorf("invalid boolean value %q", value)
+			}
+		case operator.base == "IpAddress" || operator.base == "NotIpAddress":
+			if net.ParseIP(value) == nil {
+				if _, _, err := net.ParseCIDR(value); err != nil {
+					return fmt.Errorf("invalid IP address or CIDR %q", value)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validConditionKey(k string) bool {
+	for _, v := range allowedConditionKeys {
+		if strings.EqualFold(k, v) {
+			return true
+		}
+	}
+	return strings.HasPrefix(strings.ToLower(k), "s3:existingobjecttag/") || strings.HasPrefix(strings.ToLower(k), "s3:requestobjecttag/")
+}

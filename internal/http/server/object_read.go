@@ -39,7 +39,9 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if versionID != nil {
 		authOperation = authorization.OperationHeadObjectVersion
 	}
-	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	authorizationRequest, isAuthenticated := makeAuthorizationRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), r)
+	s.bindExistingObjectTagsResolver(authorizationRequest, authorizationRequest.Bucket, authorizationRequest.Key, versionID)
+	shouldReturn := s.runAuthorization(ctx, authorizationRequest, isAuthenticated, w, r)
 	if shouldReturn {
 		return
 	}
@@ -119,7 +121,7 @@ func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
 	setStorageClassHeaderFromObject(responseHeaders, object)
-	s.setObjectLockHeaders(w, r, object)
+	s.setObjectLockHeaders(w, r, object, authorizationRequest)
 
 	gmtTimeLoc := time.FixedZone("GMT", 0)
 	responseHeaders.Set(lastModifiedHeader, object.LastModified.In(gmtTimeLoc).Format(time.RFC1123))
@@ -377,7 +379,9 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if versionID != nil {
 		authOperation = authorization.OperationGetObjectVersion
 	}
-	shouldReturn := s.authorizeRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), w, r)
+	authorizationRequest, isAuthenticated := makeAuthorizationRequest(ctx, authOperation, ptrutils.ToPtr(bucketName.String()), ptrutils.ToPtr(key.String()), r)
+	s.bindExistingObjectTagsResolver(authorizationRequest, authorizationRequest.Bucket, authorizationRequest.Key, versionID)
+	shouldReturn := s.runAuthorization(ctx, authorizationRequest, isAuthenticated, w, r)
 	if shouldReturn {
 		return
 	}
@@ -495,7 +499,7 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	setTagCountHeaderFromObject(responseHeaders, object)
 	setMetadataHeadersFromObject(responseHeaders, object)
 	setStorageClassHeaderFromObject(responseHeaders, object)
-	s.setObjectLockHeaders(w, r, object)
+	s.setObjectLockHeaders(w, r, object, authorizationRequest)
 	responseHeaders.Set(acceptRangesHeader, "bytes")
 	if len(storageRanges) > 1 {
 		separator := ulid.Make().String()

@@ -3,9 +3,11 @@ package authorization
 import "context"
 
 type Authorization struct {
-	AccessKeyId *string
-	AccountId   *string
-	PrincipalId *string
+	AccessKeyId      *string
+	AccountId        *string
+	PrincipalId      *string
+	AuthType         string
+	SignatureVersion string
 }
 
 type HTTPRequest struct {
@@ -99,7 +101,9 @@ type Request struct {
 	// operations. Bucket/Key always refer to the destination.
 	SourceBucket *string
 	SourceKey    *string
-	HttpRequest  HTTPRequest
+	// SourceResourceAccountId is the resolved source bucket owner for copy read checks.
+	SourceResourceAccountId *string
+	HttpRequest             HTTPRequest
 	// ResolveExistingObjectTags lazily returns the tags currently stored on the
 	// object this request targets (the s3:ExistingObjectTag condition). It is nil
 	// when the request has no single target object (e.g. ListBuckets). The server
@@ -116,8 +120,33 @@ type Request struct {
 	// s3:RequestObjectTag condition) via the x-amz-tagging header or the
 	// PutObjectTagging body. Nil when the request carries no tags.
 	RequestObjectTags map[string]string
+	// ResolveRequestObjectTags supplies immutable initiation tags for subsequent
+	// multipart writes. Lookup errors must fail closed.
+	ResolveRequestObjectTags func(context.Context) (map[string]string, error)
 }
 
 type RequestAuthorizer interface {
-	AuthorizeRequest(ctx context.Context, request *Request) (bool, error)
+	AuthorizeRequest(ctx context.Context, request *Request) (Decision, error)
+}
+
+type Effect string
+
+const (
+	Allow        Effect = "Allow"
+	ImplicitDeny Effect = "ImplicitDeny"
+	ExplicitDeny Effect = "ExplicitDeny"
+)
+
+// Decision contains diagnostic details for logs and audit records. References
+// are deliberately internal and must never be included in an S3 response.
+type Decision struct {
+	Effect     Effect
+	Action     string
+	Resource   string
+	References []StatementReference
+}
+
+type StatementReference struct {
+	Policy string
+	Sid    string
 }

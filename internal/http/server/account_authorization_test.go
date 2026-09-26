@@ -31,9 +31,13 @@ type captureAuthorizer struct {
 	allowed bool
 }
 
-func (a *captureAuthorizer) AuthorizeRequest(_ context.Context, request *authorization.Request) (bool, error) {
+func (a *captureAuthorizer) AuthorizeRequest(_ context.Context, request *authorization.Request) (authorization.Decision, error) {
 	a.called, a.request = true, request
-	return a.allowed, nil
+	effect := authorization.ExplicitDeny
+	if a.allowed {
+		effect = authorization.Allow
+	}
+	return authorization.Decision{Effect: effect}, nil
 }
 
 func TestAccountBoundaryPrecedesLuaAuthorization(t *testing.T) {
@@ -72,24 +76,26 @@ func TestAccountBoundaryPrecedesLuaAuthorization(t *testing.T) {
 	}
 }
 
-func TestAnonymousWebsiteReadStillRequiresLuaApproval(t *testing.T) {
+func TestAnonymousOperationsRequireAuthorizerApproval(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	for _, allowed := range []bool{false, true} {
-		authorizer := &captureAuthorizer{allowed: allowed}
-		s := &Server{storage: &accountStorage{owners: map[string]string{"public": "account-a"}}, requestAuthorizer: authorizer}
-		request := &authorization.Request{Operation: authorization.OperationGetObject, Bucket: stringPtr("public")}
-		response := httptest.NewRecorder()
-		stopped := s.runAuthorization(context.Background(), request, false, response, httptest.NewRequest("GET", "/public/index.html", nil))
-		require.Equal(t, !allowed, stopped)
-		require.True(t, authorizer.called)
-		require.Equal(t, "account-a", *authorizer.request.ResourceAccountId)
-		if !allowed {
-			require.Equal(t, 401, response.Code)
+	for _, operation := range []string{authorization.OperationGetObject, authorization.OperationPutObject, authorization.OperationDeleteBucket} {
+		for _, allowed := range []bool{false, true} {
+			authorizer := &captureAuthorizer{allowed: allowed}
+			s := &Server{storage: &accountStorage{owners: map[string]string{"public": "account-a"}}, requestAuthorizer: authorizer}
+			request := &authorization.Request{Operation: operation, Bucket: stringPtr("public")}
+			response := httptest.NewRecorder()
+			stopped := s.runAuthorization(context.Background(), request, false, response, httptest.NewRequest("PUT", "/public/key", nil))
+			require.Equal(t, !allowed, stopped)
+			require.True(t, authorizer.called)
+			require.Equal(t, "account-a", *authorizer.request.ResourceAccountId)
+			if !allowed {
+				require.Equal(t, 401, response.Code)
+			}
 		}
 	}
 }
 
-func TestDisabledAuthenticationLeavesAuthorizationToLua(t *testing.T) {
+func TestDisabledAuthenticationLeavesAuthorizationToAuthorizer(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	authorizer := &captureAuthorizer{allowed: true}
 	s := &Server{

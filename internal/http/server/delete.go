@@ -130,7 +130,10 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shouldReturn := s.authorizeRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, w, r)
+	// Retain the resolved resource account and authorizer context for each
+	// entry, including its governance-bypass authorization when requested.
+	baseRequest, isAuthenticated := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
+	shouldReturn := s.runAuthorization(ctx, baseRequest, isAuthenticated, w, r)
 	if shouldReturn {
 		return
 	}
@@ -167,7 +170,6 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		etag      *string
 	}
 	validEntries := make([]validEntry, 0, len(req.Objects))
-	baseRequest, _ := makeAuthorizationRequest(ctx, authorization.OperationDeleteObjects, ptrutils.ToPtr(bucketName.String()), nil, r)
 
 	for _, obj := range req.Objects {
 		key, err := storage.NewObjectKey(obj.Key)
@@ -200,16 +202,16 @@ func (s *Server) deleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		if ve.versionID != nil {
 			entryRequest.Operation = authorization.OperationDeleteObjectVersion
 		}
-		allowed, err := s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
-		if err == nil && allowed && bypass {
+		decision, err := s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+		if err == nil && decision.Effect == authorization.Allow && bypass {
 			entryRequest.Operation = authorization.OperationBypassGovernanceRetention
-			allowed, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
+			decision, err = s.requestAuthorizer.AuthorizeRequest(ctx, &entryRequest)
 		}
 		if err != nil {
 			handleError(err, w, r)
 			return
 		}
-		if !allowed {
+		if decision.Effect != authorization.Allow {
 			s.recordAuthorizationDenied(ctx, &entryRequest)
 			result.Errors = append(result.Errors, &DeleteErrorEntry{
 				Key:       ve.rawKey,
