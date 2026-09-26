@@ -77,3 +77,43 @@ func TestServerRejectsAmbiguousQueriesForBothAuthorizers(t *testing.T) {
 		})
 	}
 }
+
+type maxKeysStorage struct {
+	accountStorage
+	limits []int32
+}
+
+func (s *maxKeysStorage) ListObjects(_ context.Context, _ storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	s.limits = append(s.limits, opts.MaxKeys)
+	return &storage.ListBucketResult{}, nil
+}
+func (s *maxKeysStorage) ListObjectVersions(_ context.Context, _ storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	s.limits = append(s.limits, opts.MaxKeys)
+	return &storage.ListObjectVersionsResult{}, nil
+}
+func TestPolicyMaxKeysMatchesExecutedLimit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":["s3:ListBucket","s3:ListBucketVersions"],"Resource":"*","Condition":{"NumericLessThanEquals":{"s3:max-keys":"100"}}}}},"bindings":[{"policy":"p","subjects":[{"type":"anonymous"}]}]}`))
+	require.NoError(t, err)
+	for _, operation := range []string{"", "list-type=2&", "versions&"} {
+		for _, limit := range []string{"-1", "1e1", "1.5", "0", "10"} {
+			t.Run(operation+limit, func(t *testing.T) {
+				store := &maxKeysStorage{}
+				handler := SetupServer(nil, "us-east-1", "s3.test", "website.test", snapshot, store)
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, httptest.NewRequest("GET", "http://s3.test/bucket?"+operation+"max-keys="+limit, nil))
+				switch limit {
+				case "10":
+					require.Equal(t, http.StatusOK, w.Code)
+					require.Equal(t, []int32{10}, store.limits)
+				case "0":
+					require.Equal(t, http.StatusOK, w.Code)
+					require.Empty(t, store.limits)
+				default:
+					require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+					require.Empty(t, store.limits)
+				}
+			})
+		}
+	}
+}

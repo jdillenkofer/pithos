@@ -3,7 +3,21 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 )
+
+// Only an omitted limit selects the default. Invalid supplied values must not
+// authorize as a small number and then execute with the larger default limit.
+func parseMaxKeys(query url.Values) (int32, error) {
+	if !query.Has(maxKeysQuery) {
+		return int32(maxListLimit), nil
+	}
+	value, err := strconv.ParseInt(query.Get(maxKeysQuery), 10, 32)
+	if err != nil || value < 0 || value > maxListLimit {
+		return 0, ErrInvalidArgument
+	}
+	return int32(value), nil
+}
 
 // Validate before authentication and routing so signatures, authorizers, and
 // handlers all see the same unambiguous query. Preserve RawQuery for SigV4.

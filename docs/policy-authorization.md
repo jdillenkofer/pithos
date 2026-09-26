@@ -119,6 +119,8 @@ is case-sensitive. These are all supported keys:
 settings. Without forwarded-header trust, they use the direct connection.
 User-Agent and Referer are client-supplied values and are not identity proofs.
 List query keys are exposed as supplied, without operation-specific defaults.
+Object and version listings reject invalid supplied `max-keys` values instead
+of falling back to a larger limit; zero returns an empty result.
 Repeated query parameters and malformed query strings are rejected with
 HTTP 400 (`InvalidArgument`) before authentication or authorization, for both
 Lua and policy backends. This also applies to anonymous and website requests.

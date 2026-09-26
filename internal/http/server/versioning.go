@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/xml"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -110,17 +109,19 @@ func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Reques
 	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
 	versionIDMarker := httputils.GetQueryParam(query, "version-id-marker")
 
-	maxKeys := query.Get(maxKeysQuery)
-	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
-	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
-		maxKeysI64 = 1000
-	}
-	maxKeysI32 := int32(maxKeysI64)
-
-	result, err := s.storage.ListObjectVersions(ctx, bucketName, storage.ListObjectVersionsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, VersionIDMarker: versionIDMarker, MaxKeys: maxKeysI32})
+	maxKeysI32, err := parseMaxKeys(query)
 	if err != nil {
 		handleError(err, w, r)
 		return
+	}
+
+	result := &storage.ListObjectVersionsResult{}
+	if maxKeysI32 > 0 {
+		result, err = s.storage.ListObjectVersions(ctx, bucketName, storage.ListObjectVersionsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, VersionIDMarker: versionIDMarker, MaxKeys: maxKeysI32})
+		if err != nil {
+			handleError(err, w, r)
+			return
+		}
 	}
 
 	response := ListObjectVersionsResult{
