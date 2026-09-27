@@ -30,6 +30,25 @@ func TestNewAuthorizerRejectsNegativeReloadInterval(t *testing.T) {
 	require.Nil(t, a)
 }
 
+func TestAuthorizerCloseWaitsForReloadLoopAndIsIdempotent(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	path := filepath.Join(t.TempDir(), "policies.json")
+	valid := `{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(valid), 0600))
+	a, err := NewAuthorizer(path, time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, a.done)
+
+	require.NoError(t, a.Close())
+	select {
+	case <-a.done:
+	default:
+		t.Fatal("reload loop still running after Close returned")
+	}
+	require.NoError(t, a.Close())
+}
+
 func TestConcurrentReloadsAreSerialized(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

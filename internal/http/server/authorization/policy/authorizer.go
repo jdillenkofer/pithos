@@ -17,6 +17,7 @@ type Authorizer struct {
 	path     string
 	snapshot atomic.Pointer[Snapshot]
 	cancel   context.CancelFunc
+	done     chan struct{}
 	reloadMu sync.Mutex
 	proxy    *authorization.ProxyResolver
 }
@@ -55,6 +56,7 @@ func NewAuthorizerWithOptions(path string, interval time.Duration, options Optio
 	if interval > 0 {
 		ctx, cancel := context.WithCancel(context.Background())
 		a.cancel = cancel
+		a.done = make(chan struct{})
 		go a.reloadLoop(ctx, interval)
 	}
 	return a, nil
@@ -62,6 +64,7 @@ func NewAuthorizerWithOptions(path string, interval time.Duration, options Optio
 func (a *Authorizer) reloadLoop(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	defer close(a.done)
 	for {
 		select {
 		case <-ctx.Done():
@@ -94,6 +97,7 @@ func (a *Authorizer) Reload() error {
 func (a *Authorizer) Close() error {
 	if a.cancel != nil {
 		a.cancel()
+		<-a.done
 	}
 	return nil
 }
