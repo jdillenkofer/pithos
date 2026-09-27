@@ -17,7 +17,6 @@ type Authorizer struct {
 	path     string
 	snapshot atomic.Pointer[Snapshot]
 	cancel   context.CancelFunc
-	loadedAt atomic.Int64
 	reloadMu sync.Mutex
 	proxy    *authorization.ProxyResolver
 }
@@ -51,7 +50,7 @@ func NewAuthorizerWithOptions(path string, interval time.Duration, options Optio
 		proxy: proxy,
 	}
 	a.snapshot.Store(s)
-	a.loadedAt.Store(time.Now().UnixNano())
+	authorization.SetSnapshotLoadedAt("policy", time.Now())
 	authorization.ObserveReload("policy", true)
 	if interval > 0 {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -88,7 +87,7 @@ func (a *Authorizer) Reload() error {
 		return err
 	}
 	a.snapshot.Store(s)
-	a.loadedAt.Store(time.Now().UnixNano())
+	authorization.SetSnapshotLoadedAt("policy", time.Now())
 	authorization.ObserveReload("policy", true)
 	return nil
 }
@@ -103,6 +102,5 @@ func (a *Authorizer) AuthorizeRequest(ctx context.Context, r *authorization.Requ
 	r.HttpRequest.ClientIP, r.HttpRequest.Scheme = a.proxy.Resolve(r.HttpRequest)
 	d, err := a.snapshot.Load().AuthorizeRequest(ctx, r)
 	authorization.ObserveDecision("policy", d.Effect, started)
-	authorization.SetSnapshotAge("policy", time.Since(time.Unix(0, a.loadedAt.Load())))
 	return d, err
 }
