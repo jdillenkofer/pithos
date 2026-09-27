@@ -589,6 +589,25 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	bucket := bucketName.String()
+	key := errorKey.String()
+	operation := authorization.OperationGetObject
+	if r.Method == http.MethodHead {
+		operation = authorization.OperationHeadObject
+	}
+	auth := authentication.RequestAuthenticationFromContext(ctx)
+	authRequest := &authorization.Request{
+		Operation:     operation,
+		Authorization: authorizationFromAuthentication(auth),
+		Bucket:        &bucket,
+		Key:           &key,
+		HttpRequest:   makeAuthorizationHTTPRequest(r),
+	}
+	s.bindExistingObjectTagsResolver(authRequest, &bucket, &key, nil)
+	if s.runAuthorization(ctx, authRequest, auth.Authenticated, w, r) {
+		return
+	}
+
 	object, readers, err := s.storage.GetObject(ctx, bucketName, errorKey, nil, nil)
 	if err != nil {
 		// Error document not found — fall back to default HTML error

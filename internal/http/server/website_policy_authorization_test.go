@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -15,9 +18,10 @@ import (
 
 type websitePolicyStorage struct {
 	accountStorage
-	tags        map[string]string
-	tagErr      error
-	resolvedKey string
+	tags           map[string]string
+	tagErr         error
+	resolvedKey    string
+	getObjectCalls int
 }
 
 func (s *websitePolicyStorage) GetBucketWebsiteConfiguration(context.Context, storage.BucketName) (*storage.WebsiteConfiguration, error) {
@@ -27,6 +31,29 @@ func (s *websitePolicyStorage) GetBucketWebsiteConfiguration(context.Context, st
 func (s *websitePolicyStorage) GetObjectTagging(_ context.Context, _ storage.BucketName, key storage.ObjectKey, _ *storage.ObjectTaggingOptions) (map[string]string, error) {
 	s.resolvedKey = key.String()
 	return s.tags, s.tagErr
+}
+
+func (s *websitePolicyStorage) GetObject(context.Context, storage.BucketName, storage.ObjectKey, []storage.ByteRange, *storage.GetObjectOptions) (*storage.Object, []io.ReadCloser, error) {
+	s.getObjectCalls++
+	return &storage.Object{Size: 6}, []io.ReadCloser{io.NopCloser(strings.NewReader("secret"))}, nil
+}
+
+func TestWebsiteErrorDocumentRequiresAuthorization(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/missing"}}},"bindings":[{"policy":"p","subjects":[{"type":"anonymous"}]}]}`))
+	require.NoError(t, err)
+	store := &websitePolicyStorage{accountStorage: accountStorage{owners: map[string]string{"bucket": "owner"}}}
+	s := &Server{storage: store, requestAuthorizer: snapshot}
+	r := httptest.NewRequest(http.MethodGet, "/bucket/missing", nil)
+	w := httptest.NewRecorder()
+	bucket := storage.MustNewBucketName("bucket")
+	config := &storage.WebsiteConfiguration{ErrorDocumentKey: stringPtr("private/error.html")}
+
+	s.serveErrorDocument(w, r, bucket, config, http.StatusNotFound, "NoSuchKey", "missing")
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.NotContains(t, w.Body.String(), "secret")
+	require.Zero(t, store.getObjectCalls)
 }
 
 func TestWebsitePolicyUsesResolvedObjectTags(t *testing.T) {
