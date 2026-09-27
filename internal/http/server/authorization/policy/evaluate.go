@@ -19,7 +19,7 @@ func (s *Snapshot) AuthorizeRequest(ctx context.Context, r *authorization.Reques
 	if r.Operation == authorization.OperationDeleteObjects {
 		return authorization.Decision{Effect: authorization.Allow}, nil
 	}
-	checks, err := checksFor(r)
+	checks, err := checksFor(ctx, r)
 	if err != nil {
 		return authorization.Decision{Effect: authorization.ImplicitDeny}, err
 	}

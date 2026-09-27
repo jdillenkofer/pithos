@@ -20,10 +20,39 @@ func TestBucketDeleteOperationsUseDeleteActions(t *testing.T) {
 		{authorization.OperationDeleteBucketLifecycle, "s3:DeleteLifecycleConfiguration"},
 	} {
 		t.Run(tc.operation, func(t *testing.T) {
-			checks, err := checksFor(request(tc.operation, "bucket", ""))
+			checks, err := checksFor(context.Background(), request(tc.operation, "bucket", ""))
 			require.NoError(t, err)
 			require.Len(t, checks, 1)
 			require.Equal(t, tc.action, checks[0].action)
+		})
+	}
+}
+
+func TestCopyTaggingPermissionFollowsDestinationTags(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		name, directive string
+		sourceTags      map[string]string
+		requiresTagging bool
+	}{
+		{"replace with empty tags", "REPLACE", nil, true},
+		{"copy source tags", "COPY", map[string]string{"team": "storage"}, true},
+		{"copy untagged source", "COPY", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := request(authorization.OperationCopyObject, "destination", "copy")
+			r.SourceBucket, r.SourceKey = stringPointer("source"), stringPointer("original")
+			r.CopyTaggingDirective = tc.directive
+			r.ResolveExistingSourceObjectTags = func(context.Context) (map[string]string, error) {
+				return tc.sourceTags, nil
+			}
+			checks, err := checksFor(context.Background(), r)
+			require.NoError(t, err)
+			hasTagging := false
+			for _, check := range checks {
+				hasTagging = hasTagging || check.action == "s3:PutObjectTagging"
+			}
+			require.Equal(t, tc.requiresTagging, hasTagging)
 		})
 	}
 }
@@ -64,7 +93,7 @@ func TestLockMetadataRequiresPermissionsOnlyOnObjectWrites(t *testing.T) {
 			r.ObjectLockMode = stringPointer("GOVERNANCE")
 			r.ObjectLockRetainUntilDate = stringPointer("2030-01-01T00:00:00Z")
 			r.ObjectLockLegalHold = stringPointer("ON")
-			checks, err := checksFor(r)
+			checks, err := checksFor(context.Background(), r)
 			require.NoError(t, err)
 			actions := make([]string, len(checks))
 			for i, c := range checks {

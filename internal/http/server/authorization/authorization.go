@@ -103,7 +103,9 @@ type Request struct {
 	SourceKey    *string
 	// SourceResourceAccountId is the resolved source bucket owner for copy read checks.
 	SourceResourceAccountId *string
-	HttpRequest             HTTPRequest
+	// CopyTaggingDirective is COPY or REPLACE for CopyObject requests.
+	CopyTaggingDirective string
+	HttpRequest          HTTPRequest
 	// ResolveExistingObjectTags lazily returns the tags currently stored on the
 	// object this request targets (the s3:ExistingObjectTag condition). It is nil
 	// when the request has no single target object (e.g. ListBuckets). The server

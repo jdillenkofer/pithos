@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
@@ -36,7 +37,7 @@ var operationActions = map[string]string{
 	authorization.OperationBypassGovernanceRetention: "s3:BypassGovernanceRetention",
 }
 
-func checksFor(r *authorization.Request) ([]check, error) {
+func checksFor(ctx context.Context, r *authorization.Request) ([]check, error) {
 	resource := "*"
 	if r.Bucket != nil {
 		resource = "arn:aws:s3:::" + *r.Bucket
@@ -53,8 +54,18 @@ func checksFor(r *authorization.Request) ([]check, error) {
 			read = "s3:GetObjectVersion"
 		}
 		checks := []check{{read, "arn:aws:s3:::" + *r.SourceBucket + "/" + *r.SourceKey, true}, {"s3:PutObject", resource, false}}
-		if len(r.RequestObjectTags) > 0 {
-			checks = append(checks, check{"s3:PutObjectTagging", resource, false})
+		if r.Operation == authorization.OperationCopyObject {
+			requiresTagging := r.CopyTaggingDirective == "REPLACE"
+			if r.CopyTaggingDirective == "COPY" && r.ResolveExistingSourceObjectTags != nil {
+				tags, err := r.ResolveExistingSourceObjectTags(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("resolve copy source tags: %w", err)
+				}
+				requiresTagging = len(tags) > 0
+			}
+			if requiresTagging {
+				checks = append(checks, check{"s3:PutObjectTagging", resource, false})
+			}
 		}
 		return appendObjectLockChecks(checks, r, resource), nil
 	}

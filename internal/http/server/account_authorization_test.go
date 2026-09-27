@@ -25,6 +25,10 @@ func (s *accountStorage) HeadBucket(_ context.Context, name storage.BucketName) 
 	return &storage.Bucket{Name: name, OwnerAccountID: owner}, nil
 }
 
+func (s *accountStorage) GetObjectTagging(context.Context, storage.BucketName, storage.ObjectKey, *storage.ObjectTaggingOptions) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 type captureAuthorizer struct {
 	called  bool
 	request *authorization.Request

@@ -527,6 +527,12 @@ func (s *Server) authorizeCopyRequest(ctx context.Context, operation string, src
 	// Copy authorization uses the version parsed from x-amz-copy-source,
 	// never a versionId supplied in the destination request's query.
 	request.VersionID = sourceVersionID
+	if operation == authorization.OperationCopyObject {
+		request.CopyTaggingDirective = strings.ToUpper(r.Header.Get(taggingDirectiveHeader))
+		if request.CopyTaggingDirective == "" {
+			request.CopyTaggingDirective = taggingDirectiveCopy
+		}
+	}
 	// objectTag* predicates refer to the destination object being
 	// created/overwritten; sourceObjectTag* predicates refer to the copy source
 	// (matching AWS, which evaluates s3:ExistingObjectTag against the source for
