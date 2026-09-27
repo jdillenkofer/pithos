@@ -99,8 +99,14 @@ type condition struct {
 	patterns []*regexp.Regexp
 }
 
+type subjectLookupKey struct {
+	subjectType string
+	accountID   string
+	principalID string
+}
+
 type Snapshot struct {
-	bySubject map[string][]compiledStatement
+	bySubject map[subjectLookupKey][]compiledStatement
 }
 
 func strictDecode(data []byte, dst any) error {

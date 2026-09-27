@@ -23,9 +23,9 @@ func (s *Snapshot) AuthorizeRequest(ctx context.Context, r *authorization.Reques
 	if err != nil {
 		return authorization.Decision{Effect: authorization.ImplicitDeny}, err
 	}
-	statements := s.bySubject["anonymous"]
+	statements := s.bySubject[subjectLookupKey{subjectType: "anonymous"}]
 	if r.Authorization.AccountId != nil && r.Authorization.PrincipalId != nil {
-		statements = s.bySubject["principal\x00"+*r.Authorization.AccountId+"\x00"+*r.Authorization.PrincipalId]
+		statements = s.bySubject[subjectLookupKey{subjectType: "principal", accountID: *r.Authorization.AccountId, principalID: *r.Authorization.PrincipalId}]
 	}
 	result := authorization.Decision{Effect: authorization.Allow}
 	for _, c := range checks {

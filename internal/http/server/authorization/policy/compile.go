@@ -79,7 +79,7 @@ func Compile(data []byte) (*Snapshot, error) {
 			compiled[name] = append(compiled[name], cs)
 		}
 	}
-	s := &Snapshot{bySubject: map[string][]compiledStatement{}}
+	s := &Snapshot{bySubject: map[subjectLookupKey][]compiledStatement{}}
 	for i, b := range f.Bindings {
 		statements, ok := compiled[b.Policy]
 		if !ok {
@@ -99,20 +99,20 @@ func Compile(data []byte) (*Snapshot, error) {
 	return s, nil
 }
 
-func subjectKey(s Subject) (string, error) {
+func subjectKey(s Subject) (subjectLookupKey, error) {
 	switch s.Type {
 	case "anonymous":
 		if s.AccountID != "" || s.PrincipalID != "" {
-			return "", fmt.Errorf("anonymous subject has principal fields")
+			return subjectLookupKey{}, fmt.Errorf("anonymous subject has principal fields")
 		}
-		return "anonymous", nil
+		return subjectLookupKey{subjectType: "anonymous"}, nil
 	case "principal":
 		if s.AccountID == "" || s.PrincipalID == "" {
-			return "", fmt.Errorf("principal requires accountId and principalId")
+			return subjectLookupKey{}, fmt.Errorf("principal requires accountId and principalId")
 		}
-		return "principal\x00" + s.AccountID + "\x00" + s.PrincipalID, nil
+		return subjectLookupKey{subjectType: "principal", accountID: s.AccountID, principalID: s.PrincipalID}, nil
 	default:
-		return "", fmt.Errorf("unsupported type %q", s.Type)
+		return subjectLookupKey{}, fmt.Errorf("unsupported type %q", s.Type)
 	}
 }
 

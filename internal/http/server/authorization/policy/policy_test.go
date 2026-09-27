@@ -90,6 +90,35 @@ func TestRemainingRetentionDaysFailsClosedOnInvalidDate(t *testing.T) {
 	require.NotEqual(t, authorization.Allow, d.Effect)
 }
 
+func TestPrincipalSubjectKeysCannotCollide(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	data := []byte(`{"schemaVersion":1,"policies":{
+		"read":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}},
+		"write":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:PutObject","Resource":"*"}}
+	},"bindings":[
+		{"policy":"read","subjects":[{"type":"principal","accountId":"a","principalId":"b\u0000c"}]},
+		{"policy":"write","subjects":[{"type":"principal","accountId":"a\u0000b","principalId":"c"}]}
+	]}`)
+	snapshot, err := Compile(data)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		account, principal, operation string
+		want                          authorization.Effect
+	}{
+		{"a", "b\x00c", authorization.OperationGetObject, authorization.Allow},
+		{"a", "b\x00c", authorization.OperationPutObject, authorization.ImplicitDeny},
+		{"a\x00b", "c", authorization.OperationGetObject, authorization.ImplicitDeny},
+		{"a\x00b", "c", authorization.OperationPutObject, authorization.Allow},
+	} {
+		r := request(tc.operation, "bucket", "key")
+		r.Authorization.AccountId = stringPointer(tc.account)
+		r.Authorization.PrincipalId = stringPointer(tc.principal)
+		d, err := snapshot.AuthorizeRequest(context.Background(), r)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, d.Effect)
+	}
+}
+
 func TestDecisionMatrix(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
