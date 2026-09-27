@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -31,6 +32,38 @@ type policyLockConfigurationStorage struct {
 func (s *policyLockConfigurationStorage) PutObjectLockConfiguration(_ context.Context, _ storage.BucketName, config *storage.ObjectLockConfiguration) error {
 	s.stored = config
 	return nil
+}
+
+func TestObjectLockContextOnlyIncludesEffectiveHeaders(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		operation string
+		exposed   bool
+	}{
+		{authorization.OperationPutObject, true},
+		{authorization.OperationCreateMultipartUpload, true},
+		{authorization.OperationCopyObject, true},
+		{authorization.OperationGetObject, false},
+		{authorization.OperationDeleteObject, false},
+		{authorization.OperationPutObjectLockConfiguration, false},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
+			r.Header.Set("x-amz-object-lock-mode", "GOVERNANCE")
+			r.Header.Set("x-amz-object-lock-retain-until-date", "2030-01-01T00:00:00Z")
+			r.Header.Set("x-amz-object-lock-legal-hold", "ON")
+			request, _ := makeAuthorizationRequest(r.Context(), tc.operation, stringPtr("bucket"), stringPtr("key"), r)
+			if tc.exposed {
+				require.NotNil(t, request.ObjectLockMode)
+				require.NotNil(t, request.ObjectLockRetainUntilDate)
+				require.NotNil(t, request.ObjectLockLegalHold)
+			} else {
+				require.Nil(t, request.ObjectLockMode)
+				require.Nil(t, request.ObjectLockRetainUntilDate)
+				require.Nil(t, request.ObjectLockLegalHold)
+			}
+		})
+	}
 }
 
 func TestBucketRetentionPolicyIgnoresObjectHeaders(t *testing.T) {

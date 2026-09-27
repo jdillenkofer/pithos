@@ -60,7 +60,9 @@ func TestObjectLockAuthorizationAndDeniedAudit(t *testing.T) {
 	allowed, stop = server.authorizeGovernanceBypass(request.Context(), "bucket", "key", response, request)
 	require.True(t, allowed)
 	require.False(t, stop)
-	request.Header.Set("x-amz-object-lock-mode", "GOVERNANCE")
+	mode := storage.RetentionModeGovernance
+	lock := storage.ObjectLock{Retention: &storage.ObjectRetention{Mode: mode, RetainUntilDate: time.Now().Add(time.Hour)}}
+	request = request.WithContext(context.WithValue(request.Context(), requestedLockContextKey{}, lock))
 	auth, _ := makeAuthorizationRequest(request.Context(), authorization.OperationPutObjectRetention, nil, nil, request)
 	decision, err := authorizer.AuthorizeRequest(request.Context(), auth)
 	require.NoError(t, err)

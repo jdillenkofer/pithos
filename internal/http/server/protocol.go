@@ -587,9 +587,13 @@ func makeAuthorizationRequest(ctx context.Context, operation string, bucket *str
 		authorization.OperationBypassGovernanceRetention:
 		request.VersionID = httputils.GetQueryParam(r.URL.Query(), versionIDQuery)
 	}
-	request.ObjectLockMode = getHeaderAsPtr(r.Header, "x-amz-object-lock-mode")
-	request.ObjectLockRetainUntilDate = getHeaderAsPtr(r.Header, "x-amz-object-lock-retain-until-date")
-	request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
+	switch operation {
+	case authorization.OperationPutObject, authorization.OperationAppendObject,
+		authorization.OperationCreateMultipartUpload, authorization.OperationCopyObject:
+		request.ObjectLockMode = getHeaderAsPtr(r.Header, "x-amz-object-lock-mode")
+		request.ObjectLockRetainUntilDate = getHeaderAsPtr(r.Header, "x-amz-object-lock-retain-until-date")
+		request.ObjectLockLegalHold = getHeaderAsPtr(r.Header, "x-amz-object-lock-legal-hold")
+	}
 	request.BypassGovernanceRetentionRequested = r.Header.Get("x-amz-bypass-governance-retention") == "true"
 	if lock, ok := ctx.Value(requestedLockContextKey{}).(storage.ObjectLock); ok {
 		// The parsed XML body is authoritative, including absent retention
