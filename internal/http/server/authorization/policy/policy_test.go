@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,32 @@ func TestNewAuthorizerRejectsNegativeReloadInterval(t *testing.T) {
 	a, err := NewAuthorizer("unused.json", -time.Second)
 	require.ErrorContains(t, err, "must not be negative")
 	require.Nil(t, a)
+}
+
+func TestConcurrentReloadsAreSerialized(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	path := filepath.Join(t.TempDir(), "policies.json")
+	valid := `{"schemaVersion":1,"policies":{"p":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}}},"bindings":[{"policy":"p","subjects":[{"type":"principal","accountId":"a","principalId":"p"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(valid), 0600))
+	a, err := NewAuthorizer(path, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	var wg sync.WaitGroup
+	errors := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errors <- a.Reload()
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
 }
 
 func TestReloadRetainsLastValidSnapshot(t *testing.T) {

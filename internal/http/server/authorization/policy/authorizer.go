@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,7 @@ type Authorizer struct {
 	snapshot atomic.Pointer[Snapshot]
 	cancel   context.CancelFunc
 	loadedAt atomic.Int64
+	reloadMu sync.Mutex
 	proxy    *authorization.ProxyResolver
 }
 
@@ -77,6 +79,9 @@ func (a *Authorizer) reloadLoop(ctx context.Context, interval time.Duration) {
 }
 
 func (a *Authorizer) Reload() error {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+
 	s, err := Load(a.path)
 	if err != nil {
 		authorization.ObserveReload("policy", false)
