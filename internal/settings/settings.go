@@ -214,15 +214,9 @@ func (s *Settings) merge(other *Settings) {
 		sField := sStruct.FieldByName(field.Name)
 		otherField := otherStruct.FieldByName(field.Name)
 
-		if field.Type.Kind() == reflect.Pointer {
-			otherFieldValue := getUnexportedField(otherField)
-			if !isNilish(otherFieldValue) {
-				setUnexportedField(sField, otherFieldValue)
-			}
-		} else {
-			otherFieldValue := getUnexportedField(otherField)
+		otherFieldValue := getUnexportedField(otherField)
+		if !isNilish(otherFieldValue) {
 			setUnexportedField(sField, otherFieldValue)
-
 		}
 	}
 }
