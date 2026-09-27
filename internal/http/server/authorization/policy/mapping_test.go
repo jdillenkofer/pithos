@@ -9,6 +9,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBucketDeleteOperationsUseDeleteActions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, tc := range []struct {
+		operation string
+		action    string
+	}{
+		{authorization.OperationDeleteBucketCORS, "s3:DeleteBucketCORS"},
+		{authorization.OperationDeleteBucketTagging, "s3:DeleteBucketTagging"},
+		{authorization.OperationDeleteBucketLifecycle, "s3:DeleteLifecycleConfiguration"},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			checks, err := checksFor(request(tc.operation, "bucket", ""))
+			require.NoError(t, err)
+			require.Len(t, checks, 1)
+			require.Equal(t, tc.action, checks[0].action)
+		})
+	}
+}
+
 func TestBucketDefaultRetentionNeedsOnlyBucketPermission(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	s := compileTestPolicy(t, `{"Effect":"Allow","Action":"s3:PutBucketObjectLockConfiguration","Resource":"arn:aws:s3:::bucket"}`)
