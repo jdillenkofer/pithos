@@ -146,14 +146,30 @@ precedence when computing remaining retention days.
 | Pithos operation | Required action |
 |---|---|
 | ListBuckets | `s3:ListAllMyBuckets` |
+| CreateBucket | `s3:CreateBucket` |
 | HeadBucket, ListObjects | `s3:ListBucket` |
+| ListObjectVersions | `s3:ListBucketVersions` |
+| ListMultipartUploads | `s3:ListBucketMultipartUploads` |
+| DeleteBucket | `s3:DeleteBucket` |
 | GetObject, HeadObject | `s3:GetObject` |
 | versioned GetObject/HeadObject | `s3:GetObjectVersion` |
-| PutObject, AppendObject, multipart writes | `s3:PutObject` |
+| PutObject, AppendObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload | `s3:PutObject` |
 | DeleteObject / versioned delete | `s3:DeleteObject` / `s3:DeleteObjectVersion` |
 | CopyObject, UploadPartCopy | source `s3:GetObject` (or version) and destination `s3:PutObject` |
 | AbortMultipartUpload | `s3:AbortMultipartUpload` |
 | ListParts | `s3:ListMultipartUploadParts` |
+| Get/Put/Delete bucket CORS | `s3:GetBucketCORS` / `s3:PutBucketCORS` / `s3:DeleteBucketCORS` |
+| Get/Put/Delete bucket website | `s3:GetBucketWebsite` / `s3:PutBucketWebsite` / `s3:DeleteBucketWebsite` |
+| Get/Put bucket versioning | `s3:GetBucketVersioning` / `s3:PutBucketVersioning` |
+| Get/Put/Delete bucket tagging | `s3:GetBucketTagging` / `s3:PutBucketTagging` / `s3:DeleteBucketTagging` |
+| Get/Put/Delete object tagging | `s3:GetObjectTagging` / `s3:PutObjectTagging` / `s3:DeleteObjectTagging` |
+| Get/Put/Delete versioned object tagging | `s3:GetObjectVersionTagging` / `s3:PutObjectVersionTagging` / `s3:DeleteObjectVersionTagging` |
+| Get/Put/Delete bucket lifecycle | `s3:GetLifecycleConfiguration` / `s3:PutLifecycleConfiguration` / `s3:DeleteLifecycleConfiguration` |
+| Get/Put bucket notification | `s3:GetBucketNotification` / `s3:PutBucketNotification` |
+| Get/Put bucket object-lock configuration | `s3:GetBucketObjectLockConfiguration` / `s3:PutBucketObjectLockConfiguration` |
+| Get/Put object retention | `s3:GetObjectRetention` / `s3:PutObjectRetention` |
+| Get/Put object legal hold | `s3:GetObjectLegalHold` / `s3:PutObjectLegalHold` |
+| Governance-retention bypass | `s3:BypassGovernanceRetention` |
 
 Applicable tag headers add `s3:PutObjectTagging`. Explicit retention and
 legal-hold values on `PutObject`, `AppendObject`, `CreateMultipartUpload`, and
