@@ -26,8 +26,11 @@
 | `PITHOS_CREDENTIALS_[N]_ACCOUNT_ID` | Required account ID for the Nth credential; determines bucket ownership | - |
 | `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Required stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
+| `PITHOS_AUTHORIZER_TYPE` | Authorization backend: `lua` or `policy` | `lua` |
+| `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
+| `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
-| `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; used only when forwarded headers are trusted (if unset, all proxy IPs are trusted) | - |
+| `PITHOS_TRUSTED_PROXY_CIDRS` | Comma-separated trusted proxy CIDRs; required when forwarded headers are trusted; invalid CIDRs reject startup | - |
 
 > **Note:** Credentials cannot be set via command-line arguments for security reasons; they must be set using environment variables.
 
@@ -35,6 +38,11 @@ The provider settings may also be set with the `-credentialsProvider`,
 `-credentialsPath`, `-credentialsReloadIntervalSeconds`, and
 `-credentialsDatabaseIndex` command-line flags.
 The credential values themselves are never accepted as arguments.
+
+Authorization settings have matching `-authorizerType`, `-authorizerPath`,
+`-policyPath`, and `-policyReloadIntervalSeconds` flags. See
+[Policy Authorization](policy-authorization.md) for the supported language and
+operation matrix.
 
 Pithos reads these variables once when the environment credential provider is
 created at startup and caches the resulting credential set. Environment
@@ -181,20 +189,63 @@ export PITHOS_CREDENTIALS_3_PRINCIPAL_ID="bucket-reader"
 
 ## Lua Authorizer Script
 
+Both authorizers ignore forwarding headers unless `PITHOS_TRUST_FORWARDED_HEADERS`
+is enabled and the direct peer belongs to an explicitly configured trusted CIDR.
+Enabling trust without CIDRs, or configuring any invalid CIDR, prevents startup.
+Configure only proxy addresses under your control, not client networks.
+
+`X-Forwarded-For` is read from right to left, skipping trusted proxy hops and
+stopping at the first untrusted address. Values further left cannot override
+that client address. Multiple header lines are processed as one chain. A
+malformed hop encountered during traversal falls back to the direct peer.
+`CF-Connecting-IP` is used only when `X-Forwarded-For` is absent.
+
+The trusted ingress must remove or overwrite client-supplied `CF-Connecting-IP`
+and `X-Forwarded-Proto`; merely forwarding those headers is unsafe.
+`X-Forwarded-Proto` must contain a single `http` or `https` value. Repeated or
+comma-separated scheme values are ignored in favor of the direct connection's
+scheme. These rules apply equally to Lua and policy authorization.
+
 The Lua authorizer script controls access to all operations, including anonymous requests from the website endpoint. The `authorizeRequest` function receives a `request` object and must return `true` to allow or `false` to deny.
+
+Only actual Lua booleans are accepted. Strings (including `"false"`), numbers
+(including `0`), tables, `nil`, and missing return values are authorization
+errors and deny access. Startup validates the script with a sample request;
+the return type is also checked on every real request. Top-level script return
+values never count as authorization decisions.
+
+Malformed query strings and repeated query parameters are rejected with HTTP
+400 (`InvalidArgument`) before authentication and before Lua runs. Each query
+parameter therefore has at most one value, shared by authorization and the
+operation handler. This applies to API and website requests alike.
 
 ### Default Behaviour (no authorizer.lua)
 
-When no `authorizer.lua` file is found, pithos selects a built-in fallback based on whether authentication is enabled:
+When the Lua backend is selected, the authentication setting controls whether
+a missing script is allowed:
 
 | Authentication | Default behaviour |
 |----------------|-------------------|
 | Explicitly disabled | All requests are allowed (permissive mode, suitable for local development) |
-| Enabled | Anonymous requests are denied; authenticated requests are allowed |
+| Enabled | Startup fails if the script is missing or unreadable |
 
-The enabled fallback remains deny-anonymous even when the environment provider
-contains no credentials. This prevents an accidentally empty credential
-configuration from enabling anonymous access.
+Unreadable files, invalid scripts, missing `authorizeRequest` functions, and
+invalid return types detected at startup are errors in both modes. The
+development fallback applies only to a missing file with authentication
+explicitly disabled. The policy backend always requires a valid policy file.
+
+Upgrade note: authenticated deployments that previously relied on the built-in
+Lua fallback must now provide an explicit script. To deliberately allow all
+authenticated callers within their own account, use:
+
+```lua
+function authorizeRequest(request)
+  return not request:isAnonymous()
+end
+```
+
+This grants broad access within the caller's account. Use narrower rules when
+principals within an account need different permissions.
 
 Authentication is disabled only when `PITHOS_AUTHENTICATION_ENABLED=false` (or
 the equivalent `-authenticationEnabled=false` flag) is set explicitly. In this
@@ -207,7 +258,8 @@ Anonymous API and website reads still pass through `authorizeRequest`; they are
 served only when Lua allows the corresponding `GetObject`, `HeadObject`,
 `GetObjectVersion`, or `HeadObjectVersion` operation.
 
-To override either default, provide an `authorizer.lua` file at the path set by `PITHOS_AUTHORIZER_PATH`.
+Provide the script at the path set by `PITHOS_AUTHORIZER_PATH` (default
+`./authorizer.lua`).
 
 ### Request Object
 
@@ -217,6 +269,7 @@ To override either default, provide an `authorizer.lua` file at the path set by 
 | `request.authorization.accessKeyId` | `string\|nil` | The Access Key ID of the caller, or `nil` for anonymous requests |
 | `request.authorization.accountId` | `string\|nil` | The caller's account ID, or `nil` for anonymous requests |
 | `request.authorization.principalId` | `string\|nil` | The configured stable principal ID, or `nil` for anonymous requests |
+| `request.authorization.authType` | `string` | `Anonymous`, `REST-HEADER`, or `REST-QUERY-STRING`, from the server's authentication result; use this to distinguish signed headers from presigned URLs |
 | `request.resourceAccountId` | `string\|nil` | The owning account of the target bucket; for `CreateBucket`, the caller's account |
 | `request.bucket` | `string\|nil` | The bucket name (the destination for copy operations), or `nil` for bucket-list operations |
 | `request.key` | `string\|nil` | The object key (the destination for copy operations), or `nil` for bucket-level operations |

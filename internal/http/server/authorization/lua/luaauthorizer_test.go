@@ -29,7 +29,7 @@ func TestAuthorizationAlwaysDenied(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -52,7 +52,7 @@ func TestAuthorizationAlwaysAllowed(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -75,7 +75,7 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &allowedRequest)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 
 	deniedRequest := authorization.Request{
@@ -87,7 +87,7 @@ func TestOperationCorrectlyPassedThrough(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err = authorizer.AuthorizeRequest(context.Background(), &deniedRequest)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -117,7 +117,7 @@ func TestVersionTaggingOperationNamesPassedThrough(t *testing.T) {
 		}
 		authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
 		assert.Nil(t, err)
-		assert.True(t, authorized, operation)
+		assert.Equal(t, authorization.Allow, authorized.Effect, operation)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestNestedStructWorks(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &allowedRequest)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 
 	deniedRequest := authorization.Request{
@@ -153,7 +153,7 @@ func TestNestedStructWorks(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err = authorizer.AuthorizeRequest(context.Background(), &deniedRequest)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -177,7 +177,7 @@ func TestIsAnonymousReturnsTrueWhenAccessKeyIdIsNil(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -201,7 +201,7 @@ func TestIsAnonymousReturnsFalseWhenAccessKeyIdIsSet(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -225,7 +225,7 @@ func TestAccessKeyIdIsNilInLuaWhenAnonymous(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -249,7 +249,7 @@ func TestAccessKeyIdIsSetInLuaWhenAuthenticated(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -274,6 +274,7 @@ func TestIsReadOnlyReturnsTrueForReadOperations(t *testing.T) {
 		authorization.OperationGetObject,
 		authorization.OperationGetBucketWebsite,
 		authorization.OperationGetBucketTagging,
+		authorization.OperationGetBucketLifecycle,
 		authorization.OperationGetObjectTagging,
 	}
 	for _, op := range readOperations {
@@ -284,7 +285,7 @@ func TestIsReadOnlyReturnsTrueForReadOperations(t *testing.T) {
 			},
 		}
 		authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-		assert.True(t, authorized, "expected isReadOnly() == true for operation %s", op)
+		assert.Equal(t, authorization.Allow, authorized.Effect, "expected isReadOnly() == true for operation %s", op)
 		assert.Nil(t, err)
 	}
 }
@@ -315,6 +316,8 @@ func TestIsReadOnlyReturnsFalseForWriteOperations(t *testing.T) {
 		authorization.OperationDeleteBucketWebsite,
 		authorization.OperationPutBucketTagging,
 		authorization.OperationDeleteBucketTagging,
+		authorization.OperationPutBucketLifecycle,
+		authorization.OperationDeleteBucketLifecycle,
 		authorization.OperationPutObjectTagging,
 		authorization.OperationDeleteObjectTagging,
 	}
@@ -326,7 +329,7 @@ func TestIsReadOnlyReturnsFalseForWriteOperations(t *testing.T) {
 			},
 		}
 		authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-		assert.False(t, authorized, "expected isReadOnly() == false for operation %s", op)
+		assert.Equal(t, authorization.ExplicitDeny, authorized.Effect, "expected isReadOnly() == false for operation %s", op)
 		assert.Nil(t, err)
 	}
 }
@@ -351,7 +354,7 @@ func TestBucketAndKeyPassedThroughToLua(t *testing.T) {
 		Key:    ptrutils.ToPtr("my-key"),
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -375,7 +378,7 @@ func TestBucketAndKeyAreNilInLuaWhenNotSet(t *testing.T) {
 		Key:    nil,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -402,7 +405,7 @@ func TestAnonymousGetObjectAllowedByAuthorizer(t *testing.T) {
 		Key:           ptrutils.ToPtr("public-object"),
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &anonymousGet)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 
 	anonymousPut := authorization.Request{
@@ -412,7 +415,7 @@ func TestAnonymousGetObjectAllowedByAuthorizer(t *testing.T) {
 		Key:           ptrutils.ToPtr("some-object"),
 	}
 	authorized, err = authorizer.AuthorizeRequest(context.Background(), &anonymousPut)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 
 	authenticatedGet := authorization.Request{
@@ -422,7 +425,7 @@ func TestAnonymousGetObjectAllowedByAuthorizer(t *testing.T) {
 		Key:           ptrutils.ToPtr("private-object"),
 	}
 	authorized, err = authorizer.AuthorizeRequest(context.Background(), &authenticatedGet)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 
 	wrongKey := authorization.Request{
@@ -432,7 +435,7 @@ func TestAnonymousGetObjectAllowedByAuthorizer(t *testing.T) {
 		Key:           ptrutils.ToPtr("private-object"),
 	}
 	authorized, err = authorizer.AuthorizeRequest(context.Background(), &wrongKey)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -490,7 +493,7 @@ func TestHTTPRequestFieldsPassedThroughToLua(t *testing.T) {
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -520,7 +523,7 @@ func TestTrustedForwardedHeadersAppliedForClientIPAndScheme(t *testing.T) {
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -550,7 +553,7 @@ func TestForwardedHeadersIgnoredForUntrustedProxy(t *testing.T) {
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -575,7 +578,7 @@ func TestHTTPRequestIsMethodAndHasHeader(t *testing.T) {
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -604,7 +607,7 @@ func TestHTTPRequestHeaderEqualsAndQueryParamEquals(t *testing.T) {
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -633,7 +636,7 @@ func TestHTTPRequestHeaderEqualsAndQueryParamEqualsReturnFalseWhenMissingOrDiffe
 		},
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -652,7 +655,7 @@ func TestIsOperationReturnsTrueWhenOperationMatches(t *testing.T) {
 		Operation: authorization.OperationGetObject,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -671,7 +674,7 @@ func TestIsOperationReturnsFalseWhenOperationDoesNotMatch(t *testing.T) {
 		Operation: authorization.OperationGetObject,
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -750,7 +753,7 @@ func TestComprehensiveRequestAndHTTPRequestHelpers(t *testing.T) {
 	}
 
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Nil(t, err)
 }
 
@@ -773,7 +776,7 @@ func TestRequestExposesAccountIdentityAndResourceOwner(t *testing.T) {
 	}
 	allowed, err := authorizer.AuthorizeRequest(context.Background(), request)
 	assert.NoError(t, err)
-	assert.True(t, allowed)
+	assert.Equal(t, authorization.Allow, allowed.Effect)
 }
 
 func TestPrincipalHelpersFailClosedWithoutPrincipal(t *testing.T) {
@@ -799,6 +802,6 @@ func TestPrincipalHelpersFailClosedWithoutPrincipal(t *testing.T) {
 	} {
 		allowed, authorizeErr := authorizer.AuthorizeRequest(context.Background(), request)
 		assert.NoError(t, authorizeErr)
-		assert.True(t, allowed)
+		assert.Equal(t, authorization.Allow, allowed.Effect)
 	}
 }

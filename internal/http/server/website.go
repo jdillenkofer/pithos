@@ -400,6 +400,7 @@ func (s *Server) websitePrepare(ctx context.Context, w http.ResponseWriter, r *h
 		Key:           keyStr,
 		HttpRequest:   makeAuthorizationHTTPRequest(r),
 	}
+	s.bindExistingObjectTagsResolver(authRequest, &bucketStr, keyStr, nil)
 	if s.runAuthorization(ctx, authRequest, auth.Authenticated, w, r) {
 		return nil, storage.ObjectKey{}, "", false
 	}
@@ -585,6 +586,25 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 	errorKey, err := storage.NewObjectKey(*config.ErrorDocumentKey)
 	if err != nil {
 		s.writeHTMLError(w, statusCode, code, message)
+		return
+	}
+
+	bucket := bucketName.String()
+	key := errorKey.String()
+	operation := authorization.OperationGetObject
+	if r.Method == http.MethodHead {
+		operation = authorization.OperationHeadObject
+	}
+	auth := authentication.RequestAuthenticationFromContext(ctx)
+	authRequest := &authorization.Request{
+		Operation:     operation,
+		Authorization: authorizationFromAuthentication(auth),
+		Bucket:        &bucket,
+		Key:           &key,
+		HttpRequest:   makeAuthorizationHTTPRequest(r),
+	}
+	s.bindExistingObjectTagsResolver(authRequest, &bucket, &key, nil)
+	if s.runAuthorization(ctx, authRequest, auth.Authenticated, w, r) {
 		return
 	}
 

@@ -57,6 +57,16 @@ func TestMergeSettingsTwoValues(t *testing.T) {
 	assert.Equal(t, b.domain, mergedSettings.domain)
 }
 
+func TestMergeSettingsPreservesSliceWhenOverrideIsUnset(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	commandLine := Settings{trustedProxyCIDRs: []string{"10.0.0.0/8"}}
+	environment := Settings{trustedProxyCIDRs: nil}
+	merged := mergeSettings(&commandLine, &environment)
+
+	assert.Equal(t, []string{"10.0.0.0/8"}, merged.TrustedProxyCIDRs())
+}
+
 func TestSpoolDirDefaultsToEmptyOverride(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

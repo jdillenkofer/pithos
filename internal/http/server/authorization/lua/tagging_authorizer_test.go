@@ -40,7 +40,7 @@ func TestObjectTagEqualsMatchesExistingTag(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestObjectTagEqualsRejectsDifferentValue(t *testing.T) {
@@ -59,7 +59,7 @@ func TestObjectTagEqualsRejectsDifferentValue(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.Nil(t, err)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 }
 
 func TestHasObjectTagAndObjectTag(t *testing.T) {
@@ -78,7 +78,7 @@ func TestHasObjectTagAndObjectTag(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestObjectTagsReturnsTable(t *testing.T) {
@@ -98,7 +98,7 @@ func TestObjectTagsReturnsTable(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestExistingObjectTagsResolvedAtMostOncePerCall(t *testing.T) {
@@ -119,7 +119,7 @@ func TestExistingObjectTagsResolvedAtMostOncePerCall(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 	assert.Equal(t, 1, callCount, "resolver should be invoked at most once per authorization call")
 }
 
@@ -141,7 +141,7 @@ func TestExistingObjectTagsResolverErrorFailsClosed(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.NotNil(t, err)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 }
 
 func TestObjectTagPredicatesFalseWhenResolverNil(t *testing.T) {
@@ -157,7 +157,7 @@ func TestObjectTagPredicatesFalseWhenResolverNil(t *testing.T) {
 
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(nil, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestRequestTagPredicates(t *testing.T) {
@@ -173,7 +173,7 @@ func TestRequestTagPredicates(t *testing.T) {
 
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(nil, map[string]string{"team": "storage"}))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestSourceObjectTagPredicates(t *testing.T) {
@@ -196,7 +196,7 @@ func TestSourceObjectTagPredicates(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), request)
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestSourceObjectTagPredicatesFalseWhenResolverNil(t *testing.T) {
@@ -212,7 +212,7 @@ func TestSourceObjectTagPredicatesFalseWhenResolverNil(t *testing.T) {
 
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(nil, nil))
 	assert.Nil(t, err)
-	assert.True(t, authorized)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
 }
 
 func TestSourceObjectTagsResolverErrorFailsClosed(t *testing.T) {
@@ -232,5 +232,5 @@ func TestSourceObjectTagsResolverErrorFailsClosed(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), request)
 	assert.NotNil(t, err)
-	assert.False(t, authorized)
+	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 }

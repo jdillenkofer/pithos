@@ -370,7 +370,8 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	assert.NoError(t, providerErr)
 	assert.True(t, authenticated)
 	if assert.NotNil(t, identity) {
-		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: "account", PrincipalID: "client"}, *identity)
+		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: "account", PrincipalID: "client"}, *identity.AuthenticatedIdentity)
+		assert.Equal(t, signatureAlgorithmV4, identity.SignatureVersion)
 	}
 }
 
@@ -584,6 +585,7 @@ func TestCheckAuthenticationAcceptsSigV4aHeader(t *testing.T) {
 	assert.True(t, authenticated)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
+		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
 	}
 }
 
@@ -624,6 +626,7 @@ func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
 	assert.True(t, authenticated)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
+		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
 	}
 }
 

@@ -207,6 +207,9 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	// Tags are the immutable initiation tags. A non-nil empty map means no tags;
+	// nil means the backend cannot expose them. Internal only, not an S3 response field.
+	Tags                 map[string]string
 	BucketName           BucketName
 	Key                  ObjectKey
 	UploadId             UploadId

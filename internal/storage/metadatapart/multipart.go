@@ -349,6 +349,7 @@ func (mbs *metadataPartStorage) ListMultipartUploads(ctx context.Context, bucket
 
 func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) storage.ListPartsResult {
 	return storage.ListPartsResult{
+		Tags:                 mlistPartsResult.Tags,
 		BucketName:           mlistPartsResult.BucketName,
 		Key:                  mlistPartsResult.Key,
 		UploadId:             mlistPartsResult.UploadId,

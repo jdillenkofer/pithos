@@ -642,7 +642,15 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		}
 	}
 
+	tags, err := sms.loadObjectTags(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
+	if tags == nil {
+		tags = map[string]string{}
+	}
 	return &metadatastore.ListPartsResult{
+		Tags:                 tags,
 		BucketName:           bucketName,
 		Key:                  key,
 		UploadId:             uploadId,

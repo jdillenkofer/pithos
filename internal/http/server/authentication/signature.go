@@ -666,7 +666,13 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	}, nil
 }
 
-func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *AuthenticatedIdentity, authenticated bool, providerErr error) {
+// signatureAuthentication carries only metadata from a successfully verified signature.
+type signatureAuthentication struct {
+	*AuthenticatedIdentity
+	SignatureVersion string
+}
+
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authenticated bool, providerErr error) {
 	now := time.Now().UTC()
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
 	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
@@ -794,7 +800,10 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
 	}
 
-	return &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID}, isSignatureValid, nil
+	return &signatureAuthentication{
+		AuthenticatedIdentity: &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID},
+		SignatureVersion:      string(parameters.algorithm),
+	}, isSignatureValid, nil
 }
 
 type awsChunkReadCloser struct {
@@ -1050,9 +1059,10 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 		}
 		if isAuthenticated {
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
-				Authenticated: true,
-				Identity:      identity,
-				Type:          authTypeForRequest(r),
+				Authenticated:    true,
+				Identity:         identity.AuthenticatedIdentity,
+				Type:             authTypeForRequest(r),
+				SignatureVersion: identity.SignatureVersion,
 			})
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)

@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	storageFactory "github.com/jdillenkofer/pithos/internal/storage/factory"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -980,5 +981,42 @@ func TestWebsiteHosting(t *testing.T) {
 
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 		})
+	})
+}
+
+func TestWebsitePolicyTagDeny(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		snapshot, err := policy.Compile([]byte(`{"schemaVersion":1,"policies":{
+   "admin":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":"*"}},
+   "public":{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"},{"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"StringEquals":{"s3:ExistingObjectTag/private":"true"}}}]}
+  },"bindings":[{"policy":"admin","subjects":[{"type":"principal","accountId":"test-account","principalId":"test-principal"}]},{"policy":"public","subjects":[{"type":"anonymous"}]}]}`))
+		require.NoError(t, err)
+		client, addr, cleanup := setupTestServerWithAuthorizer(snapshot, dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+		t.Cleanup(cleanup)
+		ctx := context.Background()
+		_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
+		require.NoError(t, err)
+		_, err = client.PutBucketWebsite(ctx, &s3.PutBucketWebsiteInput{Bucket: bucketName, WebsiteConfiguration: &types.WebsiteConfiguration{IndexDocument: &types.IndexDocument{Suffix: aws.String("index.html")}}})
+		require.NoError(t, err)
+		httpClient := buildWebsiteHttpClient(addr)
+		tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+		require.NoError(t, err)
+		for _, private := range []string{"true", "false"} {
+			_, err = client.PutObject(ctx, &s3.PutObjectInput{Bucket: bucketName, Key: aws.String("docs/index.html"), Body: bytes.NewReader([]byte("website content")), Tagging: aws.String("private=" + private)})
+			require.NoError(t, err)
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				req, err := http.NewRequest(method, fmt.Sprintf("http://%s.%s:%d/docs/", *bucketName, testWebsiteEndpoint, tcpAddr.Port), nil)
+				require.NoError(t, err)
+				response, err := httpClient.Do(req)
+				require.NoError(t, err)
+				response.Body.Close()
+				want := http.StatusOK
+				if private == "true" {
+					want = http.StatusUnauthorized
+				}
+				require.Equal(t, want, response.StatusCode, method+" private="+private)
+			}
+		}
 	})
 }

@@ -14,7 +14,7 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 - Object metadata, object tagging, delete markers, and S3-style bucket versioning
 - [S3 Object Lock](docs/object-lock.md): governance/compliance retention, legal hold, synchronous replication recovery and audit
 - Authentication using AWS Signature Version 4
-- Authorization support via Lua scripts
+- Authorization through Lua scripts or IAM-inspired JSON policies
 - Configurable storage backends (local filesystem, S3, etc.)
 - Prometheus metrics endpoint for monitoring
 - Health monitoring endpoints
@@ -28,6 +28,11 @@ Pithos is an S3-compatible object storage server designed for self-hosters, writ
 
 ## Quick Start
 
+Create an `authorizer.lua` with your access rules before starting; the default
+authenticated mode requires an explicit script. See
+[Getting Started](docs/getting-started.md#build-and-run) for a minimal example
+and credential configuration.
+
 ```sh
 git clone https://github.com/jdillenkofer/pithos.git
 cd pithos
@@ -38,7 +43,9 @@ go build -o pithos ./cmd
 Or run the published multi-architecture image from GitHub Container Registry:
 
 ```sh
-docker run -p 9000:9000 -v "$(pwd)/data:/data" ghcr.io/jdillenkofer/pithos:latest
+docker run -p 9000:9000 -v "$(pwd)/data:/data" \
+  -v "$(pwd)/authorizer.lua:/app/authorizer.lua:ro" \
+  ghcr.io/jdillenkofer/pithos:latest
 ```
 
 The same release image is also published as `jdillenkofer/pithos:latest` on

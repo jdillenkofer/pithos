@@ -189,6 +189,11 @@ func (s *Server) objectLockConfigurationHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 	request, authenticated := makeAuthorizationRequest(ctx, operation, ptrutils.ToPtr(bucket.String()), nil, r)
+	// Bucket configuration only persists lock values from its XML body.
+	// Object-write headers must not override that body's policy context.
+	request.ObjectLockMode = nil
+	request.ObjectLockRetainUntilDate = nil
+	request.ObjectLockLegalHold = nil
 	if config != nil {
 		request.ObjectLockEnabled = &config.ObjectLockEnabled
 		if d := config.DefaultRetention; d != nil {
@@ -320,14 +325,15 @@ func (s *Server) objectProtectionHandler(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *Server) setObjectLockHeaders(w http.ResponseWriter, r *http.Request, object *storage.Object) {
-	bucket, key := r.PathValue(bucketPath), r.PathValue(keyPath)
+func (s *Server) setObjectLockHeaders(w http.ResponseWriter, r *http.Request, object *storage.Object, baseRequest *authorization.Request) {
 	allowed := func(operation string) bool {
-		request, _ := makeAuthorizationRequest(r.Context(), operation, &bucket, &key, r)
+		// Preserve the resource account resolved during the object read.
+		request := *baseRequest
+		request.Operation = operation
 		request.VersionID = object.VersionID
-		s.bindExistingObjectTagsResolver(request, &bucket, &key, object.VersionID)
-		ok, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), request)
-		return err == nil && ok
+		s.bindExistingObjectTagsResolver(&request, request.Bucket, request.Key, object.VersionID)
+		decision, err := s.requestAuthorizer.AuthorizeRequest(r.Context(), &request)
+		return err == nil && decision.Effect == authorization.Allow
 	}
 	if rt := object.ObjectLock.Retention; rt != nil && allowed(authorization.OperationGetObjectRetention) {
 		w.Header().Set("x-amz-object-lock-mode", string(rt.Mode))

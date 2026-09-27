@@ -270,12 +270,11 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		startAfter = marker
 	}
 
-	maxKeys := query.Get(maxKeysQuery)
-	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
-	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
-		maxKeysI64 = 1000
+	maxKeysI32, err := parseMaxKeys(query)
+	if err != nil {
+		handleError(err, w, r)
+		return
 	}
-	maxKeysI32 := int32(maxKeysI64)
 
 	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
 	slog.InfoContext(r.Context(), "Listing objects", "bucket", bucketName.String())
@@ -319,8 +318,8 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, bucketName storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, *string, error) {
 	maxKeys := opts.MaxKeys
-	if maxKeys <= 0 {
-		maxKeys = 1000
+	if maxKeys == 0 {
+		return &storage.ListBucketResult{}, nil, nil
 	}
 	collectedObjects := []storage.Object{}
 	collectedPrefixes := []string{}
@@ -396,18 +395,17 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 	prefix := httputils.GetQueryParam(query, prefixQuery)
 	delimiter := httputils.GetQueryParam(query, delimiterQuery)
 	continuationToken := httputils.GetQueryParam(query, continuationTokenQuery)
-	maxKeys := query.Get(maxKeysQuery)
 
 	startAfter := httputils.GetQueryParam(query, startAfterQuery)
 	if continuationToken != nil {
 		startAfter = continuationToken
 	}
 
-	maxKeysI64, err := strconv.ParseInt(maxKeys, 10, 32)
-	if err != nil || maxKeysI64 < 0 || maxKeysI64 > maxListLimit {
-		maxKeysI64 = 1000
+	maxKeysI32, err := parseMaxKeys(query)
+	if err != nil {
+		handleError(err, w, r)
+		return
 	}
-	maxKeysI32 := int32(maxKeysI64)
 
 	opts := storage.ListObjectsOptions{Prefix: prefix, Delimiter: delimiter, StartAfter: startAfter, MaxKeys: maxKeysI32}
 	slog.InfoContext(r.Context(), "Listing objects V2", "bucket", bucketName.String())
