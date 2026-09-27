@@ -135,8 +135,11 @@ conditions use the tags stored at multipart initiation. Headers on these later
 requests cannot replace those tags. The lookup is lazy and fails closed on
 errors or when the storage backend cannot expose initiation tags (including
 the S3-client backend, whose upstream ListParts API does not return tags).
-Existing tags are fetched lazily only when a matching statement needs them;
-lookup errors fail closed. Object-lock context describes the request, not
+Existing tags are fetched lazily only when a matching statement needs them.
+The exception is a `CopyObject` using the default `COPY` tagging directive:
+Pithos fetches source tags during authorization to determine whether the copy
+requires `s3:PutObjectTagging`. Lookup errors fail closed. Object-lock context
+describes the request, not
 the object's previously stored lock state or an automatically inherited
 bucket default. On object writes, the request's retain-until date takes
 precedence when computing remaining retention days.
