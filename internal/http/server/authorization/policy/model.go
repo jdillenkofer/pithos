@@ -50,12 +50,29 @@ type Document struct {
 	Statement json.RawMessage `json:"Statement"`
 }
 
+type conditionBlock map[string]map[string]json.RawMessage
+
+func (c *conditionBlock) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("must contain at least one condition operator")
+	}
+	var conditions map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(data, &conditions); err != nil {
+		return err
+	}
+	if len(conditions) == 0 {
+		return fmt.Errorf("must contain at least one condition operator")
+	}
+	*c = conditions
+	return nil
+}
+
 type Statement struct {
-	Sid       string                                `json:"Sid,omitempty"`
-	Effect    string                                `json:"Effect"`
-	Action    stringList                            `json:"Action"`
-	Resource  stringList                            `json:"Resource"`
-	Condition map[string]map[string]json.RawMessage `json:"Condition,omitempty"`
+	Sid       string         `json:"Sid,omitempty"`
+	Effect    string         `json:"Effect"`
+	Action    stringList     `json:"Action"`
+	Resource  stringList     `json:"Resource"`
+	Condition conditionBlock `json:"Condition,omitempty"`
 }
 
 type Binding struct {
