@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,9 @@ type Options struct {
 }
 
 func NewAuthorizerWithOptions(path string, interval time.Duration, options Options) (*Authorizer, error) {
+	if interval < 0 {
+		return nil, fmt.Errorf("policy reload interval must not be negative")
+	}
 	s, err := Load(path)
 	if err != nil {
 		return nil, err

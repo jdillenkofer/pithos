@@ -21,6 +21,14 @@ func compileTestPolicy(t *testing.T, statements string) *Snapshot {
 	return s
 }
 
+func TestNewAuthorizerRejectsNegativeReloadInterval(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	a, err := NewAuthorizer("unused.json", -time.Second)
+	require.ErrorContains(t, err, "must not be negative")
+	require.Nil(t, a)
+}
+
 func TestReloadRetainsLastValidSnapshot(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
