@@ -55,7 +55,23 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	apiMux.HandleFunc("PUT /{bucket}/{key...}", server.uploadPartOrPutObjectHandler)
 	apiMux.HandleFunc("DELETE /{bucket}/{key...}", server.abortMultipartUploadOrDeleteObjectHandler)
 	apiMux.HandleFunc("OPTIONS /{bucket}/{key...}", server.optionsObjectHandler)
-	var apiHandler http.Handler = apiMux
+
+	// Route bucket roots with a trailing slash before the object catch-all.
+	bucketRootMux := http.NewServeMux()
+	bucketRootMux.HandleFunc("HEAD /{bucket}/{$}", server.headBucketHandler)
+	bucketRootMux.HandleFunc("GET /{bucket}/{$}", server.routeBucketGetHandler)
+	bucketRootMux.HandleFunc("PUT /{bucket}/{$}", server.routeBucketPutHandler)
+	bucketRootMux.HandleFunc("DELETE /{bucket}/{$}", server.routeBucketDeleteHandler)
+	bucketRootMux.HandleFunc("OPTIONS /{bucket}/{$}", server.optionsBucketHandler)
+	bucketRootMux.HandleFunc("POST /{bucket}/{$}", server.postBucketHandler)
+
+	var apiHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isTrailingSlashBucketRoot(r.URL.Path) {
+			bucketRootMux.ServeHTTP(w, r)
+			return
+		}
+		apiMux.ServeHTTP(w, r)
+	})
 	// CORS must be wrapped *inside* the virtual-host addressing middleware so the
 	// resolver sees the rewritten path (with the bucket prefix) for virtual-hosted
 	// requests. This also places CORS inside SigV4 auth: anonymous preflights pass
@@ -100,6 +116,14 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
 	return prometheusmiddleware.New(rootHandler)
+}
+
+func isTrailingSlashBucketRoot(path string) bool {
+	if !strings.HasSuffix(path, "/") {
+		return false
+	}
+	withoutTrailingSlash := strings.TrimSuffix(path, "/")
+	return withoutTrailingSlash != "" && !strings.Contains(withoutTrailingSlash[1:], "/")
 }
 
 func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
