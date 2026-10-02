@@ -537,6 +537,10 @@ func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request
 		s.deleteBucketTaggingHandler(w, r)
 		return
 	}
+	if query.Has("policy") {
+		writeNotImplemented(w, r, "Bucket policies are not supported")
+		return
+	}
 	s.deleteBucketHandler(w, r)
 }
 
