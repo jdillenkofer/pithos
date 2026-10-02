@@ -608,6 +608,14 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	if err != nil {
 		return nil, nil, err
 	}
+	if opts != nil {
+		if opts.IfMatchETag != nil && *opts.IfMatchETag != storage.ETagWildcard && object.ETag != *opts.IfMatchETag {
+			return nil, nil, storage.ErrPreconditionFailed
+		}
+		if opts.IfNoneMatchETag != nil && (*opts.IfNoneMatchETag == storage.ETagWildcard || object.ETag == *opts.IfNoneMatchETag) {
+			return nil, nil, storage.ErrNotModified
+		}
+	}
 
 	// Pin all subsequent reads to the selected version, including metadata.
 	tags, err := rs.GetObjectTagging(ctx, bucketName, key, &storage.ObjectTaggingOptions{VersionID: object.VersionID})
@@ -618,8 +626,15 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 	if strings.Contains(object.ETag, "-") {
 		var total int64
 		for number := int32(1); ; number++ {
-			part, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucketName.String()), Key: aws.String(key.String()), VersionId: object.VersionID, PartNumber: &number})
+			part, err := rs.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+				Bucket: aws.String(bucketName.String()), Key: aws.String(key.String()),
+				VersionId: object.VersionID, PartNumber: &number, IfMatch: aws.String(object.ETag),
+			})
 			if err != nil {
+				var apiError smithy.APIError
+				if errors.As(err, &apiError) && apiError.ErrorCode() == "PreconditionFailed" {
+					return nil, nil, storage.ErrPreconditionFailed
+				}
 				return nil, nil, err
 			}
 			if part.PartsCount == nil || *part.PartsCount < number || *part.PartsCount > 10000 || part.ContentLength == nil {
@@ -635,6 +650,26 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			return nil, nil, errors.New("backend multipart sizes do not match selected object")
 		}
 	}
+	if opts != nil && opts.PartNumber != nil {
+		partNumber := int(*opts.PartNumber)
+		if partNumber < 1 || partNumber > 10000 {
+			return nil, nil, storage.ErrInvalidRange
+		}
+		if len(object.PartSizes) > 0 {
+			if partNumber > len(object.PartSizes) {
+				return nil, nil, storage.ErrInvalidRange
+			}
+			object.Size = object.PartSizes[partNumber-1]
+		} else if partNumber != 1 {
+			return nil, nil, storage.ErrInvalidRange
+		}
+		for _, byteRange := range ranges {
+			if !validByteRange(byteRange, object.Size) {
+				return nil, nil, storage.ErrInvalidRange
+			}
+		}
+	}
+
 	// Get each range
 	readers := []io.ReadCloser{}
 	for _, byteRange := range ranges {
@@ -646,12 +681,17 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			r := byteRangeToAWSRange(byteRange)
 			awsRange = &r
 		}
-		getObjectResult, err := rs.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		getInput := &s3.GetObjectInput{
 			Bucket:    aws.String(bucketName.String()),
 			Key:       aws.String(key.String()),
 			Range:     awsRange,
 			VersionId: object.VersionID,
-		})
+			IfMatch:   aws.String(object.ETag),
+		}
+		if opts != nil && opts.PartNumber != nil {
+			getInput.PartNumber = opts.PartNumber
+		}
+		getObjectResult, err := rs.s3Client.GetObject(ctx, getInput)
 		var notFoundError *types.NotFound
 		if err != nil && errors.As(err, &notFoundError) {
 			// Close any readers we've already opened
@@ -664,6 +704,15 @@ func (rs *s3ClientStorage) GetObject(ctx context.Context, bucketName storage.Buc
 			// Close any readers we've already opened
 			for _, r := range readers {
 				r.Close()
+			}
+			var apiError smithy.APIError
+			if errors.As(err, &apiError) {
+				switch apiError.ErrorCode() {
+				case "InvalidRange":
+					return nil, nil, storage.ErrInvalidRange
+				case "PreconditionFailed":
+					return nil, nil, storage.ErrPreconditionFailed
+				}
 			}
 			return nil, nil, err
 		}
@@ -808,6 +857,19 @@ func (rs *s3ClientStorage) PutObject(ctx context.Context, bucketName storage.Buc
 		ChecksumSHA1:      putObjectResult.ChecksumSHA1,
 		ChecksumSHA256:    putObjectResult.ChecksumSHA256,
 	}, nil
+}
+
+func validByteRange(byteRange storage.ByteRange, objectSize int64) bool {
+	if byteRange.Start == nil && byteRange.End == nil {
+		return true
+	}
+	if byteRange.Start == nil {
+		return byteRange.End != nil && *byteRange.End > 0
+	}
+	if *byteRange.Start < 0 || *byteRange.Start >= objectSize {
+		return false
+	}
+	return byteRange.End == nil || *byteRange.End > *byteRange.Start
 }
 
 // byteRangeToAWSRange converts a storage.ByteRange (exclusive end) into an S3

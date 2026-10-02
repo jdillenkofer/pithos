@@ -134,7 +134,7 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 	ctx, span := m.tracer.Start(ctx, "ObjectCacheStorageMiddleware.GetObject")
 	defer span.End()
 
-	if len(ranges) > 0 {
+	if len(ranges) > 0 || (opts != nil && opts.PartNumber != nil) {
 		return m.Next.GetObject(ctx, bucketName, key, ranges, opts)
 	}
 

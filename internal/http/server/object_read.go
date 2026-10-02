@@ -407,17 +407,27 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	rangeHeaderValue := r.Header.Get(rangeHeader)
 	slog.InfoContext(r.Context(), "Getting object", "bucket", bucketName.String(), "key", key.String())
 
-	// Parse range header and convert to storage.ByteRange (validation will be done in GetObject)
+	// Parse range header and convert to storage.ByteRange (validation will be done in GetObject).
 	storageRanges, err := parseRangeHeader(rangeHeaderValue)
 	if err != nil {
 		w.WriteHeader(416)
 		return
 	}
 
+	partNumber := 0
+	if r.URL.Query().Has(partNumberQuery) {
+		parsedPartNumber, parseErr := strconv.Atoi(r.URL.Query().Get(partNumberQuery))
+		if parseErr != nil || parsedPartNumber < 1 || parsedPartNumber > 10000 {
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		partNumber = parsedPartNumber
+	}
+
 	var getOpts *storage.GetObjectOptions
 	ifMatch := getHeaderAsPtr(r.Header, ifMatchHeader)
 	ifNoneMatch := getHeaderAsPtr(r.Header, ifNoneMatchHeader)
-	if ifMatch != nil || ifNoneMatch != nil || versionID != nil {
+	if ifMatch != nil || ifNoneMatch != nil || versionID != nil || partNumber > 0 {
 		getOpts = &storage.GetObjectOptions{}
 		if versionID != nil {
 			getOpts.VersionID = versionID
@@ -428,11 +438,31 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 		if ifNoneMatch != nil {
 			getOpts.IfNoneMatchETag = ifNoneMatch
 		}
+		if partNumber > 0 {
+			getOpts.PartNumber = ptrutils.ToPtr(int32(partNumber))
+		}
 	}
 
-	// GetObject now returns metadata and readers in a single transaction
-	// It also validates the ranges and returns ErrInvalidRange if invalid
 	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges, getOpts)
+	multipartObject := false
+	if err == nil && partNumber > 0 {
+		multipartObject = len(object.PartSizes) > 1 || strings.Contains(object.ETag, "-")
+		partSizes := object.PartSizes
+		if len(partSizes) == 0 {
+			partSizes = []int64{object.Size}
+		}
+		if partNumber > len(partSizes) {
+			for _, reader := range readers {
+				_ = reader.Close()
+			}
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		object.Size = partSizes[partNumber-1]
+		if multipartObject {
+			w.Header().Set("x-amz-mp-parts-count", strconv.Itoa(len(partSizes)))
+		}
+	}
 	if err != nil {
 		if currentDeleteMarkerErr, ok := err.(*storage.CurrentDeleteMarkerError); ok {
 			responseHeaders := w.Header()
@@ -499,8 +529,11 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 			readers[i] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObjectRange", reader)
 		}
 	} else {
-		// No range specified - we only include the headers for requests without range headers
-		setChecksumHeadersFromObject(responseHeaders, object)
+		// Part responses do not have persisted per-part checksums; the full-object
+		// checksum must not be advertised for a partial payload.
+		if partNumber == 0 || !multipartObject {
+			setChecksumHeadersFromObject(responseHeaders, object)
+		}
 		// Wrap the single reader with tracing
 		readers[0] = ioutils.NewTracingReadCloser(ctx, s.tracer, "GetObject", readers[0])
 		size := object.Size
