@@ -68,6 +68,10 @@ func (s *Server) deleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedObjectSubresource(query) {
+		writeNotImplemented(w, r, "Object subresource is not supported")
+		return
+	}
 
 	// AbortMultipartUpload
 	if query.Has(uploadIdQuery) {
@@ -80,13 +84,16 @@ func (s *Server) abortMultipartUploadOrDeleteObjectHandler(w http.ResponseWriter
 		s.deleteObjectTaggingHandler(w, r)
 		return
 	}
-
 	// DeleteObject
 	s.deleteObjectHandler(w, r)
 }
 
 func (s *Server) postBucketHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedBucketSubresource(query, r.Method) {
+		writeNotImplemented(w, r, "Bucket subresource is not supported")
+		return
+	}
 	if query.Has("delete") {
 		s.deleteObjectsHandler(w, r)
 		return
