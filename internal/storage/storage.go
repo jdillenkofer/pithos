@@ -200,6 +200,9 @@ type HeadObjectOptions struct {
 // ETag values must be bare hex strings (without surrounding quotes).
 type GetObjectOptions struct {
 	VersionID *string
+	// PartNumber selects a multipart part, with an optional byte range relative
+	// to that part.
+	PartNumber *int32
 	// IfMatchETag, when non-nil, requires the stored object's ETag to match;
 	// otherwise ErrPreconditionFailed is returned.
 	// The special value "*" matches any existing object.

@@ -25,6 +25,117 @@ import (
 	"testing"
 )
 
+func TestGetObjectPartNumber(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+		t.Cleanup(cleanup)
+		_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+		require.NoError(t, err)
+		_, err = s3Client.PutBucketVersioning(context.Background(), &s3.PutBucketVersioningInput{
+			Bucket: bucketName, VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+		})
+		require.NoError(t, err)
+
+		created, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+		require.NoError(t, err)
+		completed := make([]types.CompletedPart, 0, 2)
+		parts := [][]byte{[]byte("first multipart part"), []byte("requested final part")}
+		for i, partBody := range parts {
+			number := int32(i + 1)
+			result, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				Bucket: bucketName, Key: key, UploadId: created.UploadId,
+				PartNumber: aws.Int32(number), Body: bytes.NewReader(partBody),
+			})
+			require.NoError(t, uploadErr)
+			completed = append(completed, types.CompletedPart{ETag: result.ETag, PartNumber: aws.Int32(number)})
+		}
+		completedUpload, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+			Bucket: bucketName, Key: key, UploadId: created.UploadId,
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: completed},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, completedUpload.VersionId)
+
+		result, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{Bucket: bucketName, Key: key, PartNumber: aws.Int32(2)})
+		require.NoError(t, err)
+		defer result.Body.Close()
+		body, err := io.ReadAll(result.Body)
+		require.NoError(t, err)
+		assert.Equal(t, parts[1], body)
+		assert.Equal(t, int64(len(parts[1])), *result.ContentLength)
+		assert.Equal(t, int32(2), *result.PartsCount)
+
+		first, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: key, PartNumber: aws.Int32(1), IfMatch: result.ETag,
+		})
+		require.NoError(t, err)
+		defer first.Body.Close()
+		firstBody, err := io.ReadAll(first.Body)
+		require.NoError(t, err)
+		assert.Equal(t, parts[0], firstBody)
+		assert.Equal(t, int32(2), *first.PartsCount)
+
+		versioned, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: key, PartNumber: aws.Int32(2), VersionId: completedUpload.VersionId,
+		})
+		require.NoError(t, err)
+		defer versioned.Body.Close()
+		versionedBody, err := io.ReadAll(versioned.Body)
+		require.NoError(t, err)
+		assert.Equal(t, parts[1], versionedBody)
+
+		missingPart, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: key, PartNumber: aws.Int32(3),
+		})
+		assert.Error(t, err)
+		assert.Nil(t, missingPart)
+
+		ranged, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: key, PartNumber: aws.Int32(2), Range: aws.String("bytes=1-3"),
+		})
+		require.NoError(t, err)
+		defer ranged.Body.Close()
+		rangedBody, err := io.ReadAll(ranged.Body)
+		require.NoError(t, err)
+		assert.Equal(t, parts[1][1:4], rangedBody)
+		assert.Equal(t, fmt.Sprintf("bytes 1-3/%d", len(parts[1])), *ranged.ContentRange)
+
+		singleKey := aws.String(*key + "-single")
+		_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+			Bucket: bucketName, Key: singleKey, Body: bytes.NewReader([]byte("single object")),
+		})
+		require.NoError(t, err)
+		single, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: singleKey, PartNumber: aws.Int32(1),
+		})
+		require.NoError(t, err)
+		defer single.Body.Close()
+		singleBody, err := io.ReadAll(single.Body)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("single object"), singleBody)
+		assert.Nil(t, single.PartsCount)
+		assert.NotNil(t, single.ChecksumCRC32)
+
+		emptyKey := aws.String(*key + "-empty")
+		_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{
+			Bucket: bucketName, Key: emptyKey, Body: bytes.NewReader(nil),
+		})
+		require.NoError(t, err)
+		empty, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+			Bucket: bucketName, Key: emptyKey, PartNumber: aws.Int32(1),
+		})
+		require.NoError(t, err)
+		defer empty.Body.Close()
+		emptyBody, err := io.ReadAll(empty.Body)
+		require.NoError(t, err)
+		assert.Empty(t, emptyBody)
+	})
+}
+
 func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 	testutils.SkipIfNotIntegration(t)
 

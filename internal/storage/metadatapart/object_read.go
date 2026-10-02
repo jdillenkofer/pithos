@@ -347,16 +347,59 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 			}
 		}
 
-		// Default to full object if no ranges specified
+		// Default to the full object if no ranges were specified. For a
+		// multipart-part request, interpret ranges relative to that part and
+		// translate them to the object's byte offsets within this transaction.
 		effectiveRanges := ranges
+		objectSize := object.Size
+		partOffset := int64(0)
+		if opts != nil && opts.PartNumber != nil {
+			partNumber := int(*opts.PartNumber)
+			if partNumber < 1 || partNumber > len(object.Parts) {
+				return nil, storage.ErrInvalidRange
+			}
+			for i := 0; i < partNumber-1; i++ {
+				partOffset += object.Parts[i].Size
+			}
+			objectSize = object.Parts[partNumber-1].Size
+		}
+		if opts != nil && opts.PartNumber != nil && objectSize == 0 {
+			if len(ranges) > 0 {
+				return nil, storage.ErrInvalidRange
+			}
+			storageObject = convertObject(*object)
+			storageObject.Size = 0
+			return []io.ReadCloser{io.NopCloser(bytes.NewReader(nil))}, nil
+		}
 		if len(effectiveRanges) == 0 {
-			effectiveRanges = []storage.ByteRange{{Start: nil, End: nil}}
+			if opts != nil && opts.PartNumber != nil {
+				zero, partEnd := int64(0), objectSize
+				effectiveRanges = []storage.ByteRange{{Start: &zero, End: &partEnd}}
+			} else {
+				effectiveRanges = []storage.ByteRange{{Start: nil, End: nil}}
+			}
 		}
 
-		// Normalize suffix ranges and validate
-		effectiveRanges, err = normalizeAndValidateRanges(effectiveRanges, object.Size)
+		// Normalize suffix ranges and validate against the selected object/part.
+		effectiveRanges, err = normalizeAndValidateRanges(effectiveRanges, objectSize)
 		if err != nil {
 			return nil, err
+		}
+		if opts != nil && opts.PartNumber != nil {
+			for i := range effectiveRanges {
+				if effectiveRanges[i].Start == nil {
+					zero := int64(0)
+					effectiveRanges[i].Start = &zero
+				}
+				if effectiveRanges[i].End == nil {
+					partEnd := objectSize
+					effectiveRanges[i].End = &partEnd
+				}
+				start := *effectiveRanges[i].Start + partOffset
+				end := *effectiveRanges[i].End + partOffset
+				effectiveRanges[i].Start = &start
+				effectiveRanges[i].End = &end
+			}
 		}
 
 		// The range readers are lazy: they don't touch the part store until
@@ -383,6 +426,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 		}
 
 		storageObject = convertObject(*object)
+		storageObject.Size = objectSize
 		return readers, nil
 	}
 
