@@ -557,6 +557,10 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 		s.putObjectTaggingHandler(w, r)
 		return
 	}
+	if query.Has("acl") {
+		writeNotImplemented(w, r, "Object ACLs are not supported")
+		return
+	}
 
 	// PutObject
 	s.putObjectHandler(w, r)
