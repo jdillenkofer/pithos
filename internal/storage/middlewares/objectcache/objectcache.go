@@ -220,6 +220,8 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 		defer close(cacheWriteDone)
 		setErr := m.cache.Set(cacheKey, pr, objectSize)
 		if setErr != nil {
+			_ = pr.CloseWithError(setErr)
+			_ = m.cache.Remove(cacheKey)
 			slog.DebugContext(ctx, "Failed to write streamed object body to cache", "key", cacheKey, "error", setErr)
 		}
 	}(objKey, obj.Size)
@@ -343,6 +345,7 @@ func (m *objectCacheStorageMiddleware) PutObject(ctx context.Context, bucketName
 		defer close(cacheWriteDone)
 		setErr := m.cache.Set(objKey, pr, -1)
 		if setErr != nil {
+			_ = pr.CloseWithError(setErr)
 			if !errors.Is(setErr, errObjectLargerThanCacheThreshold) {
 				slog.DebugContext(ctx, "Failed to stream object body into cache on put", "key", objKey, "error", setErr)
 			}
@@ -395,8 +398,10 @@ func (r *cacheOnWriteReader) Read(p []byte) (int, error) {
 		}
 		r.bytesSeen += int64(n)
 		if r.bytesSeen > r.maxObjectSizeBytes {
-			_ = r.pipeWriter.CloseWithError(errObjectLargerThanCacheThreshold)
-			r.pipeWriter = nil
+			if r.pipeWriter != nil {
+				_ = r.pipeWriter.CloseWithError(errObjectLargerThanCacheThreshold)
+				r.pipeWriter = nil
+			}
 			r.cachePipeActive = false
 		} else if r.pipeWriter != nil {
 			if _, writeErr := r.pipeWriter.Write(p[:n]); writeErr != nil {
