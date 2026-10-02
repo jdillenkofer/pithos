@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -44,6 +45,10 @@ func (s *Server) listBucketsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
+	if hasUnsupportedBucketSubresource(r.URL.Query(), r.Method) {
+		writeNotImplemented(w, r, "Bucket subresource is not supported")
+		return
+	}
 	ctx, span := s.tracer.Start(r.Context(), "Server.headBucketHandler")
 	defer span.End()
 
@@ -65,8 +70,39 @@ func (s *Server) headBucketHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+func hasUnsupportedBucketSubresource(query url.Values, method string) bool {
+	allowedMethods := map[string]map[string]bool{
+		"cors":         {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
+		"lifecycle":    {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
+		"notification": {http.MethodGet: true, http.MethodPut: true},
+		"object-lock":  {http.MethodGet: true, http.MethodPut: true},
+		"tagging":      {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
+		"versioning":   {http.MethodGet: true, http.MethodPut: true},
+		"versions":     {http.MethodGet: true},
+		"website":      {http.MethodGet: true, http.MethodPut: true, http.MethodDelete: true},
+		"uploads":      {http.MethodGet: true},
+		"delete":       {http.MethodPost: true},
+	}
+	knownSubresources := []string{
+		"accelerate", "acl", "analytics", "cors", "delete", "encryption", "intelligent-tiering",
+		"inventory", "lifecycle", "location", "logging", "metrics", "notification", "object-lock",
+		"ownershipControls", "policy", "policyStatus", "publicAccessBlock", "replication", "requestPayment",
+		"tagging", "versioning", "versions", "website", "uploads",
+	}
+	for _, name := range knownSubresources {
+		if query.Has(name) && !allowedMethods[name][method] {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) routeBucketGetHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedBucketSubresource(query, r.Method) {
+		writeNotImplemented(w, r, "Bucket subresource is not supported")
+		return
+	}
 	if query.Has("object-lock") {
 		s.objectLockConfigurationHandler(w, r)
 		return
@@ -454,6 +490,10 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeBucketPutHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedBucketSubresource(query, r.Method) {
+		writeNotImplemented(w, r, "Bucket subresource is not supported")
+		return
+	}
 	if query.Has("object-lock") {
 		s.objectLockConfigurationHandler(w, r)
 		return
@@ -521,6 +561,10 @@ func (s *Server) createBucketHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedBucketSubresource(query, r.Method) {
+		writeNotImplemented(w, r, "Bucket subresource is not supported")
+		return
+	}
 	if query.Has(corsQuery) {
 		s.deleteBucketCORSHandler(w, r)
 		return
@@ -535,10 +579,6 @@ func (s *Server) routeBucketDeleteHandler(w http.ResponseWriter, r *http.Request
 	}
 	if query.Has(taggingQuery) {
 		s.deleteBucketTaggingHandler(w, r)
-		return
-	}
-	if query.Has("policy") {
-		writeNotImplemented(w, r, "Bucket policies are not supported")
 		return
 	}
 	s.deleteBucketHandler(w, r)

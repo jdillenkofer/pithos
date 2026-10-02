@@ -215,6 +215,10 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 
 func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedObjectSubresource(query) {
+		writeNotImplemented(w, r, "Object subresource is not supported")
+		return
+	}
 
 	// CreateMultipartUpload
 	if query.Has(uploadsQuery) {
@@ -525,6 +529,10 @@ func (s *Server) appendObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedObjectSubresource(query) {
+		writeNotImplemented(w, r, "Object subresource is not supported")
+		return
+	}
 
 	// UploadPart / UploadPartCopy
 	if query.Has(uploadIdQuery) || query.Has(partNumberQuery) {
@@ -557,11 +565,6 @@ func (s *Server) uploadPartOrPutObjectHandler(w http.ResponseWriter, r *http.Req
 		s.putObjectTaggingHandler(w, r)
 		return
 	}
-	if query.Has("acl") {
-		writeNotImplemented(w, r, "Object ACLs are not supported")
-		return
-	}
-
 	// PutObject
 	s.putObjectHandler(w, r)
 }

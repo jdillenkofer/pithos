@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,10 @@ import (
 )
 
 func (s *Server) headObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if hasUnsupportedObjectSubresource(r.URL.Query()) {
+		writeNotImplemented(w, r, "Object subresource is not supported")
+		return
+	}
 	ctx, span := s.tracer.Start(r.Context(), "Server.headObjectHandler")
 	defer span.End()
 
@@ -220,8 +225,21 @@ func parseRangeHeader(rangeHeader string) ([]storage.ByteRange, error) {
 	return ranges, nil
 }
 
+func hasUnsupportedObjectSubresource(query url.Values) bool {
+	for _, name := range []string{"acl", "attributes", "restore", "select", "torrent"} {
+		if query.Has(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) getObjectOrListPartsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if hasUnsupportedObjectSubresource(query) {
+		writeNotImplemented(w, r, "Object subresource is not supported")
+		return
+	}
 	if query.Has(uploadIdQuery) {
 		s.listPartsHandler(w, r)
 		return
