@@ -3,7 +3,9 @@ package objectcache
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,6 +204,76 @@ func TestReadCacheMiddleware_InvalidatesOnPutDelete(t *testing.T) {
 	assert.NoError(t, err)
 	_, _, err = mw.GetObject(ctx, bucket, key, nil, nil)
 	assert.ErrorIs(t, err, storage.ErrNoSuchKey)
+}
+
+type failingBodyCache struct {
+	*memoryCache
+}
+
+func (c *failingBodyCache) Set(key string, reader io.Reader, size int64) error {
+	if strings.HasPrefix(key, "OBJECTCACHE_OBJECT_BODY_") {
+		return errors.New("cache unavailable")
+	}
+	return c.memoryCache.Set(key, reader, size)
+}
+
+func TestReadCacheMiddleware_CacheSetFailureDoesNotBlockGetOrPut(t *testing.T) {
+	ctx := context.Background()
+	bucket := metadatastore.MustNewBucketName("bucket")
+	key := metadatastore.MustNewObjectKey("key")
+	inner := newFakeStorage()
+	inner.objectByKey["bucket/key"] = storage.Object{Key: key, ETag: "e1", Size: 5}
+	inner.bodyByKey["bucket/key"] = []byte("hello")
+	cache := &failingBodyCache{memoryCache: newMemoryCache()}
+	mw, err := NewStorageMiddleware(inner, cache, Options{MaxObjectSizeBytes: 1024, CacheReadErrorsAsMiss: true})
+	assert.NoError(t, err)
+
+	getDone := make(chan error, 1)
+	go func() {
+		_, readers, getErr := mw.GetObject(ctx, bucket, key, nil, nil)
+		if getErr == nil {
+			var body []byte
+			body, getErr = io.ReadAll(readers[0])
+			if getErr == nil {
+				assert.Equal(t, []byte("hello"), body)
+			}
+			_ = readers[0].Close()
+		}
+		getDone <- getErr
+	}()
+	select {
+	case err := <-getDone:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("GET blocked after cache failure")
+	}
+
+	putDone := make(chan error, 1)
+	go func() {
+		_, putErr := mw.PutObject(ctx, bucket, key, nil, bytes.NewReader([]byte("world")), nil, nil)
+		putDone <- putErr
+	}()
+	select {
+	case err := <-putDone:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("PUT blocked after cache failure")
+	}
+	assert.Equal(t, []byte("world"), inner.bodyByKey["bucket/key"])
+	assert.NotContains(t, cache.data, objectCacheKey(bucket, key))
+}
+
+func TestCacheOnWriteReaderContinuesAfterThreshold(t *testing.T) {
+	pr, pw := io.Pipe()
+	reader := &cacheOnWriteReader{Reader: bytes.NewReader([]byte("abcd")), pipeWriter: pw, maxObjectSizeBytes: 1}
+	buf := make([]byte, 2)
+	firstN, firstErr := reader.Read(buf)
+	secondN, secondErr := reader.Read(buf)
+	assert.Equal(t, 2, firstN)
+	assert.NoError(t, firstErr)
+	assert.Equal(t, 2, secondN)
+	assert.NoError(t, secondErr)
+	_ = pr.Close()
 }
 
 func TestReadCacheMiddleware_CachesBodyOnPutObject(t *testing.T) {
