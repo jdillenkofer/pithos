@@ -30,11 +30,21 @@ var ErrMissingMapping = errors.New("replication version mapping missing; run rec
 var ErrIndeterminatePrimary = errors.New("remote primary outcome is indeterminate; inspect the primary and run reconcile-replication")
 var ErrIndeterminateReplicaCompletion = errors.New("replica multipart completion outcome is indeterminate; manual reconciliation is required")
 
+type AckMode string
+
+const (
+	AckModeAll    AckMode = "all"
+	AckModeAsync  AckMode = "async"
+	AckModeQuorum AckMode = "quorum"
+)
+
 type Options struct {
 	Registerer      prometheus.Registerer
 	ReplicationID   string
 	SecondaryIDs    []string
 	JournalDatabase database.Database
+	AckMode         AckMode
+	RequiredAcks    int
 }
 
 type replicationStorage struct {
@@ -119,6 +129,18 @@ func NewStorage(primary storage.Storage, secondaries ...storage.Storage) (storag
 func NewStorageWithOptions(primary storage.Storage, secondaries []storage.Storage, options Options) (storage.Storage, error) {
 	if options.ReplicationID == "" || len(options.SecondaryIDs) != len(secondaries) {
 		return nil, errors.New("replicationId and one stable secondaryId per replica are required")
+	}
+	if options.AckMode == "" {
+		options.AckMode = AckModeAll
+	}
+	if options.AckMode != AckModeAll && options.AckMode != AckModeAsync && options.AckMode != AckModeQuorum {
+		return nil, fmt.Errorf("unsupported replication ack mode %q", options.AckMode)
+	}
+	if options.AckMode == AckModeQuorum && (options.RequiredAcks < 1 || options.RequiredAcks > len(secondaries)) {
+		return nil, errors.New("requiredAcks must be between 1 and the number of secondaries")
+	}
+	if options.AckMode != AckModeQuorum && options.RequiredAcks != 0 {
+		return nil, errors.New("requiredAcks is only valid with quorum ack mode")
 	}
 	seen := map[string]bool{}
 	for _, id := range options.SecondaryIDs {
@@ -280,14 +302,14 @@ func (rs *replicationStorage) prepareTargets(ctx context.Context, name string, p
 			}
 		}
 		for _, secondary := range rs.options.SecondaryIDs {
-			if _, err := rs.mapping(ctx, secondary, p.Bucket, p.Key, "VERSION", **version); err != nil {
+			if _, err := rs.mapping(ctx, secondary, p.Bucket, p.Key, "VERSION", **version); err != nil && !(rs.options.AckMode == AckModeQuorum && errors.Is(err, ErrMissingMapping)) {
 				return err
 			}
 		}
 	}
 	if p.UploadID != "" {
 		for _, secondary := range rs.options.SecondaryIDs {
-			if _, err := rs.mapping(ctx, secondary, p.Bucket, p.Key, "UPLOAD", p.UploadID); err != nil {
+			if _, err := rs.mapping(ctx, secondary, p.Bucket, p.Key, "UPLOAD", p.UploadID); err != nil && !(rs.options.AckMode == AckModeQuorum && errors.Is(err, ErrMissingMapping)) {
 				return err
 			}
 		}
@@ -301,8 +323,10 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if err := rs.replayPending(ctx); err != nil {
-		return nil, err
+	if rs.options.AckMode == AckModeAll {
+		if err := rs.replayPending(ctx); err != nil {
+			return nil, err
+		}
 	}
 	// Callers can reuse options; resolving a target must not change their values.
 	cloned, err := json.Marshal(p)
@@ -380,8 +404,10 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 	if err != nil {
 		return nil, err
 	}
-	if err := rs.replicate(ctx, op); err != nil {
-		return nil, err
+	if rs.options.AckMode != AckModeAsync {
+		if err := rs.replicate(ctx, op, true); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }
@@ -497,11 +523,19 @@ func (rs *replicationStorage) replayPending(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := rs.replicate(ctx, op); err != nil {
+		if err := rs.replicate(ctx, op, false); err != nil {
 			return err
 		}
 	}
-	rs.metrics.pending.Set(0)
+	var remaining []replicationjournal.Operation
+	if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		var err error
+		remaining, err = rs.journal.Pending(ctx, tx.SqlTx(), rs.options.ReplicationID)
+		return err
+	}); err != nil {
+		return err
+	}
+	rs.metrics.pending.Set(float64(len(remaining)))
 	return nil
 }
 
@@ -535,7 +569,7 @@ func (rs *replicationStorage) recordFailure(ctx context.Context, op *replication
 	return errors.Join(fmt.Errorf("replication operation %s pending: %w", op.ID, cause), err)
 }
 
-func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjournal.Operation) error {
+func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjournal.Operation, stopAtQuorum bool) error {
 	ctx = storage.WithObjectLockObserver(ctx, nil)
 	var p operationPayload
 	var primary operationResult
@@ -556,9 +590,46 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 	}); err != nil {
 		return err
 	}
+	ackCount := len(acks)
+	if stopAtQuorum && rs.options.AckMode == AckModeQuorum && ackCount >= rs.options.RequiredAcks {
+		return nil
+	}
+	var firstReplicaError error
+	var pendingOperations []replicationjournal.Operation
+	if rs.options.AckMode == AckModeQuorum {
+		if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			var err error
+			pendingOperations, err = rs.journal.Pending(ctx, tx.SqlTx(), rs.options.ReplicationID)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
 	for i, secondary := range rs.secondaryStorages {
 		id := rs.options.SecondaryIDs[i]
 		if _, ok := acks[id]; ok {
+			continue
+		}
+		blockedByEarlierOperation := false
+		for _, previous := range pendingOperations {
+			if previous.ID >= op.ID {
+				break
+			}
+			var previousAcks map[string]string
+			if err := database.WithTx(ctx, rs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+				var err error
+				previousAcks, err = rs.journal.Acknowledgments(ctx, tx.SqlTx(), previous.ID)
+				return err
+			}); err != nil {
+				return err
+			}
+			if _, ok := previousAcks[id]; !ok {
+				blockedByEarlierOperation = true
+				break
+			}
+		}
+		if blockedByEarlierOperation {
+			firstReplicaError = errors.Join(firstReplicaError, fmt.Errorf("replication for secondary %s is waiting for an earlier operation", id))
 			continue
 		}
 		// Decode a fresh copy so translated IDs never leak to another replica.
@@ -567,11 +638,21 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 			return err
 		}
 		if err := rs.translate(ctx, id, &replicaPayload); err != nil {
-			return rs.recordFailure(ctx, op, err)
+			replicaErr := rs.recordFailure(ctx, op, err)
+			if rs.options.AckMode == AckModeQuorum {
+				firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+				continue
+			}
+			return replicaErr
 		}
 		reader, err := rs.cachedData(ctx, op.ID)
 		if err != nil {
-			return rs.recordFailure(ctx, op, err)
+			replicaErr := rs.recordFailure(ctx, op, err)
+			if rs.options.AckMode == AckModeQuorum {
+				firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+				continue
+			}
+			return replicaErr
 		}
 		var result *operationResult
 		if p.Snapshot != nil {
@@ -581,7 +662,12 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 				missing := errors.Is(abortErr, storage.ErrNoSuchKey) || (errors.As(abortErr, &api) && (api.ErrorCode() == "NoSuchUpload" || api.ErrorCode() == "NoSuchKey"))
 				if abortErr != nil && !missing {
 					reader.Close()
-					return rs.recordFailure(ctx, op, abortErr)
+					replicaErr := rs.recordFailure(ctx, op, abortErr)
+					if rs.options.AckMode == AckModeQuorum {
+						firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+						continue
+					}
+					return replicaErr
 				}
 			}
 			result, err = rs.writeSnapshot(ctx, op.ID, id, secondary, &replicaPayload, reader)
@@ -592,21 +678,41 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 		}
 		reader.Close()
 		if err != nil {
-			return rs.recordFailure(ctx, op, err)
+			replicaErr := rs.recordFailure(ctx, op, err)
+			if rs.options.AckMode == AckModeQuorum {
+				firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+				continue
+			}
+			return replicaErr
 		}
 		if err := resolveWrittenVersion(ctx, secondary, op.Name, &replicaPayload, result); err != nil {
-			return rs.recordFailure(ctx, op, err)
+			replicaErr := rs.recordFailure(ctx, op, err)
+			if rs.options.AckMode == AckModeQuorum {
+				firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+				continue
+			}
+			return replicaErr
 		}
 		if barrier, ok := secondary.(interface {
 			Synchronize(context.Context, storage.BucketName) error
 		}); ok {
 			if err := barrier.Synchronize(ctx, storage.MustNewBucketName(p.Bucket)); err != nil {
-				return rs.recordFailure(ctx, op, err)
+				replicaErr := rs.recordFailure(ctx, op, err)
+				if rs.options.AckMode == AckModeQuorum {
+					firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+					continue
+				}
+				return replicaErr
 			}
 		}
 		if p.Snapshot != nil && primary.VersionID != nil && result.VersionID == nil {
 			if *primary.VersionID != "null" {
-				return rs.recordFailure(ctx, op, errors.New("replica did not return a version ID for a versioned write"))
+				replicaErr := rs.recordFailure(ctx, op, errors.New("replica did not return a version ID for a versioned write"))
+				if rs.options.AckMode == AckModeQuorum {
+					firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+					continue
+				}
+				return replicaErr
 			}
 			nullVersion := "null"
 			result.VersionID = &nullVersion
@@ -614,11 +720,21 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 		if p.Snapshot != nil {
 			actual, err := secondary.HeadObject(ctx, storage.MustNewBucketName(p.Bucket), storage.MustNewObjectKey(p.Key), &storage.HeadObjectOptions{VersionID: result.VersionID})
 			if err != nil {
-				return rs.recordFailure(ctx, op, err)
+				replicaErr := rs.recordFailure(ctx, op, err)
+				if rs.options.AckMode == AckModeQuorum {
+					firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+					continue
+				}
+				return replicaErr
 			}
 			expected := p.Snapshot
 			if actual.Size != expected.Size || actual.ETag != expected.ETag || !sameProtection(actual.ObjectLock, expected.ObjectLock) {
-				return rs.recordFailure(ctx, op, errors.New("replica confirmation does not match source size, ETag or Object Lock"))
+				replicaErr := rs.recordFailure(ctx, op, errors.New("replica confirmation does not match source size, ETag or Object Lock"))
+				if rs.options.AckMode == AckModeQuorum {
+					firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+					continue
+				}
+				return replicaErr
 			}
 		}
 		encoded, err := json.Marshal(result)
@@ -642,7 +758,24 @@ func (rs *replicationStorage) replicate(ctx context.Context, op *replicationjour
 			return rs.journal.DeleteProgress(ctx, tx.SqlTx(), op.ID, id)
 		})
 		if err != nil {
-			return rs.recordFailure(ctx, op, err)
+			replicaErr := rs.recordFailure(ctx, op, err)
+			if rs.options.AckMode == AckModeQuorum {
+				firstReplicaError = errors.Join(firstReplicaError, replicaErr)
+				continue
+			}
+			return replicaErr
+		}
+		ackCount++
+		if stopAtQuorum && rs.options.AckMode == AckModeQuorum && ackCount >= rs.options.RequiredAcks {
+			break
+		}
+	}
+	if rs.options.AckMode == AckModeQuorum {
+		if ackCount < rs.options.RequiredAcks {
+			return firstReplicaError
+		}
+		if ackCount < len(rs.secondaryStorages) {
+			return nil
 		}
 	}
 	op.State = "COMPLETE"

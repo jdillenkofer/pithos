@@ -582,6 +582,7 @@ func TestCanCreateReplicationStorageFromJson(t *testing.T) {
 	dbPath := filepath.Join(storagePath, "pithos.db")
 	jsonData := fmt.Sprintf(`{
 			"type": "ReplicationStorage",
+			"ackMode": "async",
 			"primaryStorage": {
 				"type": "MetadataPartStorage",
 				"db": {

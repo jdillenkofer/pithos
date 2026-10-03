@@ -67,6 +67,52 @@ func (s *replicaFaultStorage) PutObjectRetention(ctx context.Context, bucket sto
 	return s.Next.PutObjectRetention(ctx, bucket, key, retention, opts)
 }
 
+func TestReplicationQuorumAcknowledgesWithPendingReplica(t *testing.T) {
+	primary, done := newTestStorage(t)
+	defer done()
+	first, done1 := newTestStorage(t)
+	defer done1()
+	second, done2 := newTestStorage(t)
+	defer done2()
+	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(primary)}
+	a := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(first)}
+	b := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(second)}
+	b.blocked.Store(true)
+	options := replication.Options{
+		ReplicationID: "quorum-test",
+		SecondaryIDs:  []string{"a", "b"},
+		AckMode:       replication.AckModeQuorum,
+		RequiredAcks:  1,
+		Registerer:    prometheus.NewRegistry(),
+	}
+	coordinator, err := replication.NewStorageWithOptions(p, []storage.Storage{a, b}, options)
+	require.NoError(t, err)
+	ctx := t.Context()
+	require.NoError(t, coordinator.Start(ctx))
+	defer coordinator.Stop(ctx)
+	bucket := storage.MustNewBucketName("quorum")
+	require.NoError(t, coordinator.CreateBucket(ctx, bucket))
+	key := storage.MustNewObjectKey("key")
+
+	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("data"), nil, nil)
+	require.NoError(t, err)
+	_, err = coordinator.PutObject(ctx, bucket, key, nil, strings.NewReader("newer data"), nil, nil)
+	require.NoError(t, err)
+	primaryObject, err := primary.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	firstObject, err := first.HeadObject(ctx, bucket, key, nil)
+	require.NoError(t, err)
+	require.Equal(t, primaryObject.ETag, firstObject.ETag)
+	_, err = second.HeadObject(ctx, bucket, key, nil)
+	require.Error(t, err)
+
+	b.blocked.Store(false)
+	require.Eventually(t, func() bool {
+		_, err := second.HeadObject(ctx, bucket, key, nil)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestReplicationObjectLockRecoveryAndStableIDs(t *testing.T) {
 	primary, done := newTestStorage(t)
 	defer done()

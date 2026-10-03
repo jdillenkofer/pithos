@@ -669,6 +669,8 @@ func (o *OutboxStorageConfiguration) Instantiate(diProvider dependencyinjection.
 type ReplicationStorageConfiguration struct {
 	ReplicationID               string                              `json:"replicationId,omitempty"`
 	SecondaryIDs                []string                            `json:"secondaryIds,omitempty"`
+	AckMode                     replication.AckMode                 `json:"ackMode,omitempty"`
+	RequiredAcks                int                                 `json:"requiredAcks,omitempty"`
 	RawJournalDatabase          json.RawMessage                     `json:"journalDatabase,omitempty"`
 	JournalDatabaseInstantiator databaseConfig.DatabaseInstantiator `json:"-"`
 
@@ -763,7 +765,7 @@ func (r *ReplicationStorageConfiguration) Instantiate(diProvider dependencyinjec
 			ids = append(ids, fmt.Sprintf("secondary-%x", sum[:16]))
 		}
 	}
-	return replication.NewStorageWithOptions(primaryStorage, secondaryStorages, replication.Options{ReplicationID: replicationID, SecondaryIDs: ids, JournalDatabase: journalDB})
+	return replication.NewStorageWithOptions(primaryStorage, secondaryStorages, replication.Options{ReplicationID: replicationID, SecondaryIDs: ids, JournalDatabase: journalDB, AckMode: r.AckMode, RequiredAcks: r.RequiredAcks})
 }
 
 type S3ClientStorageConfiguration struct {
