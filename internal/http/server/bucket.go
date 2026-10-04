@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -169,12 +168,11 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	delimiter := httputils.GetQueryParam(query, delimiterQuery)
 	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
 	uploadIdMarker := httputils.GetQueryParam(query, uploadIdMarkerQuery)
-	maxUploads := query.Get(maxUploadsQuery)
-	maxUploadsI64, err := strconv.ParseInt(maxUploads, 10, 32)
-	if err != nil || maxUploadsI64 < 0 || maxUploadsI64 > maxListLimit {
-		maxUploadsI64 = 1000
+	maxUploadsI32, err := parseListingLimit(query, maxUploadsQuery, 1)
+	if err != nil {
+		handleError(err, w, r)
+		return
 	}
-	maxUploadsI32 := int32(maxUploadsI64)
 
 	opts := storage.ListMultipartUploadsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, UploadIdMarker: uploadIdMarker, MaxUploads: maxUploadsI32}
 	slog.InfoContext(r.Context(), "Listing MultipartUploads")

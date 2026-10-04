@@ -283,16 +283,11 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	partNumberMarker := httputils.GetQueryParam(query, partNumberMarkerQuery)
-	maxParts := query.Get(maxPartsQuery)
-	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
+	maxPartsI32, err := parseListingLimit(query, maxPartsQuery, 0)
 	if err != nil {
-		maxPartsI64 = 1000
-	}
-	if maxPartsI64 < 0 || maxPartsI64 > 1000 {
-		w.WriteHeader(400)
+		handleError(err, w, r)
 		return
 	}
-	maxPartsI32 := int32(maxPartsI64)
 
 	result, nextPartNumberMarker, err := s.listAndFilterParts(ctx, r, bucketName, key, uploadId, storage.ListPartsOptions{
 		PartNumberMarker: partNumberMarker,
@@ -333,6 +328,14 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucketName storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, *string, error) {
+	if opts.MaxParts == 0 {
+		// Still consult storage to validate the upload and return its metadata.
+		result, err := s.storage.ListParts(ctx, bucketName, key, uploadID, opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		return result, result.NextPartNumberMarker, nil
+	}
 	maxParts := opts.MaxParts
 	if maxParts <= 0 {
 		maxParts = 1000
