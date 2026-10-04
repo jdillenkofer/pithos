@@ -132,7 +132,13 @@ Bucket-scoped operations (except bucket creation) enforce
 
 ## Multipart Upload Listing
 
-`GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, and `max-uploads`.
+`GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, `max-uploads`, and `encoding-type=url`.
+
+With `encoding-type=url`, keys, common prefixes, the prefix, delimiter, and key
+markers are UTF-8 percent-encoded in the response, and `EncodingType` is `url`.
+Spaces use `%20`; upload IDs are not encoded. Unsupported encoding types return
+`InvalidArgument` (HTTP 400). Resume with decoded key markers; normal query-string
+encoding is still required when constructing the next request.
 
 `max-uploads` accepts integers from 1 to 1,000. `ListParts` accepts `max-parts`
 from 0 to 1,000; zero returns no parts but still validates the upload and returns

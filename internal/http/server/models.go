@@ -118,6 +118,7 @@ type UploadResult struct {
 }
 
 type ListMultipartUploadsResult struct {
+	EncodingType       *string               `xml:"EncodingType,omitempty"`
 	XMLName            xml.Name              `xml:"ListMultipartUploadsResult"`
 	Bucket             string                `xml:"Bucket"`
 	KeyMarker          *string               `xml:"KeyMarker"`
