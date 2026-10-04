@@ -1530,6 +1530,19 @@ func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
 			assert.Equal(t, "test-account", *uploads.Uploads[0].Owner.ID)
 			require.NotNil(t, uploads.Uploads[0].Initiator)
 			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *uploads.Uploads[0].Initiator.ID)
+
+			_, err = lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("test-account")})
+			require.NoError(t, err)
+			_, err = lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("other-account")})
+			require.Error(t, err)
+			var apiError smithy.APIError
+			require.ErrorAs(t, err, &apiError)
+			assert.Equal(t, "AccessDenied", apiError.ErrorCode())
+
+			_, err = lister.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: bucketName, ExpectedBucketOwner: aws.String("other-account")})
+			require.Error(t, err)
+			require.ErrorAs(t, err, &apiError)
+			assert.Equal(t, "AccessDenied", apiError.ErrorCode())
 		})
 	})
 }
