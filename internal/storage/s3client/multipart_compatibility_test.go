@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -24,6 +25,8 @@ func TestMultipartChecksumMetadataPassesThroughUpstream(t *testing.T) {
 		case r.URL.Query().Has("uploads"):
 			io.WriteString(w, `<ListMultipartUploadsResult><Bucket>bucket</Bucket><KeyMarker></KeyMarker><UploadIdMarker></UploadIdMarker><Prefix></Prefix><Delimiter></Delimiter><NextKeyMarker></NextKeyMarker><NextUploadIdMarker></NextUploadIdMarker><MaxUploads>1</MaxUploads><IsTruncated>false</IsTruncated><Upload><Key>key</Key><UploadId>upload</UploadId><Initiated>2026-10-01T00:00:00Z</Initiated><ChecksumAlgorithm>SHA256</ChecksumAlgorithm><ChecksumType>COMPOSITE</ChecksumType></Upload></ListMultipartUploadsResult>`)
 		default:
+			w.Header().Set("x-amz-abort-date", "Thu, 08 Oct 2026 00:00:00 GMT")
+			w.Header().Set("x-amz-abort-rule-id", "cleanup-uploads")
 			io.WriteString(w, `<ListPartsResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>upload</UploadId><PartNumberMarker>0</PartNumberMarker><MaxParts>1</MaxParts><IsTruncated>false</IsTruncated><ChecksumAlgorithm>SHA256</ChecksumAlgorithm><ChecksumType>COMPOSITE</ChecksumType></ListPartsResult>`)
 		}
 	}))
@@ -40,6 +43,9 @@ func TestMultipartChecksumMetadataPassesThroughUpstream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, aws.String("SHA256"), parts.ChecksumAlgorithm)
 	require.Equal(t, aws.String("COMPOSITE"), parts.ChecksumType)
+	expectedAbortDate := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, &expectedAbortDate, parts.AbortDate)
+	require.Equal(t, aws.String("cleanup-uploads"), parts.AbortRuleID)
 	uploads, err := backend.ListMultipartUploads(t.Context(), bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1})
 	require.NoError(t, err)
 	require.Len(t, uploads.Uploads, 1)

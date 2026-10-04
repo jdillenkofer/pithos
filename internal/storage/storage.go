@@ -396,6 +396,9 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	// AbortDate and AbortRuleID describe the earliest matching lifecycle abort rule.
+	AbortDate         *time.Time
+	AbortRuleID       *string
 	ChecksumAlgorithm *string
 	ChecksumType      *string
 	// Tags are the immutable initiation tags. A non-nil empty map means no tags;

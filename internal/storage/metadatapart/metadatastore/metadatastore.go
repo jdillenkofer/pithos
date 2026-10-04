@@ -223,6 +223,7 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	Initiated         time.Time
 	ChecksumAlgorithm *string
 	ChecksumType      *string
 	// Tags are the immutable initiation tags. A non-nil empty map means no tags;

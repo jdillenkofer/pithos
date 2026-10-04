@@ -713,6 +713,7 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		return nil, err
 	}
 	return &metadatastore.ListPartsResult{
+		Initiated:            objectEntity.CreatedAt,
 		Tags:                 tags,
 		BucketName:           bucketName,
 		Key:                  key,

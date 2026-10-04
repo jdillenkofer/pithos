@@ -161,6 +161,16 @@ combinations return `InvalidRequest` (HTTP 400). Without an explicit algorithm,
 Pithos retains its legacy `FULL_OBJECT` default and does not infer an algorithm
 for legacy uploads. S3-backed storage forwards upstream checksum metadata.
 
+### Lifecycle abort headers
+
+`ListParts` returns `x-amz-abort-date` and, when the matching rule has an ID,
+`x-amz-abort-rule-id` for the earliest enabled lifecycle abort rule matching the
+upload's key. The date is calculated from upload initiation and rounded to the
+next midnight UTC using the same due-time calculation as the reconciler. The
+current bucket lifecycle configuration applies, including to existing uploads;
+without a matching rule, the headers are omitted. S3-backed storage passes
+through upstream abort metadata.
+
 ### Owner and initiator identity
 
 `ListParts` and `ListMultipartUploads` report `Owner` and `Initiator` using

@@ -4,10 +4,50 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
+
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/stretchr/testify/require"
 )
+
+func TestListPartsReportsEarliestMatchingLifecycleAbortRule(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	t.Cleanup(cleanup)
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("logs/key")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{}))
+	upload, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, nil)
+	require.NoError(t, err)
+	parts, err := st.ListParts(ctx, bucket, key, upload.UploadId, storage.ListPartsOptions{MaxParts: 1})
+	require.NoError(t, err)
+	require.Nil(t, parts.AbortDate)
+	require.Nil(t, parts.AbortRuleID)
+	config := &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{
+		{ID: ptrutils.ToPtr("slow"), Status: "Enabled", Prefix: ptrutils.ToPtr(""), AbortIncompleteMultipartUpload: &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: ptrutils.ToPtr(int32(7))}},
+		{ID: ptrutils.ToPtr("disabled"), Status: "Disabled", Prefix: ptrutils.ToPtr("logs/"), AbortIncompleteMultipartUpload: &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: ptrutils.ToPtr(int32(1))}},
+		{ID: ptrutils.ToPtr("unrelated"), Status: "Enabled", Prefix: ptrutils.ToPtr("other/"), AbortIncompleteMultipartUpload: &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: ptrutils.ToPtr(int32(1))}},
+		{ID: ptrutils.ToPtr("fast"), Status: "Enabled", Filter: &storage.LifecycleFilter{Prefix: ptrutils.ToPtr("logs/")}, AbortIncompleteMultipartUpload: &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: ptrutils.ToPtr(int32(3))}},
+	}}
+	require.NoError(t, st.PutBucketLifecycleConfiguration(ctx, bucket, config))
+	parts, err = st.ListParts(ctx, bucket, key, upload.UploadId, storage.ListPartsOptions{MaxParts: 0})
+	require.NoError(t, err)
+	uploads, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1})
+	require.NoError(t, err)
+	initiated := uploads.Uploads[0].Initiated.UTC()
+	expected := time.Date(initiated.Year(), initiated.Month(), initiated.Day()+4, 0, 0, 0, 0, time.UTC)
+	require.Equal(t, &expected, parts.AbortDate)
+	require.Equal(t, ptrutils.ToPtr("fast"), parts.AbortRuleID)
+
+	// The current configuration, not the initiation-time configuration, applies.
+	require.NoError(t, st.DeleteBucketLifecycleConfiguration(ctx, bucket))
+	parts, err = st.ListParts(ctx, bucket, key, upload.UploadId, storage.ListPartsOptions{MaxParts: 1})
+	require.NoError(t, err)
+	require.Nil(t, parts.AbortDate)
+	require.Nil(t, parts.AbortRuleID)
+}
 
 func TestMultipartListingsRetainInitiationChecksums(t *testing.T) {
 	ctx := context.Background()

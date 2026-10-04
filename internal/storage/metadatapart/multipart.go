@@ -397,12 +397,20 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 	defer span.End()
 
 	var mListPartsResult *metadatastore.ListPartsResult
+	var lifecycleConfig *storage.BucketLifecycleConfiguration
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListPartsResult, err = mbs.metadataStore.ListParts(ctx, tx.SqlTx(), bucketName, key, uploadId, metadatastore.ListPartsOptions{
 			PartNumberMarker: opts.PartNumberMarker,
 			MaxParts:         opts.MaxParts,
 		})
+		if err != nil {
+			return err
+		}
+		lifecycleConfig, err = mbs.metadataStore.GetBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
+		if err == storage.ErrNoSuchLifecycleConfiguration {
+			return nil
+		}
 		return err
 	})
 	if err != nil {
@@ -410,5 +418,18 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 	}
 
 	listPartsResult := convertListPartsResult(*mListPartsResult)
+	if lifecycleConfig != nil {
+		for i := range lifecycleConfig.Rules {
+			rule := &lifecycleConfig.Rules[i]
+			if rule.Status != storage.LifecycleRuleStatusEnabled || !storage.LifecycleRuleMatchesObject(rule, key.String(), 0, nil) {
+				continue
+			}
+			due := storage.LifecycleAbortDueTime(rule, mListPartsResult.Initiated)
+			if due != nil && (listPartsResult.AbortDate == nil || due.Before(*listPartsResult.AbortDate)) {
+				listPartsResult.AbortDate = due
+				listPartsResult.AbortRuleID = rule.ID
+			}
+		}
+	}
 	return &listPartsResult, nil
 }
