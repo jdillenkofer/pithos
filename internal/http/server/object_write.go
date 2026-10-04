@@ -76,6 +76,12 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 		createOpts = &storage.CreateMultipartUploadOptions{}
 	}
 	createOpts.ObjectLock = objectLock
+	createOpts.ChecksumAlgorithm = getHeaderAsPtr(r.Header, "x-amz-checksum-algorithm")
+	checksumType, err = storage.ResolveMultipartChecksumType(createOpts.ChecksumAlgorithm, checksumType)
+	if err != nil {
+		handleError(err, w, r)
+		return
+	}
 	createOpts.Initiator = s.requestIdentity(ctx)
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
 	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, createOpts)
@@ -90,6 +96,10 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 		UploadId: result.UploadId.String(),
 	}
 
+	if createOpts.ChecksumAlgorithm != nil {
+		w.Header().Set("x-amz-checksum-algorithm", *createOpts.ChecksumAlgorithm)
+	}
+	w.Header().Set(checksumTypeHeader, *checksumType)
 	writeXMLResponse(w, r, http.StatusOK, initiateMultipartUploadResult)
 }
 

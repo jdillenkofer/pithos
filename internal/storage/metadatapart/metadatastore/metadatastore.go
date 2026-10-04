@@ -181,9 +181,11 @@ type AbortMultipartResult struct {
 }
 
 type Upload struct {
-	Key       ObjectKey
-	UploadId  UploadId
-	Initiated time.Time
+	ChecksumAlgorithm *string
+	ChecksumType      *string
+	Key               ObjectKey
+	UploadId          UploadId
+	Initiated         time.Time
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
@@ -221,6 +223,8 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	ChecksumAlgorithm *string
+	ChecksumType      *string
 	// Tags are the immutable initiation tags. A non-nil empty map means no tags;
 	// nil means the backend cannot expose them. Internal only, not an S3 response field.
 	Tags                 map[string]string
@@ -364,7 +368,8 @@ type PutObjectOptions struct {
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
-	ObjectLock ObjectLock
+	ObjectLock        ObjectLock
+	ChecksumAlgorithm *string
 	// Initiator is the authenticated identity that creates the upload. It is
 	// persisted with the pending object and exposed by ListParts and
 	// ListMultipartUploads. Nil means unknown (e.g. anonymous access), in which

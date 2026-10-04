@@ -15,9 +15,12 @@ import (
 
 type multipartCompatibilityStorage struct {
 	storage.Storage
-	limits        []int32
-	uploads       *storage.ListMultipartUploadsResult
-	uploadOptions []storage.ListMultipartUploadsOptions
+	limits             []int32
+	uploads            *storage.ListMultipartUploadsResult
+	uploadOptions      []storage.ListMultipartUploadsOptions
+	parts              *storage.ListPartsResult
+	createOptions      *storage.CreateMultipartUploadOptions
+	createChecksumType *string
 }
 
 func (s *multipartCompatibilityStorage) HeadBucket(_ context.Context, name storage.BucketName) (*storage.Bucket, error) {
@@ -35,7 +38,83 @@ func (s *multipartCompatibilityStorage) ListMultipartUploads(_ context.Context, 
 
 func (s *multipartCompatibilityStorage) ListParts(_ context.Context, name storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, error) {
 	s.limits = append(s.limits, opts.MaxParts)
+	if s.parts != nil {
+		return s.parts, nil
+	}
 	return &storage.ListPartsResult{BucketName: name, Key: key, UploadId: uploadID, MaxParts: opts.MaxParts}, nil
+}
+
+func (s *multipartCompatibilityStorage) CreateMultipartUpload(_ context.Context, name storage.BucketName, key storage.ObjectKey, _ *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
+	s.createOptions = opts
+	s.createChecksumType = checksumType
+	return &storage.InitiateMultipartUploadResult{UploadId: storage.MustNewUploadId("upload")}, nil
+}
+
+func TestMultipartInitiationPassesChecksumAlgorithm(t *testing.T) {
+	backend := &multipartCompatibilityStorage{}
+	request := httptest.NewRequest("POST", "http://s3.test/bucket/key?uploads", nil)
+	request.Header.Set("x-amz-checksum-algorithm", "SHA256")
+	request.Header.Set("x-amz-checksum-type", "COMPOSITE")
+	response := httptest.NewRecorder()
+	multipartCompatibilityHandler(t, backend).ServeHTTP(response, request)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.NotNil(t, backend.createOptions)
+	require.NotNil(t, backend.createOptions.ChecksumAlgorithm)
+	require.Equal(t, "SHA256", *backend.createOptions.ChecksumAlgorithm)
+	require.Equal(t, "COMPOSITE", *backend.createChecksumType)
+}
+
+func TestMultipartChecksumConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		algorithm, requestedType, effectiveType string
+		status                                  int
+	}{
+		{"SHA256", "", "COMPOSITE", 200},
+		{"SHA1", "", "COMPOSITE", 200},
+		{"CRC32", "", "COMPOSITE", 200},
+		{"CRC32C", "FULL_OBJECT", "FULL_OBJECT", 200},
+		{"CRC64NVME", "", "FULL_OBJECT", 200},
+		{"SHA256", "FULL_OBJECT", "", 400},
+		{"CRC64NVME", "COMPOSITE", "", 400},
+		{"unknown", "", "", 400},
+		{"SHA256", "unknown", "", 400},
+	} {
+		t.Run(tc.algorithm+"/"+tc.requestedType, func(t *testing.T) {
+			backend := &multipartCompatibilityStorage{}
+			request := httptest.NewRequest("POST", "http://s3.test/bucket/key?uploads", nil)
+			request.Header.Set("x-amz-checksum-algorithm", tc.algorithm)
+			if tc.requestedType != "" {
+				request.Header.Set("x-amz-checksum-type", tc.requestedType)
+			}
+			response := httptest.NewRecorder()
+			multipartCompatibilityHandler(t, backend).ServeHTTP(response, request)
+			require.Equal(t, tc.status, response.Code, response.Body.String())
+			if tc.status == http.StatusOK {
+				require.NotNil(t, backend.createChecksumType)
+				require.Equal(t, tc.effectiveType, *backend.createChecksumType)
+			} else {
+				require.Nil(t, backend.createOptions)
+				require.Contains(t, response.Body.String(), "InvalidRequest")
+			}
+		})
+	}
+}
+
+func TestMultipartListingsExposeChecksumMetadata(t *testing.T) {
+	algorithm, checksumType := "SHA256", "COMPOSITE"
+	for _, path := range []string{"/bucket?uploads", "/bucket/key?uploadId=upload", "/bucket/key?uploadId=upload&max-parts=0"} {
+		t.Run(path, func(t *testing.T) {
+			backend := &multipartCompatibilityStorage{
+				uploads: &storage.ListMultipartUploadsResult{BucketName: storage.MustNewBucketName("bucket"), Uploads: []storage.Upload{{Key: storage.MustNewObjectKey("key"), UploadId: storage.MustNewUploadId("upload"), ChecksumAlgorithm: &algorithm, ChecksumType: &checksumType}}},
+				parts:   &storage.ListPartsResult{BucketName: storage.MustNewBucketName("bucket"), Key: storage.MustNewObjectKey("key"), UploadId: storage.MustNewUploadId("upload"), ChecksumAlgorithm: &algorithm, ChecksumType: &checksumType},
+			}
+			response := httptest.NewRecorder()
+			multipartCompatibilityHandler(t, backend).ServeHTTP(response, httptest.NewRequest("GET", "http://s3.test"+path, nil))
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			require.Contains(t, response.Body.String(), "<ChecksumAlgorithm>SHA256</ChecksumAlgorithm>")
+			require.Contains(t, response.Body.String(), "<ChecksumType>COMPOSITE</ChecksumType>")
+		})
+	}
 }
 
 func multipartCompatibilityHandler(t *testing.T, backend storage.Storage) http.Handler {

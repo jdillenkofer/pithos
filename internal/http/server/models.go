@@ -109,12 +109,14 @@ type CompleteMultipartUploadResult struct {
 }
 
 type UploadResult struct {
-	Key          string          `xml:"Key"`
-	UploadId     string          `xml:"UploadId"`
-	Initiated    string          `xml:"Initiated"`
-	Initiator    *IdentityResult `xml:"Initiator"`
-	Owner        *IdentityResult `xml:"Owner"`
-	StorageClass string          `xml:"StorageClass"`
+	ChecksumAlgorithm *string         `xml:"ChecksumAlgorithm,omitempty"`
+	ChecksumType      *string         `xml:"ChecksumType,omitempty"`
+	Key               string          `xml:"Key"`
+	UploadId          string          `xml:"UploadId"`
+	Initiated         string          `xml:"Initiated"`
+	Initiator         *IdentityResult `xml:"Initiator"`
+	Owner             *IdentityResult `xml:"Owner"`
+	StorageClass      string          `xml:"StorageClass"`
 }
 
 type ListMultipartUploadsResult struct {

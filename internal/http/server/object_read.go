@@ -319,9 +319,11 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 				Size:              part.Size,
 			}
 		}, result.Parts),
-		StorageClass: storage.EffectiveStorageClass(result.StorageClass),
-		Owner:        identityResult(result.Owner),
-		Initiator:    identityResult(result.Initiator),
+		StorageClass:      storage.EffectiveStorageClass(result.StorageClass),
+		ChecksumAlgorithm: result.ChecksumAlgorithm,
+		ChecksumType:      result.ChecksumType,
+		Owner:             identityResult(result.Owner),
+		Initiator:         identityResult(result.Initiator),
 	}
 
 	writeXMLResponse(w, r, http.StatusOK, listPartsResult)
@@ -355,6 +357,8 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 			IsTruncated:          isTruncated,
 			Parts:                collectedParts,
 			StorageClass:         result.StorageClass,
+			ChecksumAlgorithm:    result.ChecksumAlgorithm,
+			ChecksumType:         result.ChecksumType,
 			Owner:                result.Owner,
 			Initiator:            result.Initiator,
 		}

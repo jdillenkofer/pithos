@@ -36,8 +36,13 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		return nil, err
 	}
 
-	if checksumType == nil {
-		checksumType = ptrutils.ToPtr(metadatastore.ChecksumTypeFullObject)
+	var algorithm *string
+	if opts != nil {
+		algorithm = opts.ChecksumAlgorithm
+	}
+	checksumType, err = metadatastore.ResolveMultipartChecksumType(algorithm, checksumType)
+	if err != nil {
+		return nil, err
 	}
 
 	objectEntity := object.Entity{
@@ -56,6 +61,7 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 		// The class chosen at CreateMultipartUpload is carried to the final
 		// object because CompleteMultipartUpload reuses this row.
 		objectEntity.StorageClass = opts.StorageClass
+		objectEntity.ChecksumAlgorithm = opts.ChecksumAlgorithm
 	}
 	if opts != nil && opts.Metadata != nil {
 		applySystemMetadataToEntity(&objectEntity, *opts.Metadata)
@@ -578,11 +584,13 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 			continue
 		}
 		upload := metadatastore.Upload{
-			Key:          objectEntity.Key,
-			UploadId:     *objectEntity.UploadId,
-			Initiated:    objectEntity.CreatedAt,
-			StorageClass: objectEntity.StorageClass,
-			Owner:        owner,
+			Key:               objectEntity.Key,
+			UploadId:          *objectEntity.UploadId,
+			Initiated:         objectEntity.CreatedAt,
+			StorageClass:      objectEntity.StorageClass,
+			Owner:             owner,
+			ChecksumAlgorithm: objectEntity.ChecksumAlgorithm,
+			ChecksumType:      objectEntity.ChecksumType,
 		}
 		if objectEntity.Id != nil {
 			objectIds = append(objectIds, *objectEntity.Id)
@@ -715,6 +723,8 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		IsTruncated:          isTruncated,
 		Parts:                parts,
 		StorageClass:         objectEntity.StorageClass,
+		ChecksumAlgorithm:    objectEntity.ChecksumAlgorithm,
+		ChecksumType:         objectEntity.ChecksumType,
 		Owner:                &metadatastore.ObjectIdentity{AccountID: bucketEntity.OwnerAccountID},
 		Initiator:            initiator,
 	}, nil

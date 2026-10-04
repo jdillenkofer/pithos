@@ -147,6 +147,20 @@ negative, or excessive values return `InvalidArgument` (HTTP 400).
 
 When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key.
 
+### Checksum metadata
+
+`CreateMultipartUpload` accepts `x-amz-checksum-algorithm` for `CRC32`, `CRC32C`,
+`CRC64NVME`, `SHA1`, or `SHA256`, and persists it with the checksum type.
+`ListParts` and each upload in `ListMultipartUploads` return `ChecksumAlgorithm`
+and `ChecksumType`, including when the upload has no parts yet.
+
+The type defaults to `COMPOSITE` for an explicitly selected algorithm other than
+`CRC64NVME`, which requires `FULL_OBJECT`. SHA algorithms require `COMPOSITE`;
+CRC32 and CRC32C support either type. Unsupported algorithms, types, or
+combinations return `InvalidRequest` (HTTP 400). Without an explicit algorithm,
+Pithos retains its legacy `FULL_OBJECT` default and does not infer an algorithm
+for legacy uploads. S3-backed storage forwards upstream checksum metadata.
+
 ### Owner and initiator identity
 
 `ListParts` and `ListMultipartUploads` report `Owner` and `Initiator` using

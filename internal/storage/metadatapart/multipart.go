@@ -33,7 +33,7 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
-		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass, ChecksumAlgorithm: opts.ChecksumAlgorithm}
 		if opts.Initiator != nil {
 			metadataOpts.Initiator = &metadatastore.ObjectIdentity{AccountID: opts.Initiator.AccountID, PrincipalID: opts.Initiator.PrincipalID}
 		}
@@ -323,12 +323,14 @@ func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore
 		CommonPrefixes:     mlistMultipartUploadsResult.CommonPrefixes,
 		Uploads: sliceutils.Map(func(mUpload metadatastore.Upload) storage.Upload {
 			return storage.Upload{
-				Key:          mUpload.Key,
-				UploadId:     mUpload.UploadId,
-				Initiated:    mUpload.Initiated,
-				StorageClass: mUpload.StorageClass,
-				Owner:        convertObjectIdentity(mUpload.Owner),
-				Initiator:    convertObjectIdentity(mUpload.Initiator),
+				Key:               mUpload.Key,
+				UploadId:          mUpload.UploadId,
+				Initiated:         mUpload.Initiated,
+				StorageClass:      mUpload.StorageClass,
+				ChecksumAlgorithm: mUpload.ChecksumAlgorithm,
+				ChecksumType:      mUpload.ChecksumType,
+				Owner:             convertObjectIdentity(mUpload.Owner),
+				Initiator:         convertObjectIdentity(mUpload.Initiator),
 			}
 		}, mlistMultipartUploadsResult.Uploads),
 		IsTruncated: mlistMultipartUploadsResult.IsTruncated,
@@ -382,9 +384,11 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 				Size:              part.Size,
 			}
 		}, mlistPartsResult.Parts),
-		StorageClass: mlistPartsResult.StorageClass,
-		Owner:        convertObjectIdentity(mlistPartsResult.Owner),
-		Initiator:    convertObjectIdentity(mlistPartsResult.Initiator),
+		StorageClass:      mlistPartsResult.StorageClass,
+		ChecksumAlgorithm: mlistPartsResult.ChecksumAlgorithm,
+		ChecksumType:      mlistPartsResult.ChecksumType,
+		Owner:             convertObjectIdentity(mlistPartsResult.Owner),
+		Initiator:         convertObjectIdentity(mlistPartsResult.Initiator),
 	}
 }
 

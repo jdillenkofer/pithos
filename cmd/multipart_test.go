@@ -388,11 +388,19 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Equal(t, int32(2), *secondPart.PartNumber)
 
 				assert.Equal(t, "\"b676ed737ae82cda0bc622cd80116002-2\"", *uploadOutput.ETag)
-				assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
-				assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
-				assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
-				assert.Nil(t, uploadOutput.ChecksumSHA1)
-				assert.Nil(t, uploadOutput.ChecksumSHA256)
+				if checksumAlgorithm == types.ChecksumAlgorithmCrc64nvme {
+					assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
+					assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
+					assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
+					assert.Nil(t, uploadOutput.ChecksumSHA1)
+					assert.Nil(t, uploadOutput.ChecksumSHA256)
+				} else {
+					assert.Equal(t, "p6WvuQ==-2", *uploadOutput.ChecksumCRC32)
+					assert.Equal(t, "fiH6pg==-2", *uploadOutput.ChecksumCRC32C)
+					assert.Nil(t, uploadOutput.ChecksumCRC64NVME)
+					assert.Equal(t, "A+Cnn2e1NWre4/EAxr/ZB2SpybE=-2", *uploadOutput.ChecksumSHA1)
+					assert.Equal(t, "C8byQ3jdpEbPg0+c4ul+KV6Uiwhd3ueEuEf9d+4aR7A=-2", *uploadOutput.ChecksumSHA256)
+				}
 
 				getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 					Bucket: bucketName,
@@ -1504,7 +1512,7 @@ func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
 			_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
 			require.NoError(t, err)
 
-			created, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+			created, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key, ChecksumAlgorithm: types.ChecksumAlgorithmSha256})
 			require.NoError(t, err)
 			_, err = s3Client.UploadPart(ctx, &s3.UploadPartInput{
 				Bucket: bucketName, Key: key, UploadId: created.UploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader(body),
@@ -1522,10 +1530,14 @@ func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
 			require.NotNil(t, result.Initiator)
 			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *result.Initiator.ID)
 			require.Len(t, result.Parts, 1)
+			assert.Equal(t, types.ChecksumAlgorithmSha256, result.ChecksumAlgorithm)
+			assert.Equal(t, types.ChecksumTypeComposite, result.ChecksumType)
 
 			uploads, err := lister.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: bucketName})
 			require.NoError(t, err)
 			require.Len(t, uploads.Uploads, 1)
+			assert.Equal(t, types.ChecksumAlgorithmSha256, uploads.Uploads[0].ChecksumAlgorithm)
+			assert.Equal(t, types.ChecksumTypeComposite, uploads.Uploads[0].ChecksumType)
 			require.NotNil(t, uploads.Uploads[0].Owner)
 			assert.Equal(t, "test-account", *uploads.Uploads[0].Owner.ID)
 			require.NotNil(t, uploads.Uploads[0].Initiator)
