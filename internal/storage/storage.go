@@ -41,6 +41,31 @@ type Bucket struct {
 	CreationDate   time.Time
 }
 
+// ObjectIdentity identifies the owner or the initiator of an object or a
+// multipart upload in Pithos's account model. AccountID is always set for a
+// known identity; PrincipalID is set when the operation was performed by a
+// specific principal rather than the account itself.
+type ObjectIdentity struct {
+	AccountID   string
+	PrincipalID string
+}
+
+// S3ID renders the identity for the S3 Owner/Initiator ID element. The account
+// itself maps to its account ID. A specific principal maps to a namespaced
+// Pithos ARN, mirroring how AWS identifies an IAM user, so that principals stay
+// unambiguous across accounts. Backends that pass through an upstream identity
+// (S3ClientStorage) put the upstream ID in AccountID and leave PrincipalID
+// empty.
+func (i *ObjectIdentity) S3ID() string {
+	if i == nil {
+		return ""
+	}
+	if i.PrincipalID != "" {
+		return "arn:pithos:iam::" + i.AccountID + ":principal/" + i.PrincipalID
+	}
+	return i.AccountID
+}
+
 type BucketVersioningStatus string
 
 const (
@@ -132,6 +157,11 @@ type PutObjectOptions struct {
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
 	ObjectLock ObjectLock
+	// Initiator is the authenticated identity that creates the upload. It is
+	// persisted with the pending object and exposed by ListParts and
+	// ListMultipartUploads. Nil means unknown (e.g. anonymous access), in which
+	// case the initiator is omitted from responses.
+	Initiator *ObjectIdentity
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string
@@ -322,6 +352,11 @@ type Upload struct {
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
+	// Owner is the bucket owner account. Nil when the backend cannot expose it.
+	Owner *ObjectIdentity
+	// Initiator is the identity that created the upload. Nil for uploads created
+	// before the initiator was persisted; never inferred from the listing caller.
+	Initiator *ObjectIdentity
 }
 
 type ListMultipartUploadsResult struct {
@@ -365,6 +400,11 @@ type ListPartsResult struct {
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
+	// Owner is the bucket owner account. Nil when the backend cannot expose it.
+	Owner *ObjectIdentity
+	// Initiator is the identity that created the upload. Nil for uploads created
+	// before the initiator was persisted; never inferred from the listing caller.
+	Initiator *ObjectIdentity
 }
 
 // DeleteObjectsEntry represents the result for a single key in a DeleteObjects operation.

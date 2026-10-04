@@ -655,6 +655,21 @@ func (s *Server) storageAccountID(ctx context.Context) string {
 	return storageAccountID(ctx)
 }
 
+// requestIdentity returns the authenticated identity to persist as a multipart
+// upload initiator. It returns nil for anonymous requests so that no initiator
+// is recorded, and the account placeholder used when authentication is
+// disabled.
+func (s *Server) requestIdentity(ctx context.Context) *storage.ObjectIdentity {
+	if s.authenticationDisabled {
+		return &storage.ObjectIdentity{AccountID: "authentication-disabled"}
+	}
+	auth := authentication.RequestAuthenticationFromContext(ctx)
+	if !auth.Authenticated || auth.Identity == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: auth.Identity.AccountID, PrincipalID: auth.Identity.PrincipalID}
+}
+
 func cloneStringSliceMap(input map[string][]string) map[string][]string {
 	cloned := make(map[string][]string, len(input))
 	for key, values := range input {

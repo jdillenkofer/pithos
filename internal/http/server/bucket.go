@@ -202,6 +202,8 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 			Key:          upload.Key.String(),
 			UploadId:     upload.UploadId.String(),
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
+			Initiator:    identityResult(upload.Initiator),
+			Owner:        identityResult(upload.Owner),
 			StorageClass: storage.EffectiveStorageClass(upload.StorageClass),
 		})
 	}
