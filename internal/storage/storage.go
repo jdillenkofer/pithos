@@ -157,6 +157,8 @@ type PutObjectOptions struct {
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
 	ObjectLock ObjectLock
+	// ChecksumAlgorithm is the algorithm selected at upload initiation.
+	ChecksumAlgorithm *string
 	// Initiator is the authenticated identity that creates the upload. It is
 	// persisted with the pending object and exposed by ListParts and
 	// ListMultipartUploads. Nil means unknown (e.g. anonymous access), in which
@@ -196,6 +198,12 @@ type CompleteMultipartUploadPart = metadatastore.CompleteMultipartUploadPart
 
 const ChecksumTypeFullObject = metadatastore.ChecksumTypeFullObject
 const ChecksumTypeComposite = metadatastore.ChecksumTypeComposite
+
+var ErrInvalidChecksumConfiguration = metadatastore.ErrInvalidChecksumConfiguration
+
+func ResolveMultipartChecksumType(algorithm, requestedType *string) (*string, error) {
+	return metadatastore.ResolveMultipartChecksumType(algorithm, requestedType)
+}
 
 type DeleteObjectOptions struct {
 	BypassGovernanceRetention bool
@@ -346,9 +354,11 @@ type CompleteMultipartUploadResult struct {
 }
 
 type Upload struct {
-	Key       ObjectKey
-	UploadId  UploadId
-	Initiated time.Time
+	ChecksumAlgorithm *string
+	ChecksumType      *string
+	Key               ObjectKey
+	UploadId          UploadId
+	Initiated         time.Time
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
@@ -386,6 +396,8 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	ChecksumAlgorithm *string
+	ChecksumType      *string
 	// Tags are the immutable initiation tags. A non-nil empty map means no tags;
 	// nil means the backend cannot expose them. Internal only, not an S3 response field.
 	Tags                 map[string]string

@@ -50,6 +50,7 @@ type Entity struct {
 	ChecksumSHA1            *string
 	ChecksumSHA256          *string
 	ChecksumType            *string
+	ChecksumAlgorithm       *string
 	Size                    int64
 	StorageClass            *string
 	VersionID               *string
