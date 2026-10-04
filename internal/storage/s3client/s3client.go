@@ -1514,6 +1514,8 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 			}
 		}, listPartsResult.Parts),
 		StorageClass:      storageClassFromAWS(listPartsResult.StorageClass),
+		AbortDate:         listPartsResult.AbortDate,
+		AbortRuleID:       listPartsResult.AbortRuleId,
 		ChecksumAlgorithm: optionalString(string(listPartsResult.ChecksumAlgorithm)),
 		ChecksumType:      optionalString(string(listPartsResult.ChecksumType)),
 		Owner:             objectIdentityFromAWSOwner(listPartsResult.Owner),
