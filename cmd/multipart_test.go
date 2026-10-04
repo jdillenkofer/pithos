@@ -1489,3 +1489,47 @@ func TestUploadPartCopy(t *testing.T) {
 		})
 	})
 }
+
+func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		t.Run("it should expose owner and initiator on ListParts"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			ctx := context.Background()
+			_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			created, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key})
+			require.NoError(t, err)
+			_, err = s3Client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket: bucketName, Key: key, UploadId: created.UploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader(body),
+			})
+			require.NoError(t, err)
+
+			// List as a different authorized principal of the same account: the
+			// initiator must be the uploader, never the caller listing the parts.
+			lister := setupS3ClientWithCredentials(testAPIEndpoint, listenerAddr, usePathStyle, policyTestAccessKeyId, policyTestSecretAccessKey)
+			result, err := lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId})
+			require.NoError(t, err)
+
+			require.NotNil(t, result.Owner)
+			assert.Equal(t, "test-account", *result.Owner.ID)
+			require.NotNil(t, result.Initiator)
+			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *result.Initiator.ID)
+			require.Len(t, result.Parts, 1)
+
+			uploads, err := lister.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.Len(t, uploads.Uploads, 1)
+			require.NotNil(t, uploads.Uploads[0].Owner)
+			assert.Equal(t, "test-account", *uploads.Uploads[0].Owner.ID)
+			require.NotNil(t, uploads.Uploads[0].Initiator)
+			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *uploads.Uploads[0].Initiator.ID)
+		})
+	})
+}

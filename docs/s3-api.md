@@ -129,6 +129,21 @@ Deleting by key in an enabled or suspended bucket creates a delete marker and re
 
 When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key.
 
+### Owner and initiator identity
+
+`ListParts` and `ListMultipartUploads` report `Owner` and `Initiator` using
+Pithos's account model:
+
+- `Owner.ID` is the bucket owner's account ID.
+- `Initiator.ID` is the account ID when the upload was created by the account
+  itself, or `arn:pithos:iam::<accountId>:principal/<principalId>` when a
+  specific principal created it.
+
+The initiator is recorded when the upload is created and is never inferred from
+the caller listing the upload. Uploads created before Pithos stored initiators
+omit the `Initiator` element. `DisplayName` is not populated because it is
+deprecated in S3.
+
 ## Authorization Operations
 
 Versioned requests use distinct Lua authorizer operation names:

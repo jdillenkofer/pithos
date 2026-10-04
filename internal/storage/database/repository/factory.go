@@ -7,6 +7,7 @@ import (
 	postgresBucket "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/bucket"
 	postgresBucketTag "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/buckettag"
 	postgresObject "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/object"
+	postgresObjectInitiator "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/objectinitiator"
 	postgresPart "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/part"
 	postgresPartContent "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/partcontent"
 	postgresPartDedupIndex "github.com/jdillenkofer/pithos/internal/storage/database/pgx/repository/partdedupindex"
@@ -18,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/buckettag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/objectinitiator"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
@@ -29,6 +31,7 @@ import (
 	sqliteBucket "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/bucket"
 	sqliteBucketTag "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/buckettag"
 	sqliteObject "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/object"
+	sqliteObjectInitiator "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/objectinitiator"
 	sqlitePart "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/part"
 	sqlitePartContent "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partcontent"
 	sqlitePartDedupIndex "github.com/jdillenkofer/pithos/internal/storage/database/sqlite/repository/partdedupindex"
@@ -91,6 +94,16 @@ func NewObjectRepository(db database.Database) (object.Repository, error) {
 		return postgresObject.NewRepository()
 	case database.DB_TYPE_SQLITE:
 		return sqliteObject.NewRepository()
+	}
+	return nil, errUnknownDatabaseType
+}
+
+func NewObjectInitiatorRepository(db database.Database) (objectinitiator.Repository, error) {
+	switch db.GetDatabaseType() {
+	case database.DB_TYPE_POSTGRES:
+		return postgresObjectInitiator.NewRepository()
+	case database.DB_TYPE_SQLITE:
+		return sqliteObjectInitiator.NewRepository()
 	}
 	return nil, errUnknownDatabaseType
 }
