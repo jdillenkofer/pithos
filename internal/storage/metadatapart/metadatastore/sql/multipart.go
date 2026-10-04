@@ -12,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
+	"github.com/oklog/ulid/v2"
 )
 
 func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, contentType *string, checksumType *string, opts *metadatastore.CreateMultipartUploadOptions) (*metadatastore.InitiateMultipartUploadResult, error) {
@@ -62,6 +63,12 @@ func (sms *sqlMetadataStore) CreateMultipartUpload(ctx context.Context, tx *sql.
 	err = sms.objectRepository.SaveObject(ctx, tx, &objectEntity)
 	if err != nil {
 		return nil, err
+	}
+
+	if opts != nil {
+		if err := sms.saveObjectInitiator(ctx, tx, *objectEntity.Id, opts.Initiator); err != nil {
+			return nil, err
+		}
 	}
 
 	if requestedLock.Retention != nil || requestedLock.LegalHold != nil {
@@ -411,6 +418,12 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	objectEntity.ChecksumSHA256 = calculatedChecksums.ChecksumSHA256
 	objectEntity.ChecksumType = ptrutils.ToPtr(checksumType)
 
+	// The completed object is no longer a multipart upload; drop the initiator
+	// that was only meaningful while the upload was pending.
+	if err := sms.deleteObjectInitiator(ctx, tx, *objectEntity.Id); err != nil {
+		return nil, err
+	}
+
 	err = sms.objectRepository.SaveObject(ctx, tx, objectEntity)
 	if err != nil {
 		if opts != nil && opts.IfNoneMatchStar && isUniqueConstraintViolation(err) {
@@ -468,6 +481,10 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, err
 	}
 
+	if err := sms.deleteObjectInitiator(ctx, tx, *objectEntity.Id); err != nil {
+		return nil, err
+	}
+
 	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
@@ -482,13 +499,14 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListMultipartUploads")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
+	owner := &metadatastore.ObjectIdentity{AccountID: bucketEntity.OwnerAccountID}
 
 	prefix := ""
 	if opts.Prefix != nil {
@@ -536,6 +554,18 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	nextKeyMarker := ""
 	nextUploadIdMarker := ""
 
+	objectIds := make([]ulid.ULID, 0, len(objectEntities))
+	for _, objectEntity := range objectEntities {
+		if objectEntity.Id == nil {
+			continue
+		}
+		objectIds = append(objectIds, *objectEntity.Id)
+	}
+	initiators, err := sms.loadObjectInitiators(ctx, tx, objectIds)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, objectEntity := range objectEntities {
 		if delimiter != "" {
 			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
@@ -549,12 +579,20 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		if int32(len(uploads)) < opts.MaxUploads {
 			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
 			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
-				uploads = append(uploads, metadatastore.Upload{
+				upload := metadatastore.Upload{
 					Key:          objectEntity.Key,
 					UploadId:     *objectEntity.UploadId,
 					Initiated:    objectEntity.CreatedAt,
 					StorageClass: objectEntity.StorageClass,
-				})
+					Owner:        owner,
+				}
+				if objectEntity.Id != nil {
+					if initiator, ok := initiators[*objectEntity.Id]; ok {
+						initiatorCopy := initiator
+						upload.Initiator = &initiatorCopy
+					}
+				}
+				uploads = append(uploads, upload)
 			}
 			nextKeyMarker = objectEntity.Key.String()
 			nextUploadIdMarker = objectEntity.UploadId.String()
@@ -581,11 +619,11 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.ListParts")
 	defer span.End()
 
-	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
+	bucketEntity, err := sms.bucketRepository.FindBucketByName(ctx, tx, bucketName)
 	if err != nil {
 		return nil, err
 	}
-	if !*exists {
+	if bucketEntity == nil {
 		return nil, metadatastore.ErrNoSuchBucket
 	}
 
@@ -649,6 +687,10 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 	if tags == nil {
 		tags = map[string]string{}
 	}
+	initiator, err := sms.loadObjectInitiator(ctx, tx, *objectEntity.Id)
+	if err != nil {
+		return nil, err
+	}
 	return &metadatastore.ListPartsResult{
 		Tags:                 tags,
 		BucketName:           bucketName,
@@ -660,5 +702,7 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		IsTruncated:          isTruncated,
 		Parts:                parts,
 		StorageClass:         objectEntity.StorageClass,
+		Owner:                &metadatastore.ObjectIdentity{AccountID: bucketEntity.OwnerAccountID},
+		Initiator:            initiator,
 	}, nil
 }

@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/xml"
 	"fmt"
+
+	"github.com/jdillenkofer/pithos/internal/storage"
 )
 
 type BucketResult struct {
@@ -11,16 +13,17 @@ type BucketResult struct {
 	Name         string   `xml:"Name"`
 }
 
-type OwnerResult struct {
-	XMLName     xml.Name `xml:"Owner"`
-	DisplayName string   `xml:"DisplayName"`
-	Id          string   `xml:"ID"`
+// IdentityResult is an S3 Owner or Initiator element. DisplayName is deprecated
+// in S3 and is never populated by Pithos; the element is omitted when empty.
+type IdentityResult struct {
+	DisplayName string `xml:"DisplayName,omitempty"`
+	Id          string `xml:"ID"`
 }
 
 type ListAllMyBucketsResult struct {
 	XMLName xml.Name        `xml:"ListAllMyBucketsResult"`
 	Buckets []*BucketResult `xml:">Buckets"`
-	Owner   *OwnerResult    `xml:"Owner"`
+	Owner   *IdentityResult `xml:"Owner"`
 }
 
 type Prefix struct {
@@ -106,10 +109,12 @@ type CompleteMultipartUploadResult struct {
 }
 
 type UploadResult struct {
-	Key          string `xml:"Key"`
-	UploadId     string `xml:"UploadId"`
-	Initiated    string `xml:"Initiated"`
-	StorageClass string `xml:"StorageClass"`
+	Key          string          `xml:"Key"`
+	UploadId     string          `xml:"UploadId"`
+	Initiated    string          `xml:"Initiated"`
+	Initiator    *IdentityResult `xml:"Initiator"`
+	Owner        *IdentityResult `xml:"Owner"`
+	StorageClass string          `xml:"StorageClass"`
 }
 
 type ListMultipartUploadsResult struct {
@@ -140,19 +145,20 @@ type PartResult struct {
 }
 
 type ListPartsResult struct {
-	XMLName              xml.Name      `xml:"ListPartsResult"`
-	Bucket               string        `xml:"Bucket"`
-	Key                  string        `xml:"Key"`
-	UploadId             string        `xml:"UploadId"`
-	PartNumberMarker     *string       `xml:"PartNumberMarker"`
-	NextPartNumberMarker *string       `xml:"NextPartNumberMarker"`
-	MaxParts             int32         `xml:"MaxParts"`
-	IsTruncated          bool          `xml:"IsTruncated"`
-	Parts                []*PartResult `xml:"Part"`
-	// @TODO: Initiator and Owner missing
-	StorageClass      string  `xml:"StorageClass"`
-	ChecksumAlgorithm *string `xml:"ChecksumAlgorithm"`
-	ChecksumType      *string `xml:"ChecksumType"`
+	XMLName              xml.Name        `xml:"ListPartsResult"`
+	Bucket               string          `xml:"Bucket"`
+	Key                  string          `xml:"Key"`
+	UploadId             string          `xml:"UploadId"`
+	PartNumberMarker     *string         `xml:"PartNumberMarker"`
+	NextPartNumberMarker *string         `xml:"NextPartNumberMarker"`
+	MaxParts             int32           `xml:"MaxParts"`
+	IsTruncated          bool            `xml:"IsTruncated"`
+	Parts                []*PartResult   `xml:"Part"`
+	Initiator            *IdentityResult `xml:"Initiator"`
+	Owner                *IdentityResult `xml:"Owner"`
+	StorageClass         string          `xml:"StorageClass"`
+	ChecksumAlgorithm    *string         `xml:"ChecksumAlgorithm"`
+	ChecksumType         *string         `xml:"ChecksumType"`
 }
 
 type WebsiteConfigurationIndexDocument struct {
@@ -383,6 +389,14 @@ type CopyPartResult struct {
 
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
 var ErrInvalidArgument = fmt.Errorf("InvalidArgument")
+
+// identityResult maps a storage identity onto its S3 Owner/Initiator wire form.
+func identityResult(identity *storage.ObjectIdentity) *IdentityResult {
+	if identity == nil || identity.AccountID == "" {
+		return nil
+	}
+	return &IdentityResult{Id: identity.S3ID()}
+}
 
 type ErrorResponse struct {
 	XMLName   xml.Name `xml:"Error"`

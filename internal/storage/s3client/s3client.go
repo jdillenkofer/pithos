@@ -1390,6 +1390,25 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName 
 	return nil
 }
 
+// objectIdentityFromAWSOwner maps an upstream S3 Owner onto a Pithos identity.
+// The upstream ID is passed through unchanged; the HTTP layer renders an
+// identity without a principal ID as its account ID.
+func objectIdentityFromAWSOwner(owner *types.Owner) *storage.ObjectIdentity {
+	if owner == nil || owner.ID == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: *owner.ID}
+}
+
+// objectIdentityFromAWSInitiator mirrors objectIdentityFromAWSOwner for the
+// upstream Initiator element, which may be a canonical user ID or an ARN.
+func objectIdentityFromAWSInitiator(initiator *types.Initiator) *storage.ObjectIdentity {
+	if initiator == nil || initiator.ID == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: *initiator.ID}
+}
+
 func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListMultipartUploads")
 	defer span.End()
@@ -1416,6 +1435,8 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 			UploadId:     storage.MustNewUploadId(*upload.UploadId),
 			Initiated:    *upload.Initiated,
 			StorageClass: storageClassFromAWS(upload.StorageClass),
+			Owner:        objectIdentityFromAWSOwner(upload.Owner),
+			Initiator:    objectIdentityFromAWSInitiator(upload.Initiator),
 		}
 	}, listMultipartUploadsResult.Uploads)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -1476,6 +1497,8 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 			}
 		}, listPartsResult.Parts),
 		StorageClass: storageClassFromAWS(listPartsResult.StorageClass),
+		Owner:        objectIdentityFromAWSOwner(listPartsResult.Owner),
+		Initiator:    objectIdentityFromAWSInitiator(listPartsResult.Initiator),
 	}, nil
 }
 

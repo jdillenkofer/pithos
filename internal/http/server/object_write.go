@@ -76,6 +76,7 @@ func (s *Server) createMultipartUploadHandler(w http.ResponseWriter, r *http.Req
 		createOpts = &storage.CreateMultipartUploadOptions{}
 	}
 	createOpts.ObjectLock = objectLock
+	createOpts.Initiator = s.requestIdentity(ctx)
 	slog.InfoContext(r.Context(), "CreateMultipartUpload", "bucket", bucketName.String(), "key", key.String())
 	result, err := s.storage.CreateMultipartUpload(ctx, bucketName, key, contentType, checksumType, createOpts)
 	if err != nil {

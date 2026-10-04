@@ -20,6 +20,13 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 	}
 }
 
+func convertObjectIdentity(identity *metadatastore.ObjectIdentity) *storage.ObjectIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: identity.AccountID, PrincipalID: identity.PrincipalID}
+}
+
 func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateMultipartUpload")
 	defer span.End()
@@ -27,6 +34,9 @@ func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucke
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
 		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
+		if opts.Initiator != nil {
+			metadataOpts.Initiator = &metadatastore.ObjectIdentity{AccountID: opts.Initiator.AccountID, PrincipalID: opts.Initiator.PrincipalID}
+		}
 	}
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -317,6 +327,8 @@ func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore
 				UploadId:     mUpload.UploadId,
 				Initiated:    mUpload.Initiated,
 				StorageClass: mUpload.StorageClass,
+				Owner:        convertObjectIdentity(mUpload.Owner),
+				Initiator:    convertObjectIdentity(mUpload.Initiator),
 			}
 		}, mlistMultipartUploadsResult.Uploads),
 		IsTruncated: mlistMultipartUploadsResult.IsTruncated,
@@ -371,6 +383,8 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 			}
 		}, mlistPartsResult.Parts),
 		StorageClass: mlistPartsResult.StorageClass,
+		Owner:        convertObjectIdentity(mlistPartsResult.Owner),
+		Initiator:    convertObjectIdentity(mlistPartsResult.Initiator),
 	}
 }
 
