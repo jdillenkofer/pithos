@@ -670,6 +670,10 @@ func (sms *sqlMetadataStore) ListParts(ctx context.Context, tx *sql.Tx, bucketNa
 		if sequenceNumberI32 <= partNumberMarkerI32 {
 			continue
 		}
+		if opts.MaxParts == 0 {
+			isTruncated = true
+			break
+		}
 		parts = append(parts, &metadatastore.MultipartPart{
 			ETag:              part.ETag,
 			ChecksumCRC32:     part.ChecksumCRC32,

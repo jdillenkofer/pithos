@@ -127,6 +127,11 @@ Deleting by key in an enabled or suspended bucket creates a delete marker and re
 
 `GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, and `max-uploads`.
 
+`max-uploads` accepts integers from 1 to 1,000. `ListParts` accepts `max-parts`
+from 0 to 1,000; zero returns no parts but still validates the upload and returns
+its metadata. Both limits default to 1,000 only when omitted. Empty, malformed,
+negative, or excessive values return `InvalidArgument` (HTTP 400).
+
 When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key.
 
 ### Owner and initiator identity
