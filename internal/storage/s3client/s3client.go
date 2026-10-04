@@ -1178,10 +1178,15 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.CreateMultipartUpload")
 	defer span.End()
 
-	checksumTypeStr := types.ChecksumTypeFullObject
-	if checksumType != nil {
-		checksumTypeStr = types.ChecksumType(*checksumType)
+	var algorithm *string
+	if opts != nil {
+		algorithm = opts.ChecksumAlgorithm
 	}
+	effectiveType, err := storage.ResolveMultipartChecksumType(algorithm, checksumType)
+	if err != nil {
+		return nil, err
+	}
+	checksumTypeStr := types.ChecksumType(*effectiveType)
 	var tagging *string
 	if opts != nil && len(opts.Tags) > 0 {
 		values := url.Values{}
@@ -1196,6 +1201,9 @@ func (rs *s3ClientStorage) CreateMultipartUpload(ctx context.Context, bucketName
 		ContentType:  contentType,
 		ChecksumType: checksumTypeStr,
 		Tagging:      tagging,
+	}
+	if algorithm != nil {
+		input.ChecksumAlgorithm = types.ChecksumAlgorithm(*algorithm)
 	}
 	if opts != nil && opts.Metadata != nil {
 		input.CacheControl = opts.Metadata.CacheControl
@@ -1390,6 +1398,32 @@ func (rs *s3ClientStorage) AbortMultipartUpload(ctx context.Context, bucketName 
 	return nil
 }
 
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+// objectIdentityFromAWSOwner maps an upstream S3 Owner onto a Pithos identity.
+// The upstream ID is passed through unchanged; the HTTP layer renders an
+// identity without a principal ID as its account ID.
+func objectIdentityFromAWSOwner(owner *types.Owner) *storage.ObjectIdentity {
+	if owner == nil || owner.ID == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: *owner.ID}
+}
+
+// objectIdentityFromAWSInitiator mirrors objectIdentityFromAWSOwner for the
+// upstream Initiator element, which may be a canonical user ID or an ARN.
+func objectIdentityFromAWSInitiator(initiator *types.Initiator) *storage.ObjectIdentity {
+	if initiator == nil || initiator.ID == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: *initiator.ID}
+}
+
 func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, error) {
 	ctx, span := rs.tracer.Start(ctx, "S3ClientStorage.ListMultipartUploads")
 	defer span.End()
@@ -1412,10 +1446,14 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 
 	uploads := sliceutils.Map(func(upload types.MultipartUpload) storage.Upload {
 		return storage.Upload{
-			Key:          storage.MustNewObjectKey(*upload.Key),
-			UploadId:     storage.MustNewUploadId(*upload.UploadId),
-			Initiated:    *upload.Initiated,
-			StorageClass: storageClassFromAWS(upload.StorageClass),
+			Key:               storage.MustNewObjectKey(*upload.Key),
+			UploadId:          storage.MustNewUploadId(*upload.UploadId),
+			Initiated:         *upload.Initiated,
+			StorageClass:      storageClassFromAWS(upload.StorageClass),
+			ChecksumAlgorithm: optionalString(string(upload.ChecksumAlgorithm)),
+			ChecksumType:      optionalString(string(upload.ChecksumType)),
+			Owner:             objectIdentityFromAWSOwner(upload.Owner),
+			Initiator:         objectIdentityFromAWSInitiator(upload.Initiator),
 		}
 	}, listMultipartUploadsResult.Uploads)
 	commonPrefixes := sliceutils.Map(func(commonPrefix types.CommonPrefix) string {
@@ -1423,12 +1461,12 @@ func (rs *s3ClientStorage) ListMultipartUploads(ctx context.Context, bucketName 
 	}, listMultipartUploadsResult.CommonPrefixes)
 	return &storage.ListMultipartUploadsResult{
 		BucketName:         storage.MustNewBucketName(*listMultipartUploadsResult.Bucket),
-		KeyMarker:          *listMultipartUploadsResult.KeyMarker,
-		UploadIdMarker:     *listMultipartUploadsResult.UploadIdMarker,
-		Prefix:             *listMultipartUploadsResult.Prefix,
-		Delimiter:          *listMultipartUploadsResult.Delimiter,
-		NextKeyMarker:      *listMultipartUploadsResult.NextKeyMarker,
-		NextUploadIdMarker: *listMultipartUploadsResult.NextUploadIdMarker,
+		KeyMarker:          aws.ToString(listMultipartUploadsResult.KeyMarker),
+		UploadIdMarker:     aws.ToString(listMultipartUploadsResult.UploadIdMarker),
+		Prefix:             aws.ToString(listMultipartUploadsResult.Prefix),
+		Delimiter:          aws.ToString(listMultipartUploadsResult.Delimiter),
+		NextKeyMarker:      aws.ToString(listMultipartUploadsResult.NextKeyMarker),
+		NextUploadIdMarker: aws.ToString(listMultipartUploadsResult.NextUploadIdMarker),
 		MaxUploads:         *listMultipartUploadsResult.MaxUploads,
 		CommonPrefixes:     commonPrefixes,
 		Uploads:            uploads,
@@ -1458,7 +1496,7 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 		BucketName:           storage.MustNewBucketName(*listPartsResult.Bucket),
 		Key:                  storage.MustNewObjectKey(*listPartsResult.Key),
 		UploadId:             storage.MustNewUploadId(*listPartsResult.UploadId),
-		PartNumberMarker:     *listPartsResult.PartNumberMarker,
+		PartNumberMarker:     aws.ToString(listPartsResult.PartNumberMarker),
 		NextPartNumberMarker: listPartsResult.NextPartNumberMarker,
 		MaxParts:             *listPartsResult.MaxParts,
 		IsTruncated:          *listPartsResult.IsTruncated,
@@ -1475,7 +1513,13 @@ func (rs *s3ClientStorage) ListParts(ctx context.Context, bucketName storage.Buc
 				Size:              *part.Size,
 			}
 		}, listPartsResult.Parts),
-		StorageClass: storageClassFromAWS(listPartsResult.StorageClass),
+		StorageClass:      storageClassFromAWS(listPartsResult.StorageClass),
+		AbortDate:         listPartsResult.AbortDate,
+		AbortRuleID:       listPartsResult.AbortRuleId,
+		ChecksumAlgorithm: optionalString(string(listPartsResult.ChecksumAlgorithm)),
+		ChecksumType:      optionalString(string(listPartsResult.ChecksumType)),
+		Owner:             objectIdentityFromAWSOwner(listPartsResult.Owner),
+		Initiator:         objectIdentityFromAWSInitiator(listPartsResult.Initiator),
 	}, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/bucket"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/buckettag"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/object"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/objectinitiator"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/objectlock"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/part"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partdedupindex"
@@ -45,15 +46,16 @@ func isUniqueConstraintViolation(err error) bool {
 type sqlMetadataStore struct {
 	objectLockRepository objectlock.Repository
 	*lifecycle.ValidatedLifecycle
-	bucketRepository         bucket.Repository
-	bucketTagRepository      buckettag.Repository
-	objectRepository         object.Repository
-	partRepository           part.Repository
-	partDedupIndexRepository partdedupindex.Repository
-	partRegistryRepository   partregistry.Repository
-	tagRepository            tag.Repository
-	userMetadataRepository   usermetadata.Repository
-	tracer                   trace.Tracer
+	bucketRepository          bucket.Repository
+	bucketTagRepository       buckettag.Repository
+	objectRepository          object.Repository
+	objectInitiatorRepository objectinitiator.Repository
+	partRepository            part.Repository
+	partDedupIndexRepository  partdedupindex.Repository
+	partRegistryRepository    partregistry.Repository
+	tagRepository             tag.Repository
+	userMetadataRepository    usermetadata.Repository
+	tracer                    trace.Tracer
 }
 
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
@@ -61,6 +63,10 @@ var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
 func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository, userMetadataRepository usermetadata.Repository) (metadatastore.MetadataStore, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
+	if err != nil {
+		return nil, err
+	}
+	objectInitiatorRepository, err := repositoryfactory.NewObjectInitiatorRepository(db)
 	if err != nil {
 		return nil, err
 	}
@@ -81,17 +87,18 @@ func New(db database.Database, bucketRepository bucket.Repository, objectReposit
 		return nil, err
 	}
 	return &sqlMetadataStore{
-		objectLockRepository:     objectLockRepository,
-		ValidatedLifecycle:       lifecycle,
-		bucketRepository:         bucketRepository,
-		bucketTagRepository:      bucketTagRepository,
-		objectRepository:         objectRepository,
-		partRepository:           partRepository,
-		partDedupIndexRepository: partDedupIndexRepository,
-		partRegistryRepository:   partRegistryRepository,
-		tagRepository:            tagRepository,
-		userMetadataRepository:   userMetadataRepository,
-		tracer:                   otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
+		objectLockRepository:      objectLockRepository,
+		ValidatedLifecycle:        lifecycle,
+		bucketRepository:          bucketRepository,
+		bucketTagRepository:       bucketTagRepository,
+		objectRepository:          objectRepository,
+		objectInitiatorRepository: objectInitiatorRepository,
+		partRepository:            partRepository,
+		partDedupIndexRepository:  partDedupIndexRepository,
+		partRegistryRepository:    partRegistryRepository,
+		tagRepository:             tagRepository,
+		userMetadataRepository:    userMetadataRepository,
+		tracer:                    otel.Tracer("internal/storage/metadatapart/metadatastore/sql"),
 	}, nil
 }
 
@@ -163,6 +170,53 @@ func (sms *sqlMetadataStore) replaceObjectUserMetadata(ctx context.Context, tx *
 		}
 	}
 	return nil
+}
+
+// saveObjectInitiator persists the identity that initiated a multipart upload.
+// A nil identity, or one without an account ID, is a no-op.
+func (sms *sqlMetadataStore) saveObjectInitiator(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, identity *metadatastore.ObjectIdentity) error {
+	if identity == nil || identity.AccountID == "" {
+		return nil
+	}
+	initiatorEntity := objectinitiator.Entity{
+		ObjectId:    objectId,
+		AccountId:   identity.AccountID,
+		PrincipalId: identity.PrincipalID,
+	}
+	return sms.objectInitiatorRepository.SaveObjectInitiator(ctx, tx, &initiatorEntity)
+}
+
+// deleteObjectInitiator removes the stored initiator of an object. It is a
+// no-op when no initiator was stored (e.g. a completed object).
+func (sms *sqlMetadataStore) deleteObjectInitiator(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+	return sms.objectInitiatorRepository.DeleteObjectInitiatorByObjectId(ctx, tx, objectId)
+}
+
+// loadObjectInitiator returns the initiator of an object, or nil when none was
+// stored (uploads created before the initiator was persisted).
+func (sms *sqlMetadataStore) loadObjectInitiator(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*metadatastore.ObjectIdentity, error) {
+	initiatorEntity, err := sms.objectInitiatorRepository.FindObjectInitiatorByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+	if initiatorEntity == nil {
+		return nil, nil
+	}
+	return &metadatastore.ObjectIdentity{AccountID: initiatorEntity.AccountId, PrincipalID: initiatorEntity.PrincipalId}, nil
+}
+
+// loadObjectInitiators returns the stored initiators of the given objects keyed
+// by object id. Objects without an initiator are absent from the map.
+func (sms *sqlMetadataStore) loadObjectInitiators(ctx context.Context, tx *sql.Tx, objectIds []ulid.ULID) (map[ulid.ULID]metadatastore.ObjectIdentity, error) {
+	initiatorEntities, err := sms.objectInitiatorRepository.FindObjectInitiatorsByObjectIdsOrderByObjectId(ctx, tx, objectIds)
+	if err != nil {
+		return nil, err
+	}
+	initiators := make(map[ulid.ULID]metadatastore.ObjectIdentity, len(initiatorEntities))
+	for _, initiatorEntity := range initiatorEntities {
+		initiators[initiatorEntity.ObjectId] = metadatastore.ObjectIdentity{AccountID: initiatorEntity.AccountId, PrincipalID: initiatorEntity.PrincipalId}
+	}
+	return initiators, nil
 }
 
 // applySystemMetadataToEntity copies the user-modifiable system metadata

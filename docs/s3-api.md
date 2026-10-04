@@ -123,11 +123,68 @@ Deleting by key in an enabled or suspended bucket creates a delete marker and re
 
 `GET /<bucket>?versions` lists object versions and delete markers. It supports `prefix`, `delimiter`, `key-marker`, `version-id-marker`, and `max-keys`, and returns `Version`, `DeleteMarker`, `CommonPrefixes`, `NextKeyMarker`, and `NextVersionIdMarker` elements.
 
+## Expected Bucket Owner
+
+Bucket-scoped operations (except bucket creation) enforce
+`x-amz-expected-bucket-owner` when supplied. A mismatch returns `AccessDenied`
+(HTTP 403), even when authentication is disabled. Repeated owner headers return
+`InvalidArgument` (HTTP 400).
+
 ## Multipart Upload Listing
 
-`GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, and `max-uploads`.
+`GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, `max-uploads`, and `encoding-type=url`.
 
-When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key.
+With `encoding-type=url`, keys, common prefixes, the prefix, delimiter, and key
+markers are UTF-8 percent-encoded in the response, and `EncodingType` is `url`.
+Spaces use `%20`; upload IDs are not encoded. Unsupported encoding types return
+`InvalidArgument` (HTTP 400). Resume with decoded key markers; normal query-string
+encoding is still required when constructing the next request.
+
+`max-uploads` accepts integers from 1 to 1,000. `ListParts` accepts `max-parts`
+from 0 to 1,000; zero returns no parts but still validates the upload and returns
+its metadata. Both limits default to 1,000 only when omitted. Empty, malformed,
+negative, or excessive values return `InvalidArgument` (HTTP 400).
+
+When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key. S3-backed storage accepts omitted optional delimiter and marker elements in upstream responses.
+
+### Checksum metadata
+
+`CreateMultipartUpload` accepts `x-amz-checksum-algorithm` for `CRC32`, `CRC32C`,
+`CRC64NVME`, `SHA1`, or `SHA256`, and persists it with the checksum type.
+`ListParts` and each upload in `ListMultipartUploads` return `ChecksumAlgorithm`
+and `ChecksumType`, including when the upload has no parts yet.
+
+The type defaults to `COMPOSITE` for an explicitly selected algorithm other than
+`CRC64NVME`, which requires `FULL_OBJECT`. SHA algorithms require `COMPOSITE`;
+CRC32 and CRC32C support either type. Unsupported algorithms, types, or
+combinations return `InvalidRequest` (HTTP 400). Without an explicit algorithm,
+Pithos retains its legacy `FULL_OBJECT` default and does not infer an algorithm
+for legacy uploads. S3-backed storage forwards upstream checksum metadata.
+
+### Lifecycle abort headers
+
+`ListParts` returns `x-amz-abort-date` and, when the matching rule has an ID,
+`x-amz-abort-rule-id` for the earliest enabled lifecycle abort rule matching the
+upload's key. The date is calculated from upload initiation and rounded to the
+next midnight UTC using the same due-time calculation as the reconciler. The
+current bucket lifecycle configuration applies, including to existing uploads;
+without a matching rule, the headers are omitted. S3-backed storage passes
+through upstream abort metadata.
+
+### Owner and initiator identity
+
+`ListParts` and `ListMultipartUploads` report `Owner` and `Initiator` using
+Pithos's account model:
+
+- `Owner.ID` is the bucket owner's account ID.
+- `Initiator.ID` is the account ID when the upload was created by the account
+  itself, or `arn:pithos:iam::<accountId>:principal/<principalId>` when a
+  specific principal created it.
+
+The initiator is recorded when the upload is created and is never inferred from
+the caller listing the upload. Uploads created before Pithos stored initiators
+omit the `Initiator` element. `DisplayName` is not populated because it is
+deprecated in S3.
 
 ## Authorization Operations
 

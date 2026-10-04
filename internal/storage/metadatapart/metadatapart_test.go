@@ -1741,3 +1741,106 @@ func TestGetObject_MultipleRangesStartingAfterEarlierParts(t *testing.T) {
 	assert.Equal(t, "bb", string(first))
 	assert.Equal(t, "cc", string(second))
 }
+
+func TestListPartsAndUploadsExposeOwnerAndInitiator(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{OwnerAccountID: "account-a"}))
+
+	initiator := &storage.ObjectIdentity{AccountID: "account-a", PrincipalID: "principal-writer"}
+	createResult, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, &storage.CreateMultipartUploadOptions{Initiator: initiator})
+	require.NoError(t, err)
+	_, err = st.UploadPart(ctx, bucket, key, createResult.UploadId, 1, bytes.NewReader([]byte("part-1")), nil)
+	require.NoError(t, err)
+
+	listPartsResult, err := st.ListParts(ctx, bucket, key, createResult.UploadId, storage.ListPartsOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, listPartsResult.Owner)
+	assert.Equal(t, "account-a", listPartsResult.Owner.AccountID)
+	assert.Empty(t, listPartsResult.Owner.PrincipalID)
+	assert.Equal(t, "account-a", listPartsResult.Owner.S3ID())
+	require.NotNil(t, listPartsResult.Initiator)
+	assert.Equal(t, "account-a", listPartsResult.Initiator.AccountID)
+	assert.Equal(t, "principal-writer", listPartsResult.Initiator.PrincipalID)
+	assert.Equal(t, "arn:pithos:iam::account-a:principal/principal-writer", listPartsResult.Initiator.S3ID())
+
+	listUploadsResult, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	require.Len(t, listUploadsResult.Uploads, 1)
+	require.NotNil(t, listUploadsResult.Uploads[0].Owner)
+	assert.Equal(t, "account-a", listUploadsResult.Uploads[0].Owner.AccountID)
+	require.NotNil(t, listUploadsResult.Uploads[0].Initiator)
+	assert.Equal(t, "principal-writer", listUploadsResult.Uploads[0].Initiator.PrincipalID)
+}
+
+func TestListPartsOmitsInitiatorWithoutStoredIdentity(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{OwnerAccountID: "account-a"}))
+
+	createResult, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, nil)
+	require.NoError(t, err)
+
+	listPartsResult, err := st.ListParts(ctx, bucket, key, createResult.UploadId, storage.ListPartsOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, listPartsResult.Owner)
+	assert.Equal(t, "account-a", listPartsResult.Owner.AccountID)
+	assert.Nil(t, listPartsResult.Initiator)
+}
+
+func TestCompleteMultipartUploadDropsStoredInitiator(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{OwnerAccountID: "account-a"}))
+
+	initiator := &storage.ObjectIdentity{AccountID: "account-a", PrincipalID: "principal-writer"}
+	createResult, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, &storage.CreateMultipartUploadOptions{Initiator: initiator})
+	require.NoError(t, err)
+	_, err = st.UploadPart(ctx, bucket, key, createResult.UploadId, 1, bytes.NewReader([]byte("part-1")), nil)
+	require.NoError(t, err)
+	_, err = st.CompleteMultipartUpload(ctx, bucket, key, createResult.UploadId, nil, nil)
+	require.NoError(t, err)
+
+	// The completed object no longer carries an initiator: listing the upload
+	// must fail, and listing uploads must be empty.
+	_, err = st.ListParts(ctx, bucket, key, createResult.UploadId, storage.ListPartsOptions{})
+	require.Error(t, err)
+	listUploadsResult, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	assert.Empty(t, listUploadsResult.Uploads)
+}
+
+func TestAbortMultipartUploadRemovesStoredInitiator(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	defer cleanup()
+
+	bucket := storage.MustNewBucketName("bucket")
+	key := storage.MustNewObjectKey("key")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{OwnerAccountID: "account-a"}))
+
+	initiator := &storage.ObjectIdentity{AccountID: "account-a", PrincipalID: "principal-writer"}
+	createResult, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, &storage.CreateMultipartUploadOptions{Initiator: initiator})
+	require.NoError(t, err)
+	require.NoError(t, st.AbortMultipartUpload(ctx, bucket, key, createResult.UploadId))
+
+	listUploadsResult, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	assert.Empty(t, listUploadsResult.Uploads)
+}

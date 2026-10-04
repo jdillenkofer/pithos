@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGetObjectPartNumber(t *testing.T) {
@@ -388,11 +389,19 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Equal(t, int32(2), *secondPart.PartNumber)
 
 				assert.Equal(t, "\"b676ed737ae82cda0bc622cd80116002-2\"", *uploadOutput.ETag)
-				assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
-				assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
-				assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
-				assert.Nil(t, uploadOutput.ChecksumSHA1)
-				assert.Nil(t, uploadOutput.ChecksumSHA256)
+				if checksumAlgorithm == types.ChecksumAlgorithmCrc64nvme {
+					assert.Equal(t, "ICnSTA==", *uploadOutput.ChecksumCRC32)
+					assert.Equal(t, "wHOQSg==", *uploadOutput.ChecksumCRC32C)
+					assert.Equal(t, "hJdk5JLZLJk=", *uploadOutput.ChecksumCRC64NVME)
+					assert.Nil(t, uploadOutput.ChecksumSHA1)
+					assert.Nil(t, uploadOutput.ChecksumSHA256)
+				} else {
+					assert.Equal(t, "p6WvuQ==-2", *uploadOutput.ChecksumCRC32)
+					assert.Equal(t, "fiH6pg==-2", *uploadOutput.ChecksumCRC32C)
+					assert.Nil(t, uploadOutput.ChecksumCRC64NVME)
+					assert.Equal(t, "A+Cnn2e1NWre4/EAxr/ZB2SpybE=-2", *uploadOutput.ChecksumSHA1)
+					assert.Equal(t, "C8byQ3jdpEbPg0+c4ul+KV6Uiwhd3ueEuEf9d+4aR7A=-2", *uploadOutput.ChecksumSHA256)
+				}
 
 				getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
 					Bucket: bucketName,
@@ -1486,6 +1495,80 @@ func TestUploadPartCopy(t *testing.T) {
 			if assert.ErrorAs(t, err, &apiErr) {
 				assert.Equal(t, "PreconditionFailed", apiErr.ErrorCode())
 			}
+		})
+	})
+}
+
+func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		t.Run("it should expose owner and initiator on ListParts"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+
+			ctx := context.Background()
+			_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+
+			created, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key, ChecksumAlgorithm: types.ChecksumAlgorithmSha256})
+			require.NoError(t, err)
+			_, err = s3Client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket: bucketName, Key: key, UploadId: created.UploadId, PartNumber: aws.Int32(1), Body: bytes.NewReader(body),
+			})
+			require.NoError(t, err)
+
+			// List as a different authorized principal of the same account: the
+			// initiator must be the uploader, never the caller listing the parts.
+			lister := setupS3ClientWithCredentials(testAPIEndpoint, listenerAddr, usePathStyle, policyTestAccessKeyId, policyTestSecretAccessKey)
+			result, err := lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId})
+			require.NoError(t, err)
+
+			require.NotNil(t, result.Owner)
+			assert.Equal(t, "test-account", *result.Owner.ID)
+			require.NotNil(t, result.Initiator)
+			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *result.Initiator.ID)
+			require.Len(t, result.Parts, 1)
+			assert.Equal(t, types.ChecksumAlgorithmSha256, result.ChecksumAlgorithm)
+			assert.Equal(t, types.ChecksumTypeComposite, result.ChecksumType)
+
+			uploads, err := lister.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: bucketName})
+			require.NoError(t, err)
+			require.Len(t, uploads.Uploads, 1)
+			assert.Equal(t, types.ChecksumAlgorithmSha256, uploads.Uploads[0].ChecksumAlgorithm)
+			assert.Equal(t, types.ChecksumTypeComposite, uploads.Uploads[0].ChecksumType)
+			require.NotNil(t, uploads.Uploads[0].Owner)
+			assert.Equal(t, "test-account", *uploads.Uploads[0].Owner.ID)
+			require.NotNil(t, uploads.Uploads[0].Initiator)
+			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *uploads.Uploads[0].Initiator.ID)
+
+			_, err = s3Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+				Bucket: bucketName,
+				LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{{
+					ID: aws.String("cleanup-uploads"), Status: types.ExpirationStatusEnabled,
+					Filter:                         &types.LifecycleRuleFilter{Prefix: aws.String("")},
+					AbortIncompleteMultipartUpload: &types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(7)},
+				}}},
+			})
+			require.NoError(t, err)
+			withLifecycle, err := lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("test-account")})
+			require.NoError(t, err)
+			initiated := uploads.Uploads[0].Initiated.UTC()
+			expectedAbort := time.Date(initiated.Year(), initiated.Month(), initiated.Day()+8, 0, 0, 0, 0, time.UTC)
+			assert.Equal(t, &expectedAbort, withLifecycle.AbortDate)
+			assert.Equal(t, aws.String("cleanup-uploads"), withLifecycle.AbortRuleId)
+			_, err = lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("other-account")})
+			require.Error(t, err)
+			var apiError smithy.APIError
+			require.ErrorAs(t, err, &apiError)
+			assert.Equal(t, "AccessDenied", apiError.ErrorCode())
+
+			_, err = lister.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{Bucket: bucketName, ExpectedBucketOwner: aws.String("other-account")})
+			require.Error(t, err)
+			require.ErrorAs(t, err, &apiError)
+			assert.Equal(t, "AccessDenied", apiError.ErrorCode())
 		})
 	})
 }

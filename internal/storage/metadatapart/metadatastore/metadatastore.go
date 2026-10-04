@@ -21,6 +21,15 @@ type Bucket struct {
 	CreationDate   time.Time
 }
 
+// ObjectIdentity identifies the owner or the initiator of an object or a
+// multipart upload in Pithos's account model. AccountID is always set for a
+// known identity; PrincipalID is set when the operation was performed by a
+// specific principal rather than the account itself.
+type ObjectIdentity struct {
+	AccountID   string
+	PrincipalID string
+}
+
 type BucketVersioningStatus string
 
 const (
@@ -172,12 +181,19 @@ type AbortMultipartResult struct {
 }
 
 type Upload struct {
-	Key       ObjectKey
-	UploadId  UploadId
-	Initiated time.Time
+	ChecksumAlgorithm *string
+	ChecksumType      *string
+	Key               ObjectKey
+	UploadId          UploadId
+	Initiated         time.Time
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
+	// Owner is the bucket owner account. Nil when the backend cannot expose it.
+	Owner *ObjectIdentity
+	// Initiator is the identity that created the upload. Nil for uploads created
+	// before the initiator was persisted; never inferred from the listing caller.
+	Initiator *ObjectIdentity
 }
 
 type ListMultipartUploadsResult struct {
@@ -207,6 +223,9 @@ type MultipartPart struct {
 }
 
 type ListPartsResult struct {
+	Initiated         time.Time
+	ChecksumAlgorithm *string
+	ChecksumType      *string
 	// Tags are the immutable initiation tags. A non-nil empty map means no tags;
 	// nil means the backend cannot expose them. Internal only, not an S3 response field.
 	Tags                 map[string]string
@@ -221,6 +240,11 @@ type ListPartsResult struct {
 	// StorageClass is the class chosen at CreateMultipartUpload; nil means
 	// STANDARD.
 	StorageClass *string
+	// Owner is the bucket owner account. Nil when the backend cannot expose it.
+	Owner *ObjectIdentity
+	// Initiator is the identity that created the upload. Nil for uploads created
+	// before the initiator was persisted; never inferred from the listing caller.
+	Initiator *ObjectIdentity
 }
 
 const ChecksumTypeFullObject = "FULL_OBJECT"
@@ -345,7 +369,13 @@ type PutObjectOptions struct {
 // CreateMultipartUploadOptions holds options for a CreateMultipartUpload
 // operation. A nil options pointer is valid and means all defaults.
 type CreateMultipartUploadOptions struct {
-	ObjectLock ObjectLock
+	ObjectLock        ObjectLock
+	ChecksumAlgorithm *string
+	// Initiator is the authenticated identity that creates the upload. It is
+	// persisted with the pending object and exposed by ListParts and
+	// ListMultipartUploads. Nil means unknown (e.g. anonymous access), in which
+	// case the initiator is omitted from responses.
+	Initiator *ObjectIdentity
 	// Tags is the object's tag set, supplied via the x-amz-tagging header. It is
 	// applied to the object when the upload completes. Nil/empty means no tags.
 	Tags map[string]string

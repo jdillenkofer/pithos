@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -165,16 +165,19 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 
 	query := r.URL.Query()
 
+	if query.Has("encoding-type") && query.Get("encoding-type") != "url" {
+		handleError(ErrInvalidArgument, w, r)
+		return
+	}
 	prefix := httputils.GetQueryParam(query, prefixQuery)
 	delimiter := httputils.GetQueryParam(query, delimiterQuery)
 	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
 	uploadIdMarker := httputils.GetQueryParam(query, uploadIdMarkerQuery)
-	maxUploads := query.Get(maxUploadsQuery)
-	maxUploadsI64, err := strconv.ParseInt(maxUploads, 10, 32)
-	if err != nil || maxUploadsI64 < 0 || maxUploadsI64 > maxListLimit {
-		maxUploadsI64 = 1000
+	maxUploadsI32, err := parseListingLimit(query, maxUploadsQuery, 1)
+	if err != nil {
+		handleError(err, w, r)
+		return
 	}
-	maxUploadsI32 := int32(maxUploadsI64)
 
 	opts := storage.ListMultipartUploadsOptions{Prefix: prefix, Delimiter: delimiter, KeyMarker: keyMarker, UploadIdMarker: uploadIdMarker, MaxUploads: maxUploadsI32}
 	slog.InfoContext(r.Context(), "Listing MultipartUploads")
@@ -197,87 +200,51 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		CommonPrefixes:     []*CommonPrefixResult{},
 	}
 
+	encode := func(value string) string { return value }
+	if query.Get("encoding-type") == "url" {
+		// QueryEscape supplies UTF-8 percent encoding; S3 uses %20, not +,
+		// for spaces and also encodes slashes in keys and prefixes.
+		encode = func(value string) string { return strings.ReplaceAll(url.QueryEscape(value), "+", "%20") }
+		listMultipartUploadsResult.EncodingType = ptrutils.ToPtr("url")
+		listMultipartUploadsResult.KeyMarker = ptrutils.ToPtr(encode(result.KeyMarker))
+		listMultipartUploadsResult.Prefix = ptrutils.ToPtr(encode(result.Prefix))
+		listMultipartUploadsResult.Delimiter = ptrutils.ToPtr(encode(result.Delimiter))
+		if nextKeyMarker != nil {
+			listMultipartUploadsResult.NextKeyMarker = ptrutils.ToPtr(encode(*nextKeyMarker))
+		}
+	}
 	for _, upload := range result.Uploads {
 		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
-			Key:          upload.Key.String(),
-			UploadId:     upload.UploadId.String(),
-			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
-			StorageClass: storage.EffectiveStorageClass(upload.StorageClass),
+			Key:               encode(upload.Key.String()),
+			UploadId:          upload.UploadId.String(),
+			Initiated:         upload.Initiated.UTC().Format(time.RFC3339),
+			ChecksumAlgorithm: upload.ChecksumAlgorithm,
+			ChecksumType:      upload.ChecksumType,
+			Initiator:         identityResult(upload.Initiator),
+			Owner:             identityResult(upload.Owner),
+			StorageClass:      storage.EffectiveStorageClass(upload.StorageClass),
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
-		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
+		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixResult{Prefix: encode(commonPrefix)})
 	}
 	writeXMLResponse(w, r, http.StatusOK, listMultipartUploadsResult)
 }
 
 func (s *Server) listAndFilterMultipartUploads(ctx context.Context, r *http.Request, bucketName storage.BucketName, opts storage.ListMultipartUploadsOptions) (*storage.ListMultipartUploadsResult, *string, *string, error) {
-	maxUploads := opts.MaxUploads
-	if maxUploads <= 0 {
-		maxUploads = 1000
+	if opts.MaxUploads <= 0 {
+		opts.MaxUploads = 1000
 	}
-	collectedUploads := []storage.Upload{}
-	collectedPrefixes := []string{}
-	seenPrefixes := map[string]struct{}{}
-	keyMarker := opts.KeyMarker
-	uploadIDMarker := opts.UploadIdMarker
-	var nextKeyMarker *string
-	var nextUploadIDMarker *string
-
-	for {
-		result, err := s.storage.ListMultipartUploads(ctx, bucketName, storage.ListMultipartUploadsOptions{
-			Prefix:         opts.Prefix,
-			Delimiter:      opts.Delimiter,
-			KeyMarker:      keyMarker,
-			UploadIdMarker: uploadIDMarker,
-			MaxUploads:     maxUploads,
-		})
-		if err != nil {
-			return nil, nil, nil, err
-		}
-
-		lastKeyMarker := keyMarker
-		lastUploadIDMarker := uploadIDMarker
-		for uploadIndex, upload := range result.Uploads {
-			uploadKey := upload.Key.String()
-			uploadID := upload.UploadId.String()
-			lastKeyMarker = &uploadKey
-			lastUploadIDMarker = &uploadID
-			collectedUploads = append(collectedUploads, upload)
-			if int32(len(collectedUploads)) >= maxUploads {
-				hasMore := uploadIndex < len(result.Uploads)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
-				if hasMore {
-					nextKeyMarker = lastKeyMarker
-					nextUploadIDMarker = lastUploadIDMarker
-					return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, NextKeyMarker: *lastKeyMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, NextUploadIdMarker: *lastUploadIDMarker, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: true}, nextKeyMarker, nextUploadIDMarker, nil
-				}
-				return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
-			}
-		}
-		for _, commonPrefix := range result.CommonPrefixes {
-			lastKeyMarker = &commonPrefix
-			lastUploadIDMarker = ptrutils.ToPtr("")
-			if _, exists := seenPrefixes[commonPrefix]; exists {
-				continue
-			}
-			seenPrefixes[commonPrefix] = struct{}{}
-			collectedPrefixes = append(collectedPrefixes, commonPrefix)
-		}
-
-		if !result.IsTruncated {
-			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
-		}
-		if lastKeyMarker == nil || lastUploadIDMarker == nil {
-			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
-		}
-		if keyMarker != nil && uploadIDMarker != nil && *keyMarker == *lastKeyMarker && *uploadIDMarker == *lastUploadIDMarker {
-			return &storage.ListMultipartUploadsResult{BucketName: result.BucketName, KeyMarker: result.KeyMarker, UploadIdMarker: result.UploadIdMarker, Prefix: result.Prefix, Delimiter: result.Delimiter, MaxUploads: maxUploads, CommonPrefixes: collectedPrefixes, Uploads: collectedUploads, IsTruncated: false}, nil, nil, nil
-		}
-		keyMarker = ptrutils.ToPtr(*lastKeyMarker)
-		uploadIDMarker = ptrutils.ToPtr(*lastUploadIDMarker)
-		nextKeyMarker = keyMarker
-		nextUploadIDMarker = uploadIDMarker
+	// The storage backend paginates uploads and common prefixes together.
+	// Do not combine pages here or reconstruct markers from the separate lists.
+	result, err := s.storage.ListMultipartUploads(ctx, bucketName, opts)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	if !result.IsTruncated {
+		return result, nil, nil, nil
+	}
+	return result, ptrutils.ToPtr(result.NextKeyMarker), ptrutils.ToPtr(result.NextUploadIdMarker), nil
 }
 
 func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {

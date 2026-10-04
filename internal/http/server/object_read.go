@@ -283,16 +283,11 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	partNumberMarker := httputils.GetQueryParam(query, partNumberMarkerQuery)
-	maxParts := query.Get(maxPartsQuery)
-	maxPartsI64, err := strconv.ParseInt(maxParts, 10, 32)
+	maxPartsI32, err := parseListingLimit(query, maxPartsQuery, 0)
 	if err != nil {
-		maxPartsI64 = 1000
-	}
-	if maxPartsI64 < 0 || maxPartsI64 > 1000 {
-		w.WriteHeader(400)
+		handleError(err, w, r)
 		return
 	}
-	maxPartsI32 := int32(maxPartsI64)
 
 	result, nextPartNumberMarker, err := s.listAndFilterParts(ctx, r, bucketName, key, uploadId, storage.ListPartsOptions{
 		PartNumberMarker: partNumberMarker,
@@ -324,13 +319,31 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 				Size:              part.Size,
 			}
 		}, result.Parts),
-		StorageClass: storage.EffectiveStorageClass(result.StorageClass),
+		StorageClass:      storage.EffectiveStorageClass(result.StorageClass),
+		ChecksumAlgorithm: result.ChecksumAlgorithm,
+		ChecksumType:      result.ChecksumType,
+		Owner:             identityResult(result.Owner),
+		Initiator:         identityResult(result.Initiator),
 	}
 
+	if result.AbortDate != nil {
+		w.Header().Set("x-amz-abort-date", result.AbortDate.UTC().Format(http.TimeFormat))
+		if result.AbortRuleID != nil {
+			w.Header().Set("x-amz-abort-rule-id", *result.AbortRuleID)
+		}
+	}
 	writeXMLResponse(w, r, http.StatusOK, listPartsResult)
 }
 
 func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucketName storage.BucketName, key storage.ObjectKey, uploadID storage.UploadId, opts storage.ListPartsOptions) (*storage.ListPartsResult, *string, error) {
+	if opts.MaxParts == 0 {
+		// Still consult storage to validate the upload and return its metadata.
+		result, err := s.storage.ListParts(ctx, bucketName, key, uploadID, opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		return result, result.NextPartNumberMarker, nil
+	}
 	maxParts := opts.MaxParts
 	if maxParts <= 0 {
 		maxParts = 1000
@@ -338,6 +351,26 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 	partNumberMarker := opts.PartNumberMarker
 	collectedParts := make([]*storage.MultipartPart, 0, maxParts)
 	var nextPartNumberMarker *string
+
+	buildResult := func(result *storage.ListPartsResult, isTruncated bool, next *string) *storage.ListPartsResult {
+		return &storage.ListPartsResult{
+			BucketName:           result.BucketName,
+			Key:                  result.Key,
+			UploadId:             result.UploadId,
+			PartNumberMarker:     result.PartNumberMarker,
+			NextPartNumberMarker: next,
+			MaxParts:             maxParts,
+			IsTruncated:          isTruncated,
+			Parts:                collectedParts,
+			StorageClass:         result.StorageClass,
+			ChecksumAlgorithm:    result.ChecksumAlgorithm,
+			ChecksumType:         result.ChecksumType,
+			AbortDate:            result.AbortDate,
+			AbortRuleID:          result.AbortRuleID,
+			Owner:                result.Owner,
+			Initiator:            result.Initiator,
+		}
+	}
 
 	for {
 		result, err := s.storage.ListParts(ctx, bucketName, key, uploadID, storage.ListPartsOptions{
@@ -357,20 +390,20 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 				hasMore := partIndex < len(result.Parts)-1 || result.IsTruncated
 				if hasMore {
 					nextPartNumberMarker = lastPartNumberMarker
-					return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nextPartNumberMarker, MaxParts: maxParts, IsTruncated: true, Parts: collectedParts, StorageClass: result.StorageClass}, nextPartNumberMarker, nil
+					return buildResult(result, true, nextPartNumberMarker), nextPartNumberMarker, nil
 				}
-				return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
+				return buildResult(result, false, nil), nil, nil
 			}
 		}
 
 		if !result.IsTruncated {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
+			return buildResult(result, false, nil), nil, nil
 		}
 		if lastPartNumberMarker == nil {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
+			return buildResult(result, false, nil), nil, nil
 		}
 		if partNumberMarker != nil && *partNumberMarker == *lastPartNumberMarker {
-			return &storage.ListPartsResult{BucketName: result.BucketName, Key: result.Key, UploadId: result.UploadId, PartNumberMarker: result.PartNumberMarker, NextPartNumberMarker: nil, MaxParts: maxParts, IsTruncated: false, Parts: collectedParts, StorageClass: result.StorageClass}, nil, nil
+			return buildResult(result, false, nil), nil, nil
 		}
 		partNumberMarker = ptrutils.ToPtr(*lastPartNumberMarker)
 		nextPartNumberMarker = partNumberMarker

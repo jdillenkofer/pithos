@@ -20,13 +20,23 @@ func convertInitiateMultipartUploadResult(result metadatastore.InitiateMultipart
 	}
 }
 
+func convertObjectIdentity(identity *metadatastore.ObjectIdentity) *storage.ObjectIdentity {
+	if identity == nil {
+		return nil
+	}
+	return &storage.ObjectIdentity{AccountID: identity.AccountID, PrincipalID: identity.PrincipalID}
+}
+
 func (mbs *metadataPartStorage) CreateMultipartUpload(ctx context.Context, bucketName storage.BucketName, key storage.ObjectKey, contentType *string, checksumType *string, opts *storage.CreateMultipartUploadOptions) (*storage.InitiateMultipartUploadResult, error) {
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.CreateMultipartUpload")
 	defer span.End()
 
 	var metadataOpts *metadatastore.CreateMultipartUploadOptions
 	if opts != nil {
-		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass}
+		metadataOpts = &metadatastore.CreateMultipartUploadOptions{ObjectLock: opts.ObjectLock, Tags: opts.Tags, Metadata: opts.Metadata, StorageClass: opts.StorageClass, ChecksumAlgorithm: opts.ChecksumAlgorithm}
+		if opts.Initiator != nil {
+			metadataOpts.Initiator = &metadatastore.ObjectIdentity{AccountID: opts.Initiator.AccountID, PrincipalID: opts.Initiator.PrincipalID}
+		}
 	}
 	var initiateMultipartUploadResult storage.InitiateMultipartUploadResult
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
@@ -313,10 +323,14 @@ func convertListMultipartUploadsResult(mlistMultipartUploadsResult metadatastore
 		CommonPrefixes:     mlistMultipartUploadsResult.CommonPrefixes,
 		Uploads: sliceutils.Map(func(mUpload metadatastore.Upload) storage.Upload {
 			return storage.Upload{
-				Key:          mUpload.Key,
-				UploadId:     mUpload.UploadId,
-				Initiated:    mUpload.Initiated,
-				StorageClass: mUpload.StorageClass,
+				Key:               mUpload.Key,
+				UploadId:          mUpload.UploadId,
+				Initiated:         mUpload.Initiated,
+				StorageClass:      mUpload.StorageClass,
+				ChecksumAlgorithm: mUpload.ChecksumAlgorithm,
+				ChecksumType:      mUpload.ChecksumType,
+				Owner:             convertObjectIdentity(mUpload.Owner),
+				Initiator:         convertObjectIdentity(mUpload.Initiator),
 			}
 		}, mlistMultipartUploadsResult.Uploads),
 		IsTruncated: mlistMultipartUploadsResult.IsTruncated,
@@ -370,7 +384,11 @@ func convertListPartsResult(mlistPartsResult metadatastore.ListPartsResult) stor
 				Size:              part.Size,
 			}
 		}, mlistPartsResult.Parts),
-		StorageClass: mlistPartsResult.StorageClass,
+		StorageClass:      mlistPartsResult.StorageClass,
+		ChecksumAlgorithm: mlistPartsResult.ChecksumAlgorithm,
+		ChecksumType:      mlistPartsResult.ChecksumType,
+		Owner:             convertObjectIdentity(mlistPartsResult.Owner),
+		Initiator:         convertObjectIdentity(mlistPartsResult.Initiator),
 	}
 }
 
@@ -379,12 +397,20 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 	defer span.End()
 
 	var mListPartsResult *metadatastore.ListPartsResult
+	var lifecycleConfig *storage.BucketLifecycleConfiguration
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListPartsResult, err = mbs.metadataStore.ListParts(ctx, tx.SqlTx(), bucketName, key, uploadId, metadatastore.ListPartsOptions{
 			PartNumberMarker: opts.PartNumberMarker,
 			MaxParts:         opts.MaxParts,
 		})
+		if err != nil {
+			return err
+		}
+		lifecycleConfig, err = mbs.metadataStore.GetBucketLifecycleConfiguration(ctx, tx.SqlTx(), bucketName)
+		if err == storage.ErrNoSuchLifecycleConfiguration {
+			return nil
+		}
 		return err
 	})
 	if err != nil {
@@ -392,5 +418,18 @@ func (mbs *metadataPartStorage) ListParts(ctx context.Context, bucketName storag
 	}
 
 	listPartsResult := convertListPartsResult(*mListPartsResult)
+	if lifecycleConfig != nil {
+		for i := range lifecycleConfig.Rules {
+			rule := &lifecycleConfig.Rules[i]
+			if rule.Status != storage.LifecycleRuleStatusEnabled || !storage.LifecycleRuleMatchesObject(rule, key.String(), 0, nil) {
+				continue
+			}
+			due := storage.LifecycleAbortDueTime(rule, mListPartsResult.Initiated)
+			if due != nil && (listPartsResult.AbortDate == nil || due.Before(*listPartsResult.AbortDate)) {
+				listPartsResult.AbortDate = due
+				listPartsResult.AbortRuleID = rule.ID
+			}
+		}
+	}
 	return &listPartsResult, nil
 }
