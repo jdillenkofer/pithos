@@ -215,12 +215,14 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 	}
 	for _, upload := range result.Uploads {
 		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
-			Key:          encode(upload.Key.String()),
-			UploadId:     upload.UploadId.String(),
-			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
-			Initiator:    identityResult(upload.Initiator),
-			Owner:        identityResult(upload.Owner),
-			StorageClass: storage.EffectiveStorageClass(upload.StorageClass),
+			Key:               encode(upload.Key.String()),
+			UploadId:          upload.UploadId.String(),
+			Initiated:         upload.Initiated.UTC().Format(time.RFC3339),
+			ChecksumAlgorithm: upload.ChecksumAlgorithm,
+			ChecksumType:      upload.ChecksumType,
+			Initiator:         identityResult(upload.Initiator),
+			Owner:             identityResult(upload.Owner),
+			StorageClass:      storage.EffectiveStorageClass(upload.StorageClass),
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
