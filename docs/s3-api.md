@@ -145,7 +145,7 @@ from 0 to 1,000; zero returns no parts but still validates the upload and return
 its metadata. Both limits default to 1,000 only when omitted. Empty, malformed,
 negative, or excessive values return `InvalidArgument` (HTTP 400).
 
-When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key.
+When a response is truncated, resume with both `NextKeyMarker` and `NextUploadIdMarker`. The marker pair is significant because multiple pending multipart uploads can share the same object key. S3-backed storage accepts omitted optional delimiter and marker elements in upstream responses.
 
 ### Checksum metadata
 

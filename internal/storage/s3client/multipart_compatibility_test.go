@@ -13,6 +13,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMultipartListingsAcceptOmittedOptionalUpstreamFields(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Query().Has("uploads") {
+			// No delimiter was requested, and an untruncated page needs no next markers.
+			io.WriteString(w, `<ListMultipartUploadsResult><Bucket>bucket</Bucket><KeyMarker></KeyMarker><UploadIdMarker></UploadIdMarker><Prefix></Prefix><MaxUploads>1000</MaxUploads><IsTruncated>false</IsTruncated></ListMultipartUploadsResult>`)
+		} else {
+			io.WriteString(w, `<ListPartsResult><Bucket>bucket</Bucket><Key>key</Key><UploadId>upload</UploadId><PartNumberMarker>0</PartNumberMarker><MaxParts>1000</MaxParts><IsTruncated>false</IsTruncated></ListPartsResult>`)
+		}
+	}))
+	t.Cleanup(endpoint.Close)
+	backend, err := NewStorage(s3.New(s3.Options{BaseEndpoint: aws.String(endpoint.URL), Region: "us-east-1", UsePathStyle: true, Credentials: aws.AnonymousCredentials{}}))
+	require.NoError(t, err)
+	bucket, key := storage.MustNewBucketName("bucket"), storage.MustNewObjectKey("key")
+	uploads, err := backend.ListMultipartUploads(t.Context(), bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	require.False(t, uploads.IsTruncated)
+	require.Empty(t, uploads.Delimiter)
+	require.Empty(t, uploads.NextKeyMarker)
+	require.Empty(t, uploads.NextUploadIdMarker)
+	parts, err := backend.ListParts(t.Context(), bucket, key, storage.MustNewUploadId("upload"), storage.ListPartsOptions{MaxParts: 1000})
+	require.NoError(t, err)
+	require.False(t, parts.IsTruncated)
+	require.Nil(t, parts.NextPartNumberMarker)
+	require.Nil(t, parts.ChecksumAlgorithm)
+	require.Nil(t, parts.ChecksumType)
+	require.Nil(t, parts.Owner)
+	require.Nil(t, parts.Initiator)
+	require.Nil(t, parts.AbortDate)
+}
+
 func TestMultipartChecksumMetadataPassesThroughUpstream(t *testing.T) {
 	var gotAlgorithm, gotType string
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
