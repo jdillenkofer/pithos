@@ -368,6 +368,9 @@ func (s *Server) bindExistingObjectTagsResolver(request *authorization.Request, 
 // request (error or denied).
 func (s *Server) runAuthorization(ctx context.Context, request *authorization.Request, isAuthenticated bool, w http.ResponseWriter, r *http.Request) bool {
 	s.bindMultipartRequestTagsResolver(request, r)
+	if request.Bucket != nil && request.Operation != authorization.OperationCreateBucket && s.checkExpectedBucketOwner(ctx, *request.Bucket, w, r) {
+		return true
+	}
 	// Disabling authentication is an explicit permissive development mode. In
 	// that mode there is no caller account against which ownership could be
 	// checked, so leave the complete decision to the configured authorizer.
@@ -446,6 +449,34 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 		request.SourceResourceAccountId = ptrutils.ToPtr(sourceBucket.OwnerAccountID)
 	}
 	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
+}
+
+// checkExpectedBucketOwner enforces the caller's owner guard independently of
+// authentication and programmable authorization. True means the request failed.
+func (s *Server) checkExpectedBucketOwner(ctx context.Context, bucket string, w http.ResponseWriter, r *http.Request) bool {
+	values := r.Header.Values("x-amz-expected-bucket-owner")
+	if len(values) == 0 {
+		return false
+	}
+	if len(values) != 1 {
+		writeS3ErrorResponse(w, r, http.StatusBadRequest, "InvalidArgument", "Expected bucket owner must not be repeated", r.URL.Path)
+		return true
+	}
+	name, err := storage.NewBucketName(bucket)
+	if err != nil {
+		handleError(err, w, r)
+		return true
+	}
+	result, err := s.storage.HeadBucket(ctx, name)
+	if err != nil {
+		handleError(err, w, r)
+		return true
+	}
+	if result.OwnerAccountID != values[0] {
+		writeS3ErrorResponse(w, r, http.StatusForbidden, "AccessDenied", "Expected bucket owner does not match", r.URL.Path)
+		return true
+	}
+	return false
 }
 
 // Subsequent multipart writes use the initiation tags, never headers supplied

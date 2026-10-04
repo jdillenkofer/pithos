@@ -123,6 +123,13 @@ Deleting by key in an enabled or suspended bucket creates a delete marker and re
 
 `GET /<bucket>?versions` lists object versions and delete markers. It supports `prefix`, `delimiter`, `key-marker`, `version-id-marker`, and `max-keys`, and returns `Version`, `DeleteMarker`, `CommonPrefixes`, `NextKeyMarker`, and `NextVersionIdMarker` elements.
 
+## Expected Bucket Owner
+
+Bucket-scoped operations (except bucket creation) enforce
+`x-amz-expected-bucket-owner` when supplied. A mismatch returns `AccessDenied`
+(HTTP 403), even when authentication is disabled. Repeated owner headers return
+`InvalidArgument` (HTTP 400).
+
 ## Multipart Upload Listing
 
 `GET /<bucket>?uploads` supports `prefix`, `delimiter`, `key-marker`, `upload-id-marker`, and `max-uploads`.
