@@ -9,11 +9,15 @@ import (
 // Only an omitted limit selects the default. Invalid supplied values must not
 // authorize as a small number and then execute with the larger default limit.
 func parseMaxKeys(query url.Values) (int32, error) {
-	if !query.Has(maxKeysQuery) {
+	return parseListingLimit(query, maxKeysQuery, 0)
+}
+
+func parseListingLimit(query url.Values, parameter string, minimum int64) (int32, error) {
+	if !query.Has(parameter) {
 		return int32(maxListLimit), nil
 	}
-	value, err := strconv.ParseInt(query.Get(maxKeysQuery), 10, 32)
-	if err != nil || value < 0 || value > maxListLimit {
+	value, err := strconv.ParseInt(query.Get(parameter), 10, 32)
+	if err != nil || value < minimum || value > maxListLimit {
 		return 0, ErrInvalidArgument
 	}
 	return int32(value), nil
