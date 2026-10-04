@@ -540,11 +540,6 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 			objectEntities = objectEntities[:opts.MaxUploads]
 		}
 	} else {
-		keyCount, err := sms.objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-		if err != nil {
-			return nil, err
-		}
-		isTruncated = int32(*keyCount) > opts.MaxUploads
 		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
 		if err != nil {
 			return nil, err
@@ -554,48 +549,62 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	nextKeyMarker := ""
 	nextUploadIdMarker := ""
 
-	objectIds := make([]ulid.ULID, 0, len(objectEntities))
-	for _, objectEntity := range objectEntities {
-		if objectEntity.Id == nil {
-			continue
-		}
-		objectIds = append(objectIds, *objectEntity.Id)
-	}
-	initiators, err := sms.loadObjectInitiators(ctx, tx, objectIds)
-	if err != nil {
-		return nil, err
-	}
+	objectIds := []ulid.ULID{}
+	uploadIndexByObjectId := map[ulid.ULID]int{}
 
 	for _, objectEntity := range objectEntities {
+		var commonPrefix *string
 		if delimiter != "" {
-			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
+			commonPrefix = determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
 			if commonPrefix != nil {
-				if _, seen := commonPrefixSet[*commonPrefix]; !seen {
-					commonPrefixSet[*commonPrefix] = struct{}{}
-					commonPrefixes = append(commonPrefixes, *commonPrefix)
+				// A prefix is one listing entry, and must not recur on later pages.
+				if *commonPrefix <= keyMarker {
+					continue
+				}
+				if _, seen := commonPrefixSet[*commonPrefix]; seen {
+					continue
 				}
 			}
 		}
-		if int32(len(uploads)) < opts.MaxUploads {
-			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
-			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
-				upload := metadatastore.Upload{
-					Key:          objectEntity.Key,
-					UploadId:     *objectEntity.UploadId,
-					Initiated:    objectEntity.CreatedAt,
-					StorageClass: objectEntity.StorageClass,
-					Owner:        owner,
-				}
-				if objectEntity.Id != nil {
-					if initiator, ok := initiators[*objectEntity.Id]; ok {
-						initiatorCopy := initiator
-						upload.Initiator = &initiatorCopy
-					}
-				}
-				uploads = append(uploads, upload)
+		if int32(len(uploads)+len(commonPrefixes)) >= opts.MaxUploads {
+			isTruncated = true
+			break
+		}
+		if commonPrefix != nil {
+			commonPrefixSet[*commonPrefix] = struct{}{}
+			commonPrefixes = append(commonPrefixes, *commonPrefix)
+			nextKeyMarker = *commonPrefix
+			nextUploadIdMarker = ""
+			continue
+		}
+		upload := metadatastore.Upload{
+			Key:          objectEntity.Key,
+			UploadId:     *objectEntity.UploadId,
+			Initiated:    objectEntity.CreatedAt,
+			StorageClass: objectEntity.StorageClass,
+			Owner:        owner,
+		}
+		if objectEntity.Id != nil {
+			objectIds = append(objectIds, *objectEntity.Id)
+			uploadIndexByObjectId[*objectEntity.Id] = len(uploads)
+		}
+		uploads = append(uploads, upload)
+		nextKeyMarker = objectEntity.Key.String()
+		nextUploadIdMarker = objectEntity.UploadId.String()
+	}
+
+	// Load identities only for uploads on this page, not uploads grouped into
+	// common prefixes or excluded by MaxUploads.
+	if len(objectIds) > 0 {
+		initiators, err := sms.loadObjectInitiators(ctx, tx, objectIds)
+		if err != nil {
+			return nil, err
+		}
+		for objectId, uploadIndex := range uploadIndexByObjectId {
+			if initiator, ok := initiators[objectId]; ok {
+				initiatorCopy := initiator
+				uploads[uploadIndex].Initiator = &initiatorCopy
 			}
-			nextKeyMarker = objectEntity.Key.String()
-			nextUploadIdMarker = objectEntity.UploadId.String()
 		}
 	}
 
