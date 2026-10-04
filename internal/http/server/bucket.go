@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/httputils"
@@ -164,6 +165,10 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 
 	query := r.URL.Query()
 
+	if query.Has("encoding-type") && query.Get("encoding-type") != "url" {
+		handleError(ErrInvalidArgument, w, r)
+		return
+	}
 	prefix := httputils.GetQueryParam(query, prefixQuery)
 	delimiter := httputils.GetQueryParam(query, delimiterQuery)
 	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
@@ -195,9 +200,22 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		CommonPrefixes:     []*CommonPrefixResult{},
 	}
 
+	encode := func(value string) string { return value }
+	if query.Get("encoding-type") == "url" {
+		// QueryEscape supplies UTF-8 percent encoding; S3 uses %20, not +,
+		// for spaces and also encodes slashes in keys and prefixes.
+		encode = func(value string) string { return strings.ReplaceAll(url.QueryEscape(value), "+", "%20") }
+		listMultipartUploadsResult.EncodingType = ptrutils.ToPtr("url")
+		listMultipartUploadsResult.KeyMarker = ptrutils.ToPtr(encode(result.KeyMarker))
+		listMultipartUploadsResult.Prefix = ptrutils.ToPtr(encode(result.Prefix))
+		listMultipartUploadsResult.Delimiter = ptrutils.ToPtr(encode(result.Delimiter))
+		if nextKeyMarker != nil {
+			listMultipartUploadsResult.NextKeyMarker = ptrutils.ToPtr(encode(*nextKeyMarker))
+		}
+	}
 	for _, upload := range result.Uploads {
 		listMultipartUploadsResult.Uploads = append(listMultipartUploadsResult.Uploads, &UploadResult{
-			Key:          upload.Key.String(),
+			Key:          encode(upload.Key.String()),
 			UploadId:     upload.UploadId.String(),
 			Initiated:    upload.Initiated.UTC().Format(time.RFC3339),
 			Initiator:    identityResult(upload.Initiator),
@@ -206,7 +224,7 @@ func (s *Server) listMultipartUploadsHandler(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	for _, commonPrefix := range result.CommonPrefixes {
-		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixResult{Prefix: commonPrefix})
+		listMultipartUploadsResult.CommonPrefixes = append(listMultipartUploadsResult.CommonPrefixes, &CommonPrefixResult{Prefix: encode(commonPrefix)})
 	}
 	writeXMLResponse(w, r, http.StatusOK, listMultipartUploadsResult)
 }
