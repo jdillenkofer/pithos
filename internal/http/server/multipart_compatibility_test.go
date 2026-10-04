@@ -38,6 +38,44 @@ func multipartCompatibilityHandler(t *testing.T, backend storage.Storage) http.H
 	return SetupServer(nil, "us-east-1", "s3.test", "website.test", authorizer, backend)
 }
 
+func TestMultipartExpectedBucketOwner(t *testing.T) {
+	for _, path := range []string{"/bucket?uploads", "/bucket/key?uploadId=upload"} {
+		for _, tc := range []struct {
+			name   string
+			owners []string
+			status int
+		}{
+			{"omitted", nil, http.StatusOK},
+			{"matching", []string{"account"}, http.StatusOK},
+			{"mismatching", []string{"other"}, http.StatusForbidden},
+			{"empty", []string{""}, http.StatusForbidden},
+			{"repeated", []string{"account", "other"}, http.StatusBadRequest},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				backend := &multipartCompatibilityStorage{}
+				handler := multipartCompatibilityHandler(t, backend)
+				request := httptest.NewRequest("GET", "http://s3.test"+path, nil)
+				for _, owner := range tc.owners {
+					request.Header.Add("x-amz-expected-bucket-owner", owner)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				require.Equal(t, tc.status, response.Code, response.Body.String())
+				if tc.status != http.StatusOK {
+					require.Empty(t, backend.limits)
+					var result ErrorResponse
+					require.NoError(t, xml.Unmarshal(response.Body.Bytes(), &result))
+					if tc.status == http.StatusForbidden {
+						require.Equal(t, "AccessDenied", result.Code)
+					} else {
+						require.Equal(t, "InvalidArgument", result.Code)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestMultipartListingLimits(t *testing.T) {
 	for _, operation := range []struct {
 		path, parameter string
