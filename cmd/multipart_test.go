@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGetObjectPartNumber(t *testing.T) {
@@ -1543,8 +1544,21 @@ func TestListPartsExposesOwnerAndInitiator(t *testing.T) {
 			require.NotNil(t, uploads.Uploads[0].Initiator)
 			assert.Equal(t, "arn:pithos:iam::test-account:principal/test-principal", *uploads.Uploads[0].Initiator.ID)
 
-			_, err = lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("test-account")})
+			_, err = s3Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+				Bucket: bucketName,
+				LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: []types.LifecycleRule{{
+					ID: aws.String("cleanup-uploads"), Status: types.ExpirationStatusEnabled,
+					Filter:                         &types.LifecycleRuleFilter{Prefix: aws.String("")},
+					AbortIncompleteMultipartUpload: &types.AbortIncompleteMultipartUpload{DaysAfterInitiation: aws.Int32(7)},
+				}}},
+			})
 			require.NoError(t, err)
+			withLifecycle, err := lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("test-account")})
+			require.NoError(t, err)
+			initiated := uploads.Uploads[0].Initiated.UTC()
+			expectedAbort := time.Date(initiated.Year(), initiated.Month(), initiated.Day()+8, 0, 0, 0, 0, time.UTC)
+			assert.Equal(t, &expectedAbort, withLifecycle.AbortDate)
+			assert.Equal(t, aws.String("cleanup-uploads"), withLifecycle.AbortRuleId)
 			_, err = lister.ListParts(ctx, &s3.ListPartsInput{Bucket: bucketName, Key: key, UploadId: created.UploadId, ExpectedBucketOwner: aws.String("other-account")})
 			require.Error(t, err)
 			var apiError smithy.APIError

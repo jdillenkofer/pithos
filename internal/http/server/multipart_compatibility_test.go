@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -97,6 +98,32 @@ func TestMultipartChecksumConfiguration(t *testing.T) {
 				require.Contains(t, response.Body.String(), "InvalidRequest")
 			}
 		})
+	}
+}
+
+func TestListPartsLifecycleAbortHeaders(t *testing.T) {
+	for _, limit := range []string{"0", "1"} {
+		for _, configured := range []bool{false, true} {
+			t.Run(limit+"/"+map[bool]string{false: "absent", true: "configured"}[configured], func(t *testing.T) {
+				parts := &storage.ListPartsResult{BucketName: storage.MustNewBucketName("bucket"), Key: storage.MustNewObjectKey("key"), UploadId: storage.MustNewUploadId("upload")}
+				if configured {
+					date := time.Date(2026, 10, 8, 2, 0, 0, 0, time.FixedZone("offset", 2*3600))
+					ruleID := "cleanup-uploads"
+					parts.AbortDate, parts.AbortRuleID = &date, &ruleID
+				}
+				backend := &multipartCompatibilityStorage{parts: parts}
+				response := httptest.NewRecorder()
+				multipartCompatibilityHandler(t, backend).ServeHTTP(response, httptest.NewRequest("GET", "http://s3.test/bucket/key?uploadId=upload&max-parts="+limit, nil))
+				require.Equal(t, http.StatusOK, response.Code)
+				if configured {
+					require.Equal(t, "Thu, 08 Oct 2026 00:00:00 GMT", response.Header().Get("x-amz-abort-date"))
+					require.Equal(t, "cleanup-uploads", response.Header().Get("x-amz-abort-rule-id"))
+				} else {
+					require.Empty(t, response.Header().Get("x-amz-abort-date"))
+					require.Empty(t, response.Header().Get("x-amz-abort-rule-id"))
+				}
+			})
+		}
 	}
 }
 

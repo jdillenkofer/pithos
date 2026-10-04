@@ -326,6 +326,12 @@ func (s *Server) listPartsHandler(w http.ResponseWriter, r *http.Request) {
 		Initiator:         identityResult(result.Initiator),
 	}
 
+	if result.AbortDate != nil {
+		w.Header().Set("x-amz-abort-date", result.AbortDate.UTC().Format(http.TimeFormat))
+		if result.AbortRuleID != nil {
+			w.Header().Set("x-amz-abort-rule-id", *result.AbortRuleID)
+		}
+	}
 	writeXMLResponse(w, r, http.StatusOK, listPartsResult)
 }
 
@@ -359,6 +365,8 @@ func (s *Server) listAndFilterParts(ctx context.Context, r *http.Request, bucket
 			StorageClass:         result.StorageClass,
 			ChecksumAlgorithm:    result.ChecksumAlgorithm,
 			ChecksumType:         result.ChecksumType,
+			AbortDate:            result.AbortDate,
+			AbortRuleID:          result.AbortRuleID,
 			Owner:                result.Owner,
 			Initiator:            result.Initiator,
 		}
