@@ -13,7 +13,16 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 )
 
-type BinarySerializer struct{}
+type BinarySerializer struct {
+	// MaxFieldBytes bounds allocations when decoding untrusted or damaged logs.
+	// Zero preserves the historical unlimited decoder behavior.
+	MaxFieldBytes uint32
+}
+
+type boundedBinaryReader struct {
+	io.Reader
+	maxFieldBytes uint32
+}
 
 func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 	if err := binary.Write(w, binary.BigEndian, e.Version); err != nil {
@@ -163,6 +172,9 @@ func (s *BinarySerializer) Encode(w io.Writer, e *auditlog.Entry) error {
 }
 
 func (s *BinarySerializer) NewDecoder(r io.Reader) Decoder {
+	if s.MaxFieldBytes > 0 {
+		r = boundedBinaryReader{Reader: r, maxFieldBytes: s.MaxFieldBytes}
+	}
 	return &BinaryDecoder{r: r}
 }
 
@@ -354,6 +366,9 @@ func readBytes(r io.Reader) ([]byte, error) {
 	}
 	if l == 0 {
 		return nil, nil
+	}
+	if bounded, ok := r.(boundedBinaryReader); ok && l > bounded.maxFieldBytes {
+		return nil, errors.New("binary audit field exceeds decoding limit")
 	}
 	buf := make([]byte, l)
 	if _, err := io.ReadFull(r, buf); err != nil {
