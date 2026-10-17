@@ -10,6 +10,9 @@ import (
 )
 
 type Repository interface {
+	// FindNextObject returns at most one live object, strictly after startAfter
+	// and at or above minimumKey, within the literal prefix range.
+	FindNextObject(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, startAfter, minimumKey string) (*Entity, error)
 	SaveObject(ctx context.Context, tx *sql.Tx, object *Entity) error
 	InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, object *Entity) (*bool, error)
 	UpdateObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, object *Entity, optimisticLockVersion int64) (*bool, error)
