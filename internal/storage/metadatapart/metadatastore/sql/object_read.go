@@ -226,86 +226,110 @@ func (sms *sqlMetadataStore) ListObjectVersions(ctx context.Context, tx *sql.Tx,
 		maxKeys = 1000
 	}
 
-	var entities []object.Entity
-	if delimiter == "" {
-		// Without a delimiter every row is emitted, so one extra row is enough
-		// to detect truncation and the fetch can be bounded in SQL.
-		entities, err = sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker, maxKeys+1)
-	} else {
-		entities, err = sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker)
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	commonPrefixes := []string{}
-	commonPrefixSet := map[string]struct{}{}
 	versions := []metadatastore.ObjectVersion{}
 	isTruncated := false
-	emittedCount := int32(0)
-	var lastReturnedKey *string
-	var lastReturnedVersionID *string
 	var nextKeyMarker *string
 	var nextVersionIDMarker *string
 
-	for _, entity := range entities {
-		if delimiter != "" {
-			commonPrefix := determineCommonPrefix(prefix, entity.Key.String(), delimiter)
-			if commonPrefix != nil {
-				if _, exists := commonPrefixSet[*commonPrefix]; exists {
-					// The entity is represented by an already-emitted common
-					// prefix; advance the continuation markers past it so the
-					// next page does not re-emit the same prefix.
-					k := entity.Key.String()
-					lastReturnedKey = &k
-					lastReturnedVersionID = entity.VersionID
-					continue
-				}
-				if emittedCount >= maxKeys {
-					isTruncated = true
-					break
-				}
-				commonPrefixSet[*commonPrefix] = struct{}{}
-				commonPrefixes = append(commonPrefixes, *commonPrefix)
-				emittedCount++
-				k := entity.Key.String()
-				lastReturnedKey = &k
-				lastReturnedVersionID = entity.VersionID
-				continue
-			}
+	appendVersion := func(entity object.Entity) {
+		versionID := ""
+		if entity.VersionID != nil {
+			versionID = *entity.VersionID
 		}
-
-		if emittedCount >= maxKeys {
-			isTruncated = true
-			break
-		}
-
-		keyWithoutPrefix := strings.TrimPrefix(entity.Key.String(), prefix)
-		if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
-			versionID := ""
-			if entity.VersionID != nil {
-				versionID = *entity.VersionID
-			}
-			versions = append(versions, metadatastore.ObjectVersion{
-				Key:            entity.Key,
-				VersionID:      versionID,
-				IsDeleteMarker: entity.IsDeleteMarker,
-				IsLatest:       entity.IsLatest,
-				LastModified:   entity.UpdatedAt,
-				Size:           entity.Size,
-				ETag:           &entity.ETag,
-				StorageClass:   entity.StorageClass,
-			})
-			emittedCount++
-			nextKey := entity.Key.String()
-			lastReturnedKey = &nextKey
-			lastReturnedVersionID = entity.VersionID
-		}
+		versions = append(versions, metadatastore.ObjectVersion{
+			Key:            entity.Key,
+			VersionID:      versionID,
+			IsDeleteMarker: entity.IsDeleteMarker,
+			IsLatest:       entity.IsLatest,
+			LastModified:   entity.UpdatedAt,
+			Size:           entity.Size,
+			ETag:           &entity.ETag,
+			StorageClass:   entity.StorageClass,
+		})
 	}
 
-	if isTruncated {
-		nextKeyMarker = lastReturnedKey
-		nextVersionIDMarker = lastReturnedVersionID
+	if delimiter == "" {
+		// Without a delimiter every row is emitted, so one extra row is enough
+		// to detect truncation and the fetch can be bounded in SQL.
+		entities, err := sms.objectRepository.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker, maxKeys+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(entities)) > maxKeys {
+			isTruncated = true
+			entities = entities[:maxKeys]
+		}
+		for _, entity := range entities {
+			appendVersion(entity)
+		}
+		if isTruncated {
+			last := entities[len(entities)-1]
+			k := last.Key.String()
+			nextKeyMarker = &k
+			nextVersionIDMarker = last.VersionID
+		}
+	} else {
+		// A marker equal to or inside a group suppresses that entire group,
+		// including when it came from a previous page's CommonPrefix.
+		minimumKey := prefix
+		if group := determineCommonPrefix(prefix, keyMarker, delimiter); group != nil {
+			minimumKey = object.PrefixUpperBound(*group)
+			if minimumKey == "" {
+				return &metadatastore.ListObjectVersionsResult{Versions: versions, CommonPrefixes: commonPrefixes}, nil
+			}
+		}
+		var lastKey string
+		var lastVersionID *string
+		// Batch rows to avoid one round trip per result. Rows after an emitted
+		// group are discarded and the next query seeks past the group, so the
+		// batch grows only while rows are direct versions and restarts at one
+		// after a group: a run of groups costs one single-row query each.
+		batchSize := int64(1)
+	listing:
+		for {
+			remaining := int64(maxKeys) - int64(len(versions)+len(commonPrefixes))
+			limit := int32(min(batchSize, remaining+1))
+			batch, err := sms.objectRepository.FindObjectVersionsFromKey(ctx, tx, bucketName, prefix, keyMarker, versionIDMarker, minimumKey, limit)
+			if err != nil {
+				return nil, err
+			}
+			batchSize = min(64, batchSize*2)
+			for _, entity := range batch {
+				if entity.Key.String() < minimumKey {
+					continue
+				}
+				if remaining == 0 {
+					isTruncated = true
+					break listing
+				}
+				if group := determineCommonPrefix(prefix, entity.Key.String(), delimiter); group != nil {
+					commonPrefixes = append(commonPrefixes, *group)
+					lastKey, lastVersionID = *group, nil
+					minimumKey = object.PrefixUpperBound(*group)
+					if minimumKey == "" {
+						break listing
+					}
+					batchSize = 1
+				} else {
+					appendVersion(entity)
+					lastKey, lastVersionID = entity.Key.String(), entity.VersionID
+					keyMarker = lastKey
+					versionIDMarker = ""
+					if entity.VersionID != nil {
+						versionIDMarker = *entity.VersionID
+					}
+				}
+				remaining--
+			}
+			if len(batch) < int(limit) {
+				break
+			}
+		}
+		if isTruncated {
+			nextKeyMarker = &lastKey
+			nextVersionIDMarker = lastVersionID
+		}
 	}
 
 	return &metadatastore.ListObjectVersionsResult{

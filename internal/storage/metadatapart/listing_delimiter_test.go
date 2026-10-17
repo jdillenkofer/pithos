@@ -109,3 +109,104 @@ func TestDelimiterListingPagination(t *testing.T) {
 		})
 	}
 }
+
+func TestDelimiterVersionListingPagination(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, backend := range []struct {
+		name string
+		new  func(*testing.T) (*metadataPartStorage, func())
+	}{{"sqlite", newTestStorage}, {"postgres", newPostgresTestStorage}} {
+		t.Run(backend.name, func(t *testing.T) {
+			if backend.name == "postgres" {
+				testutils.SkipOnWindowsInGitHubActions(t)
+				testutils.SkipOnMacOSInGitHubActions(t)
+			}
+			st, cleanup := backend.new(t)
+			defer cleanup()
+			ctx := t.Context()
+			bucket := storage.MustNewBucketName("bucket")
+			require.NoError(t, st.CreateBucket(ctx, bucket))
+			repo, err := repositoryfactory.NewObjectRepository(st.db)
+			require.NoError(t, err)
+			keys := []string{"a", "b/", "b/1", "b/2", "b0", "c", "d/1", "d/2", "e", "logs/a", "logs/b/c", "logs/b/d", "logs/z", "x::a", "x::b::c", "x::z", "ababa"}
+			for i := range 300 {
+				keys = append(keys, fmt.Sprintf("b/huge/%06d", i))
+			}
+			slices.Sort(keys)
+			// Every other key also gets an older "null" version, which sorts last
+			// within its key.
+			versionsByKey := map[string][]string{}
+			require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{}, func(ctx context.Context, tx database.Tx) error {
+				for i, key := range keys {
+					versionIDs := []string{fmt.Sprintf("v%06d", i)}
+					if i%2 == 0 {
+						versionIDs = append(versionIDs, "null")
+					}
+					versionsByKey[key] = versionIDs
+					for j, versionID := range versionIDs {
+						entity := object.Entity{BucketName: bucket, Key: storage.MustNewObjectKey(key), UploadStatus: object.UploadStatusCompleted, VersionID: &versionID, IsLatest: j == 0}
+						require.NoError(t, repo.SaveObject(ctx, tx.SqlTx(), &entity))
+					}
+				}
+				return nil
+			}))
+			for _, tc := range []struct{ prefix, delimiter string }{{"", "/"}, {"logs/", "/"}, {"x::", "::"}, {"ab", "aba"}, {"missing/", "/"}} {
+				for _, initialMarker := range []string{"", "b/", "b/1", "b/huge/000010", "logs/b/cc", "x::b::c"} {
+					expected := []string{}
+					lastGroup := ""
+					for _, key := range keys {
+						suffix, ok := strings.CutPrefix(key, tc.prefix)
+						if !ok {
+							continue
+						}
+						if i := strings.Index(suffix, tc.delimiter); i >= 0 {
+							group := tc.prefix + suffix[:i+len(tc.delimiter)]
+							if group > initialMarker && group != lastGroup {
+								expected = append(expected, group)
+								lastGroup = group
+							}
+							continue
+						}
+						if key > initialMarker {
+							for _, versionID := range versionsByKey[key] {
+								expected = append(expected, key+"#"+versionID)
+							}
+						}
+					}
+					slices.Sort(expected)
+					for _, size := range []int32{1, 2, 3, 7, 1000} {
+						t.Run(fmt.Sprintf("%s/%s/%d", tc.prefix, initialMarker, size), func(t *testing.T) {
+							keyMarker := initialMarker
+							var versionIDMarker *string
+							got := []string{}
+							for page := 0; ; page++ {
+								require.Less(t, page, len(expected)+2)
+								var result *metadatastore.ListObjectVersionsResult
+								require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{}, func(ctx context.Context, tx database.Tx) error {
+									var err error
+									result, err = st.metadataStore.ListObjectVersions(ctx, tx.SqlTx(), bucket, metadatastore.ListObjectVersionsOptions{Prefix: &tc.prefix, Delimiter: &tc.delimiter, KeyMarker: &keyMarker, VersionIDMarker: versionIDMarker, MaxKeys: size})
+									return err
+								}))
+								entries := append([]string{}, result.CommonPrefixes...)
+								for _, version := range result.Versions {
+									entries = append(entries, version.Key.String()+"#"+version.VersionID)
+								}
+								require.LessOrEqual(t, len(entries), int(size))
+								got = append(got, entries...)
+								require.Equal(t, len(got) < len(expected), result.IsTruncated)
+								if !result.IsTruncated {
+									break
+								}
+								require.NotNil(t, result.NextKeyMarker)
+								keyMarker = *result.NextKeyMarker
+								versionIDMarker = result.NextVersionIDMarker
+							}
+							slices.Sort(got)
+							require.Equal(t, expected, got)
+						})
+					}
+				}
+			}
+		})
+	}
+}
