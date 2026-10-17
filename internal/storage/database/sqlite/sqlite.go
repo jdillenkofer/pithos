@@ -146,6 +146,12 @@ func (sdb *sqliteDatabase) GetDatabaseType() database.DatabaseType {
 	return database.DB_TYPE_SQLITE
 }
 
+// stmtCacheSize is the number of prepared statements go-sqlite3 keeps per
+// connection. Without it every query is re-parsed and re-planned by sqlite,
+// which dominates the cost of the small indexed lookups on the request path.
+// Sized to hold every statement the repositories issue.
+const stmtCacheSize = "256"
+
 func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 	openDatabaseMu.Lock()
 	defer openDatabaseMu.Unlock()
@@ -155,7 +161,7 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 	if err != nil {
 		return nil, err
 	}
-	writeableDb, err := otelsql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate",
+	writeableDb, err := otelsql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate&_stmt_cache_size="+stmtCacheSize,
 		otelsql.WithAttributes(semconv.DBSystemSqlite),
 	)
 	if err != nil {
@@ -167,7 +173,7 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 		return nil, err
 	}
 
-	readOnlyDb, err := otelsql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred",
+	readOnlyDb, err := otelsql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred&_stmt_cache_size="+stmtCacheSize,
 		otelsql.WithAttributes(semconv.DBSystemSqlite),
 	)
 	if err != nil {
