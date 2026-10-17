@@ -25,22 +25,14 @@ func NewRepository() (objectinitiator.Repository, error) {
 }
 
 func convertRowToObjectInitiatorEntity(initiatorRows *sql.Rows) (*objectinitiator.Entity, error) {
+	initiatorEntity := &objectinitiator.Entity{}
 	var objectId string
-	var accountId string
-	var principalId string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := initiatorRows.Scan(&objectId, &accountId, &principalId, &createdAt, &updatedAt)
+	err := initiatorRows.Scan(&objectId, &initiatorEntity.AccountId, &initiatorEntity.PrincipalId, &initiatorEntity.CreatedAt, &initiatorEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	return &objectinitiator.Entity{
-		ObjectId:    ulid.MustParse(objectId),
-		AccountId:   accountId,
-		PrincipalId: principalId,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
-	}, nil
+	initiatorEntity.ObjectId = ulid.MustParse(objectId)
+	return initiatorEntity, nil
 }
 
 func (ir *pgxRepository) FindObjectInitiatorByObjectId(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) (*objectinitiator.Entity, error) {

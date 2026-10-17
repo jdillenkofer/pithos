@@ -65,43 +65,19 @@ func (br *sqliteRepository) FindInUsePartIdCounts(ctx context.Context, tx *sql.T
 }
 
 func convertRowToPartEntity(partRows *sql.Rows) (*part.Entity, error) {
+	partEntity := &part.Entity{}
 	var id string
 	var partIdStr string
 	var objectId string
-	var etag string
-	var checksumCRC32 *string
-	var checksumCRC32C *string
-	var checksumCRC64NVME *string
-	var checksumSHA1 *string
-	var checksumSHA256 *string
-	var size int64
-	var sequenceNumber int
-	var partStoreName *string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := partRows.Scan(&id, &partIdStr, &objectId, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &size, &sequenceNumber, &partStoreName, &createdAt, &updatedAt)
+	err := partRows.Scan(&id, &partIdStr, &objectId, &partEntity.ETag, &partEntity.ChecksumCRC32, &partEntity.ChecksumCRC32C, &partEntity.ChecksumCRC64NVME, &partEntity.ChecksumSHA1, &partEntity.ChecksumSHA256, &partEntity.Size, &partEntity.SequenceNumber, &partEntity.PartStoreName, &partEntity.CreatedAt, &partEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	partId := partstore.MustNewPartIdFromString(partIdStr)
-	partEntity := part.Entity{
-		Id:                &ulidId,
-		PartId:            *partId,
-		ObjectId:          ulid.MustParse(objectId),
-		ETag:              etag,
-		ChecksumCRC32:     checksumCRC32,
-		ChecksumCRC32C:    checksumCRC32C,
-		ChecksumCRC64NVME: checksumCRC64NVME,
-		ChecksumSHA1:      checksumSHA1,
-		ChecksumSHA256:    checksumSHA256,
-		Size:              size,
-		SequenceNumber:    sequenceNumber,
-		PartStoreName:     partStoreName,
-		CreatedAt:         createdAt,
-		UpdatedAt:         updatedAt,
-	}
-	return &partEntity, nil
+	partEntity.Id = &ulidId
+	partEntity.PartId = *partstore.MustNewPartIdFromString(partIdStr)
+	partEntity.ObjectId = ulid.MustParse(objectId)
+	return partEntity, nil
 }
 
 func (br *sqliteRepository) FindInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {

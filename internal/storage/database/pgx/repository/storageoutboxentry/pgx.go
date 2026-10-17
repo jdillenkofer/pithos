@@ -55,18 +55,10 @@ func (sor *pgxRepository) Count(ctx context.Context, tx *sql.Tx, outboxId string
 }
 
 func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageoutboxentry.Entity, error) {
+	storageOutboxEntryEntity := &storageoutboxentry.Entity{}
 	var id string
-	var operation string
 	var bucket string
-	var key string
-	var versionID *string
-	var contentType *string
-	var createdAt time.Time
-	var updatedAt time.Time
-	var claimOwner *string
-	var claimUntil *time.Time
-	var version int64
-	err := storageOutboxRow.Scan(&id, &operation, &bucket, &key, &versionID, &contentType, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
+	err := storageOutboxRow.Scan(&id, &storageOutboxEntryEntity.Operation, &bucket, &storageOutboxEntryEntity.Key, &storageOutboxEntryEntity.VersionID, &storageOutboxEntryEntity.ContentType, &storageOutboxEntryEntity.CreatedAt, &storageOutboxEntryEntity.UpdatedAt, &storageOutboxEntryEntity.ClaimOwner, &storageOutboxEntryEntity.ClaimUntil, &storageOutboxEntryEntity.Version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -74,19 +66,9 @@ func convertRowToStorageOutboxEntryEntity(storageOutboxRow *sql.Row) (*storageou
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	return &storageoutboxentry.Entity{
-		Id:          &ulidId,
-		Operation:   operation,
-		Bucket:      storage.MustNewBucketName(bucket),
-		Key:         key,
-		VersionID:   versionID,
-		ContentType: contentType,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
-		ClaimOwner:  claimOwner,
-		ClaimUntil:  claimUntil,
-		Version:     version,
-	}, nil
+	storageOutboxEntryEntity.Id = &ulidId
+	storageOutboxEntryEntity.Bucket = storage.MustNewBucketName(bucket)
+	return storageOutboxEntryEntity, nil
 }
 
 func (sor *pgxRepository) FindFirstStorageOutboxEntry(ctx context.Context, tx *sql.Tx, outboxId string) (*storageoutboxentry.Entity, error) {
@@ -172,18 +154,14 @@ func (sor *pgxRepository) FindStorageOutboxEntryChunksById(ctx context.Context, 
 
 	var chunks []*storageoutboxentry.ContentChunk
 	for rows.Next() {
+		chunk := &storageoutboxentry.ContentChunk{}
 		var entryIdStr string
-		var chunkIndex int
-		var content []byte
-		err := rows.Scan(&entryIdStr, &chunkIndex, &content)
+		err := rows.Scan(&entryIdStr, &chunk.ChunkIndex, &chunk.Content)
 		if err != nil {
 			return nil, err
 		}
-		chunks = append(chunks, &storageoutboxentry.ContentChunk{
-			OutboxEntryId: ulid.MustParse(entryIdStr),
-			ChunkIndex:    chunkIndex,
-			Content:       content,
-		})
+		chunk.OutboxEntryId = ulid.MustParse(entryIdStr)
+		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
 }

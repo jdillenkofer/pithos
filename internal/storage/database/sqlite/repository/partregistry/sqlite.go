@@ -94,23 +94,14 @@ func (pr *sqliteRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) ([]
 	defer rows.Close()
 	entities := []partregistry.Entity{}
 	for rows.Next() {
+		var entity partregistry.Entity
 		var partIdStr string
-		var refCount int64
-		var createdAt time.Time
-		var updatedAt time.Time
-		var version int64
-		err := rows.Scan(&partIdStr, &refCount, &createdAt, &updatedAt, &version)
+		err := rows.Scan(&partIdStr, &entity.RefCount, &entity.CreatedAt, &entity.UpdatedAt, &entity.Version)
 		if err != nil {
 			return nil, err
 		}
-		partId := partstore.MustNewPartIdFromString(partIdStr)
-		entities = append(entities, partregistry.Entity{
-			PartId:    *partId,
-			RefCount:  refCount,
-			CreatedAt: createdAt,
-			UpdatedAt: updatedAt,
-			Version:   version,
-		})
+		entity.PartId = *partstore.MustNewPartIdFromString(partIdStr)
+		entities = append(entities, entity)
 	}
 	return entities, rows.Err()
 }
