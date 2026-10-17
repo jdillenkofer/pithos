@@ -114,6 +114,9 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 					return report, err
 				}
 				report.TotalObjects++
+				if !version.IsLatest {
+					report.NoncurrentVersions++
+				}
 				if result.Success {
 					report.SuccessfulObjects++
 				} else {
@@ -211,7 +214,7 @@ func truncateError(message string, maxLength int) string {
 
 func (v *Validator) validateObject(ctx context.Context, inspector storage.IntegrityInspector, bucket storage.BucketName, version storage.ObjectVersion) ValidationResult {
 	versionID := version.VersionID
-	result := ValidationResult{BucketName: bucket.String(), ObjectKey: version.Key.String(), VersionID: &versionID, Success: true}
+	result := ValidationResult{BucketName: bucket.String(), ObjectKey: version.Key.String(), VersionID: &versionID, IsLatest: version.IsLatest, Success: true}
 	err := inspector.InspectObject(ctx, bucket, version.Key, &versionID, func(object storage.Object, parts []storage.IntegrityPart) error {
 		var calculatedParts []checksumutils.PartChecksums
 		var totalSize int64

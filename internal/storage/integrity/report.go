@@ -11,6 +11,7 @@ type ValidationResult struct {
 	BucketName string
 	ObjectKey  string
 	VersionID  *string
+	IsLatest   bool
 	// Corrupted is true only for verified size or checksum mismatches, not I/O errors.
 	Corrupted      bool
 	Success        bool
@@ -29,6 +30,7 @@ type PartFailure struct {
 }
 
 type ValidationReport struct {
+	NoncurrentVersions int
 	StartTime         time.Time
 	EndTime           time.Time
 	TotalBuckets      int
