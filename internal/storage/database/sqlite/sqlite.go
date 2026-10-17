@@ -14,7 +14,6 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 
-	"github.com/XSAM/otelsql"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
@@ -161,8 +160,8 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 	if err != nil {
 		return nil, err
 	}
-	writeableDb, err := otelsql.Open("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate&_stmt_cache_size="+stmtCacheSize,
-		otelsql.WithAttributes(semconv.DBSystemSqlite),
+	writeableDb, err := database.OpenSQL("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate&_stmt_cache_size="+stmtCacheSize,
+		semconv.DBSystemSqlite,
 	)
 	if err != nil {
 		return nil, err
@@ -173,8 +172,8 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 		return nil, err
 	}
 
-	readOnlyDb, err := otelsql.Open("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred&_stmt_cache_size="+stmtCacheSize,
-		otelsql.WithAttributes(semconv.DBSystemSqlite),
+	readOnlyDb, err := database.OpenSQL("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred&_stmt_cache_size="+stmtCacheSize,
+		semconv.DBSystemSqlite,
 	)
 	if err != nil {
 		writeableDb.Close()
