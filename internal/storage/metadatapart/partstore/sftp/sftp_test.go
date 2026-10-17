@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"strconv"
 	"testing"
+	"time"
 
 	"os"
 	"path/filepath"
@@ -17,8 +18,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/moby/moby/api/types/container"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/ssh"
 )
@@ -39,7 +42,23 @@ func randSeq(n int) (*string, error) {
 	return &seq, nil
 }
 
-func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig) {
+func prepareSshServer(t testing.TB, usePassword bool) (string, *ssh.ClientConfig) {
+	sshAddr, clientConfig, _ := prepareSshServerWithShaping(t, usePassword, false)
+	return sshAddr, clientConfig
+}
+
+// networkProfile describes the link between the client and the SSH server.
+// Zero values mean no added delay and no bandwidth limit.
+type networkProfile struct {
+	name     string
+	rtt      time.Duration
+	rateMbit int
+}
+
+// prepareSshServerWithShaping starts an OpenSSH server container. If
+// shapeable is set, the container gets NET_ADMIN and tc so its network can
+// be shaped with setNetworkProfile.
+func prepareSshServerWithShaping(t testing.TB, usePassword bool, shapeable bool) (string, *ssh.ClientConfig, testcontainers.Container) {
 	const sshUsername = "user"
 	sshPasswordPtr, err := randSeq(16)
 	assert.Nil(t, err)
@@ -70,12 +89,21 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 			wait.ForListeningPort(internalSshPort),
 		),
 	}
+	if shapeable {
+		req.HostConfigModifier = func(hc *container.HostConfig) {
+			hc.CapAdd = append(hc.CapAdd, "NET_ADMIN")
+		}
+	}
 	opensshServerContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	defer testcontainers.CleanupContainer(t, opensshServerContainer)
 	assert.Nil(t, err)
+
+	if shapeable {
+		execInContainer(t, ctx, opensshServerContainer, "apk", "add", "--no-cache", "iproute2")
+	}
 
 	externalSshPort, err := opensshServerContainer.MappedPort(ctx, internalSshPort)
 	assert.Nil(t, err)
@@ -117,7 +145,56 @@ func prepareSshServer(t *testing.T, usePassword bool) (string, *ssh.ClientConfig
 	externalSshPortStr := externalSshPort.Port()
 	sshAddr := fmt.Sprintf("%v:%v", host, externalSshPortStr)
 
-	return sshAddr, clientConfig
+	return sshAddr, clientConfig, opensshServerContainer
+}
+
+func execInContainer(t testing.TB, ctx context.Context, c testcontainers.Container, cmd ...string) {
+	exitCode, output, err := c.Exec(ctx, cmd, tcexec.Multiplexed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 0 {
+		out, _ := io.ReadAll(output)
+		t.Fatalf("%v failed with exit code %d: %s", cmd, exitCode, out)
+	}
+}
+
+// setNetworkProfile replaces the shaping of the container's eth0 with
+// profile. netem on egress delays every packet the server sends by the full
+// round trip time and limits download bandwidth. The kernel of Docker
+// Desktop lacks ifb, so upload bandwidth is limited with an ingress policer
+// instead, which drops excess packets like a bottleneck link.
+func setNetworkProfile(t testing.TB, ctx context.Context, c testcontainers.Container, profile networkProfile) {
+	// Deleting fails when no qdisc is configured yet, which is fine.
+	_, _, _ = c.Exec(ctx, []string{"tc", "qdisc", "del", "dev", "eth0", "root"})
+	_, _, _ = c.Exec(ctx, []string{"tc", "qdisc", "del", "dev", "eth0", "ingress"})
+
+	if profile.rtt > 0 || profile.rateMbit > 0 {
+		netem := []string{"tc", "qdisc", "add", "dev", "eth0", "root", "netem"}
+		if profile.rtt > 0 {
+			netem = append(netem, "delay", fmt.Sprintf("%dms", profile.rtt.Milliseconds()))
+		}
+		if profile.rateMbit > 0 {
+			netem = append(netem, "rate", fmt.Sprintf("%dmbit", profile.rateMbit))
+		}
+		// Raise the queue limit so netem does not drop packets of
+		// bandwidth-delay products beyond the default 1000 packets.
+		netem = append(netem, "limit", "100000")
+		execInContainer(t, ctx, c, netem...)
+	}
+	if profile.rateMbit > 0 {
+		// A policer has no queue, so a burst below the bandwidth-delay
+		// product drops packets of every full window. Allow one round trip
+		// (at least 20ms) worth of data, like a bottleneck buffered for one
+		// BDP. Docker Desktop uses an MTU of 65535, so the policer must also
+		// accept packets of that size or it drops every large segment and
+		// stalls TCP.
+		burstMs := max(int(profile.rtt.Milliseconds()), 20)
+		burstKB := max(profile.rateMbit*burstMs/8, 128)
+		execInContainer(t, ctx, c, "tc", "qdisc", "add", "dev", "eth0", "handle", "ffff:", "ingress")
+		execInContainer(t, ctx, c, "tc", "filter", "add", "dev", "eth0", "parent", "ffff:", "protocol", "all", "u32", "match", "u32", "0", "0",
+			"police", "rate", fmt.Sprintf("%dmbit", profile.rateMbit), "burst", fmt.Sprintf("%dk", burstKB), "mtu", "64k", "drop", "flowid", ":1")
+	}
 }
 
 func TestSftpPartStore(t *testing.T) {
