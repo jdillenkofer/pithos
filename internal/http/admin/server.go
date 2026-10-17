@@ -76,6 +76,7 @@ func NewHandler(options ...Options) (http.Handler, error) {
 	protected.HandleFunc("POST /logout", a.logout)
 	a.registerBuckets(protected)
 	a.registerObjects(protected)
+	a.registerCredentials(protected)
 	public.Handle("/", a.requireSession(a.requireCSRF(protected)))
 	ready = true
 	return &Handler{Handler: securityHeaders(public), cancel: cancel, workers: &a.workers}, nil
