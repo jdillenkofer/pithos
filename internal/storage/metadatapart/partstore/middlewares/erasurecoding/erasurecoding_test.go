@@ -330,3 +330,39 @@ func TestErasureCodingPartStoreBackgroundHealScanRepairsMissingShards(t *testing
 	})
 	assert.Nil(t, err)
 }
+
+func TestErasureCodingPartStoreHealsMissingParityShard(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	store, shardStores, db := createTestStore(t, 3)
+	ctx := context.Background()
+	assert.Nil(t, store.Start(ctx))
+	defer store.Stop(ctx)
+
+	partId, _ := partstore.NewRandomPartId()
+	data := bytes.Repeat([]byte("parity-heal"), 25000)
+
+	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		return store.PutPart(ctx, tx, *partId, bytes.NewReader(data))
+	})
+	assert.Nil(t, err)
+
+	readAll := func() []byte {
+		rc, err := store.GetPart(ctx, nil, *partId)
+		if !assert.Nil(t, err) {
+			return nil
+		}
+		out, err := io.ReadAll(rc)
+		assert.Nil(t, err)
+		assert.Nil(t, rc.Close())
+		return out
+	}
+
+	// Lose the parity shard; the read heals it.
+	shardStores[2].markMissing(*partId)
+	assert.Equal(t, data, readAll())
+
+	// The healed parity shard must be able to stand in for a lost data shard.
+	shardStores[0].markMissing(*partId)
+	assert.Equal(t, data, readAll())
+}
