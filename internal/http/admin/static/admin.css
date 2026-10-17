@@ -183,9 +183,24 @@ label .hint { font-weight: 400; }
 .form-grid label { margin-bottom: 0; }
 .form-narrow { max-width: 40rem; }
 label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
-input, select, textarea { font: inherit; color: var(--text); background: var(--container); border: 2px solid var(--input-border); border-radius: 8px; padding: 4px 10px; min-height: 32px; width: 100%; min-width: 0; }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--link); outline-offset: 1px; border-color: var(--link); }
-input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; accent-color: var(--primary); margin: 0; }
+input:not([type="checkbox"], [type="radio"]), select, textarea { font: inherit; color: var(--text); background: var(--container); border: 2px solid var(--input-border); border-radius: 8px; padding: 4px 10px; min-height: 32px; width: 100%; min-width: 0; }
+input:not([type="checkbox"], [type="radio"]):focus, select:focus, textarea:focus { outline: 2px solid var(--link); outline-offset: 1px; border-color: var(--link); }
+
+/* Checkboxes and radio buttons in the Cloudscape style */
+input[type="checkbox"], input[type="radio"] { appearance: none; flex: none; width: 16px; height: 16px; margin: 2px 0; padding: 0; border: 2px solid var(--input-border); background: var(--container) no-repeat center; cursor: pointer; vertical-align: -3px; transition: background-color 0.1s, border-color 0.1s; }
+input[type="checkbox"] { border-radius: 4px; }
+input[type="radio"] { border-radius: 50%; }
+input[type="checkbox"]:hover, input[type="radio"]:hover { border-color: var(--primary); }
+input[type="checkbox"]:checked { background-color: var(--primary); border-color: var(--primary); background-size: 10px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 5.2l2.3 2.3L8.5 2.5'/%3E%3C/svg%3E"); }
+input[type="radio"]:checked { border-color: var(--primary); border-width: 5px; }
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: not-allowed; border-color: var(--divider); background-color: var(--divider); }
+input[type="radio"]:checked:disabled { border-color: var(--muted); background-color: var(--container); }
+label.check { cursor: pointer; align-items: flex-start; line-height: 20px; }
+label.check input { margin-top: 2px; }
+fieldset { display: grid; gap: 8px; }
+fieldset label.check { margin-bottom: 0; }
+td.select input { display: block; }
 input[type="file"] { padding: 6px 10px; }
 textarea { display: block; font-family: var(--mono); font-size: 12px; line-height: 18px; resize: vertical; }
 fieldset { border: 1px solid var(--divider); border-radius: 8px; padding: 12px 16px; margin: 16px 0 0; }
