@@ -108,6 +108,10 @@ func (s *Server) listObjectVersionsHandler(w http.ResponseWriter, r *http.Reques
 	delimiter := httputils.GetQueryParam(query, delimiterQuery)
 	keyMarker := httputils.GetQueryParam(query, keyMarkerQuery)
 	versionIDMarker := httputils.GetQueryParam(query, "version-id-marker")
+	if versionIDMarker != nil && *versionIDMarker != "" && (keyMarker == nil || *keyMarker == "") {
+		writeS3ErrorResponse(w, r, http.StatusBadRequest, "InvalidArgument", "A version-id marker cannot be specified without a key marker.", r.URL.Path)
+		return
+	}
 
 	maxKeysI32, err := parseMaxKeys(query)
 	if err != nil {
