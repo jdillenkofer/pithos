@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -292,7 +293,7 @@ func (s *Server) listObjectsHandler(w http.ResponseWriter, r *http.Request) {
 		Delimiter:      delimiter,
 		StartAfter:     httputils.GetQueryParam(query, startAfterQuery), // Original start-after from request
 		Marker:         marker,
-		KeyCount:       int32(len(result.Objects)),
+		KeyCount:       int32(len(result.Objects) + len(result.CommonPrefixes)),
 		MaxKeys:        maxKeysI32,
 		CommonPrefixes: []*CommonPrefixResult{},
 		IsTruncated:    result.IsTruncated,
@@ -341,27 +342,39 @@ func (s *Server) listAndFilterObjects(ctx context.Context, r *http.Request, buck
 			return nil, nil, err
 		}
 
+		// Objects and prefixes share one bytewise-ordered pagination budget.
+		type entry struct {
+			key    string
+			object *storage.Object
+		}
+		entries := make([]entry, 0, len(result.Objects)+len(result.CommonPrefixes))
+		for i := range result.Objects {
+			entries = append(entries, entry{key: result.Objects[i].Key.String(), object: &result.Objects[i]})
+		}
+		for _, prefix := range result.CommonPrefixes {
+			entries = append(entries, entry{key: prefix})
+		}
+		slices.SortFunc(entries, func(a, b entry) int { return strings.Compare(a.key, b.key) })
 		lastScanned := startAfter
-		for objectIndex, object := range result.Objects {
-			key := object.Key.String()
+		for i, entry := range entries {
+			key := entry.key
 			lastScanned = &key
-			collectedObjects = append(collectedObjects, object)
-			if int32(len(collectedObjects)) >= maxKeys {
-				hasMore := objectIndex < len(result.Objects)-1 || len(result.CommonPrefixes) > 0 || result.IsTruncated
+			if entry.object != nil {
+				collectedObjects = append(collectedObjects, *entry.object)
+			} else {
+				if _, exists := seenPrefixes[key]; exists {
+					continue
+				}
+				seenPrefixes[key] = struct{}{}
+				collectedPrefixes = append(collectedPrefixes, key)
+			}
+			if int32(len(collectedObjects)+len(collectedPrefixes)) >= maxKeys {
+				hasMore := i < len(entries)-1 || result.IsTruncated
 				if hasMore {
 					nextMarker = lastScanned
-					return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: true}, nextMarker, nil
 				}
-				return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: false}, nil, nil
+				return &storage.ListBucketResult{Objects: collectedObjects, CommonPrefixes: collectedPrefixes, IsTruncated: hasMore}, nextMarker, nil
 			}
-		}
-		for _, commonPrefix := range result.CommonPrefixes {
-			lastScanned = &commonPrefix
-			if _, exists := seenPrefixes[commonPrefix]; exists {
-				continue
-			}
-			seenPrefixes[commonPrefix] = struct{}{}
-			collectedPrefixes = append(collectedPrefixes, commonPrefix)
 		}
 
 		if !result.IsTruncated {
@@ -424,7 +437,7 @@ func (s *Server) listObjectsV2Handler(w http.ResponseWriter, r *http.Request) {
 		Prefix:            prefix,
 		Delimiter:         delimiter,
 		MaxKeys:           maxKeysI32,
-		KeyCount:          int32(len(result.Objects)),
+		KeyCount:          int32(len(result.Objects) + len(result.CommonPrefixes)),
 		IsTruncated:       result.IsTruncated,
 		ContinuationToken: continuationToken,
 		StartAfter:        httputils.GetQueryParam(query, startAfterQuery), // Original start-after from request

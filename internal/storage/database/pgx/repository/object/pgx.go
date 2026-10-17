@@ -247,6 +247,26 @@ func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, 
 	return &containsObjects, nil
 }
 
+// FindNextObject supports inclusive subtree-successor seeks without losing a
+// key equal to the successor. The original prefix still supplies the upper bound.
+func (or *pgxRepository) FindNextObject(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, startAfter, minimumKey string) (*object.Entity, error) {
+	rows, err := tx.QueryContext(ctx, objectListingSelect+objectListingFilter+`
+ AND key COLLATE "C" >= $6
+ ORDER BY key COLLATE "C" ASC LIMIT 1`, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, object.PrefixUpperBound(prefix), minimumKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	entity, err := convertRowToObjectEntity(rows)
+	if err != nil {
+		return nil, err
+	}
+	return entity, rows.Err()
+}
+
 func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, object.PrefixUpperBound(prefix))
 	if err != nil {

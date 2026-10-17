@@ -43,7 +43,6 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	maxKeys := opts.MaxKeys
 
 	commonPrefixes := []string{}
-	commonPrefixSet := map[string]struct{}{}
 	objects := []metadatastore.Object{}
 	listedObjectIds := []ulid.ULID{}
 	var err error
@@ -58,72 +57,82 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			isTruncated = true
 			objectEntities = objectEntities[:maxKeys]
 		}
-	} else {
-		keyCount, err := sms.objectRepository.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, tx, bucketName, prefix, startAfter)
-		if err != nil {
-			return nil, err
+	} else if maxKeys > 0 {
+		// A marker equal to or inside a group suppresses that entire group,
+		// including when it came from a previous page's CommonPrefix.
+		minimumKey := prefix
+		if group := determineCommonPrefix(prefix, startAfter, delimiter); group != nil {
+			minimumKey = object.PrefixUpperBound(*group)
+			if minimumKey == "" {
+				return &metadatastore.ListBucketResult{Objects: objects, CommonPrefixes: commonPrefixes}, nil
+			}
 		}
-		isTruncated = int32(*keyCount) > maxKeys
-		objectEntities, err = sms.objectRepository.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, tx, bucketName, prefix, startAfter)
-		if err != nil {
-			return nil, err
+		for {
+			entity, err := sms.objectRepository.FindNextObject(ctx, tx, bucketName, prefix, startAfter, minimumKey)
+			if err != nil {
+				return nil, err
+			}
+			if entity == nil {
+				break
+			}
+			// Probe one extra logical result, not one extra descendant row.
+			if len(objectEntities)+len(commonPrefixes) >= int(maxKeys) {
+				isTruncated = true
+				break
+			}
+			if group := determineCommonPrefix(prefix, entity.Key.String(), delimiter); group != nil {
+				commonPrefixes = append(commonPrefixes, *group)
+				minimumKey = object.PrefixUpperBound(*group)
+				if minimumKey == "" {
+					break
+				}
+			} else {
+				objectEntities = append(objectEntities, *entity)
+				startAfter = entity.Key.String()
+			}
 		}
 	}
 
 	for _, objectEntity := range objectEntities {
-		if delimiter != "" {
-			commonPrefix := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
-			if commonPrefix != nil {
-				if _, seen := commonPrefixSet[*commonPrefix]; !seen {
-					commonPrefixSet[*commonPrefix] = struct{}{}
-					commonPrefixes = append(commonPrefixes, *commonPrefix)
+		var parts []metadatastore.Part = nil
+		if !opts.SkipPartFetch {
+			// @Perf: Consider optimizing part fetch to reduce database calls
+			partEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+			for _, partEntity := range partEntities {
+				partStruc := metadatastore.Part{
+					Id:                partEntity.PartId,
+					ETag:              partEntity.ETag,
+					ChecksumCRC32:     partEntity.ChecksumCRC32,
+					ChecksumCRC32C:    partEntity.ChecksumCRC32C,
+					ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME,
+					ChecksumSHA1:      partEntity.ChecksumSHA1,
+					ChecksumSHA256:    partEntity.ChecksumSHA256,
+					Size:              partEntity.Size,
+					StoreName:         partEntity.PartStoreName,
 				}
+				parts = append(parts, partStruc)
 			}
 		}
-		if int32(len(objects)) < maxKeys {
-			var parts []metadatastore.Part = nil
-			if !opts.SkipPartFetch {
-				// @Perf: Consider optimizing part fetch to reduce database calls
-				partEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
-				if err != nil {
-					return nil, err
-				}
-				for _, partEntity := range partEntities {
-					partStruc := metadatastore.Part{
-						Id:                partEntity.PartId,
-						ETag:              partEntity.ETag,
-						ChecksumCRC32:     partEntity.ChecksumCRC32,
-						ChecksumCRC32C:    partEntity.ChecksumCRC32C,
-						ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME,
-						ChecksumSHA1:      partEntity.ChecksumSHA1,
-						ChecksumSHA256:    partEntity.ChecksumSHA256,
-						Size:              partEntity.Size,
-						StoreName:         partEntity.PartStoreName,
-					}
-					parts = append(parts, partStruc)
-				}
-			}
-			keyWithoutPrefix := strings.TrimPrefix(objectEntity.Key.String(), prefix)
-			if delimiter == "" || !strings.Contains(keyWithoutPrefix, delimiter) {
-				objects = append(objects, metadatastore.Object{
-					Key:               objectEntity.Key,
-					LastModified:      objectEntity.UpdatedAt,
-					VersionID:         objectEntity.VersionID,
-					IsDeleteMarker:    objectEntity.IsDeleteMarker,
-					ETag:              objectEntity.ETag,
-					ChecksumCRC32:     objectEntity.ChecksumCRC32,
-					ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
-					ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
-					ChecksumSHA1:      objectEntity.ChecksumSHA1,
-					ChecksumSHA256:    objectEntity.ChecksumSHA256,
-					ChecksumType:      objectEntity.ChecksumType,
-					Size:              objectEntity.Size,
-					StorageClass:      objectEntity.StorageClass,
-					Parts:             parts,
-				})
-				listedObjectIds = append(listedObjectIds, *objectEntity.Id)
-			}
-		}
+		objects = append(objects, metadatastore.Object{
+			Key:               objectEntity.Key,
+			LastModified:      objectEntity.UpdatedAt,
+			VersionID:         objectEntity.VersionID,
+			IsDeleteMarker:    objectEntity.IsDeleteMarker,
+			ETag:              objectEntity.ETag,
+			ChecksumCRC32:     objectEntity.ChecksumCRC32,
+			ChecksumCRC32C:    objectEntity.ChecksumCRC32C,
+			ChecksumCRC64NVME: objectEntity.ChecksumCRC64NVME,
+			ChecksumSHA1:      objectEntity.ChecksumSHA1,
+			ChecksumSHA256:    objectEntity.ChecksumSHA256,
+			ChecksumType:      objectEntity.ChecksumType,
+			Size:              objectEntity.Size,
+			StorageClass:      objectEntity.StorageClass,
+			Parts:             parts,
+		})
+		listedObjectIds = append(listedObjectIds, *objectEntity.Id)
 	}
 
 	// Load the tag sets of the whole page in one query, so per-object consumers
