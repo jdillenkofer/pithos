@@ -93,70 +93,23 @@ func NewRepository() (object.Repository, error) {
 }
 
 func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
+	// Scan straight into the entity: every scan destination escapes to the heap,
+	// so per-column locals would cost one allocation per column and row.
+	objectEntity := &object.Entity{}
 	var id string
 	var bucketName string
 	var key string
-	var contentType *string
-	var cacheControl *string
-	var contentDisposition *string
-	var contentEncoding *string
-	var contentLanguage *string
-	var expires *string
-	var websiteRedirectLocation *string
-	var etag string
-	var checksumCRC32 *string
-	var checksumCRC32C *string
-	var checksumCRC64NVME *string
-	var checksumSHA1 *string
-	var checksumSHA256 *string
-	var checksumType *string
-	var size int64
-	var versionID *string
-	var isDeleteMarker bool
-	var isLatest bool
-	var uploadStatus string
 	var uploadId *string
-	var optimisticLockVersion int64
-	var createdAt time.Time
-	var updatedAt time.Time
-	var storageClass *string
-	var checksumAlgorithm *string
-	err := objectRows.Scan(&id, &bucketName, &key, &contentType, &cacheControl, &contentDisposition, &contentEncoding, &contentLanguage, &expires, &websiteRedirectLocation, &etag, &checksumCRC32, &checksumCRC32C, &checksumCRC64NVME, &checksumSHA1, &checksumSHA256, &checksumType, &size, &versionID, &isDeleteMarker, &isLatest, &uploadStatus, &uploadId, &optimisticLockVersion, &createdAt, &updatedAt, &storageClass, &checksumAlgorithm)
+	err := objectRows.Scan(&id, &bucketName, &key, &objectEntity.ContentType, &objectEntity.CacheControl, &objectEntity.ContentDisposition, &objectEntity.ContentEncoding, &objectEntity.ContentLanguage, &objectEntity.Expires, &objectEntity.WebsiteRedirectLocation, &objectEntity.ETag, &objectEntity.ChecksumCRC32, &objectEntity.ChecksumCRC32C, &objectEntity.ChecksumCRC64NVME, &objectEntity.ChecksumSHA1, &objectEntity.ChecksumSHA256, &objectEntity.ChecksumType, &objectEntity.Size, &objectEntity.VersionID, &objectEntity.IsDeleteMarker, &objectEntity.IsLatest, &objectEntity.UploadStatus, &uploadId, &objectEntity.OptimisticLockVersion, &objectEntity.CreatedAt, &objectEntity.UpdatedAt, &objectEntity.StorageClass, &objectEntity.ChecksumAlgorithm)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	objectEntity := object.Entity{
-		Id:                      &ulidId,
-		BucketName:              storage.MustNewBucketName(bucketName),
-		Key:                     storage.MustNewObjectKey(key),
-		ContentType:             contentType,
-		CacheControl:            cacheControl,
-		ContentDisposition:      contentDisposition,
-		ContentEncoding:         contentEncoding,
-		ContentLanguage:         contentLanguage,
-		Expires:                 expires,
-		WebsiteRedirectLocation: websiteRedirectLocation,
-		ETag:                    etag,
-		ChecksumCRC32:           checksumCRC32,
-		ChecksumCRC32C:          checksumCRC32C,
-		ChecksumCRC64NVME:       checksumCRC64NVME,
-		ChecksumSHA1:            checksumSHA1,
-		ChecksumSHA256:          checksumSHA256,
-		ChecksumType:            checksumType,
-		Size:                    size,
-		StorageClass:            storageClass,
-		ChecksumAlgorithm:       checksumAlgorithm,
-		VersionID:               versionID,
-		IsDeleteMarker:          isDeleteMarker,
-		IsLatest:                isLatest,
-		UploadStatus:            uploadStatus,
-		UploadId:                ptrutils.MapPtr(uploadId, storage.MustNewUploadId),
-		OptimisticLockVersion:   optimisticLockVersion,
-		CreatedAt:               createdAt,
-		UpdatedAt:               updatedAt,
-	}
-	return &objectEntity, nil
+	objectEntity.Id = &ulidId
+	objectEntity.BucketName = storage.MustNewBucketName(bucketName)
+	objectEntity.Key = storage.MustNewObjectKey(key)
+	objectEntity.UploadId = ptrutils.MapPtr(uploadId, storage.MustNewUploadId)
+	return objectEntity, nil
 }
 
 func (or *sqliteRepository) SaveObject(ctx context.Context, tx *sql.Tx, object *object.Entity) error {
