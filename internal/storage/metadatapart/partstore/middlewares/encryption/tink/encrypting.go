@@ -46,6 +46,22 @@ var segmentBufferPool = sync.Pool{
 	},
 }
 
+// getSegmentBuffer returns a buffer of ciphertextSegmentSize bytes, pooled
+// for the segment size new parts are written with.
+func getSegmentBuffer(ciphertextSegmentSize int) *[]byte {
+	if ciphertextSegmentSize == DefaultSegmentSize {
+		return segmentBufferPool.Get().(*[]byte)
+	}
+	buf := make([]byte, ciphertextSegmentSize)
+	return &buf
+}
+
+func putSegmentBuffer(buf *[]byte) {
+	if len(*buf) == DefaultSegmentSize {
+		segmentBufferPool.Put(buf)
+	}
+}
+
 // newEncryptingReader returns a reader yielding prefix, the tink stream
 // header and the encrypted segments of src. mainKey, aad and
 // ciphertextSegmentSize have the same meaning as for
@@ -85,14 +101,6 @@ func newEncryptingReader(src io.Reader, prefix []byte, mainKey []byte, aad []byt
 	nonce := make([]byte, tinkNonceSize)
 	copy(nonce, noncePrefix)
 
-	var buf *[]byte
-	if ciphertextSegmentSize == DefaultSegmentSize {
-		buf = segmentBufferPool.Get().(*[]byte)
-	} else {
-		b := make([]byte, ciphertextSegmentSize)
-		buf = &b
-	}
-
 	pss := ciphertextSegmentSize - tinkTagSize
 	return &encryptingReader{
 		src:      src,
@@ -100,16 +108,14 @@ func newEncryptingReader(src io.Reader, prefix []byte, mainKey []byte, aad []byt
 		nonce:    nonce,
 		pss:      pss,
 		firstPss: pss - tinkHeaderLen,
-		buf:      buf,
+		buf:      getSegmentBuffer(ciphertextSegmentSize),
 		out:      header,
 	}, nil
 }
 
 func (r *encryptingReader) release() {
 	if r.buf != nil {
-		if len(*r.buf) == DefaultSegmentSize {
-			segmentBufferPool.Put(r.buf)
-		}
+		putSegmentBuffer(r.buf)
 		r.buf = nil
 		r.out = nil
 	}

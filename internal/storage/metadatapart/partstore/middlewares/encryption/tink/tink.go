@@ -517,7 +517,10 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx dat
 				closeUnderlying()
 				return nil, err
 			}
-			return &compositeReadSeekCloser{seekableReader, closerFunc(closeUnderlying)}, nil
+			return &compositeReadSeekCloser{seekableReader, closerFunc(func() error {
+				seekableReader.release()
+				return closeUnderlying()
+			})}, nil
 		})
 		return ioutils.NewReadSeekCloserWithCloseHook(lazyReader, closeUnderlying), nil
 	}
