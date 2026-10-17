@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -23,7 +24,11 @@ var errAuthorizationFunctionNotFound = errors.New("authorization function " + au
 var errAuthorizationResultNotBoolean = errors.New("authorization function " + authorizationFunctionName + " must return a boolean")
 
 type LuaAuthorizer struct {
-	code          string
+	code string
+	// chunk is the policy code precompiled to a Lua binary chunk. Loading it
+	// skips lexing and parsing the source on every request; the chunk keeps
+	// the source name and debug info, so runtime errors read the same.
+	chunk         []byte
 	proxyResolver *authorization.ProxyResolver
 	tracer        trace.Tracer
 }
@@ -58,8 +63,13 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 	if err != nil {
 		return nil, err
 	}
+	chunk, err := compileChunk(code)
+	if err != nil {
+		return nil, err
+	}
 	luaAuthorizer := &LuaAuthorizer{
 		code:          code,
+		chunk:         chunk,
 		proxyResolver: proxyResolver,
 		tracer:        otel.Tracer("internal/http/server/authorization/lua"),
 	}
@@ -68,6 +78,18 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 		return nil, err
 	}
 	return luaAuthorizer, nil
+}
+
+func compileChunk(code string) ([]byte, error) {
+	L := lua.NewState()
+	if err := lua.LoadString(L, code); err != nil {
+		return nil, err
+	}
+	var chunk bytes.Buffer
+	if err := L.Dump(&chunk); err != nil {
+		return nil, err
+	}
+	return chunk.Bytes(), nil
 }
 
 func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
@@ -273,7 +295,10 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	L.Pop(1)
 	lua.Require(L, "math", lua.MathOpen, true)
 	L.Pop(1)
-	err := lua.DoString(L, authorizer.code)
+	err := L.Load(bytes.NewReader(authorizer.chunk), authorizer.code, "b")
+	if err == nil {
+		err = L.ProtectedCall(0, lua.MultipleReturns, 0)
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while executing Lua code", "error", err)
 		return authorization.ImplicitDeny, err
