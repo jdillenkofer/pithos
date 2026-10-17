@@ -138,7 +138,8 @@ func BenchmarkSftpPartStore(b *testing.B) {
 // BenchmarkSftpPartStoreConcurrent measures the total throughput of
 // concurrent part transfers, which BenchmarkSftpPartStore cannot show since
 // it runs one operation at a time. Each iteration transfers
-// concurrentBenchParts parts of 1-4MB in parallel.
+// concurrentBenchParts parts of 1-4MB in parallel, for several connection
+// pool sizes.
 func BenchmarkSftpPartStoreConcurrent(b *testing.B) {
 	testutils.SkipOnWindowsInGitHubActions(b)
 	testutils.SkipOnMacOSInGitHubActions(b)
@@ -195,42 +196,46 @@ func BenchmarkSftpPartStoreConcurrent(b *testing.B) {
 	for _, profile := range profiles {
 		b.Run(profile.name, func(b *testing.B) {
 			setNetworkProfile(b, ctx, c, profile)
-			ps := startSftpPartStore(b, sshAddr, clientConfig)
-			defer ps.Stop(ctx)
+			for _, connectionPoolSize := range []int{1, 2, 4, 8} {
+				b.Run(fmt.Sprintf("conns=%d", connectionPoolSize), func(b *testing.B) {
+					ps := startSftpPartStore(b, sshAddr, clientConfig, WithConnectionPoolSize(connectionPoolSize))
+					defer ps.Stop(ctx)
 
-			b.Run("PutPart", func(b *testing.B) {
-				b.SetBytes(int64(totalBytes))
-				for b.Loop() {
-					runConcurrently(b, func(i int) error {
-						partId, err := partstore.NewRandomPartId()
-						if err != nil {
-							return err
+					b.Run("PutPart", func(b *testing.B) {
+						b.SetBytes(int64(totalBytes))
+						for b.Loop() {
+							runConcurrently(b, func(i int) error {
+								partId, err := partstore.NewRandomPartId()
+								if err != nil {
+									return err
+								}
+								return ps.PutPart(ctx, nil, *partId, streamReader{bytes.NewReader(payloads[i])})
+							})
 						}
-						return ps.PutPart(ctx, nil, *partId, streamReader{bytes.NewReader(payloads[i])})
 					})
-				}
-			})
 
-			b.Run("GetPart", func(b *testing.B) {
-				b.SetBytes(int64(totalBytes))
-				for b.Loop() {
-					runConcurrently(b, func(i int) error {
-						rc, err := ps.GetPart(ctx, nil, getPartIds[i])
-						if err != nil {
-							return err
+					b.Run("GetPart", func(b *testing.B) {
+						b.SetBytes(int64(totalBytes))
+						for b.Loop() {
+							runConcurrently(b, func(i int) error {
+								rc, err := ps.GetPart(ctx, nil, getPartIds[i])
+								if err != nil {
+									return err
+								}
+								defer rc.Close()
+								_, err = io.Copy(io.Discard, rc)
+								return err
+							})
 						}
-						defer rc.Close()
-						_, err = io.Copy(io.Discard, rc)
-						return err
 					})
-				}
-			})
+				})
+			}
 		})
 	}
 }
 
-func startSftpPartStore(b *testing.B, sshAddr string, clientConfig *ssh.ClientConfig) partstore.PartStore {
-	ps, err := New(sshAddr, clientConfig, "/tmp/pithos")
+func startSftpPartStore(b *testing.B, sshAddr string, clientConfig *ssh.ClientConfig, opts ...Option) partstore.PartStore {
+	ps, err := New(sshAddr, clientConfig, "/tmp/pithos", opts...)
 	if err != nil {
 		b.Fatal(err)
 	}

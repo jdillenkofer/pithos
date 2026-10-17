@@ -373,6 +373,11 @@ type SftpPartStoreConfiguration struct {
 	SshClientConfigInstantiator sftpConfig.SshClientConfigInstantiator `json:"-"`
 	RawSshClientConfig          json.RawMessage                        `json:"sshClientConfig"`
 	Root                        internalConfig.StringProvider          `json:"root"`
+	// ConnectionPoolSize is the number of SSH connections; 0 uses the
+	// default of 1. More connections speed up concurrent transfers to fast
+	// or high-latency servers, but count against the server's limit of
+	// connections per user. See sftp.WithConnectionPoolSize.
+	ConnectionPoolSize int `json:"connectionPoolSize"`
 	internalConfig.DynamicJsonType
 }
 
@@ -402,7 +407,7 @@ func (s *SftpPartStoreConfiguration) Instantiate(diProvider dependencyinjection.
 	if err != nil {
 		return nil, err
 	}
-	return sftp.New(s.Addr.Value(), sshClientConfig, s.Root.Value())
+	return sftp.New(s.Addr.Value(), sshClientConfig, s.Root.Value(), sftp.WithConnectionPoolSize(s.ConnectionPoolSize))
 }
 
 type GoogleDrivePartStoreConfiguration struct {

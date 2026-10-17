@@ -36,6 +36,8 @@ const maxStpRetries = 5
 const readAheadBlockSize = 1024 * 1024
 
 // defaultConnectionPoolSize is the number of SSH connections per store.
+// Servers often limit concurrent connections per user, so more than one
+// is opt-in.
 const defaultConnectionPoolSize = 1
 
 var errNotConnected = errors.New("sftp part store is not connected")
@@ -283,7 +285,12 @@ func doRetriableOperation[T any](ctx context.Context, op func() (T, error), maxR
 type Option func(*sftpPartStore)
 
 // WithConnectionPoolSize sets the number of SSH connections. Requests use
-// the least busy one.
+// the least busy one. A single connection carries at most one TCP receive
+// window per round trip, x/crypto/ssh caps each SSH channel at 2MB per
+// round trip, and the server runs one sftp-server process per connection.
+// More connections speed up concurrent transfers when the link is not the
+// bottleneck, e.g. a fast local server or a fast high-latency link, but
+// not on links slower than one connection already fills.
 func WithConnectionPoolSize(connectionPoolSize int) Option {
 	return func(s *sftpPartStore) {
 		if connectionPoolSize > 0 {
