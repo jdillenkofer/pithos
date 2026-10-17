@@ -24,8 +24,10 @@ type objectCursor struct {
 }
 type objectLink struct {
 	Label, URL, ViewURL, Version, SizeText, Modified, Type, StorageClass string
-	Size                                                                 int64
-	DeleteMarker, Latest                                                 bool
+	// Select is the value of the row's selection checkbox.
+	Select               string
+	Size                 int64
+	DeleteMarker, Latest bool
 }
 type objectsView struct {
 	CSRF, Bucket, Prefix, Parent, NextURL, VersionsURL, UploadURL string
@@ -131,6 +133,7 @@ func (a *App) registerObjects(mux *http.ServeMux) {
 	mux.HandleFunc("GET /objects/download", a.download)
 	mux.HandleFunc("GET /objects/view", a.view)
 	a.registerVersions(mux)
+	a.registerBatchDelete(mux)
 	mux.HandleFunc("GET /objects/upload", a.uploadPage)
 	mux.HandleFunc("POST /objects/upload", a.upload)
 	mux.HandleFunc("POST /objects/delete", a.deleteObject)
@@ -217,7 +220,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Versions {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Select: objectRef{Key: o.Key.String(), Version: o.VersionID}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
 		if result.NextKeyMarker != nil {
 			cursor.Key = *result.NextKeyMarker
@@ -238,7 +241,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Objects {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), ViewURL: listViewURL(bucket.String(), o.Key.String(), "", false), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), ViewURL: listViewURL(bucket.String(), o.Key.String(), "", false), Select: objectRef{Key: o.Key.String()}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
 			if o.Key.String() > cursor.Key {
 				cursor.Key = o.Key.String()
 			}

@@ -5,8 +5,10 @@
     <div><h2>Objects <span class="count">({{len .Objects}}{{if .NextURL}}+{{end}})</span></h2><p>Objects are the fundamental entities stored in a bucket.{{if .Prefix}} Showing prefix <code>{{.Prefix}}</code>.{{end}}</p></div>
     <div class="toolbar">
       <a class="button-link" href="{{.VersionsURL}}">{{if .Versions}}Hide versions{{else}}Show versions{{end}}</a>
+      <button type="submit" form="delete-selection" {{if not .Objects}}disabled{{end}}>Delete</button>
       <a class="button-link primary" href="{{.UploadURL}}">Upload</a>
     </div>
+    <form id="delete-selection" method="get" action="/objects/delete-objects"><input type="hidden" name="bucket" value="{{.Bucket}}"></form>
   </div>
   <div class="filter-bar">
     <form method="get" action="/objects" role="search"><input type="hidden" name="bucket" value="{{.Bucket}}">{{if .Versions}}<input type="hidden" name="versions" value="true">{{end}}<input class="search" name="prefix" value="{{.Prefix}}" placeholder="Find objects by prefix" aria-label="Find objects by prefix"></form>
@@ -14,10 +16,11 @@
   </div>
   {{if .Crumbs}}<div class="filter-bar"><div class="crumbs"><a href="/objects?bucket={{.Bucket}}{{if .Versions}}&amp;versions=true{{end}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">/</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">/</span></div></div>{{end}}
   <div class="table-wrap"><table>
-  <thead><tr><th>Name</th>{{if .Versions}}<th>Version ID</th>{{end}}<th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <thead><tr><th class="select"><span class="visually-hidden">Select</span></th><th>Name</th>{{if .Versions}}<th>Version ID</th>{{end}}<th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
-  {{range .Prefixes}}<tr><td><a href="{{.URL}}"><span class="icon folder" aria-hidden="true"></span>{{.Label}}</a></td>{{if $.Versions}}<td>-</td>{{end}}<td>Folder</td><td>-</td><td class="num">-</td><td>-</td><td></td></tr>{{end}}
+  {{range .Prefixes}}<tr><td class="select"></td><td><a href="{{.URL}}"><span class="icon folder" aria-hidden="true"></span>{{.Label}}</a></td>{{if $.Versions}}<td>-</td>{{end}}<td>Folder</td><td>-</td><td class="num">-</td><td>-</td><td></td></tr>{{end}}
   {{range .Objects}}<tr>
+    <td class="select"><input type="checkbox" form="delete-selection" name="object" value="{{.Select}}" aria-label="Select {{.Label}}"></td>
     <td><a href="{{.URL}}"><span class="icon {{if .DeleteMarker}}marker{{else}}file{{end}}" aria-hidden="true"></span>{{.Label}}</a></td>
     {{if $.Versions}}<td><span class="key">{{.Version}}</span>{{if .Latest}} <span class="badge">Latest</span>{{end}}</td>{{end}}
     <td>{{if .DeleteMarker}}Delete marker{{else}}{{.Type}}{{end}}</td>
@@ -26,7 +29,7 @@
     <td>{{if .DeleteMarker}}-{{else}}{{.StorageClass}}{{end}}</td>
     <td class="actions">{{if .ViewURL}}<a class="button-link small" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}</td>
   </tr>{{end}}
-  {{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}7{{else}}6{{end}}" class="empty"><strong>No objects</strong>{{if .Prefix}}No objects match this prefix.{{else}}You don't have any objects in this bucket.{{end}}</td></tr>{{end}}
+  {{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}8{{else}}7{{end}}" class="empty"><strong>No objects</strong>{{if .Prefix}}No objects match this prefix.{{else}}You don't have any objects in this bucket.{{end}}</td></tr>{{end}}
   </tbody></table></div>
 </div>
 {{end}}
@@ -52,7 +55,11 @@
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="{{.BucketURL}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><span>{{.Name}}</span></div>
 <div class="page-head">
   <div><h1>{{.Name}}</h1>{{if .DeleteMarker}}<p class="subtitle"><span class="status warn">Delete marker</span></p>{{end}}</div>
-  <div class="toolbar">{{if not .DeleteMarker}}{{if .ViewURL}}<a class="button-link" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}</div>
+  <div class="toolbar">
+    <form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
+      <button data-confirm="{{if .Version}}This version is deleted permanently. This cannot be undone.{{else}}The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.{{end}}" data-confirm-title="Delete {{.Name}}?" data-confirm-action="{{if .Version}}Delete version{{else}}Delete object{{end}}">Delete</button></form>
+    {{if not .DeleteMarker}}{{if .ViewURL}}<a class="button-link" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}
+  </div>
 </div>
 <nav class="tabs" aria-label="Object"><a href="{{.DetailURL}}" aria-current="page">Properties</a><a href="{{.VersionsURL}}">Versions</a></nav>
 {{if .DeleteMarker}}<div class="alert warn"><p>This version {{if .Version}}(<code>{{.Version}}</code>) {{end}}is a delete marker and has no content.</p></div>{{else}}
@@ -111,12 +118,4 @@
   </div>
 </div>
 {{end}}
-<div class="container danger-zone">
-  <div class="container-head"><div><h2>Delete {{if .Version}}object version{{else}}object{{end}}</h2><p>{{if .Version}}Permanently deletes this version.{{else}}Deletes the object. In a versioned bucket a delete marker is created instead.{{end}}</p></div></div>
-  <div class="container-body">
-  <form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-  <label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
-  <div class="actions-row start"><button class="danger" data-confirm="{{if .Version}}This version is deleted permanently. This cannot be undone.{{else}}The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.{{end}}" data-confirm-title="Delete {{.Name}}?" data-confirm-action="{{if .Version}}Delete version{{else}}Delete object{{end}}">Delete</button></div></form>
-  </div>
-</div>
 {{end}}

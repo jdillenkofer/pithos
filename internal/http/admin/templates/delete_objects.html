@@ -1,0 +1,33 @@
+{{define "delete-objects"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="{{.BackURL}}">{{.Bucket}}</a><span class="sep">›</span><span>Delete objects</span></div>
+{{if .Results}}
+<div class="page-head"><h1>Delete objects: status</h1></div>
+<div class="alert {{if eq .Deleted (len .Results)}}ok{{else}}bad{{end}}" role="status"><p>Successfully deleted {{.Deleted}} of {{len .Results}} {{if .Permanent}}objects and versions{{else}}objects{{end}}.</p></div>
+<div class="container">
+  <div class="container-head"><h2>Results</h2><a class="button-link primary" href="{{.BackURL}}">Close</a></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Version ID</th><th>Status</th></tr></thead><tbody>
+  {{range .Results}}<tr><td class="key">{{.Key}}</td><td class="key">{{if .Version}}{{.Version}}{{else}}-{{end}}</td><td>{{if .Error}}<span class="status bad">{{.Error}}</span>{{else}}<span class="status ok">Deleted</span>{{end}}</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+{{else}}
+<div class="page-head"><h1>Delete objects</h1></div>
+<div class="alert warn"><p>{{if .Permanent}}Deleting specific versions is permanent and cannot be undone. Deleting a delete marker makes the previous version current again.{{else}}In a versioned bucket, deleting an object adds a delete marker and keeps its earlier versions; in an unversioned bucket the object is removed permanently.{{end}}</p></div>
+<form method="post" action="/objects/delete-objects">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="back" value="{{.BackURL}}">
+<div class="container">
+  <div class="container-head"><h2>Specified objects <span class="count">({{len .Objects}})</span></h2></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Version ID</th></tr></thead><tbody>
+  {{range .Objects}}<tr><td class="key">{{.Key}}<input type="hidden" name="object" value="{{.Value}}"></td><td class="key">{{if .Version}}{{.Version}}{{else}}-{{end}}</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>{{if .Permanent}}Permanently delete objects?{{else}}Delete objects?{{end}}</h2><p>To confirm deletion, type <em>{{.Confirmation}}</em> in the text input field.</p></div></div>
+  <div class="container-body">
+    <label>Confirmation <input name="confirm_text" required autocomplete="off" placeholder="{{.Confirmation}}" pattern="{{.Confirmation}}"></label>
+    <label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
+  </div>
+</div>
+<div class="actions-row"><a class="button-link" href="{{.BackURL}}">Cancel</a><button type="submit" class="danger">Delete objects</button></div>
+</form>
+{{end}}
+{{end}}
