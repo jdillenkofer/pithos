@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +23,13 @@ import (
 // hashing and encryption readers PutPart receives in production.
 type streamReader struct {
 	io.Reader
+}
+
+var benchNetworkProfiles = []networkProfile{
+	{name: "local"},
+	{name: "lan", rtt: 1 * time.Millisecond, rateMbit: 1000},
+	{name: "wan", rtt: 20 * time.Millisecond, rateMbit: 100},
+	{name: "remote", rtt: 80 * time.Millisecond, rateMbit: 50},
 }
 
 // BenchmarkSftpPartStore measures the part store against a containerized
@@ -70,13 +79,7 @@ func BenchmarkSftpPartStore(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	profiles := []networkProfile{
-		{name: "local"},
-		{name: "lan", rtt: 1 * time.Millisecond, rateMbit: 1000},
-		{name: "wan", rtt: 20 * time.Millisecond, rateMbit: 100},
-		{name: "remote", rtt: 80 * time.Millisecond, rateMbit: 50},
-	}
-	for _, profile := range profiles {
+	for _, profile := range benchNetworkProfiles {
 		b.Run(profile.name, func(b *testing.B) {
 			setNetworkProfile(b, ctx, c, profile)
 			// A fresh connection per profile, so TCP state does not carry over.
@@ -128,6 +131,100 @@ func BenchmarkSftpPartStore(b *testing.B) {
 					}
 				})
 			}
+		})
+	}
+}
+
+// BenchmarkSftpPartStoreConcurrent measures the total throughput of
+// concurrent part transfers, which BenchmarkSftpPartStore cannot show since
+// it runs one operation at a time. Each iteration transfers
+// concurrentBenchParts parts of 1-4MB in parallel.
+func BenchmarkSftpPartStoreConcurrent(b *testing.B) {
+	testutils.SkipOnWindowsInGitHubActions(b)
+	testutils.SkipOnMacOSInGitHubActions(b)
+
+	const concurrentBenchParts = 8
+
+	ctx := context.Background()
+	sshAddr, clientConfig, c := prepareSshServerWithShaping(b, false, true)
+
+	payloads := make([][]byte, concurrentBenchParts)
+	getPartIds := make([]partstore.PartId, concurrentBenchParts)
+	totalBytes := 0
+	fixtureStore := startSftpPartStore(b, sshAddr, clientConfig)
+	for i := range payloads {
+		payloads[i] = make([]byte, (i%4+1)*1024*1024)
+		if _, err := rand.Read(payloads[i]); err != nil {
+			b.Fatal(err)
+		}
+		totalBytes += len(payloads[i])
+		partId, err := partstore.NewRandomPartId()
+		if err != nil {
+			b.Fatal(err)
+		}
+		getPartIds[i] = *partId
+		if err := fixtureStore.PutPart(ctx, nil, getPartIds[i], bytes.NewReader(payloads[i])); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := fixtureStore.Stop(ctx); err != nil {
+		b.Fatal(err)
+	}
+
+	runConcurrently := func(b *testing.B, op func(i int) error) {
+		var wg sync.WaitGroup
+		errs := make([]error, concurrentBenchParts)
+		for i := range concurrentBenchParts {
+			wg.Go(func() {
+				errs[i] = op(i)
+			})
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	// The rate limits of wan and remote sit below what a single SSH channel
+	// window allows at their round trip times. The unlimited variants make
+	// the window the bottleneck instead.
+	profiles := append(benchNetworkProfiles,
+		networkProfile{name: "wan-nolimit", rtt: 20 * time.Millisecond},
+		networkProfile{name: "remote-nolimit", rtt: 80 * time.Millisecond},
+	)
+	for _, profile := range profiles {
+		b.Run(profile.name, func(b *testing.B) {
+			setNetworkProfile(b, ctx, c, profile)
+			ps := startSftpPartStore(b, sshAddr, clientConfig)
+			defer ps.Stop(ctx)
+
+			b.Run("PutPart", func(b *testing.B) {
+				b.SetBytes(int64(totalBytes))
+				for b.Loop() {
+					runConcurrently(b, func(i int) error {
+						partId, err := partstore.NewRandomPartId()
+						if err != nil {
+							return err
+						}
+						return ps.PutPart(ctx, nil, *partId, streamReader{bytes.NewReader(payloads[i])})
+					})
+				}
+			})
+
+			b.Run("GetPart", func(b *testing.B) {
+				b.SetBytes(int64(totalBytes))
+				for b.Loop() {
+					runConcurrently(b, func(i int) error {
+						rc, err := ps.GetPart(ctx, nil, getPartIds[i])
+						if err != nil {
+							return err
+						}
+						defer rc.Close()
+						_, err = io.Copy(io.Discard, rc)
+						return err
+					})
+				}
+			})
 		})
 	}
 }
