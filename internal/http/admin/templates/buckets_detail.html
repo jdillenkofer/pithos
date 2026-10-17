@@ -176,30 +176,29 @@
   <div class="table-wrap divider"><table><thead><tr><th>Lifecycle rule name</th><th>Status</th><th>Scope</th><th>Current version actions</th><th>Noncurrent versions actions</th><th>Other actions</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
   {{range .Lifecycle}}<tr><td>{{.ID}}</td><td>{{if eq .Status "Enabled"}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">{{.Status}}</span>{{end}}</td><td>{{.Scope}}</td><td>{{.Current}}</td><td>{{.Noncurrent}}</td><td>{{.Other}}</td>
     <td class="actions">{{if .EditURL}}<a class="button-link small" href="{{.EditURL}}">Edit</a>
-      <form method="post" action="/buckets/configure">{{template "bucket_form_fields" $}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="rule_action" value="delete"><input type="hidden" name="original_id" value="{{.ID}}"><button class="small">Delete</button></form>{{end}}</td></tr>
+      <form method="post" action="/buckets/configure">{{template "bucket_form_fields" $}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="rule_action" value="delete"><input type="hidden" name="original_id" value="{{.ID}}"><button class="small" data-confirm="Delete lifecycle rule “{{.ID}}”?">Delete</button></form>{{end}}</td></tr>
   {{else}}<tr><td colspan="7" class="empty"><strong>No lifecycle rules</strong>There are no lifecycle rules for this bucket.</td></tr>{{end}}
   </tbody></table></div>
 </div>
 
 <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="original_id" value="{{.LifecycleRule.OriginalID}}">
 <div class="container" id="lifecycle-rule">
-  <div class="container-head"><div><h2>{{if .LifecycleRule.OriginalID}}Edit lifecycle rule{{else}}Create lifecycle rule{{end}}</h2><p>Leave an action empty to skip it. At least one action is required.</p></div>{{if .LifecycleRule.OriginalID}}<a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle">Cancel</a>{{end}}</div>
+  <div class="container-head"><div><h2>{{if .LifecycleRule.OriginalID}}Edit lifecycle rule{{else}}Create lifecycle rule{{end}}</h2><p>Choose the objects the rule applies to and at least one action.</p></div>{{if .LifecycleRule.OriginalID}}<a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle">Cancel</a>{{end}}</div>
   <div class="container-body">
-    <div class="form-grid">
-      <label>Lifecycle rule name <input name="rule_id" value="{{.LifecycleRule.ID}}" maxlength="255" required></label>
-      <label>Status <select name="status"><option {{if eq .LifecycleRule.Status "Enabled"}}selected{{end}}>Enabled</option><option {{if eq .LifecycleRule.Status "Disabled"}}selected{{end}}>Disabled</option></select></label>
-      <label>Prefix <span class="hint">- leave empty to apply to all objects</span><input name="prefix" value="{{.LifecycleRule.Prefix}}" placeholder="logs/"></label>
+    <div class="form-stack">
+      <label class="field"><span class="field-label">Lifecycle rule name</span><input name="rule_id" value="{{.LifecycleRule.ID}}" maxlength="255" required><span class="hint">Up to 255 characters.</span></label>
+      <label class="field"><span class="field-label">Status</span><select name="status"><option {{if eq .LifecycleRule.Status "Enabled"}}selected{{end}}>Enabled</option><option {{if eq .LifecycleRule.Status "Disabled"}}selected{{end}}>Disabled</option></select></label>
+      <label class="field"><span class="field-label">Prefix <span class="hint">- optional</span></span><input name="prefix" value="{{.LifecycleRule.Prefix}}" placeholder="logs/"><span class="hint">Leave empty to apply the rule to all objects in the bucket.</span></label>
+      <fieldset><legend>Lifecycle rule actions</legend>
+        <p class="hint">Leave a number empty to skip that action.</p>
+        <label class="field short"><span class="field-label">Expire current versions of objects</span><input type="number" min="1" name="expire_days" value="{{.LifecycleRule.ExpireDays}}" placeholder="Days"><span class="hint">Days after object creation. In a versioned bucket, a delete marker is added.</span></label>
+        <label class="field short"><span class="field-label">Permanently delete noncurrent versions of objects</span><input type="number" min="1" name="noncurrent_days" value="{{.LifecycleRule.NoncurrentDays}}" placeholder="Days"><span class="hint">Days after objects become noncurrent.</span></label>
+        <label class="field short"><span class="field-label">Number of newer versions to retain <span class="hint">- optional</span></span><input type="number" min="1" name="newer_noncurrent" value="{{.LifecycleRule.NewerNoncurrent}}" placeholder="Versions"><span class="hint">Applies to the noncurrent version action above.</span></label>
+        <label class="field short"><span class="field-label">Delete incomplete multipart uploads</span><input type="number" min="1" name="abort_days" value="{{.LifecycleRule.Abort}}" placeholder="Days"><span class="hint">Days after the upload was started.</span></label>
+        <label class="check"><input type="checkbox" name="expired_delete_markers" value="true" {{if .LifecycleRule.ExpiredDeleteMarkers}}checked{{end}}> <span>Delete expired object delete markers<br><span class="hint">Cannot be combined with expiring current versions.</span></span></label>
+      </fieldset>
     </div>
-    <fieldset><legend>Lifecycle rule actions</legend>
-      <div class="form-grid">
-        <label>Expire current versions after (days) <input type="number" min="1" name="expire_days" value="{{.LifecycleRule.ExpireDays}}"></label>
-        <label>Permanently delete noncurrent versions after (days) <input type="number" min="1" name="noncurrent_days" value="{{.LifecycleRule.NoncurrentDays}}"></label>
-        <label>Number of newer versions to retain <span class="hint">- optional</span><input type="number" min="1" name="newer_noncurrent" value="{{.LifecycleRule.NewerNoncurrent}}"></label>
-        <label>Delete incomplete multipart uploads after (days) <input type="number" min="1" name="abort_days" value="{{.LifecycleRule.Abort}}"></label>
-      </div>
-      <div class="actions-row start"><label class="check"><input type="checkbox" name="expired_delete_markers" value="true" {{if .LifecycleRule.ExpiredDeleteMarkers}}checked{{end}}> Delete expired object delete markers</label></div>
-    </fieldset>
-    <div class="actions-row"><button class="primary">{{if .LifecycleRule.OriginalID}}Save rule{{else}}Create rule{{end}}</button></div>
+    <div class="actions-row">{{if .LifecycleRule.OriginalID}}<a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle">Cancel</a>{{end}}<button class="primary">{{if .LifecycleRule.OriginalID}}Save rule{{else}}Create rule{{end}}</button></div>
   </div>
 </div>
 </form>

@@ -148,13 +148,16 @@ pre { background: var(--bg-layout); border: 1px solid var(--divider); border-rad
 /* Tables */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: separate; border-spacing: 0; }
-th { text-align: left; font-weight: 700; color: var(--muted); padding: 8px 20px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-td { padding: 9px 20px; border-bottom: 1px solid var(--divider); vertical-align: middle; overflow-wrap: anywhere; }
+th { text-align: left; font-weight: 700; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--border); vertical-align: bottom; }
+th:first-child, td:first-child { padding-left: 20px; }
+th:last-child, td:last-child { padding-right: 20px; }
+td { padding: 9px 16px; border-bottom: 1px solid var(--divider); vertical-align: middle; overflow-wrap: break-word; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--row-hover); }
 td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 td.actions { text-align: right; white-space: nowrap; }
 td.actions form { display: inline; margin: 0; }
+td.actions .button-link + form, td.actions .button-link + .button-link { margin-left: 4px; }
 td.empty { text-align: center; padding: 32px 20px; color: var(--muted); }
 td.empty strong { display: block; color: var(--text); margin-bottom: 4px; }
 td.nowrap { white-space: nowrap; }
@@ -299,3 +302,19 @@ fieldset label.check { margin-bottom: 8px; }
 :target { scroll-margin-top: 56px; }
 @media (max-width: 52rem) { .tag-row { grid-template-columns: 1fr; } }
 th.select, td.select { width: 1%; padding-right: 0; }
+
+/* Vertical forms, as in the S3 console's create pages */
+.form-stack { display: grid; gap: 20px; max-width: 44rem; }
+.form-stack label { margin: 0; }
+.field { display: grid; gap: 4px; }
+.field > .field-label { font-weight: 700; }
+.field > .field-label .hint { font-weight: 400; font-style: italic; }
+.field > .hint { margin-top: 2px; }
+.field input:not([type="checkbox"], [type="radio"]), .field select { max-width: 28rem; }
+.field.short input:not([type="checkbox"], [type="radio"]) { max-width: 10rem; }
+.option-group { display: grid; gap: 12px; }
+.option { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; align-items: start; }
+.option > input { margin-top: 2px; }
+.option .option-body { display: grid; gap: 8px; }
+.option .option-title { font-weight: 700; cursor: pointer; }
+.option .hint { font-size: 12px; }
