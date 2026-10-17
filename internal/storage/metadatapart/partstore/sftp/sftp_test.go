@@ -10,7 +10,10 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +25,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/moby/moby/api/types/container"
+	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
@@ -303,7 +307,12 @@ func TestSftpPartStoreTxPutPart(t *testing.T) {
 	}
 	assertNoLeftoverFiles := func() {
 		store := ps.(*sftpPartStore)
-		entries, err := store.client.ReadDir(store.root)
+		var entries []os.FileInfo
+		err := store.withClient(func(client *sftp.Client) error {
+			var err error
+			entries, err = client.ReadDir(store.root)
+			return err
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,4 +343,102 @@ func TestSftpPartStoreTxPutPart(t *testing.T) {
 	assert.NoError(t, putPartInTx("second", nil))
 	assert.Equal(t, "second", readPart())
 	assertNoLeftoverFiles()
+}
+
+func TestSftpPartStoreReconnectUnderLoad(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
+
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	sshAddr, clientConfig := prepareSshServer(t, false)
+	// Count SSH handshakes to tell how often the store reconnected.
+	var handshakes atomic.Int32
+	hostKeyCallback := clientConfig.HostKeyCallback
+	clientConfig.HostKeyCallback = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		handshakes.Add(1)
+		return hostKeyCallback(hostname, remote, key)
+	}
+
+	ps, err := New(sshAddr, clientConfig, "/tmp/pithos", WithConnectionPoolSize(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Stop(ctx)
+	store := ps.(*sftpPartStore)
+
+	content := make([]byte, 256*1024)
+	if _, err := rand.Read(content); err != nil {
+		t.Fatal(err)
+	}
+	putAndGet := func() error {
+		partId, err := partstore.NewRandomPartId()
+		if err != nil {
+			return err
+		}
+		if err := ps.PutPart(ctx, nil, *partId, streamReader{bytes.NewReader(content)}); err != nil {
+			return err
+		}
+		rc, err := ps.GetPart(ctx, nil, *partId)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		got, err := io.ReadAll(rc)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(content, got) {
+			return errors.New("part content mismatch")
+		}
+		return ps.DeletePart(ctx, nil, *partId)
+	}
+
+	const workers = 8
+	const connectionDrops = 5
+	stop := make(chan struct{})
+	var succeeded atomic.Int32
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Transfers cut off by a dropped connection fail, since only
+				// opening a file is retried. Only the recovery matters here.
+				if putAndGet() == nil {
+					succeeded.Add(1)
+				}
+			}
+		})
+	}
+
+	for i := range connectionDrops {
+		time.Sleep(200 * time.Millisecond)
+		slot := store.slots[i%len(store.slots)]
+		conn := slot.conn.Load()
+		_ = conn.sshClient.Close()
+		// Wait for the workers to replace the connection before dropping
+		// the next one.
+		assert.Eventually(t, func() bool {
+			return slot.conn.Load() != conn
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	assert.Positive(t, succeeded.Load())
+	// Every worker on a dropped connection sees it fail, but only the first
+	// one to notice reconnects.
+	assert.Equal(t, int32(len(store.slots)+connectionDrops), handshakes.Load())
+	assert.NoError(t, putAndGet())
 }

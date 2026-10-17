@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,14 +35,110 @@ const maxStpRetries = 5
 // parallelism. Memory cost is up to two blocks per open part reader.
 const readAheadBlockSize = 1024 * 1024
 
+// defaultConnectionPoolSize is the number of SSH connections per store.
+const defaultConnectionPoolSize = 1
+
+var errNotConnected = errors.New("sftp part store is not connected")
+
 type sftpPartStore struct {
 	addr         string
 	clientConfig *ssh.ClientConfig
 	root         string
-	client       *sftp.Client
-	sshClient    *ssh.Client
-	mu           sync.Mutex
-	tracer       trace.Tracer
+	slots        []*connSlot
+	// next rotates the starting point of the least-busy search, so idle
+	// connections take turns.
+	next   atomic.Uint32
+	tracer trace.Tracer
+}
+
+// connSlot is one connection of the pool. Its connection is replaced as a
+// whole on reconnect, so every request sees a consistent SSH connection and
+// SFTP client.
+type connSlot struct {
+	conn atomic.Pointer[sftpConn]
+	// inUse counts leases, including those still on a replaced connection.
+	inUse atomic.Int32
+	// reconnectMu serializes reconnects of this slot.
+	reconnectMu sync.Mutex
+}
+
+type sftpConn struct {
+	sshClient *ssh.Client
+	client    *sftp.Client
+}
+
+func (c *sftpConn) close() error {
+	_ = c.client.Close()
+	return c.sshClient.Close()
+}
+
+// clientLease is a connection taken from the pool. Files opened through it
+// must be closed before the lease is released.
+type clientLease struct {
+	slot *connSlot
+	conn *sftpConn
+}
+
+func (l *clientLease) release() {
+	l.slot.inUse.Add(-1)
+}
+
+// acquire leases the least busy connection. The lease has no connection if
+// the slot is not connected, so the caller can reconnect it.
+func (s *sftpPartStore) acquire() *clientLease {
+	n := len(s.slots)
+	start := int(s.next.Add(1)) % n
+	best := s.slots[start]
+	for i := 1; i < n; i++ {
+		slot := s.slots[(start+i)%n]
+		if slot.inUse.Load() < best.inUse.Load() {
+			best = slot
+		}
+	}
+	best.inUse.Add(1)
+	return &clientLease{slot: best, conn: best.conn.Load()}
+}
+
+// withClient runs op on a leased client without retrying.
+func (s *sftpPartStore) withClient(op func(*sftp.Client) error) error {
+	lease := s.acquire()
+	defer lease.release()
+	if lease.conn == nil {
+		return errNotConnected
+	}
+	return op(lease.conn.client)
+}
+
+// doRetriableWithClient runs op on a leased client and retries failures on
+// a fresh connection. On success the caller owns the returned lease and
+// must release it.
+func doRetriableWithClient[T any](ctx context.Context, s *sftpPartStore, op func(*sftp.Client) (T, error), shouldIgnoreError func(error) bool) (T, *clientLease, error) {
+	// failed is the lease of the last failed attempt.
+	var failed *clientLease
+	var lease *clientLease
+	t, err := doRetriableOperation(ctx, func() (T, error) {
+		var empty T
+		l := s.acquire()
+		if l.conn == nil {
+			l.release()
+			failed = l
+			return empty, errNotConnected
+		}
+		t, err := op(l.conn.client)
+		if err != nil {
+			l.release()
+			failed = l
+			return empty, err
+		}
+		lease = l
+		return t, nil
+	}, maxStpRetries, func() error {
+		return s.reconnect(failed.slot, failed.conn)
+	}, shouldIgnoreError)
+	if err != nil {
+		return t, nil, err
+	}
+	return t, lease, nil
 }
 
 // Compile-time check to ensure sftpPartStore implements partstore.PartStore
@@ -51,10 +148,14 @@ var _ partstore.StatsProvider = (*sftpPartStore)(nil)
 func (s *sftpPartStore) SupportsStats() bool { return true }
 
 func (s *sftpPartStore) ensureRootDir() error {
-	_, err := doRetriableOperation(context.Background(), func() (*struct{}, error) {
-		return nil, s.client.MkdirAll(s.root)
-	}, maxStpRetries, s.reconnectSftpClient, nil)
-	return err
+	_, lease, err := doRetriableWithClient(context.Background(), s, func(client *sftp.Client) (*struct{}, error) {
+		return nil, client.MkdirAll(s.root)
+	}, nil)
+	if err != nil {
+		return err
+	}
+	lease.release()
+	return nil
 }
 
 func (s *sftpPartStore) getFilename(partId partstore.PartId) string {
@@ -77,37 +178,44 @@ func (s *sftpPartStore) tryGetPartIdFromFilename(filename string) (partId *parts
 	return partId, true
 }
 
-func (s *sftpPartStore) reconnectSftpClient() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// reconnect replaces the connection failed of slot with a new one. If
+// another goroutine already replaced it, it returns without dialing, so
+// concurrent failures of one connection cause a single reconnect. Requests
+// still using the old connection fail and retry on the new one.
+func (s *sftpPartStore) reconnect(slot *connSlot, failed *sftpConn) error {
+	slot.reconnectMu.Lock()
+	defer slot.reconnectMu.Unlock()
 
-	if s.client != nil {
+	if slot.conn.Load() != failed {
+		return nil
+	}
+	if failed != nil {
 		slog.Info(fmt.Sprintf("SFTP reconnecting to %s", s.addr))
-		s.client.Close()
+		_ = failed.close()
 	}
 
-	// Close the SSH connection properly
-	if s.sshClient != nil {
-		s.sshClient.Close()
-	}
-
-	client, err := ssh.Dial("tcp", s.addr, s.clientConfig)
+	conn, err := s.dial()
 	if err != nil {
-		slog.Error(fmt.Sprintf("SFTP failed to establish SSH connection to %s: %v", s.addr, err))
 		return err
 	}
-	s.sshClient = client // Store SSH client reference
-
-	sftpClient, err := sftp.NewClient(client)
-	if err != nil {
-		slog.Error(fmt.Sprintf("SFTP failed to create SFTP client for %s: %v", s.addr, err))
-		client.Close()
-		s.sshClient = nil
-		return err
-	}
-	s.client = sftpClient
+	slot.conn.Store(conn)
 	slog.Info(fmt.Sprintf("SFTP successfully reconnected to %s", s.addr))
 	return nil
+}
+
+func (s *sftpPartStore) dial() (*sftpConn, error) {
+	sshClient, err := ssh.Dial("tcp", s.addr, s.clientConfig)
+	if err != nil {
+		slog.Error(fmt.Sprintf("SFTP failed to establish SSH connection to %s: %v", s.addr, err))
+		return nil, err
+	}
+	client, err := sftp.NewClient(sshClient)
+	if err != nil {
+		slog.Error(fmt.Sprintf("SFTP failed to create SFTP client for %s: %v", s.addr, err))
+		_ = sshClient.Close()
+		return nil, err
+	}
+	return &sftpConn{sshClient: sshClient, client: client}, nil
 }
 
 // getBackoffDuration returns the backoff duration for a given retry attempt.
@@ -172,35 +280,62 @@ func doRetriableOperation[T any](ctx context.Context, op func() (T, error), maxR
 	}
 }
 
-func New(addr string, clientConfig *ssh.ClientConfig, root string) (partstore.PartStore, error) {
+type Option func(*sftpPartStore)
+
+// WithConnectionPoolSize sets the number of SSH connections. Requests use
+// the least busy one.
+func WithConnectionPoolSize(connectionPoolSize int) Option {
+	return func(s *sftpPartStore) {
+		if connectionPoolSize > 0 {
+			s.slots = make([]*connSlot, connectionPoolSize)
+		}
+	}
+}
+
+func New(addr string, clientConfig *ssh.ClientConfig, root string, opts ...Option) (partstore.PartStore, error) {
 	bs := &sftpPartStore{
 		addr:         addr,
 		clientConfig: clientConfig,
 		root:         root,
-		client:       nil,
+		slots:        make([]*connSlot, defaultConnectionPoolSize),
 		tracer:       otel.Tracer("internal/storage/metadatapart/partstore/sftp"),
+	}
+	for _, opt := range opts {
+		opt(bs)
+	}
+	for i := range bs.slots {
+		bs.slots[i] = &connSlot{}
 	}
 	return bs, nil
 }
 
 func (s *sftpPartStore) Start(ctx context.Context) error {
-	if err := s.reconnectSftpClient(); err != nil {
+	// Each connection costs an SSH handshake, so dial them concurrently.
+	errs := make([]error, len(s.slots))
+	var wg sync.WaitGroup
+	for i, slot := range s.slots {
+		wg.Go(func() {
+			errs[i] = s.reconnect(slot, slot.conn.Load())
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		_ = s.Stop(ctx)
 		return err
 	}
 	return s.ensureRootDir()
 }
 
 func (s *sftpPartStore) Stop(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.client != nil {
-		s.client.Close()
+	var errs []error
+	for _, slot := range s.slots {
+		slot.reconnectMu.Lock()
+		if conn := slot.conn.Swap(nil); conn != nil {
+			errs = append(errs, conn.close())
+		}
+		slot.reconnectMu.Unlock()
 	}
-	if s.sshClient != nil {
-		return s.sshClient.Close()
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
@@ -215,19 +350,25 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		// at commit. SFTPv3 servers report an existing file as a generic
 		// failure, so any status error falls back to the temp file below,
 		// which replaces an existing part atomically.
-		f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
-			return s.client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
-		}, maxStpRetries, s.reconnectSftpClient, isStatusError)
+		f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
+			return client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
+		}, isStatusError)
 		if err == nil {
-			if err := writeAndClose(f, reader); err != nil {
-				_ = s.client.Remove(filename)
+			err := writeAndClose(f, reader)
+			if err != nil {
+				_ = lease.conn.client.Remove(filename)
+			}
+			lease.release()
+			if err != nil {
 				return err
 			}
 			tx.OnRollback(func(context.Context) error {
-				if err := s.client.Remove(filename); err != nil && !isNotFoundError(err) {
-					return err
-				}
-				return nil
+				return s.withClient(func(client *sftp.Client) error {
+					if err := client.Remove(filename); err != nil && !isNotFoundError(err) {
+						return err
+					}
+					return nil
+				})
 			})
 			return nil
 		}
@@ -236,14 +377,18 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		}
 
 		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
-		f, err = doRetriableOperation(ctx, func() (*sftp.File, error) {
-			return s.client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-		}, maxStpRetries, s.reconnectSftpClient, nil)
+		f, lease, err = doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
+			return client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		}, nil)
 		if err != nil {
 			return err
 		}
-		if err := writeAndClose(f, reader); err != nil {
-			_ = s.client.Remove(tempName)
+		err = writeAndClose(f, reader)
+		if err != nil {
+			_ = lease.conn.client.Remove(tempName)
+		}
+		lease.release()
+		if err != nil {
 			return err
 		}
 
@@ -251,50 +396,57 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		backupCreated := false
 		published := false
 		tx.OnPreCommit(func(context.Context) error {
-			if err := s.client.Rename(filename, backupName); err == nil {
-				backupCreated = true
-			} else if !isNotFoundError(err) {
-				return err
-			}
-			if err := s.client.Rename(tempName, filename); err != nil {
-				if backupCreated {
-					_ = s.client.Rename(backupName, filename)
-					backupCreated = false
+			return s.withClient(func(client *sftp.Client) error {
+				if err := client.Rename(filename, backupName); err == nil {
+					backupCreated = true
+				} else if !isNotFoundError(err) {
+					return err
 				}
-				return err
-			}
-			published = true
-			return nil
+				if err := client.Rename(tempName, filename); err != nil {
+					if backupCreated {
+						_ = client.Rename(backupName, filename)
+						backupCreated = false
+					}
+					return err
+				}
+				published = true
+				return nil
+			})
 		})
 		tx.OnAfterCommit(func(context.Context) error {
 			if backupCreated {
-				return s.client.Remove(backupName)
+				return s.withClient(func(client *sftp.Client) error {
+					return client.Remove(backupName)
+				})
 			}
 			return nil
 		})
 		tx.OnRollback(func(context.Context) error {
-			if published {
-				_ = s.client.Remove(filename)
-				if backupCreated {
-					return s.client.Rename(backupName, filename)
+			return s.withClient(func(client *sftp.Client) error {
+				if published {
+					_ = client.Remove(filename)
+					if backupCreated {
+						return client.Rename(backupName, filename)
+					}
 				}
-			}
-			if !published {
-				_ = s.client.Remove(tempName)
-			}
-			return nil
+				if !published {
+					_ = client.Remove(tempName)
+				}
+				return nil
+			})
 		})
 		return nil
 	}
 
-	f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
-		return s.client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-	}, maxStpRetries, s.reconnectSftpClient, nil)
+	f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
+		return client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+	}, nil)
 	if err != nil {
 		return err
 	}
+	defer lease.release()
 	if err := writeAndClose(f, reader); err != nil {
-		_ = s.client.Remove(filename)
+		_ = lease.conn.client.Remove(filename)
 		return err
 	}
 	return nil
@@ -326,8 +478,8 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
-		f, err := s.client.OpenFile(filename, os.O_RDONLY)
+	f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
+		f, err := client.OpenFile(filename, os.O_RDONLY)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil, partstore.ErrPartNotFound
@@ -335,26 +487,44 @@ func (s *sftpPartStore) GetPart(ctx context.Context, tx database.Tx, partId part
 			return nil, err
 		}
 		return f, nil
-	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
+	}, func(err error) bool {
 		return errors.Is(err, partstore.ErrPartNotFound)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return ioutils.NewReadAheadReadSeekCloser(f, readAheadBlockSize), nil
+	return &leasedReadCloser{
+		ReadCloser: ioutils.NewReadAheadReadSeekCloser(f, readAheadBlockSize),
+		lease:      lease,
+	}, nil
+}
+
+// leasedReadCloser keeps the client of an open part leased until the part
+// is closed, so the least-busy pick accounts for running downloads.
+type leasedReadCloser struct {
+	io.ReadCloser
+	lease     *clientLease
+	closeOnce sync.Once
+}
+
+func (r *leasedReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.closeOnce.Do(r.lease.release)
+	return err
 }
 
 func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
 	_, span := s.tracer.Start(ctx, "sftpPartStore.GetPartIds")
 	defer span.End()
 
-	dirEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
-		return s.client.ReadDir(s.root)
-	}, maxStpRetries, s.reconnectSftpClient, nil)
+	dirEntries, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) ([]os.FileInfo, error) {
+		return client.ReadDir(s.root)
+	}, nil)
 	if err != nil {
 		return nil, err
 	}
+	lease.release()
 	partIds := []partstore.PartId{}
 	for _, dirEntry := range dirEntries {
 		if dirEntry.IsDir() {
@@ -368,12 +538,13 @@ func (s *sftpPartStore) GetPartIds(ctx context.Context, tx database.Tx) ([]parts
 }
 
 func (s *sftpPartStore) Stats(ctx context.Context, tx database.Tx) (partstore.Stats, error) {
-	dirEntries, err := doRetriableOperation(ctx, func() ([]os.FileInfo, error) {
-		return s.client.ReadDir(s.root)
-	}, maxStpRetries, s.reconnectSftpClient, nil)
+	dirEntries, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) ([]os.FileInfo, error) {
+		return client.ReadDir(s.root)
+	}, nil)
 	if err != nil {
 		return partstore.Stats{}, err
 	}
+	lease.release()
 	var stats partstore.Stats
 	for _, entry := range dirEntries {
 		if entry.IsDir() {
@@ -397,33 +568,39 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 		backupName := filename + ".txbackup." + ulid.Make().String()
 		backupCreated := false
 		tx.OnPreCommit(func(context.Context) error {
-			if err := s.client.Rename(filename, backupName); err == nil {
-				backupCreated = true
-				return nil
-			} else if isNotFoundError(err) {
-				return nil
-			} else {
-				return err
-			}
+			return s.withClient(func(client *sftp.Client) error {
+				if err := client.Rename(filename, backupName); err == nil {
+					backupCreated = true
+					return nil
+				} else if isNotFoundError(err) {
+					return nil
+				} else {
+					return err
+				}
+			})
 		})
 		tx.OnAfterCommit(func(context.Context) error {
 			if backupCreated {
-				return s.client.Remove(backupName)
+				return s.withClient(func(client *sftp.Client) error {
+					return client.Remove(backupName)
+				})
 			}
 			return nil
 		})
 		tx.OnRollback(func(context.Context) error {
 			if backupCreated {
-				return s.client.Rename(backupName, filename)
+				return s.withClient(func(client *sftp.Client) error {
+					return client.Rename(backupName, filename)
+				})
 			}
 			return nil
 		})
 		return nil
 	}
 
-	_, err := doRetriableOperation(ctx, func() (*struct{}, error) {
-		return nil, s.client.Remove(filename)
-	}, maxStpRetries, s.reconnectSftpClient, func(err error) bool {
+	_, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*struct{}, error) {
+		return nil, client.Remove(filename)
+	}, func(err error) bool {
 		// Check for both ENOENT and fs.ErrNotExist to be safe
 		return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
 	})
@@ -434,6 +611,7 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 		}
 		return err
 	}
+	lease.release()
 	return nil
 }
 
