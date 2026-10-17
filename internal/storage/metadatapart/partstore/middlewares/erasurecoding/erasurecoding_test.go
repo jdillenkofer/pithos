@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
@@ -365,4 +366,86 @@ func TestErasureCodingPartStoreHealsMissingParityShard(t *testing.T) {
 	// The healed parity shard must be able to stand in for a lost data shard.
 	shardStores[0].markMissing(*partId)
 	assert.Equal(t, data, readAll())
+}
+
+func newMemoryErasureCodingStore(t *testing.T, dataShards, parityShards int) (partstore.PartStore, []*benchmarkPartStore) {
+	t.Helper()
+	shardStores := make([]*benchmarkPartStore, dataShards+parityShards)
+	stores := make([]partstore.PartStore, len(shardStores))
+	for i := range shardStores {
+		shardStores[i] = newBenchmarkPartStore(0, false)
+		stores[i] = shardStores[i]
+	}
+	store, err := NewWithPartStores(dataShards, parityShards, 64*1024, stores, WithHealScanInterval(0))
+	assert.Nil(t, err)
+	return store, shardStores
+}
+
+// frameOffset returns where frame stripeIndex starts in a shard of full stripes.
+func frameOffset(stripeIndex int) int {
+	return shardHeaderSize + stripeIndex*(frameHeaderSize+64*1024)
+}
+
+func readPart(t *testing.T, store partstore.PartStore, partId partstore.PartId) ([]byte, error) {
+	t.Helper()
+	rc, err := store.GetPart(context.Background(), nil, partId)
+	if err != nil {
+		return nil, err
+	}
+	out, err := io.ReadAll(rc)
+	assert.Nil(t, rc.Close())
+	return out, err
+}
+
+func TestErasureCodingPartStoreToleratesShardFailuresMidStream(t *testing.T) {
+	store, shardStores := newMemoryErasureCodingStore(t, 4, 2)
+	partId, _ := partstore.NewRandomPartId()
+	data := make([]byte, 4*1024*1024+12345)
+	rand.New(rand.NewSource(1)).Read(data)
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, bytes.NewReader(data)))
+
+	// Corrupt a payload byte of data shard 1 in stripe 3.
+	shardStores[1].parts[*partId][frameOffset(3)+frameHeaderSize+10] ^= 0xff
+	out, err := readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, data, out)
+
+	// Additionally truncate data shard 2 after stripe 5, which needs the
+	// second parity shard to skip ahead.
+	shardStores[2].parts[*partId] = shardStores[2].parts[*partId][:frameOffset(6)]
+	out, err = readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, data, out)
+
+	// A third failure exceeds the parity.
+	shardStores[0].parts[*partId][frameOffset(8)+frameHeaderSize] ^= 0xff
+	_, err = readPart(t, store, *partId)
+	assert.NotNil(t, err)
+}
+
+func TestErasureCodingPartStoreDetectsTruncatedDataShardsAtFrameBoundary(t *testing.T) {
+	store, shardStores := newMemoryErasureCodingStore(t, 1, 1)
+	partId, _ := partstore.NewRandomPartId()
+	data := make([]byte, 8*64*1024)
+	rand.New(rand.NewSource(1)).Read(data)
+	assert.Nil(t, store.PutPart(context.Background(), nil, *partId, bytes.NewReader(data)))
+
+	shardStores[0].parts[*partId] = shardStores[0].parts[*partId][:frameOffset(4)]
+	out, err := readPart(t, store, *partId)
+	assert.Nil(t, err)
+	assert.Equal(t, data, out)
+}
+
+func TestErasureCodingPartStoreRoundtripsEdgeSizes(t *testing.T) {
+	store, _ := newMemoryErasureCodingStore(t, 3, 2)
+	for _, size := range []int{0, 1, 64*1024 - 1, 3 * 64 * 1024, 3*64*1024 + 1, 10*3*64*1024 + 7} {
+		partId, _ := partstore.NewRandomPartId()
+		data := make([]byte, size)
+		rand.New(rand.NewSource(int64(size))).Read(data)
+		assert.Nil(t, store.PutPart(context.Background(), nil, *partId, bytes.NewReader(data)))
+		out, err := readPart(t, store, *partId)
+		assert.Nil(t, err)
+		assert.Equal(t, len(data), len(out), "size %d", size)
+		assert.True(t, bytes.Equal(data, out), "size %d", size)
+	}
 }
