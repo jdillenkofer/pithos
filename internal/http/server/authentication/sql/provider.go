@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sync"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
@@ -21,6 +22,8 @@ type credentialSnapshot struct {
 type CredentialProvider struct {
 	database    database.Database
 	coordinator *authentication.SnapshotCoordinator[credentialSnapshot]
+	// mutationMu orders snapshot publication like the commits it reflects.
+	mutationMu sync.Mutex
 }
 
 var _ authentication.CredentialProvider = (*CredentialProvider)(nil)

@@ -18,7 +18,8 @@ type SnapshotCoordinator[T any] struct {
 	onChanged func(*T)
 	provider  string
 
-	snapshot atomic.Pointer[T]
+	snapshot  atomic.Pointer[T]
+	refreshMu sync.Mutex
 
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -65,7 +66,7 @@ func (c *SnapshotCoordinator[T]) refreshLoop(ctx context.Context, interval time.
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			next, err := c.load(ctx)
+			err := c.Refresh(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -74,16 +75,37 @@ func (c *SnapshotCoordinator[T]) refreshLoop(ctx context.Context, interval time.
 				slog.Error("Failed to reload credential snapshot; retaining last-known-good credentials", "provider", c.provider, "error", err)
 				continue
 			}
-			current := c.snapshot.Load()
-			if c.equal == nil || !c.equal(current, next) {
-				c.snapshot.Store(next)
-				if c.onChanged != nil {
-					c.onChanged(next)
-				}
-			}
-			observeCredentialSnapshotReload(c.provider, true)
 		}
 	}
+}
+
+// Refresh synchronously publishes a complete new snapshot. Serializing loads
+// prevents a background refresh from overwriting a newer mutation snapshot.
+func (c *SnapshotCoordinator[T]) Refresh(ctx context.Context) error {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	next, err := c.load(ctx)
+	if err != nil {
+		return err
+	}
+	current := c.snapshot.Load()
+	if c.equal == nil || !c.equal(current, next) {
+		c.snapshot.Store(next)
+		if c.onChanged != nil {
+			c.onChanged(next)
+		}
+	}
+	observeCredentialSnapshotReload(c.provider, true)
+	return nil
+}
+
+// Update publishes a snapshot derived from the current one without invoking
+// the loader. It is serialized with Refresh, so a reload that started before a
+// committed mutation cannot overwrite the derived snapshot afterwards.
+func (c *SnapshotCoordinator[T]) Update(derive func(current *T) *T) {
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+	c.snapshot.Store(derive(c.snapshot.Load()))
 }
 
 func (c *SnapshotCoordinator[T]) Snapshot() *T {
