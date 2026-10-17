@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -41,6 +42,23 @@ func (r *multipartIdentityObjectRepository) FindUploadsByBucketNameAndPrefixAndK
 		key := upload.Key.String()
 		if key > keyMarker || (key == keyMarker && uploadIDMarker != "" && upload.UploadId.String() > uploadIDMarker) {
 			uploads = append(uploads, upload)
+		}
+	}
+	return uploads, nil
+}
+
+func (r *multipartIdentityObjectRepository) FindUploadsFromKey(_ context.Context, _ *sql.Tx, _ storage.BucketName, prefix, keyMarker, uploadIDMarker, minimumKey string, limit int32) ([]object.Entity, error) {
+	uploads := []object.Entity{}
+	for _, upload := range r.uploads {
+		key := upload.Key.String()
+		if !strings.HasPrefix(key, prefix) || key < minimumKey {
+			continue
+		}
+		if key > keyMarker || (key == keyMarker && uploadIDMarker != "" && upload.UploadId.String() > uploadIDMarker) {
+			uploads = append(uploads, upload)
+		}
+		if len(uploads) == int(limit) {
+			break
 		}
 	}
 	return uploads, nil

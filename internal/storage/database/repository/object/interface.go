@@ -17,6 +17,10 @@ type Repository interface {
 	// listing order, after the (keyMarker, versionIDMarker) position and at or
 	// above minimumKey, within the literal prefix range.
 	FindObjectVersionsFromKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, keyMarker, versionIDMarker, minimumKey string, limit int32) ([]Entity, error)
+	// FindUploadsFromKey returns a bounded batch of pending uploads in listing
+	// order, after the (keyMarker, uploadIdMarker) position and at or above
+	// minimumKey, within the literal prefix range.
+	FindUploadsFromKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, keyMarker, uploadIdMarker, minimumKey string, limit int32) ([]Entity, error)
 	SaveObject(ctx context.Context, tx *sql.Tx, object *Entity) error
 	InsertObjectIfAbsent(ctx context.Context, tx *sql.Tx, object *Entity) (*bool, error)
 	UpdateObjectByIdAndOptimisticLockVersion(ctx context.Context, tx *sql.Tx, object *Entity, optimisticLockVersion int64) (*bool, error)

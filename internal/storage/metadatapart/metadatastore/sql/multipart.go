@@ -532,57 +532,14 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 	}
 
 	commonPrefixes := []string{}
-	commonPrefixSet := map[string]struct{}{}
 	uploads := []metadatastore.Upload{}
 	isTruncated := false
-	var objectEntities []object.Entity
-	if delimiter == "" {
-		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker, opts.MaxUploads+1)
-		if err != nil {
-			return nil, err
-		}
-		if int32(len(objectEntities)) > opts.MaxUploads {
-			isTruncated = true
-			objectEntities = objectEntities[:opts.MaxUploads]
-		}
-	} else {
-		objectEntities, err = sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	nextKeyMarker := ""
 	nextUploadIdMarker := ""
 
 	objectIds := []ulid.ULID{}
 	uploadIndexByObjectId := map[ulid.ULID]int{}
-
-	for _, objectEntity := range objectEntities {
-		var commonPrefix *string
-		if delimiter != "" {
-			commonPrefix = determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter)
-			if commonPrefix != nil {
-				// A prefix is one listing entry, and must not recur on later pages.
-				if *commonPrefix <= keyMarker {
-					continue
-				}
-				if _, seen := commonPrefixSet[*commonPrefix]; seen {
-					continue
-				}
-			}
-		}
-		if int32(len(uploads)+len(commonPrefixes)) >= opts.MaxUploads {
-			isTruncated = true
-			break
-		}
-		if commonPrefix != nil {
-			commonPrefixSet[*commonPrefix] = struct{}{}
-			commonPrefixes = append(commonPrefixes, *commonPrefix)
-			nextKeyMarker = *commonPrefix
-			nextUploadIdMarker = ""
-			continue
-		}
+	appendUpload := func(objectEntity object.Entity) {
 		upload := metadatastore.Upload{
 			Key:               objectEntity.Key,
 			UploadId:          *objectEntity.UploadId,
@@ -599,6 +556,69 @@ func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.T
 		uploads = append(uploads, upload)
 		nextKeyMarker = objectEntity.Key.String()
 		nextUploadIdMarker = objectEntity.UploadId.String()
+	}
+
+	if delimiter == "" {
+		objectEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, tx, bucketName, prefix, keyMarker, uploadIdMarker, opts.MaxUploads+1)
+		if err != nil {
+			return nil, err
+		}
+		if int32(len(objectEntities)) > opts.MaxUploads {
+			isTruncated = true
+			objectEntities = objectEntities[:opts.MaxUploads]
+		}
+		for _, objectEntity := range objectEntities {
+			appendUpload(objectEntity)
+		}
+	} else {
+		// A prefix is one listing entry and must not recur on later pages: a
+		// marker equal to or inside a group suppresses that entire group.
+		minimumKey := prefix
+		exhausted := false
+		if group := determineCommonPrefix(prefix, keyMarker, delimiter); group != nil {
+			minimumKey = object.PrefixUpperBound(*group)
+			exhausted = minimumKey == ""
+		}
+		// Same adaptive batching as ListObjectVersions: grow while rows are
+		// direct uploads, restart at one after seeking past a group.
+		batchSize := int64(1)
+		seekKey, seekUploadId := keyMarker, uploadIdMarker
+	listing:
+		for !exhausted {
+			remaining := int64(opts.MaxUploads) - int64(len(uploads)+len(commonPrefixes))
+			limit := int32(min(batchSize, remaining+1))
+			batch, err := sms.objectRepository.FindUploadsFromKey(ctx, tx, bucketName, prefix, seekKey, seekUploadId, minimumKey, limit)
+			if err != nil {
+				return nil, err
+			}
+			batchSize = min(64, batchSize*2)
+			for _, objectEntity := range batch {
+				if objectEntity.Key.String() < minimumKey {
+					continue
+				}
+				if remaining == 0 {
+					isTruncated = true
+					break listing
+				}
+				if group := determineCommonPrefix(prefix, objectEntity.Key.String(), delimiter); group != nil {
+					commonPrefixes = append(commonPrefixes, *group)
+					nextKeyMarker = *group
+					nextUploadIdMarker = ""
+					minimumKey = object.PrefixUpperBound(*group)
+					if minimumKey == "" {
+						break listing
+					}
+					batchSize = 1
+				} else {
+					appendUpload(objectEntity)
+					seekKey, seekUploadId = nextKeyMarker, nextUploadIdMarker
+				}
+				remaining--
+			}
+			if len(batch) < int(limit) {
+				break
+			}
+		}
 	}
 
 	// Load identities only for uploads on this page, not uploads grouped into
