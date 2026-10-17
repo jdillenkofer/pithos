@@ -67,17 +67,21 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 				return &metadatastore.ListBucketResult{Objects: objects, CommonPrefixes: commonPrefixes}, nil
 			}
 		}
+		// Batch direct objects to avoid one round trip per result. Descendants
+		// already buffered are discarded and the next query seeks past the group,
+		// so the batch grows only while rows are direct objects and restarts
+		// small after a group: a run of groups costs one two-row query each.
+		// Two rows rather than one let a single query also probe truncation.
+		batchSize := int64(2)
 	listing:
 		for {
-			// Batch direct objects to avoid one round trip per result. Descendants
-			// already buffered are discarded; the next query seeks past the group.
-			// The cap bounds overfetch even when every row belongs to one group.
 			remaining := int64(maxKeys) - int64(len(objectEntities)+len(commonPrefixes))
-			limit := int32(min(64, remaining+1))
+			limit := int32(min(batchSize, remaining+1))
 			batch, err := sms.objectRepository.FindObjectsFromKey(ctx, tx, bucketName, prefix, startAfter, minimumKey, limit)
 			if err != nil {
 				return nil, err
 			}
+			batchSize = min(64, batchSize*2)
 			for _, entity := range batch {
 				if entity.Key.String() < minimumKey {
 					continue
@@ -93,6 +97,7 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 					if minimumKey == "" {
 						break listing
 					}
+					batchSize = 2
 				} else {
 					objectEntities = append(objectEntities, entity)
 					startAfter = entity.Key.String()

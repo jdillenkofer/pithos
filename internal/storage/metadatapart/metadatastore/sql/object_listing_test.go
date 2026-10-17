@@ -99,7 +99,8 @@ func TestDelimiterListingBatchesDirectObjects(t *testing.T) {
 			require.Len(t, result.Objects, min(count, 1000))
 			require.Empty(t, result.CommonPrefixes)
 			require.Equal(t, count > 1000, result.IsTruncated)
-			require.LessOrEqual(t, len(repo.minimums), 16)
+			// Batches double from 2 to 64: 5 ramp-up queries, then 64 rows each.
+			require.LessOrEqual(t, len(repo.minimums), 20)
 			require.Equal(t, min(count, 1001), repo.fetched)
 			for _, limit := range repo.limits {
 				require.LessOrEqual(t, limit, int32(64))
