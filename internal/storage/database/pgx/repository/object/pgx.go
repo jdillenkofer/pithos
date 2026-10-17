@@ -75,6 +75,7 @@ WHERE bucket_name = $1
 WHERE bucket_name = $1
   AND key COLLATE "C" >= $2
   AND upload_status = $3
+  AND version_id IS NOT NULL
   AND (key COLLATE "C" > $4
        OR (key COLLATE "C" = $4 AND COALESCE(NULLIF(version_id, 'null'), '') COLLATE "C" < COALESCE(NULLIF($5, 'null'), '')))
   AND ($6 = '' OR key COLLATE "C" < $6)`
