@@ -333,6 +333,45 @@ func (or *sqliteRepository) FindObjectVersionsFromKey(ctx context.Context, tx *s
 	return entities, rows.Err()
 }
 
+const findUploadsFromKeyStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key >= $2
+ AND upload_status = $3
+ AND ($4 = '' OR key < $4)
+ ORDER BY key ASC, upload_id ASC LIMIT $5`
+
+const findUploadsAfterMarkerStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key >= $2
+ AND upload_status = $3
+ AND (key > $2 OR ($4 <> '' AND upload_id > $4))
+ AND ($5 = '' OR key < $5)
+ ORDER BY key ASC, upload_id ASC LIMIT $6`
+
+func (or *sqliteRepository) FindUploadsFromKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, keyMarker, uploadIdMarker, minimumKey string, limit int32) ([]object.Entity, error) {
+	lowerBound := max(prefix, minimumKey)
+	var rows *sql.Rows
+	var err error
+	if keyMarker >= lowerBound {
+		rows, err = tx.QueryContext(ctx, findUploadsAfterMarkerStmt, bucketName.String(), keyMarker, object.UploadStatusPending, uploadIdMarker, object.PrefixUpperBound(prefix), limit)
+	} else {
+		rows, err = tx.QueryContext(ctx, findUploadsFromKeyStmt, bucketName.String(), lowerBound, object.UploadStatusPending, object.PrefixUpperBound(prefix), limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entities := []object.Entity{}
+	for rows.Next() {
+		entity, err := convertRowToObjectEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		entities = append(entities, *entity)
+	}
+	return entities, rows.Err()
+}
+
 func (or *sqliteRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, object.PrefixUpperBound(prefix))
 	if err != nil {
