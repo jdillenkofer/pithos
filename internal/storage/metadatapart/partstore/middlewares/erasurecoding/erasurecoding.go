@@ -57,6 +57,10 @@ type erasureCodingPartStore struct {
 	// enc is built once and reused; reedsolomon encoders depend only on the
 	// (fixed) shard counts and are safe for concurrent use across streams.
 	enc reedsolomon.Encoder
+	// stripePool and shardBufPool recycle PutPart stripe buffers and GetPart
+	// shard payload buffers across requests.
+	stripePool   sync.Pool
+	shardBufPool sync.Pool
 }
 
 type Option func(*erasureCodingPartStore) error
@@ -244,16 +248,15 @@ func parseShardHeader(b []byte) (int, int, int, int, error) {
 	return data, total, idx, stripe, nil
 }
 
-func encodeFrameHeader(stripeIndex uint64, dataBytes int, payload []byte) []byte {
-	b := make([]byte, frameHeaderSize)
+func putFrameHeader(b []byte, stripeIndex uint64, dataBytes int, payload []byte) {
 	binary.BigEndian.PutUint64(b[0:8], stripeIndex)
 	binary.BigEndian.PutUint32(b[8:12], uint32(dataBytes))
 	binary.BigEndian.PutUint32(b[12:16], uint32(len(payload)))
 	h := sha256.Sum256(payload)
 	copy(b[16:48], h[:])
-	return b
 }
 
+// parseFrameHeader returns the frame fields; the hash aliases b.
 func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
 	if len(b) != frameHeaderSize {
 		return 0, 0, 0, nil, errors.New("invalid frame header")
@@ -261,96 +264,180 @@ func parseFrameHeader(b []byte) (uint64, int, int, []byte, error) {
 	idx := binary.BigEndian.Uint64(b[0:8])
 	dataBytes := int(binary.BigEndian.Uint32(b[8:12]))
 	payloadLen := int(binary.BigEndian.Uint32(b[12:16]))
-	h := make([]byte, 32)
-	copy(h, b[16:48])
 	if dataBytes < 1 || payloadLen < 1 {
 		return 0, 0, 0, nil, errors.New("invalid frame header fields")
 	}
-	return idx, dataBytes, payloadLen, h, nil
+	return idx, dataBytes, payloadLen, b[16:48], nil
+}
+
+// stripeFrames holds one encoded stripe. frames[i] is shard i's frame: a
+// frame header followed by room for a full shard payload, so each frame goes
+// to its shard store in a single write.
+type stripeFrames struct {
+	frames   [][]byte
+	shards   [][]byte
+	scratch  []byte
+	n        int
+	shardLen int
+	wg       sync.WaitGroup
+}
+
+func (e *erasureCodingPartStore) getStripeFrames() *stripeFrames {
+	if s, ok := e.stripePool.Get().(*stripeFrames); ok {
+		return s
+	}
+	frameCap := frameHeaderSize + e.stripeShardSz
+	buf := make([]byte, e.totalShards*frameCap)
+	s := &stripeFrames{frames: make([][]byte, e.totalShards), shards: make([][]byte, e.totalShards)}
+	for i := range s.frames {
+		s.frames[i] = buf[i*frameCap : (i+1)*frameCap]
+	}
+	return s
+}
+
+// readStripe fills the data shards of s from reader. A short final stripe is
+// laid out with the shorter shard length the encoding expects.
+func (e *erasureCodingPartStore) readStripe(reader io.Reader, s *stripeFrames) error {
+	s.n = 0
+	s.shardLen = e.stripeShardSz
+	for i := 0; i < e.dataShards; i++ {
+		m, err := io.ReadFull(reader, s.frames[i][frameHeaderSize:])
+		s.n += m
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return err
+		}
+		if s.n == 0 {
+			return nil
+		}
+		if s.scratch == nil {
+			s.scratch = make([]byte, e.dataShards*e.stripeShardSz)
+		}
+		scratch := s.scratch
+		for j := 0; j <= i; j++ {
+			copy(scratch[j*e.stripeShardSz:], s.frames[j][frameHeaderSize:])
+		}
+		s.shardLen = (s.n + e.dataShards - 1) / e.dataShards
+		for j := 0; j < e.dataShards; j++ {
+			payload := s.frames[j][frameHeaderSize : frameHeaderSize+s.shardLen]
+			start := min(j*s.shardLen, s.n)
+			end := min(start+s.shardLen, s.n)
+			clear(payload[copy(payload, scratch[start:end]):])
+		}
+		break
+	}
+	for i := range s.shards {
+		s.shards[i] = s.frames[i][frameHeaderSize : frameHeaderSize+s.shardLen]
+	}
+	return nil
 }
 
 func (e *erasureCodingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
 	unlock := e.partLocker.Lock(partId)
 	defer unlock()
 
-	enc := e.enc
-
-	pipeReaders := make([]*io.PipeReader, e.totalShards)
 	pipeWriters := make([]*io.PipeWriter, e.totalShards)
-	errCh := make(chan error, e.totalShards)
+	innerErrs := make([]error, e.totalShards)
+	var innerWg sync.WaitGroup
 	for i := 0; i < e.totalShards; i++ {
 		pr, pw := io.Pipe()
-		pipeReaders[i], pipeWriters[i] = pr, pw
+		pipeWriters[i] = pw
+		innerWg.Add(1)
 		go func(idx int) {
-			errCh <- e.partStores[idx].PutPart(ctx, tx, partId, pr)
+			defer innerWg.Done()
+			innerErrs[idx] = e.partStores[idx].PutPart(ctx, tx, partId, pr)
+			// Fail pending writes if the store stopped reading early.
+			_ = pr.CloseWithError(io.ErrClosedPipe)
 		}(i)
-		if _, err := pipeWriters[i].Write(e.shardHeader(i)); err != nil {
-			return err
-		}
 	}
 
-	stripeDataCap := e.dataShards * e.stripeShardSz
-	stripeBuf := make([]byte, stripeDataCap)
-	stripeIndex := uint64(0)
-	for {
-		n, readErr := io.ReadFull(reader, stripeBuf)
-		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-			for _, pw := range pipeWriters {
-				_ = pw.CloseWithError(readErr)
-			}
-			return readErr
+	// Each shard is written by one goroutine per stripe, and a stripe starts
+	// only after the previous one finished, so writes stay in order.
+	writeErrs := make([]error, e.totalShards)
+	write := func(i int, b []byte) {
+		if writeErrs[i] == nil {
+			_, writeErrs[i] = pipeWriters[i].Write(b)
 		}
-		if n == 0 {
-			break
-		}
-
-		shardLen := (n + e.dataShards - 1) / e.dataShards
-		shards := make([][]byte, e.totalShards)
-		for i := 0; i < e.totalShards; i++ {
-			shards[i] = make([]byte, shardLen)
-		}
-		for i := 0; i < e.dataShards; i++ {
-			start := i * shardLen
-			end := start + shardLen
-			if start > n {
-				start = n
-			}
-			if end > n {
-				end = n
-			}
-			copy(shards[i], stripeBuf[start:end])
-		}
-		if err := enc.Encode(shards); err != nil {
-			for _, pw := range pipeWriters {
+	}
+	finish := func(err error) error {
+		for _, pw := range pipeWriters {
+			if err != nil {
 				_ = pw.CloseWithError(err)
+			} else {
+				_ = pw.Close()
 			}
+		}
+		innerWg.Wait()
+		if err != nil {
 			return err
 		}
-
-		for i := 0; i < e.totalShards; i++ {
-			fh := encodeFrameHeader(stripeIndex, n, shards[i])
-			if _, err := pipeWriters[i].Write(fh); err != nil {
-				return err
-			}
-			if _, err := pipeWriters[i].Write(shards[i]); err != nil {
-				return err
+		for _, innerErr := range innerErrs {
+			if innerErr != nil {
+				return innerErr
 			}
 		}
-		stripeIndex++
-		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+		for _, writeErr := range writeErrs {
+			if writeErr != nil {
+				return writeErr
+			}
+		}
+		return nil
+	}
+
+	var inflight sync.WaitGroup
+	inflight.Add(e.totalShards)
+	for i := 0; i < e.totalShards; i++ {
+		go func(i int) {
+			defer inflight.Done()
+			write(i, e.shardHeader(i))
+		}(i)
+	}
+	pending := &inflight
+
+	// Two stripe buffers let the next stripe be read and encoded while the
+	// previous one is still being hashed and written.
+	var stripes [2]*stripeFrames
+	defer func() {
+		for _, s := range stripes {
+			if s != nil {
+				e.stripePool.Put(s)
+			}
+		}
+	}()
+	for stripeIndex := uint64(0); ; stripeIndex++ {
+		if stripes[stripeIndex%2] == nil {
+			stripes[stripeIndex%2] = e.getStripeFrames()
+		}
+		s := stripes[stripeIndex%2]
+		err := e.readStripe(reader, s)
+		if err == nil && s.n > 0 {
+			err = e.enc.Encode(s.shards)
+		}
+		pending.Wait()
+		if err != nil {
+			return finish(err)
+		}
+		if s.n == 0 {
+			break
+		}
+		s.wg.Add(e.totalShards)
+		for i := 0; i < e.totalShards; i++ {
+			go func(i int, stripeIndex uint64) {
+				defer s.wg.Done()
+				frame := s.frames[i][:frameHeaderSize+s.shardLen]
+				putFrameHeader(frame[:frameHeaderSize], stripeIndex, s.n, s.shards[i])
+				write(i, frame)
+			}(i, stripeIndex)
+		}
+		pending = &s.wg
+		if s.n < e.dataShards*e.stripeShardSz {
 			break
 		}
 	}
-
-	for _, pw := range pipeWriters {
-		_ = pw.Close()
-	}
-	for i := 0; i < e.totalShards; i++ {
-		if err := <-errCh; err != nil {
-			return err
-		}
-	}
-	return nil
+	pending.Wait()
+	return finish(nil)
 }
 
 func (e *erasureCodingPartStore) Capabilities() partstore.Capabilities {
@@ -458,21 +545,108 @@ func closePartReaders(readers []io.ReadCloser) {
 	}
 }
 
+// shardStream reads the frames of one shard. Reads stream only as many
+// shards as reconstruction needs plus one spare, whose payloads are hashed
+// only when they are used. The spare also reveals data shards that end early.
+// Other shards stay open but unread and skip ahead to the current stripe when
+// they are needed.
+type shardStream struct {
+	rc         io.ReadCloser
+	active     bool
+	spare      bool
+	next       uint64
+	header     [frameHeaderSize]byte
+	buf        []byte
+	payload    []byte
+	ok         bool
+	unverified bool
+	sawFrame   bool
+	err        error
+}
+
+func (e *erasureCodingPartStore) readFrame(s *shardStream, stripeIndex uint64) {
+	s.ok, s.unverified, s.sawFrame, s.payload = false, false, false, nil
+	for {
+		atStripe := s.next == stripeIndex
+		if _, err := io.ReadFull(s.rc, s.header[:]); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				s.err = err
+			}
+			return
+		}
+		s.sawFrame = atStripe
+		idx, _, payloadLen, expectedHash, err := parseFrameHeader(s.header[:])
+		if err != nil || idx != s.next || payloadLen > e.stripeShardSz {
+			return
+		}
+		s.next++
+		if idx < stripeIndex {
+			if !skipBytes(s.rc, payloadLen) {
+				return
+			}
+			continue
+		}
+		if s.buf == nil {
+			s.buf = e.getShardBuf()
+		}
+		payload := s.buf[:payloadLen]
+		if _, err := io.ReadFull(s.rc, payload); err != nil {
+			return
+		}
+		s.payload = payload
+		if s.spare {
+			s.unverified = true
+			return
+		}
+		s.ok = verifyPayload(expectedHash, payload)
+		return
+	}
+}
+
+func verifyPayload(expectedHash []byte, payload []byte) bool {
+	h := sha256.Sum256(payload)
+	return bytes.Equal(expectedHash, h[:])
+}
+
+func (e *erasureCodingPartStore) getShardBuf() []byte {
+	if b, ok := e.shardBufPool.Get().(*[]byte); ok {
+		return *b
+	}
+	return make([]byte, e.stripeShardSz)
+}
+
+func (e *erasureCodingPartStore) putShardBuf(b []byte) {
+	if cap(b) == e.stripeShardSz {
+		b = b[:cap(b)]
+		e.shardBufPool.Put(&b)
+	}
+}
+
+func skipBytes(r io.Reader, n int) bool {
+	if seeker, ok := r.(io.Seeker); ok {
+		_, err := seeker.Seek(int64(n), io.SeekCurrent)
+		return err == nil
+	}
+	_, err := io.CopyN(io.Discard, r, int64(n))
+	return err == nil
+}
+
 func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.Tx, partId partstore.PartId, readers []io.ReadCloser, healShards []bool, healMissing bool, unlock func()) io.ReadCloser {
 	pr, pw := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		closeReaderAt := func(i int) {
-			if readers[i] != nil {
-				_ = readers[i].Close()
-				readers[i] = nil
-			}
+		streams := make([]*shardStream, e.totalShards)
+		for i, rc := range readers {
+			streams[i] = &shardStream{rc: rc}
 		}
 		defer func() {
-			for _, rc := range readers {
-				if rc != nil {
-					_ = rc.Close()
+			for _, s := range streams {
+				if s.rc != nil {
+					_ = s.rc.Close()
+				}
+				if s.buf != nil {
+					e.putShardBuf(s.buf)
 				}
 			}
 		}()
@@ -515,112 +689,192 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				_ = <-healErrCh
 			}
 		}
-
-		// ReconstructData leaves parity shards nil, so healing a parity shard
-		// needs the full reconstruction.
-		healingParity := false
-		for i := e.dataShards; i < e.totalShards; i++ {
-			if healPipeWriters[i] != nil {
-				healingParity = true
-			}
+		fail := func(err error) {
+			closeHealingWriters(err)
+			_ = pw.CloseWithError(err)
 		}
 
-		enc := e.enc
-		for stripeIndex := uint64(0); ; stripeIndex++ {
-			shards := make([][]byte, e.totalShards)
-			available := 0
-			dataBytes := 0
-			seenAny := false
-			for i := 0; i < e.totalShards; i++ {
-				if readers[i] == nil {
-					continue
+		// Reconstruction must produce the data shards and any shard being healed.
+		required := make([]bool, e.totalShards)
+		for i := range required {
+			required[i] = i < e.dataShards || healPipeWriters[i] != nil
+		}
+
+		// activate starts streaming up to want more shards, preferring data
+		// shards so healthy stripes need no reconstruction.
+		activate := func(want int, spare bool) []int {
+			var started []int
+			for i, s := range streams {
+				if len(started) == want {
+					break
 				}
-				fh := make([]byte, frameHeaderSize)
-				_, err := io.ReadFull(readers[i], fh)
-				if err != nil {
-					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-						closeReaderAt(i)
-						healShards[i] = true
+				if s.rc != nil && !s.active {
+					s.active, s.spare = true, spare
+					started = append(started, i)
+				}
+			}
+			return started
+		}
+		hasSpare := func() bool {
+			for _, s := range streams {
+				if s.spare {
+					return true
+				}
+			}
+			return false
+		}
+		readFrames := func(idxs []int, stripeIndex uint64) error {
+			if len(idxs) == 1 {
+				e.readFrame(streams[idxs[0]], stripeIndex)
+			} else {
+				var wg sync.WaitGroup
+				for _, i := range idxs {
+					wg.Add(1)
+					go func(s *shardStream) {
+						defer wg.Done()
+						e.readFrame(s, stripeIndex)
+					}(streams[i])
+				}
+				wg.Wait()
+			}
+			for _, i := range idxs {
+				s := streams[i]
+				if s.err != nil {
+					return s.err
+				}
+				if !s.ok && !s.unverified {
+					_ = s.rc.Close()
+					s.rc, s.active, s.spare = nil, false, false
+					healShards[i] = true
+				}
+			}
+			return nil
+		}
+
+		activate(e.dataShards, false)
+		shards := make([][]byte, e.totalShards)
+		for stripeIndex := uint64(0); ; stripeIndex++ {
+			if !hasSpare() {
+				activate(1, true)
+			}
+			var idxs []int
+			for i, s := range streams {
+				s.ok, s.unverified, s.sawFrame = false, false, false
+				if s.active {
+					idxs = append(idxs, i)
+				}
+			}
+			if err := readFrames(idxs, stripeIndex); err != nil {
+				fail(err)
+				return
+			}
+			for {
+				available, seen := 0, false
+				for _, s := range streams {
+					if s.ok {
+						available++
+					}
+					seen = seen || s.sawFrame
+				}
+				// No streamed shard, the spare included, has another frame:
+				// the part ended.
+				if available >= e.dataShards || !seen {
+					break
+				}
+				// A shard failed: use the spare first, then stream more.
+				usedSpare := false
+				for i, s := range streams {
+					if !s.spare {
 						continue
 					}
-					closeHealingWriters(err)
-					_ = pw.CloseWithError(err)
+					s.spare = false
+					if s.unverified {
+						s.unverified = false
+						s.ok = verifyPayload(s.header[16:48], s.payload)
+					}
+					if !s.ok {
+						_ = s.rc.Close()
+						s.rc, s.active = nil, false
+						healShards[i] = true
+					}
+					usedSpare = true
+				}
+				if usedSpare {
+					continue
+				}
+				started := activate(e.dataShards-available, false)
+				if len(started) == 0 {
+					break
+				}
+				if err := readFrames(started, stripeIndex); err != nil {
+					fail(err)
 					return
 				}
-				seenAny = true
-				fIdx, fDataBytes, payloadLen, expectedHash, err := parseFrameHeader(fh)
-				if err != nil || fIdx != stripeIndex {
-					closeReaderAt(i)
-					healShards[i] = true
-					continue
-				}
-				payload := make([]byte, payloadLen)
-				_, err = io.ReadFull(readers[i], payload)
-				if err != nil {
-					closeReaderAt(i)
-					healShards[i] = true
-					continue
-				}
-				h := sha256.Sum256(payload)
-				if !bytes.Equal(expectedHash, h[:]) {
-					closeReaderAt(i)
-					healShards[i] = true
-					continue
-				}
-				if dataBytes == 0 {
-					dataBytes = fDataBytes
-				}
-				shards[i] = payload
-				available++
 			}
-			if !seenAny {
+
+			available, seen, dataBytes := 0, false, 0
+			for i, s := range streams {
+				seen = seen || s.sawFrame
+				if s.ok {
+					available++
+					shards[i] = s.payload
+					if dataBytes == 0 {
+						dataBytes = int(binary.BigEndian.Uint32(s.header[8:12]))
+					}
+				} else {
+					if s.buf == nil && required[i] {
+						s.buf = e.getShardBuf()
+					}
+					shards[i] = s.buf[:0]
+				}
+			}
+			if !seen {
 				closeHealingWriters(nil)
 				_ = pw.Close()
 				return
 			}
 			if available < e.dataShards {
-				err := fmt.Errorf("insufficient shards in stripe %d", stripeIndex)
-				closeHealingWriters(err)
-				_ = pw.CloseWithError(fmt.Errorf("insufficient shards in stripe %d", stripeIndex))
+				fail(fmt.Errorf("insufficient shards in stripe %d", stripeIndex))
 				return
 			}
-			reconstruct := enc.ReconstructData
-			if healingParity {
-				reconstruct = enc.Reconstruct
+			needsReconstruct := false
+			for i := range shards {
+				needsReconstruct = needsReconstruct || (required[i] && len(shards[i]) == 0)
 			}
-			if err := reconstruct(shards); err != nil {
-				closeHealingWriters(err)
-				_ = pw.CloseWithError(err)
-				return
+			if needsReconstruct {
+				if err := e.enc.ReconstructSome(shards, required); err != nil {
+					fail(err)
+					return
+				}
+				for i, s := range streams {
+					if s.buf == nil && cap(shards[i]) > 0 {
+						s.buf = shards[i][:cap(shards[i])]
+					}
+				}
 			}
+			var frameHeader [frameHeaderSize]byte
 			for i := 0; i < e.totalShards; i++ {
-				if !healShards[i] || healPipeWriters[i] == nil {
+				if healPipeWriters[i] == nil {
 					continue
 				}
-				fh := encodeFrameHeader(stripeIndex, dataBytes, shards[i])
-				if _, err := healPipeWriters[i].Write(fh); err != nil {
-					closeHealingWriters(err)
-					_ = pw.CloseWithError(err)
+				putFrameHeader(frameHeader[:], stripeIndex, dataBytes, shards[i])
+				if _, err := healPipeWriters[i].Write(frameHeader[:]); err != nil {
+					fail(err)
 					return
 				}
 				if _, err := healPipeWriters[i].Write(shards[i]); err != nil {
-					closeHealingWriters(err)
-					_ = pw.CloseWithError(err)
+					fail(err)
 					return
 				}
 			}
-			buf := bytes.NewBuffer(nil)
-			for i := 0; i < e.dataShards; i++ {
-				buf.Write(shards[i])
-			}
-			out := buf.Bytes()
-			if dataBytes < len(out) {
-				out = out[:dataBytes]
-			}
-			if _, err := pw.Write(out); err != nil {
-				closeHealingWriters(err)
-				_ = pw.CloseWithError(err)
-				return
+			remaining := dataBytes
+			for i := 0; i < e.dataShards && remaining > 0; i++ {
+				chunk := shards[i][:min(len(shards[i]), remaining)]
+				if _, err := pw.Write(chunk); err != nil {
+					fail(err)
+					return
+				}
+				remaining -= len(chunk)
 			}
 		}
 	}()
