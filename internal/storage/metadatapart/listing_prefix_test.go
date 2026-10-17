@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -126,37 +127,31 @@ func TestSQLListingPrefixesAreLiteralAndCaseSensitive(t *testing.T) {
 						for _, listing := range []prefixListingQueries{
 							{
 								name: "objects", expected: entitiesWithLiteralPrefix(objects, prefix),
-								all: func(key, _ string) ([]object.Entity, error) {
-									return repo.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx, sqlTx, bucket, prefix, key)
-								},
 								page: func(key, _ string, limit int32) ([]object.Entity, error) {
 									return repo.FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimit(ctx, sqlTx, bucket, prefix, key, limit)
 								},
-								count: func(key, _ string) (*int, error) {
-									return repo.CountObjectsByBucketNameAndPrefixAndStartAfter(ctx, sqlTx, bucket, prefix, key)
+								fromKey: func(key, _ string, limit int32) ([]object.Entity, error) {
+									return repo.FindObjectsFromKey(ctx, sqlTx, bucket, prefix, key, "", limit)
 								},
 								secondaryMarker: func(object.Entity) string { return "" },
 							},
 							{
 								name: "uploads", expected: entitiesWithLiteralPrefix(uploads, prefix),
-								all: func(key, uploadID string) ([]object.Entity, error) {
-									return repo.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, sqlTx, bucket, prefix, key, uploadID)
-								},
 								page: func(key, uploadID string, limit int32) ([]object.Entity, error) {
 									return repo.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, sqlTx, bucket, prefix, key, uploadID, limit)
 								},
-								count: func(key, uploadID string) (*int, error) {
-									return repo.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, sqlTx, bucket, prefix, key, uploadID)
+								fromKey: func(key, uploadID string, limit int32) ([]object.Entity, error) {
+									return repo.FindUploadsFromKey(ctx, sqlTx, bucket, prefix, key, uploadID, "", limit)
 								},
 								secondaryMarker: func(entity object.Entity) string { return entity.UploadId.String() },
 							},
 							{
 								name: "versions", expected: entitiesWithLiteralPrefix(versions, prefix),
-								all: func(key, versionID string) ([]object.Entity, error) {
-									return repo.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDesc(ctx, sqlTx, bucket, prefix, key, versionID)
-								},
 								page: func(key, versionID string, limit int32) ([]object.Entity, error) {
 									return repo.FindObjectVersionsByBucketNameAndPrefixAndKeyMarkerAndVersionIDMarkerOrderByKeyAscAndVersionIDDescWithLimit(ctx, sqlTx, bucket, prefix, key, versionID, limit)
+								},
+								fromKey: func(key, versionID string, limit int32) ([]object.Entity, error) {
+									return repo.FindObjectVersionsFromKey(ctx, sqlTx, bucket, prefix, key, versionID, "", limit)
 								},
 								secondaryMarker: func(entity object.Entity) string { return *entity.VersionID },
 							},
@@ -175,16 +170,15 @@ func TestSQLListingPrefixesAreLiteralAndCaseSensitive(t *testing.T) {
 type prefixListingQueries struct {
 	name            string
 	expected        []object.Entity
-	all             func(keyMarker, secondaryMarker string) ([]object.Entity, error)
 	page            func(keyMarker, secondaryMarker string, limit int32) ([]object.Entity, error)
-	count           func(keyMarker, secondaryMarker string) (*int, error)
+	fromKey         func(keyMarker, secondaryMarker string, limit int32) ([]object.Entity, error)
 	secondaryMarker func(object.Entity) string
 }
 
 func (listing prefixListingQueries) check(t *testing.T) {
 	t.Helper()
 	// Check every continuation position, including before the first entry and
-	// after the last, for both bounded and unbounded repository queries.
+	// after the last, for both the paged and the seeking repository queries.
 	for cursor := 0; cursor <= len(listing.expected); cursor++ {
 		keyMarker, secondaryMarker := "", ""
 		if cursor > 0 {
@@ -193,18 +187,12 @@ func (listing prefixListingQueries) check(t *testing.T) {
 			secondaryMarker = listing.secondaryMarker(previous)
 		}
 		expected := listing.expected[cursor:]
-		actual, err := listing.all(keyMarker, secondaryMarker)
-		require.NoError(t, err)
-		require.Equal(t, listingEntityIDs(expected), listingEntityIDs(actual))
-		if listing.count != nil {
-			count, err := listing.count(keyMarker, secondaryMarker)
-			require.NoError(t, err)
-			require.Equal(t, len(expected), *count)
-		}
-		for _, limit := range []int32{1, 3} {
-			actual, err := listing.page(keyMarker, secondaryMarker, limit)
-			require.NoError(t, err)
-			require.Equal(t, listingEntityIDs(expected[:min(len(expected), int(limit))]), listingEntityIDs(actual))
+		for _, query := range []func(string, string, int32) ([]object.Entity, error){listing.page, listing.fromKey} {
+			for _, limit := range []int32{1, 3, math.MaxInt32} {
+				actual, err := query(keyMarker, secondaryMarker, limit)
+				require.NoError(t, err)
+				require.Equal(t, listingEntityIDs(expected[:min(len(expected), int(limit))]), listingEntityIDs(actual))
+			}
 		}
 	}
 }
