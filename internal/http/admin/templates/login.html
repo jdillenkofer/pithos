@@ -1,0 +1,11 @@
+{{define "login"}}
+<h1>Global administrator login</h1>
+{{if .Disabled}}<p>No administrators are configured. Set the admin access-key allowlist to enable login.</p>{{end}}
+<form method="post" action="/login">
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <label>Access key <input name="access_key" autocomplete="username" maxlength="128" required></label>
+  <label>Secret key <input type="password" name="secret_key" autocomplete="current-password" maxlength="256" required></label>
+  <button {{if .Disabled}}disabled{{end}}>Log in</button>
+</form>
+<p>Global administrators can manage every account. S3 API permissions are unchanged.</p>
+{{end}}

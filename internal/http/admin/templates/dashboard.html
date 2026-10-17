@@ -1,0 +1,18 @@
+{{define "dashboard"}}
+<section hx-get="/" hx-trigger="every 10s" hx-target="#main" hx-swap="innerHTML">
+<h1>Dashboard</h1>
+<dl>
+<dt>Database health</dt><dd>{{.DatabaseHealth}}</dd>
+<dt>Storage</dt><dd>{{.StorageState}}</dd>
+<dt>S3 request rate</dt><dd>{{.RequestRate}}</dd>
+<dt>S3 error rate (4xx and 5xx)</dt><dd>{{.ErrorRate}}</dd>
+<dt>S3 latency</dt><dd>{{.Latency}}</dd>
+</dl>
+{{if .MetricsError}}<p role="alert">{{.MetricsError}}</p>{{end}}
+<h2>Storage usage and queue backlogs</h2>
+<table><thead><tr><th>Metric</th><th>Labels</th><th>Value</th></tr></thead><tbody>
+{{range .Metrics}}<tr><td>{{.Name}}</td><td>{{.Labels}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="3">No storage or queue metrics available for this configuration.</td></tr>{{end}}
+</tbody></table>
+<p>Refreshes every 10 seconds. Bucket usage gauges represent current live objects; historical versions and delete markers are excluded. Database labels distinguish replicated stores.</p>
+</section>
+{{end}}

@@ -322,10 +322,22 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 
 	var httpAdminServer *http.Server
 	if settings.AdminEnabled() {
-		adminHandler, err := admin.NewHandler()
+		adminContext, stopAdmin := context.WithCancel(ctx)
+		defer stopAdmin()
+		adminHandler, err := admin.NewHandler(admin.Options{
+			Context: adminContext, Settings: settings, Storage: store, StorageStarted: true,
+			Databases: dbs, CredentialProvider: credentialProvider, Authorizer: requestAuthorizer,
+		})
 		if err != nil {
 			return fmt.Errorf("create admin handler: %w", err)
 		}
+		defer func() {
+			if closer, ok := adminHandler.(io.Closer); ok {
+				if err := closer.Close(); err != nil {
+					slog.Error("Couldn't stop admin workers", "error", err)
+				}
+			}
+		}()
 		httpAdminServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
 			Addr:              net.JoinHostPort(settings.AdminBindAddress(), fmt.Sprint(settings.AdminPort())),

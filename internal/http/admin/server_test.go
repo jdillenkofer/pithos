@@ -19,13 +19,14 @@ func TestRouter(t *testing.T) {
 		body   string
 	}{
 		{http.MethodGet, "/healthz", http.StatusOK, "ok\n"},
-		{http.MethodGet, "/", http.StatusServiceUnavailable, "Login and management are not available yet."},
+		{http.MethodGet, "/", http.StatusSeeOther, "/login"},
+		{http.MethodGet, "/login", http.StatusOK, "Global administrator login"},
 		{http.MethodGet, "/static/admin.css", http.StatusOK, "color-scheme"},
-		{http.MethodGet, "/missing", http.StatusNotFound, "404"},
-		{http.MethodGet, "/static/missing.js", http.StatusNotFound, "404"},
-		{http.MethodGet, "/templates/layout.html", http.StatusNotFound, "404"},
-		{http.MethodPost, "/healthz", http.StatusMethodNotAllowed, "Method Not Allowed"},
-		{http.MethodPost, "/", http.StatusMethodNotAllowed, "Method Not Allowed"},
+		{http.MethodGet, "/missing", http.StatusSeeOther, "/login"},
+		{http.MethodGet, "/static/missing.js", http.StatusSeeOther, "/login"},
+		{http.MethodGet, "/templates/layout.html", http.StatusSeeOther, "/login"},
+		{http.MethodPost, "/healthz", http.StatusSeeOther, ""},
+		{http.MethodPost, "/", http.StatusSeeOther, ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -56,12 +57,12 @@ func TestManagementRoutesAreNotExposed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/buckets", "/objects", "/credentials", "/policies", "/audit", "/storage"} {
+	for _, path := range []string{"/", "/buckets", "/buckets/create", "/buckets/delete", "/buckets/detail", "/buckets/configure", "/objects", "/objects/detail", "/objects/download", "/objects/upload", "/objects/delete", "/objects/tags", "/objects/retention", "/objects/legal-hold", "/credentials", "/credentials/create", "/credentials/delete", "/policies", "/policies/save", "/policies/validate", "/policies/simulate", "/audit", "/audit/verify", "/audit/verify/progress", "/storage", "/storage/validate", "/storage/validate/progress", "/logout"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, httptest.NewRequest(method, path, nil))
-			if w.Code != http.StatusNotFound {
-				t.Errorf("%s %s: status = %d, want 404", method, path, w.Code)
+			if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+				t.Errorf("%s %s: status = %d, want login redirect", method, path, w.Code)
 			}
 		}
 	}

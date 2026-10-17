@@ -1,0 +1,16 @@
+{{define "buckets"}}
+<section aria-label="All buckets">
+<p>Global administration: buckets from all accounts are shown.</p>
+<table><thead><tr><th>Bucket</th><th>Owner account</th><th>Objects</th></tr></thead><tbody>
+{{range .Buckets}}<tr><td><a href="/buckets/detail?bucket={{.Name.String}}">{{.Name.String}}</a></td><td>{{.OwnerAccountID}}</td><td><a href="/objects?bucket={{.Name.String}}">Browse objects</a></td></tr>{{else}}<tr><td colspan="3">No buckets.</td></tr>{{end}}
+</tbody></table>
+</section>
+<section><h2>Create bucket</h2>
+<form method="post" action="/buckets/create">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<label>Bucket name <input name="bucket" required></label>
+<label>Owner account <input name="owner" value="{{.Owner}}" maxlength="256" required></label>
+<label><input type="checkbox" name="object_lock" value="true"> Enable object lock (also enables versioning)</label>
+<button type="submit">Create bucket</button>
+</form></section>
+{{end}}

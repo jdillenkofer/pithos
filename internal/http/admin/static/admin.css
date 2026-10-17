@@ -26,3 +26,59 @@ main {
   max-width: 80rem;
   margin: auto;
 }
+form {
+  margin-block: 1rem;
+}
+label {
+  display: block;
+  margin-block: 0.5rem;
+}
+input, select, textarea, button {
+  font: inherit;
+  padding: 0.35rem;
+}
+textarea {
+  display: block;
+  max-width: 100%;
+  width: 60rem;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+}
+button {
+  cursor: pointer;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-block: 1rem;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid GrayText;
+  overflow-wrap: anywhere;
+}
+pre {
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid GrayText;
+}
+nav form {
+  margin: 0;
+}
+dt {
+  font-weight: bold;
+}
+dd {
+  margin-bottom: 0.75rem;
+}
+[role="alert"] {
+  border-left: 0.3rem solid #c33;
+  padding-left: 1rem;
+}
+.htmx-indicator {
+  opacity: 0;
+}
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator {
+  opacity: 1;
+}

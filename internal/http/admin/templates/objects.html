@@ -1,0 +1,35 @@
+{{define "objects"}}
+<h1>Objects: {{.Bucket}}</h1>
+<p><a href="/buckets">Buckets</a> / <a href="{{.Parent}}">Parent prefix</a> / {{.Prefix}}</p>
+<form method="get" action="/objects"><input type="hidden" name="bucket" value="{{.Bucket}}"><label>Prefix <input name="prefix" value="{{.Prefix}}"></label><label><input type="checkbox" name="versions" value="true" {{if .Versions}}checked{{end}}> Show versions and delete markers</label><button>Browse</button></form>
+<table><thead><tr><th>Key / prefix</th><th>Bytes</th><th>Type</th></tr></thead><tbody>
+{{range .Prefixes}}<tr><td><a href="{{.URL}}">{{.Label}}</a></td><td></td><td>Prefix</td></tr>{{end}}
+{{range .Objects}}<tr><td><a href="{{.URL}}">{{.Label}}</a></td><td>{{.Size}}</td><td>{{if .DeleteMarker}}Delete marker{{else}}Object{{end}}</td></tr>{{end}}
+</tbody></table>
+{{if .NextURL}}<p><a href="{{.NextURL}}">Next page</a></p>{{end}}
+<h2>Upload object</h2>
+<form method="post" action="/objects/upload" enctype="multipart/form-data">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="bucket" value="{{.Bucket}}">
+<label>Object key <input name="key" value="{{.Prefix}}" maxlength="1024" required></label>
+<label>File <input type="file" name="file" required></label><button>Upload</button>
+</form>
+<p>Uploads stream directly to storage. Resumable S3 multipart uploads are not supported in this UI.</p>
+{{end}}
+
+{{define "object-detail"}}
+<h1>{{.Bucket}} / {{.Key}}</h1>
+<p>Version: {{if .Version}}{{.Version}}{{else}}current{{end}}</p>
+{{if .DeleteMarker}}<p>This version is a delete marker.</p>{{else}}
+<p><a href="{{.DownloadURL}}">Download as attachment</a></p>
+<h2>Metadata, checksums, retention and legal hold</h2><pre>{{.JSON}}</pre>
+<h2>Tags</h2>
+<form method="post" action="/objects/tags"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}"><label>Tags JSON <textarea name="tags" rows="8" cols="70" required>{{.Tags}}</textarea></label><button>Save tags</button></form>
+<h2>Retention</h2>
+<form method="post" action="/objects/retention"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}"><label>Mode <select name="mode"><option>GOVERNANCE</option><option>COMPLIANCE</option></select></label><label>Retain until (RFC3339) <input name="retain_until" placeholder="2030-01-01T00:00:00Z" required></label><label><input type="checkbox" name="bypass_governance" value="yes"> Explicitly bypass governance retention (global admin capability)</label><button>Save retention</button></form>
+<h2>Legal hold</h2>
+<form method="post" action="/objects/legal-hold"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}"><label>Status <select name="status"><option>ON</option><option>OFF</option></select></label><button>Save legal hold</button></form>
+{{end}}
+<h2>Delete</h2>
+<form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}"><label><input type="checkbox" name="confirm" value="yes" required> Confirm deletion of this object/version</label><label><input type="checkbox" name="bypass_governance" value="yes"> Explicitly bypass governance retention (global admin capability)</label><button>Delete</button></form>
+{{end}}

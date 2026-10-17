@@ -3,54 +3,84 @@
 package admin
 
 import (
-	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
 	"net/http"
+
+	"github.com/jdillenkofer/pithos/internal/http/admin/session"
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
+	"github.com/jdillenkofer/pithos/internal/settings"
+	"github.com/oklog/ulid/v2"
 )
 
-//go:embed templates/*.html static/*.css
+//go:embed templates/*.html static/*
 var assets embed.FS
 
 const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
 
-// NewHandler builds the admin router. Until session authentication is installed,
-// no management routes are exposed, regardless of configured admin credentials.
-func NewHandler() (http.Handler, error) {
+// NewHandler builds an isolated admin router. Only health, login and embedded
+// static assets are public; all management routes require a fresh credential
+// lookup and, for unsafe methods, a per-session CSRF token.
+func NewHandler(options ...Options) (http.Handler, error) {
+	var opts Options
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
+	if opts.Settings == nil {
+		opts.Settings = &settings.Settings{}
+	}
 	pages, err := template.ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse admin templates: %w", err)
 	}
-	stylesheet, err := assets.ReadFile("static/admin.css")
-	if err != nil {
-		return nil, fmt.Errorf("load admin static assets: %w", err)
+	lifetime, cancel := context.WithCancel(opts.Context)
+	opts.Context = lifetime
+	a := &App{options: opts, pages: pages, limiter: session.NewLoginLimiter()}
+	ready := false
+	defer func() {
+		if !ready {
+			cancel()
+			a.workers.wait()
+		}
+	}()
+	if err := a.initializeLoginKey(); err != nil {
+		return nil, err
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	if err := a.initializeSessions(); err != nil {
+		return nil, err
+	}
+	public := http.NewServeMux()
+	public.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	mux.HandleFunc("GET /static/admin.css", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/css; charset=utf-8")
-		_, _ = w.Write(stylesheet)
-	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		var body bytes.Buffer
-		if err := pages.ExecuteTemplate(&body, "layout", struct{ Title string }{Title: "Admin UI"}); err != nil {
-			http.Error(w, "Unable to render page", http.StatusInternalServerError)
-			return
+	for _, file := range []struct{ name, kind string }{{"admin.css", "text/css; charset=utf-8"}, {"admin.js", "text/javascript; charset=utf-8"}, {"htmx.min.js", "text/javascript; charset=utf-8"}} {
+		contents, err := assets.ReadFile("static/" + file.name)
+		if err != nil {
+			return nil, fmt.Errorf("read admin asset: %w", err)
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write(body.Bytes())
-	})
-	return securityHeaders(mux), nil
+		public.HandleFunc("GET /static/"+file.name, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", file.kind)
+			_, _ = w.Write(contents)
+		})
+	}
+	public.HandleFunc("GET /login", a.loginPage)
+	public.HandleFunc("POST /login", a.login)
+	protected := http.NewServeMux()
+	protected.HandleFunc("GET /{$}", a.dashboard)
+	protected.HandleFunc("POST /logout", a.logout)
+	a.registerBuckets(protected)
+	a.registerObjects(protected)
+	public.Handle("/", a.requireSession(a.requireCSRF(protected)))
+	ready = true
+	return &Handler{Handler: securityHeaders(public), cancel: cancel, workers: &a.workers}, nil
 }
 
-// securityHeaders wraps the entire router so errors and static responses receive
-// the same protections as rendered pages.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
@@ -58,6 +88,8 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), authentication.RequestIDContextKey{}, ulid.Make().String())
+		ctx = context.WithValue(ctx, authentication.ClientIPContextKey{}, clientIP(r))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
