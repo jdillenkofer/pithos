@@ -509,8 +509,11 @@ func (a *App) deleteObject(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, 400, "Invalid object target")
 		return
 	}
-	if r.FormValue("confirm") != "yes" {
-		a.fail(w, r, 400, "Deletion requires confirmation")
+	c := confirmation{Title: "Delete " + k.String() + "?", Message: "The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.", Action: "Delete object"}
+	if v != nil {
+		c = confirmation{Title: "Permanently delete version " + *v + "?", Message: "This version of " + k.String() + " is deleted permanently. This cannot be undone.", Action: "Delete version"}
+	}
+	if !a.confirmed(w, r, c) {
 		return
 	}
 	// Only allowlisted global admins reach this route, including the explicit

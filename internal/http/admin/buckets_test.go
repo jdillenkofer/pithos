@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/jdillenkofer/pithos/internal/ptrutils"
 	"github.com/stretchr/testify/require"
 	"html/template"
 	"net/http"
@@ -140,7 +141,7 @@ func bucketTestApp(t *testing.T, s *bucketTestStorage) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pages, err = pages.ParseFS(os.DirFS("."), "templates/buckets*.html")
+	pages, err = pages.ParseFS(os.DirFS("."), "templates/buckets*.html", "templates/confirm.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +379,7 @@ func structuredBucketRequest(a *App, tab string, form url.Values) *httptest.Resp
 	form.Set("bucket", "valid-bucket")
 	form.Set("tab", tab)
 	form.Set("editor", "form")
+	form.Set("confirm", "yes")
 	return bucketRequest(a, "POST", "/buckets/configure", form)
 }
 
@@ -501,4 +503,27 @@ func TestBucketConfigurationEventNames(t *testing.T) {
 	for _, tab := range bucketTabs {
 		require.NotEqual(t, "AdminPut", bucketConfigurationEvent(tab, "save"), tab)
 	}
+}
+
+func TestBucketConfigurationDeletesRequireConfirmation(t *testing.T) {
+	s := &bucketTestStorage{lifecycle: &storage.BucketLifecycleConfiguration{Rules: []storage.LifecycleRule{{ID: ptrutils.ToPtr("keep"), Status: "Enabled", Expiration: &storage.LifecycleExpiration{Days: ptrutils.ToPtr(int32(1))}}}}}
+	a := bucketTestApp(t, s)
+	for _, form := range []url.Values{
+		{"tab": {"cors"}, "action": {"delete"}},
+		{"tab": {"lifecycle"}, "action": {"delete"}},
+		{"tab": {"tags"}, "editor": {"form"}},
+		{"tab": {"website"}, "editor": {"form"}, "website": {"disabled"}},
+		{"tab": {"lifecycle"}, "editor": {"form"}, "rule_action": {"delete"}, "original_id": {"keep"}},
+	} {
+		form.Set("bucket", "valid-bucket")
+		w := bucketRequest(a, "POST", "/buckets/configure", form)
+		require.Equal(t, http.StatusOK, w.Code, "%v: %s", form, w.Body.String())
+		require.Contains(t, w.Body.String(), `name="confirm" value="yes"`)
+		require.Contains(t, w.Body.String(), `name="tab" value="`+form.Get("tab")+`"`, "the confirmation re-submits the same form")
+		require.Zero(t, s.writes, "%v deleted without confirmation", form)
+	}
+	writes := s.writes
+	w := bucketRequest(a, "POST", "/buckets/configure", url.Values{"bucket": {"valid-bucket"}, "tab": {"versioning"}, "configuration": {`{"Status":"Enabled"}`}})
+	require.Equal(t, http.StatusSeeOther, w.Code, "non-destructive changes need no confirmation")
+	require.Equal(t, writes+1, s.writes)
 }

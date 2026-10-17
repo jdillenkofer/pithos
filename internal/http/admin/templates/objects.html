@@ -115,9 +115,8 @@
   <div class="container-head"><div><h2>Delete {{if .Version}}object version{{else}}object{{end}}</h2><p>{{if .Version}}Permanently deletes this version.{{else}}Deletes the object. In a versioned bucket a delete marker is created instead.{{end}}</p></div></div>
   <div class="container-body">
   <form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-  <label class="check"><input type="checkbox" name="confirm" value="yes" required> I confirm the deletion</label>
   <label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
-  <div class="actions-row start"><button class="danger">Delete</button></div></form>
+  <div class="actions-row start"><button class="danger" data-confirm="{{if .Version}}This version is deleted permanently. This cannot be undone.{{else}}The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.{{end}}" data-confirm-title="Delete {{.Name}}?" data-confirm-action="{{if .Version}}Delete version{{else}}Delete object{{end}}">Delete</button></div></form>
   </div>
 </div>
 {{end}}

@@ -33,6 +33,13 @@
     </nav>
     <main id="main" class="content">{{.Content}}</main>
   </div>
+  <dialog class="modal" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+    <form method="dialog">
+      <h2 id="confirm-dialog-title" data-confirm-title></h2>
+      <p data-confirm-message></p>
+      <div class="actions-row"><button value="cancel">Cancel</button><button value="confirm" class="danger" data-confirm-action>Delete</button></div>
+    </form>
+  </dialog>
 {{else}}
   <main id="main" class="login-wrap">{{.Content}}</main>
 {{end}}

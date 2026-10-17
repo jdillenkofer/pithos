@@ -111,6 +111,13 @@ func (a *App) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, http.StatusBadRequest, "Cannot delete the credential used by this session")
 		return
 	}
+	if !a.confirmed(w, r, confirmation{
+		Title:   "Delete access key " + accessKeyID + "?",
+		Message: "Clients using this access key immediately lose access to the S3 API and existing console sessions with it end. This cannot be undone.",
+		Action:  "Delete access key",
+	}) {
+		return
+	}
 	if err := store.Delete(r.Context(), accessKeyID); err != nil {
 		if errors.Is(err, authentication.ErrCredentialNotFound) {
 			a.fail(w, r, http.StatusNotFound, "Credential not found")

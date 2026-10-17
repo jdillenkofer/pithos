@@ -361,6 +361,11 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	// Validate before invoking any storage mutation.
 	apply, err := bucketConfigurationMutation(a.options.Storage, name, tab, text, action)
+	if err == nil {
+		if c, destructive := bucketDeletionConfirmation(name.String(), tab, action, r.PostForm); destructive && !a.confirmed(w, r, c) {
+			return
+		}
+	}
 	if err != nil {
 		a.fail(w, r, 400, err.Error())
 		return
@@ -371,6 +376,24 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(r, bucketConfigurationEvent(tab, action))
 	http.Redirect(w, r, "/buckets/detail?bucket="+url.QueryEscape(name.String())+"&tab="+url.QueryEscape(tab)+"#"+tab, http.StatusSeeOther)
+}
+
+// bucketDeletionConfirmation describes configuration removals, including
+// deleting one lifecycle rule, which need explicit confirmation.
+func bucketDeletionConfirmation(bucket, tab, action string, form url.Values) (confirmation, bool) {
+	if form.Get("rule_action") == "delete" {
+		rule := form.Get("original_id")
+		return confirmation{Title: "Delete lifecycle rule " + rule + "?", Message: "The rule is removed from bucket " + bucket + " and its actions stop applying.", Action: "Delete rule"}, true
+	}
+	if action != "delete" {
+		return confirmation{}, false
+	}
+	names := map[string]string{"lifecycle": "lifecycle configuration", "cors": "CORS configuration", "website": "static website hosting configuration", "tags": "tags"}
+	return confirmation{
+		Title:   "Delete the " + names[tab] + " of " + bucket + "?",
+		Message: "The " + names[tab] + " of bucket " + bucket + " is removed. This cannot be undone.",
+		Action:  "Delete",
+	}, true
 }
 
 // bucketConfigurationEvent names the audit event like the S3 operation, for

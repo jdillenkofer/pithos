@@ -357,3 +357,11 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator { cursor: pointe
 .sim-verdict .status { font-size: 18px; font-weight: 700; }
 .sim-result table { background: var(--container); border-radius: 8px; }
 .alert.info { border-color: var(--info); }
+
+/* Confirmation dialog */
+dialog.modal { border: 0; border-radius: 16px; padding: 0; width: min(32rem, calc(100vw - 32px)); background: var(--container); color: var(--text); box-shadow: 0 8px 32px rgb(0 7 22 / 35%); }
+dialog.modal::backdrop { background: rgb(15 20 26 / 55%); }
+dialog.modal form { padding: 20px 24px; display: grid; gap: 12px; }
+dialog.modal p { margin: 0; color: var(--muted); }
+dialog.modal .actions-row { margin-top: 8px; }
+@media (prefers-color-scheme: dark) { dialog.modal { border: 1px solid var(--border); } }

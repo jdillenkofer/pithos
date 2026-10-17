@@ -87,3 +87,20 @@ func TestObjectVersionsListAndDelete(t *testing.T) {
 	require.Contains(t, result.Body.String(), "Object retention or legal hold prevents this operation")
 	require.NotContains(t, result.Body.String(), "SECRET")
 }
+
+func TestObjectDeleteRequiresConfirmation(t *testing.T) {
+	store := &versionsTestStore{}
+	form := url.Values{"bucket": {"bucket"}, "key": {"doc.txt"}, "version": {"v2"}, "note": {`"><script>alert(1)</script>`}}
+	page := versionsTestRequest(t, store, http.MethodPost, "/objects/delete", form)
+	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
+	require.Empty(t, store.deleted)
+	require.Contains(t, page.Body.String(), "Permanently delete version v2?")
+	require.Contains(t, page.Body.String(), `name="version" value="v2"`)
+	require.Contains(t, page.Body.String(), `name="confirm" value="yes"`)
+	require.NotContains(t, page.Body.String(), "<script>alert")
+
+	form.Set("confirm", "yes")
+	done := versionsTestRequest(t, store, http.MethodPost, "/objects/delete", form)
+	require.Equal(t, http.StatusSeeOther, done.Code, done.Body.String())
+	require.Equal(t, []string{"v2"}, store.deleted)
+}

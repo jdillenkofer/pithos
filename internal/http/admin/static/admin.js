@@ -54,12 +54,32 @@ function updateTagEditor(editor) {
   }
 }
 
-// Buttons with data-confirm ask before submitting a destructive form.
+// Buttons with data-confirm open the confirmation dialog. Confirming
+// re-submits the form with confirm=yes through the same button; the server
+// asks again with a confirmation page when this script does not run.
 document.addEventListener("click", function (event) {
   const button = event.target.closest("button[data-confirm]");
-  if (button && !window.confirm(button.dataset.confirm)) {
-    event.preventDefault();
+  const dialog = document.getElementById("confirm-dialog");
+  if (!button || !button.form || !dialog || button.form.querySelector('input[name="confirm"][value="yes"]')) {
+    return;
   }
+  event.preventDefault();
+  dialog.querySelector("[data-confirm-title]").textContent = button.dataset.confirmTitle || "Are you sure?";
+  dialog.querySelector("[data-confirm-message]").textContent = button.dataset.confirm;
+  dialog.querySelector("[data-confirm-action]").textContent = button.dataset.confirmAction || "Delete";
+  dialog.returnValue = "";
+  dialog.onclose = function () {
+    if (dialog.returnValue !== "confirm") {
+      return;
+    }
+    const confirm = document.createElement("input");
+    confirm.type = "hidden";
+    confirm.name = "confirm";
+    confirm.value = "yes";
+    button.form.appendChild(confirm);
+    button.form.requestSubmit(button);
+  };
+  dialog.showModal();
 });
 
 // Audit filters: picking a relative range applies it at once; editing a

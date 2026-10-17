@@ -65,7 +65,7 @@ func (credentialLookupOnlyFake) Lookup(context.Context, string) (authentication.
 
 func credentialTestHandler(t *testing.T, provider authentication.CredentialProvider) http.Handler {
 	t.Helper()
-	pages, err := template.ParseFiles("templates/credentials.html", "templates/credentials-created.html")
+	pages, err := template.ParseFiles("templates/credentials.html", "templates/credentials-created.html", "templates/confirm.html")
 	require.NoError(t, err)
 	_, err = pages.Parse(`{{define "layout"}}{{.Content}}{{end}}`)
 	require.NoError(t, err)
@@ -108,6 +108,11 @@ func TestCredentialHandlersCreateListDelete(t *testing.T) {
 	require.NotContains(t, repeated.Body.String(), secret)
 	deleted := httptest.NewRecorder()
 	handler.ServeHTTP(deleted, credentialTestRequest("POST", "/credentials/delete", url.Values{"accessKeyId": {"new-key"}}))
+	require.Equal(t, http.StatusOK, deleted.Code, "an unconfirmed deletion only asks for confirmation")
+	require.Contains(t, deleted.Body.String(), "Delete access key new-key?")
+	require.Len(t, provider.credentials, 1)
+	deleted = httptest.NewRecorder()
+	handler.ServeHTTP(deleted, credentialTestRequest("POST", "/credentials/delete", url.Values{"accessKeyId": {"new-key"}, "confirm": {"yes"}}))
 	require.Equal(t, http.StatusSeeOther, deleted.Code)
 	require.Equal(t, "/credentials", deleted.Header().Get("Location"))
 	require.Empty(t, provider.credentials)
@@ -190,7 +195,7 @@ func TestSQLCredentialDeletionInvalidatesSessionWhenReloadFails(t *testing.T) {
 			db.failReloads.Store(true)
 
 			deleteSecond := func() *httptest.ResponseRecorder {
-				form := url.Values{"accessKeyId": {"second"}, "csrf_token": {csrf}}
+				form := url.Values{"accessKeyId": {"second"}, "csrf_token": {csrf}, "confirm": {"yes"}}
 				req := httptest.NewRequest(http.MethodPost, "/credentials/delete", strings.NewReader(form.Encode()))
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				req.AddCookie(adminCookie)
