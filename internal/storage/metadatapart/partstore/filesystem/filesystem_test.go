@@ -158,3 +158,57 @@ func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	})
 	assert.NoError(t, err)
 }
+
+func TestFilesystemPartStoreRollbackRemovesFreshPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	ctx := context.Background()
+	storagePath := t.TempDir()
+	db, err := sqlite.OpenDatabase(filepath.Join(storagePath, "pithos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	partsPath := filepath.Join(storagePath, "parts")
+	ps, err := New(partsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Stop(ctx)
+
+	partId, err := partstore.NewRandomPartId()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errRollback := fmt.Errorf("rollback")
+	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+		if err := ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("staged"))); err != nil {
+			return err
+		}
+		return errRollback
+	})
+	assert.ErrorIs(t, err, errRollback)
+	_, err = ps.GetPart(ctx, nil, *partId)
+	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	entries, err := os.ReadDir(partsPath)
+	assert.NoError(t, err)
+	assert.Empty(t, entries, "rollback must not leave files behind")
+
+	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+		return ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("committed")))
+	})
+	assert.NoError(t, err)
+	rc, err := ps.GetPart(ctx, nil, *partId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	content, err := io.ReadAll(rc)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("committed"), content)
+}
