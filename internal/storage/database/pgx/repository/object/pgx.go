@@ -290,6 +290,49 @@ func (or *pgxRepository) FindObjectsFromKey(ctx context.Context, tx *sql.Tx, buc
 	return entities, rows.Err()
 }
 
+// Like FindObjectsFromKey, use a single effective lower bound so the seek
+// starts at the marker or the subtree successor, whichever is greater.
+const findObjectVersionsFromKeyStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key COLLATE "C" >= $2
+ AND upload_status = $3
+ AND version_id IS NOT NULL
+ AND ($4 = '' OR key COLLATE "C" < $4)
+ ORDER BY key COLLATE "C" ASC, COALESCE(NULLIF(version_id, 'null'), '') COLLATE "C" DESC LIMIT $5`
+
+const findObjectVersionsAfterMarkerStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key COLLATE "C" >= $2
+ AND upload_status = $3
+ AND version_id IS NOT NULL
+ AND (key COLLATE "C" > $2 OR COALESCE(NULLIF(version_id, 'null'), '') COLLATE "C" < COALESCE(NULLIF($4, 'null'), ''))
+ AND ($5 = '' OR key COLLATE "C" < $5)
+ ORDER BY key COLLATE "C" ASC, COALESCE(NULLIF(version_id, 'null'), '') COLLATE "C" DESC LIMIT $6`
+
+func (or *pgxRepository) FindObjectVersionsFromKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, keyMarker, versionIDMarker, minimumKey string, limit int32) ([]object.Entity, error) {
+	lowerBound := max(prefix, minimumKey)
+	var rows *sql.Rows
+	var err error
+	if keyMarker >= lowerBound {
+		rows, err = tx.QueryContext(ctx, findObjectVersionsAfterMarkerStmt, bucketName.String(), keyMarker, object.UploadStatusCompleted, versionIDMarker, object.PrefixUpperBound(prefix), limit)
+	} else {
+		rows, err = tx.QueryContext(ctx, findObjectVersionsFromKeyStmt, bucketName.String(), lowerBound, object.UploadStatusCompleted, object.PrefixUpperBound(prefix), limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entities := []object.Entity{}
+	for rows.Next() {
+		entity, err := convertRowToObjectEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		entities = append(entities, *entity)
+	}
+	return entities, rows.Err()
+}
+
 func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]object.Entity, error) {
 	objectRows, err := tx.QueryContext(ctx, findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, object.PrefixUpperBound(prefix))
 	if err != nil {
