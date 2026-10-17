@@ -2,6 +2,7 @@ package metadatapart
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -146,4 +147,36 @@ func BenchmarkStorageGetObjectRangeTail256MB(b *testing.B) {
 			b.Fatalf("unexpected range read size: %d", n)
 		}
 	}
+}
+
+// benchmarkPutUnique writes a distinct payload per iteration so every put
+// stores a new part; the PutGet benchmarks reuse one payload and therefore
+// measure the dedup-hit path after the first iteration.
+func benchmarkPutUnique(b *testing.B, size int) {
+	st := newBenchmarkStorage(b)
+	ctx := context.Background()
+	bucketName := storage.MustNewBucketName("bench-bucket")
+	if err := st.CreateBucket(ctx, bucketName); err != nil {
+		b.Fatal(err)
+	}
+	data := make([]byte, size)
+	b.SetBytes(int64(size))
+	b.ReportAllocs()
+	i := 0
+	for b.Loop() {
+		binary.LittleEndian.PutUint64(data, uint64(i))
+		key := storage.MustNewObjectKey(fmt.Sprintf("obj-%d", i))
+		i++
+		if _, err := st.PutObject(ctx, bucketName, key, nil, ioutils.NewByteReadSeekCloser(data), nil, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkStoragePutUnique4KB(b *testing.B) {
+	benchmarkPutUnique(b, 4*1024)
+}
+
+func BenchmarkStoragePutUnique1MB(b *testing.B) {
+	benchmarkPutUnique(b, 1000*1000)
 }
