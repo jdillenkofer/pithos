@@ -1,0 +1,1 @@
+DROP INDEX objects_completed_listing_idx;

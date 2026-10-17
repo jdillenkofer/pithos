@@ -123,6 +123,13 @@ Deleting by key in an enabled or suspended bucket creates a delete marker and re
 
 `GET /<bucket>?versions` lists object versions and delete markers. It supports `prefix`, `delimiter`, `key-marker`, `version-id-marker`, and `max-keys`, and returns `Version`, `DeleteMarker`, `CommonPrefixes`, `NextKeyMarker`, and `NextVersionIdMarker` elements.
 
+## Listing Prefixes
+
+Object, version, and multipart upload listings match `prefix` literally and
+case-sensitively. Characters such as `%`, `_`, `*`, `?`, brackets, and backslashes
+are ordinary key characters, not wildcards or escape sequences. SQL-backed
+listings compare keys in UTF-8 byte order, independently of the database locale.
+
 ## Expected Bucket Owner
 
 Bucket-scoped operations (except bucket creation) enforce
