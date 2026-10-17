@@ -209,8 +209,34 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 
 	filename := s.getFilename(partId)
 	if tx != nil {
-		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
+		// Part ids are fresh random ids, so the part usually does not exist
+		// yet. Nothing can reference it before commit, so write it in place
+		// and remove it on rollback, saving the temp file and both renames
+		// at commit. SFTPv3 servers report an existing file as a generic
+		// failure, so any status error falls back to the temp file below,
+		// which replaces an existing part atomically.
 		f, err := doRetriableOperation(ctx, func() (*sftp.File, error) {
+			return s.client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
+		}, maxStpRetries, s.reconnectSftpClient, isStatusError)
+		if err == nil {
+			if err := writeAndClose(f, reader); err != nil {
+				_ = s.client.Remove(filename)
+				return err
+			}
+			tx.OnRollback(func(context.Context) error {
+				if err := s.client.Remove(filename); err != nil && !isNotFoundError(err) {
+					return err
+				}
+				return nil
+			})
+			return nil
+		}
+		if !isStatusError(err) {
+			return err
+		}
+
+		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
+		f, err = doRetriableOperation(ctx, func() (*sftp.File, error) {
 			return s.client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 		}, maxStpRetries, s.reconnectSftpClient, nil)
 		if err != nil {
@@ -413,4 +439,12 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 
 func isNotFoundError(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
+}
+
+// isStatusError reports whether err is a status the server answered with,
+// as opposed to a connection failure worth retrying. pkg/sftp maps some
+// statuses to os errors.
+func isStatusError(err error) bool {
+	var statusErr *sftp.StatusError
+	return errors.As(err, &statusErr) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
 }
