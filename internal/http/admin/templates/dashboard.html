@@ -1,18 +1,31 @@
 {{define "dashboard"}}
 <section hx-get="/" hx-trigger="every 10s" hx-target="#main" hx-swap="innerHTML">
-<h1>Dashboard</h1>
-<dl>
-<dt>Database health</dt><dd>{{.DatabaseHealth}}</dd>
-<dt>Storage</dt><dd>{{.StorageState}}</dd>
-<dt>S3 request rate</dt><dd>{{.RequestRate}}</dd>
-<dt>S3 error rate (4xx and 5xx)</dt><dd>{{.ErrorRate}}</dd>
-<dt>S3 latency</dt><dd>{{.Latency}}</dd>
-</dl>
+<div class="page-head">
+  <div><h1>Dashboard</h1><p class="subtitle">Live server status · refreshes every 10 seconds</p></div>
+</div>
+<div class="stats">
+  <div class="stat"><div class="label">Database</div><div class="value small"><span class="badge {{if .DatabaseHealthy}}ok{{else}}bad{{end}}">{{.DatabaseHealth}}</span></div></div>
+  <div class="stat"><div class="label">Storage</div><div class="value small"><span class="badge {{if .StorageStarted}}ok{{else}}warn{{end}}">{{.StorageState}}</span></div></div>
+  <div class="stat"><div class="label">S3 requests</div><div class="value">{{.RequestRate}}</div></div>
+  <div class="stat"><div class="label">S3 errors (4xx/5xx)</div><div class="value">{{.ErrorRate}}</div></div>
+  <div class="stat"><div class="label">Mean latency</div><div class="value">{{.Latency}}</div></div>
+</div>
 {{if .MetricsError}}<p role="alert">{{.MetricsError}}</p>{{end}}
-<h2>Storage usage and queue backlogs</h2>
-<table><thead><tr><th>Metric</th><th>Labels</th><th>Value</th></tr></thead><tbody>
-{{range .Metrics}}<tr><td>{{.Name}}</td><td>{{.Labels}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="3">No storage or queue metrics available for this configuration.</td></tr>{{end}}
-</tbody></table>
-<p>Refreshes every 10 seconds. Bucket usage gauges represent current live objects; historical versions and delete markers are excluded. Database labels distinguish replicated stores.</p>
+{{if .Usage}}<div class="stats">{{range .Usage}}<div class="stat"><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}</div>{{end}}
+<div class="card flush">
+  <h2>Bucket usage</h2>
+  <p class="hint card-pad">Current live objects; historical versions and delete markers are excluded. Sampled periodically, so recent writes may take a moment to appear.</p>
+  <div class="table-wrap"><table>
+  <thead><tr><th>Bucket</th><th>Database</th><th class="num">Objects</th><th class="num">Size</th></tr></thead>
+  <tbody>{{range .Buckets}}<tr><td><a href="/objects?bucket={{.Bucket}}">{{.Bucket}}</a></td><td><span class="chip">db {{.Database}}</span></td><td class="num">{{.Objects}}</td><td class="num">{{.Size}}</td></tr>{{else}}<tr><td colspan="4" class="empty">No bucket usage sampled yet.</td></tr>{{end}}</tbody>
+  </table></div>
+</div>
+{{if .Metrics}}<div class="card flush">
+  <h2>Storage and queues</h2>
+  <div class="table-wrap"><table>
+  <thead><tr><th>Metric</th><th>Labels</th><th class="num">Value</th></tr></thead>
+  <tbody>{{range .Metrics}}<tr><td>{{.Label}}</td><td>{{range .Labels}}<span class="chip">{{.}}</span>{{end}}</td><td class="num">{{.Value}}</td></tr>{{end}}</tbody>
+  </table></div>
+</div>{{end}}
 </section>
 {{end}}

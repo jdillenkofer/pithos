@@ -22,18 +22,27 @@ type objectCursor struct {
 	Versions                     bool
 }
 type objectLink struct {
-	Label, URL   string
-	Size         int64
-	DeleteMarker bool
+	Label, URL, Version, SizeText, Modified string
+	Size                                    int64
+	DeleteMarker, Latest                    bool
 }
 type objectsView struct {
-	CSRF, Bucket, Prefix, Parent, NextURL string
-	Versions                              bool
-	Prefixes, Objects                     []objectLink
+	CSRF, Bucket, Prefix, Parent, NextURL, VersionsURL string
+	Versions                                           bool
+	Prefixes, Objects, Crumbs                          []objectLink
 }
+
+func formatModified(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02 15:04")
+}
+
 type objectDetailView struct {
-	CSRF, Bucket, Key, Version, JSON, Tags, DownloadURL string
-	DeleteMarker                                        bool
+	CSRF, Bucket, Key, Version, JSON, Tags, DownloadURL, BucketURL string
+	DeleteMarker                                                   bool
+	Properties                                                     []usageTile
 }
 
 // objectError exposes only known protocol errors, never backend connection
@@ -119,6 +128,18 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 	}
 	q := url.Values{"bucket": {bucket.String()}, "prefix": {parent}, "versions": {fmt.Sprint(versions)}}
 	view.Parent = "/objects?" + q.Encode()
+	// Breadcrumbs link every enclosing prefix of the current listing.
+	for i := 0; i < len(prefix); i++ {
+		if prefix[i] == '/' {
+			q.Set("prefix", prefix[:i+1])
+			start := strings.LastIndex(prefix[:i], "/") + 1
+			view.Crumbs = append(view.Crumbs, objectLink{Label: prefix[start : i+1], URL: "/objects?" + q.Encode()})
+		}
+	}
+	q.Set("prefix", prefix)
+	q.Set("versions", fmt.Sprint(!versions))
+	view.VersionsURL = "/objects?" + q.Encode()
+	q.Set("versions", fmt.Sprint(versions))
 	delimiter := "/"
 	var prefixes []string
 	var truncated bool
@@ -139,7 +160,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Versions {
-			view.Objects = append(view.Objects, objectLink{Label: o.Key.String() + " (" + o.VersionID + ")", URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), Size: o.Size, DeleteMarker: o.IsDeleteMarker})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
 		if result.NextKeyMarker != nil {
 			cursor.Key = *result.NextKeyMarker
@@ -160,7 +181,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Objects {
-			view.Objects = append(view.Objects, objectLink{Label: o.Key.String(), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), Size: o.Size})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified)})
 			if o.Key.String() > cursor.Key {
 				cursor.Key = o.Key.String()
 			}
@@ -173,7 +194,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range prefixes {
 		q.Set("prefix", p)
-		view.Prefixes = append(view.Prefixes, objectLink{Label: p, URL: "/objects?" + q.Encode()})
+		view.Prefixes = append(view.Prefixes, objectLink{Label: strings.TrimPrefix(p, prefix), URL: "/objects?" + q.Encode()})
 	}
 	if truncated {
 		b, _ := json.Marshal(cursor)
@@ -196,7 +217,7 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 	object, err := a.options.Storage.HeadObject(r.Context(), b, k, &storage.HeadObjectOptions{VersionID: v})
 	var marker *storage.VersionDeleteMarkerMethodNotAllowedError
 	var current *storage.CurrentDeleteMarkerError
-	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version)}
+	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version), BucketURL: "/objects?" + url.Values{"bucket": {b.String()}}.Encode()}
 	if errors.As(err, &marker) || errors.As(err, &current) {
 		view.DeleteMarker = true
 		if marker != nil {
@@ -211,6 +232,23 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 	} else {
 		raw, _ := json.MarshalIndent(object, "", "  ")
 		view.JSON = string(raw)
+		contentType, storageClass := "—", "STANDARD"
+		if object.ContentType != nil && *object.ContentType != "" {
+			contentType = *object.ContentType
+		}
+		if object.StorageClass != nil && *object.StorageClass != "" {
+			storageClass = *object.StorageClass
+		}
+		view.Properties = []usageTile{
+			{"Size", fmt.Sprintf("%s (%d bytes)", humanBytes(float64(object.Size)), object.Size)},
+			{"Content type", contentType},
+			{"Last modified", formatModified(object.LastModified) + " UTC"},
+			{"ETag", object.ETag},
+			{"Storage class", storageClass},
+		}
+		if object.VersionID != nil && *object.VersionID != "" {
+			view.Properties = append(view.Properties, usageTile{"Version ID", *object.VersionID})
+		}
 		tags, tagErr := a.options.Storage.GetObjectTagging(r.Context(), b, k, &storage.ObjectTaggingOptions{VersionID: v})
 		if tagErr != nil {
 			a.objectError(w, r, tagErr)

@@ -42,6 +42,12 @@ func (a *App) clearSession(w http.ResponseWriter) {
 }
 
 func (a *App) loginPage(w http.ResponseWriter, r *http.Request) {
+	a.renderLogin(w, r, http.StatusOK, "", "")
+}
+
+// renderLogin issues a fresh signed login CSRF token, so a failed attempt can
+// be retried directly from the returned form.
+func (a *App) renderLogin(w http.ResponseWriter, r *http.Request, status int, message, accessKey string) {
 	nonce, err := session.NewToken()
 	if err != nil {
 		a.fail(w, r, 500, "Unable to initialize login")
@@ -51,10 +57,10 @@ func (a *App) loginPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = mac.Write([]byte(nonce))
 	token := nonce + "." + hex.EncodeToString(mac.Sum(nil))
 	http.SetCookie(w, a.cookie(loginCSRFCookieName, token, "/login", 600))
-	a.render(w, r, "Login", "login", struct {
-		CSRF     string
-		Disabled bool
-	}{token, a.sessions == nil})
+	a.renderStatus(w, r, status, "Login", "login", struct {
+		CSRF, Error, AccessKey string
+		Disabled               bool
+	}{token, message, accessKey, a.sessions == nil})
 }
 func (a *App) validLoginCSRF(r *http.Request) bool {
 	cookie, err := r.Cookie(loginCSRFCookieName)
@@ -91,19 +97,19 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.validLoginCSRF(r) {
 		a.audit(r, "AdminLoginRejected")
-		a.fail(w, r, 403, "Invalid CSRF token")
+		a.renderLogin(w, r, 403, "Your login form expired. Please sign in again.", "")
 		return
 	}
 	key, secret := r.PostForm.Get("access_key"), r.PostForm.Get("secret_key")
 	if len(key) > authentication.MaxAccessKeyIDLength || len(secret) > authentication.MaxSecretAccessKeyLength {
 		a.audit(r, "AdminLoginFailed")
-		a.fail(w, r, 401, "Invalid credentials")
+		a.renderLogin(w, r, 401, "Invalid access key or secret.", "")
 		return
 	}
 	if !a.limiter.Allow(clientIP(r), key) {
 		w.Header().Set("Retry-After", "60")
 		a.audit(r, "AdminLoginRateLimited")
-		a.fail(w, r, 429, "Too many login attempts")
+		a.renderLogin(w, r, 429, "Too many login attempts. Try again in a minute.", key)
 		return
 	}
 	var credential authentication.Credential
@@ -116,12 +122,12 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	_, allowed := a.allowed[key]
 	if err != nil {
 		a.audit(r, "AdminLoginUnavailable")
-		a.fail(w, r, 503, "Credential service unavailable")
+		a.renderLogin(w, r, 503, "The credential service is unavailable. Try again later.", key)
 		return
 	}
 	if !found || !allowed || !secretMatches || a.sessions == nil {
 		a.audit(r, "AdminLoginFailed")
-		a.fail(w, r, 401, "Invalid credentials")
+		a.renderLogin(w, r, 401, "Invalid access key or secret.", key)
 		return
 	}
 	token, err := session.NewToken()
@@ -191,6 +197,7 @@ func (a *App) requireSession(next http.Handler) http.Handler {
 		next.ServeHTTP(w, a.withIdentity(r, credential, record))
 	})
 }
+
 // csrfBodyLimit bounds the body read while extracting the CSRF token. Routes
 // with larger forms still enforce their own, tighter content limits.
 func csrfBodyLimit(path string) int64 {

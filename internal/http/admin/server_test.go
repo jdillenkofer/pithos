@@ -20,7 +20,7 @@ func TestRouter(t *testing.T) {
 	}{
 		{http.MethodGet, "/healthz", http.StatusOK, "ok\n"},
 		{http.MethodGet, "/", http.StatusSeeOther, "/login"},
-		{http.MethodGet, "/login", http.StatusOK, "Global administrator login"},
+		{http.MethodGet, "/login", http.StatusOK, "Sign in"},
 		{http.MethodGet, "/static/admin.css", http.StatusOK, "color-scheme"},
 		{http.MethodGet, "/missing", http.StatusSeeOther, "/login"},
 		{http.MethodGet, "/static/missing.js", http.StatusSeeOther, "/login"},

@@ -1,15 +1,20 @@
 {{define "storage"}}
-<section>
-<h1>Storage inspector</h1>
-<p>Read-only configured storage tree. Endpoints, filesystem paths, credentials, keys, tokens and provider values are intentionally hidden. Configuration on disk may differ from the running store until restart.</p>
-{{template "storage_node" .Tree}}
+<div class="page-head">
+  <div><h1>Storage</h1><p class="subtitle">Configured storage stack and live integrity validation</p></div>
+</div>
+<section class="card">
+<h2>Configuration tree</h2>
+<p class="hint">Read-only view of the configured middleware and part stores. Endpoints, paths, credentials, keys and tokens are hidden. The file on disk may differ from the running store until restart.</p>
+<ul class="tree">{{template "storage_node" .Tree}}</ul>
+</section>
+<section class="card">
 <h2>Validate live storage</h2>
-<p>Checks part and object integrity for currently visible objects on the running store, including named part stores. Historical object versions are not scanned. No objects are deleted or repaired. Validation requires one local database and is limited to ten minutes. Concurrent writes may affect results.</p>
+<p class="hint">Checks part and object checksums of the current version of every object on the running store. Historical versions are not scanned and nothing is deleted or repaired. Requires one local database; limited to ten minutes. Concurrent writes may cause spurious failures.</p>
 <form method="post" action="/storage/validate">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<button type="submit" {{if .Job.Running}}disabled{{end}}>Validate storage (read-only)</button>
+<button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Run validation (read-only)</button>
 </form>
 {{template "storage_progress" .Job}}
 </section>
 {{end}}
-{{define "storage_node"}}<ul><li><strong>{{.Kind}}</strong>{{range .Fields}}<dl><dt>{{.Name}}</dt><dd>{{.Value}}</dd></dl>{{end}}{{range .Children}}{{template "storage_node" .}}{{end}}</li></ul>{{end}}
+{{define "storage_node"}}<li><span class="node">{{.Kind}}{{range .Fields}}<span class="chip">{{.Name}}: {{.Value}}</span>{{end}}</span>{{if .Children}}<ul>{{range .Children}}{{template "storage_node" .}}{{end}}</ul>{{end}}</li>{{end}}

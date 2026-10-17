@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,6 +62,10 @@ func csrfToken(r *http.Request) string {
 }
 
 func (a *App) render(w http.ResponseWriter, r *http.Request, title, templateName string, data any) {
+	a.renderStatus(w, r, http.StatusOK, title, templateName, data)
+}
+
+func (a *App) renderStatus(w http.ResponseWriter, r *http.Request, status int, title, templateName string, data any) {
 	var content bytes.Buffer
 	if err := a.pages.ExecuteTemplate(&content, templateName, data); err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "Unable to render page")
@@ -68,25 +74,81 @@ func (a *App) render(w http.ResponseWriter, r *http.Request, title, templateName
 	}
 	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "main" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
 		_, _ = w.Write(content.Bytes())
 		return
 	}
-	var page bytes.Buffer
-	view := struct {
-		Title         string
-		Content       template.HTML
-		CSRF          string
-		Authenticated bool
-	}{title, template.HTML(content.String()), csrfToken(r), currentCredential(r).AccessKeyID != ""}
-	if err := a.pages.ExecuteTemplate(&page, "layout", view); err != nil {
+	page, err := a.renderLayout(r, title, template.HTML(content.String()))
+	if err != nil {
 		a.fail(w, r, http.StatusInternalServerError, "Unable to render page")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(page.Bytes())
+	w.WriteHeader(status)
+	_, _ = w.Write(page)
 }
+
+func (a *App) renderLayout(r *http.Request, title string, content template.HTML) ([]byte, error) {
+	credential := currentCredential(r)
+	view := struct {
+		Title, Section, AccessKeyID string
+		Content                     template.HTML
+		CSRF                        string
+		Authenticated               bool
+	}{title, navSection(title), credential.AccessKeyID, content, csrfToken(r), credential.AccessKeyID != ""}
+	var page bytes.Buffer
+	if err := a.pages.ExecuteTemplate(&page, "layout", view); err != nil {
+		return nil, err
+	}
+	return page.Bytes(), nil
+}
+
+// navSection maps a page title to the navigation entry it belongs to.
+func navSection(title string) string {
+	switch {
+	case title == "Objects", title == "Object details", strings.HasPrefix(title, "Bucket: "):
+		return "Buckets"
+	case title == "Credential created":
+		return "Credentials"
+	}
+	return title
+}
+
+// fail renders an error page inside the layout. Fragment requests and
+// handlers without templates receive the message as plain text.
 func (a *App) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
-	http.Error(w, message, status)
+	if a.pages == nil || r.Header.Get("HX-Request") == "true" {
+		http.Error(w, message, status)
+		return
+	}
+	var content bytes.Buffer
+	data := struct {
+		Status        int
+		StatusText    string
+		Message, Back string
+	}{status, http.StatusText(status), message, sameOriginBackLink(r)}
+	if err := a.pages.ExecuteTemplate(&content, "error", data); err != nil {
+		http.Error(w, message, status)
+		return
+	}
+	page, err := a.renderLayout(r, http.StatusText(status), template.HTML(content.String()))
+	if err != nil {
+		http.Error(w, message, status)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	_, _ = w.Write(page)
+}
+
+// sameOriginBackLink returns the referring admin path, or "" for any other origin.
+func sameOriginBackLink(r *http.Request) string {
+	referer, err := url.Parse(r.Referer())
+	if err != nil || referer.Host != r.Host || (referer.Scheme != "http" && referer.Scheme != "https") {
+		return ""
+	}
+	return referer.RequestURI()
 }
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

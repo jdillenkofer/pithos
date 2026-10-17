@@ -1,29 +1,39 @@
 {{define "buckets_detail"}}
-<p><a href="/buckets">All buckets</a> · <a href="/objects?bucket={{.Bucket.Name.String}}">Browse objects</a></p>
-<p>Owner account: {{.Bucket.OwnerAccountID}}</p>
-<nav aria-label="Bucket configuration">{{range .Tabs}}<a href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab={{.}}" {{if eq . $.Tab}}aria-current="page"{{end}}>{{.}}</a> {{end}}</nav>
-<section><h2>{{.Tab}}</h2>
-<p>Edit the typed storage configuration as JSON. Unknown fields and invalid S3 configurations are rejected. Configuration is limited to 1 MiB including form encoding.</p>
-{{if eq .Tab "versioning"}}<p>Example: <code>{"Status":"Enabled"}</code>. Use <code>Suspended</code> to suspend versioning.</p>{{end}}
-{{if eq .Tab "object-lock"}}<p>Example: <code>{"ObjectLockEnabled":"Enabled","DefaultRetention":{"Mode":"GOVERNANCE","Days":30}}</code>. Object lock cannot be disabled once enabled.</p>{{end}}
-{{if eq .Tab "lifecycle"}}<p>Example: <code>{"Rules":[{"ID":"expire","Status":"Enabled","Prefix":"","Expiration":{"Days":30}}]}</code></p>{{end}}
-{{if eq .Tab "cors"}}<p>Example: <code>{"Rules":[{"AllowedOrigins":["https://example.com"],"AllowedMethods":["GET"]}]}</code></p>{{end}}
-{{if eq .Tab "website"}}<p>Example: <code>{"IndexDocumentSuffix":"index.html"}</code></p>{{end}}
-{{if eq .Tab "tags"}}<p>Example: <code>{"environment":"production"}</code></p>{{end}}
-{{if eq .Tab "notifications"}}<p>Use <code>{}</code> to remove notifications. Destination validation is always enabled.</p>{{end}}
+<div class="page-head">
+  <div>
+    <div class="crumbs"><a href="/buckets">Buckets</a><span class="sep">/</span><span>{{.Bucket.Name.String}}</span></div>
+    <h1>{{.Bucket.Name.String}}</h1>
+    <p class="subtitle">Owner account <span class="chip">{{.Bucket.OwnerAccountID}}</span></p>
+  </div>
+  <a class="button-link primary" href="/objects?bucket={{.Bucket.Name.String}}">Browse objects</a>
+</div>
+<nav class="tabs" aria-label="Bucket configuration">{{range .Tabs}}<a href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab={{.}}" {{if eq . $.Tab}}aria-current="page"{{end}}>{{.}}</a>{{end}}</nav>
+<section class="card"><h2>{{.Tab}} configuration</h2>
+<p class="hint">Edit the configuration as JSON. Unknown fields and invalid S3 configurations are rejected. Limited to 1 MiB including form encoding.</p>
+{{if eq .Tab "versioning"}}<p class="hint">Example: <code>{"Status":"Enabled"}</code>. Use <code>Suspended</code> to suspend versioning.</p>{{end}}
+{{if eq .Tab "object-lock"}}<p class="hint">Example: <code>{"ObjectLockEnabled":"Enabled","DefaultRetention":{"Mode":"GOVERNANCE","Days":30}}</code>. Object lock cannot be disabled once enabled.</p>{{end}}
+{{if eq .Tab "lifecycle"}}<p class="hint">Example: <code>{"Rules":[{"ID":"expire","Status":"Enabled","Prefix":"","Expiration":{"Days":30}}]}</code></p>{{end}}
+{{if eq .Tab "cors"}}<p class="hint">Example: <code>{"Rules":[{"AllowedOrigins":["https://example.com"],"AllowedMethods":["GET"]}]}</code></p>{{end}}
+{{if eq .Tab "website"}}<p class="hint">Example: <code>{"IndexDocumentSuffix":"index.html"}</code></p>{{end}}
+{{if eq .Tab "tags"}}<p class="hint">Example: <code>{"environment":"production"}</code></p>{{end}}
+{{if eq .Tab "notifications"}}<p class="hint">Use <code>{}</code> to remove notifications. Destination validation is always enabled.</p>{{end}}
 <form method="post" action="/buckets/configure">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="bucket" value="{{.Bucket.Name.String}}">
 <input type="hidden" name="tab" value="{{.Tab}}">
-<label>Configuration JSON <textarea name="configuration" rows="24" cols="90" required>{{.Configuration}}</textarea></label>
-<button type="submit" name="action" value="save">Save configuration</button>
-{{if or (eq .Tab "lifecycle") (eq .Tab "cors") (eq .Tab "website") (eq .Tab "tags")}}<button type="submit" name="action" value="delete" formnovalidate>Remove configuration</button>{{end}}
+<label>Configuration JSON <textarea name="configuration" rows="18" required>{{.Configuration}}</textarea></label>
+<div class="actions-row">
+<button type="submit" name="action" value="save" class="primary">Save configuration</button>
+{{if or (eq .Tab "lifecycle") (eq .Tab "cors") (eq .Tab "website") (eq .Tab "tags")}}<button type="submit" name="action" value="delete" class="ghost-danger" formnovalidate>Remove configuration</button>{{end}}
+</div>
 </form></section>
-<section><h2>Delete bucket</h2><p>Only empty buckets can be deleted. Type the bucket name to confirm.</p>
+<section class="card danger-zone"><h2>Delete bucket</h2><p class="hint">Only empty buckets can be deleted. Type <code>{{.Bucket.Name.String}}</code> to confirm.</p>
 <form method="post" action="/buckets/delete">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="bucket" value="{{.Bucket.Name.String}}">
+<div class="form-grid">
 <label>Confirm bucket name <input name="confirm" required autocomplete="off"></label>
-<button type="submit">Delete bucket</button>
+<div><button type="submit" class="danger">Delete bucket</button></div>
+</div>
 </form></section>
 {{end}}

@@ -1,16 +1,29 @@
 {{define "buckets"}}
-<section aria-label="All buckets">
-<p>Global administration: buckets from all accounts are shown.</p>
-<table><thead><tr><th>Bucket</th><th>Owner account</th><th>Objects</th></tr></thead><tbody>
-{{range .Buckets}}<tr><td><a href="/buckets/detail?bucket={{.Name.String}}">{{.Name.String}}</a></td><td>{{.OwnerAccountID}}</td><td><a href="/objects?bucket={{.Name.String}}">Browse objects</a></td></tr>{{else}}<tr><td colspan="3">No buckets.</td></tr>{{end}}
-</tbody></table>
+<div class="page-head">
+  <div><h1>Buckets</h1><p class="subtitle">All buckets across every account</p></div>
+</div>
+<section class="card flush" aria-label="All buckets">
+<div class="table-wrap"><table>
+<thead><tr><th>Bucket</th><th>Owner account</th><th>Created</th><th class="num">Actions</th></tr></thead>
+<tbody>
+{{range .Buckets}}<tr>
+  <td><a class="key" href="/objects?bucket={{.Name.String}}">{{.Name.String}}</a></td>
+  <td><span class="chip">{{.OwnerAccountID}}</span></td>
+  <td class="hint">{{if not .CreationDate.IsZero}}{{.CreationDate.Format "2006-01-02 15:04"}}{{end}}</td>
+  <td class="actions"><a class="button-link" href="/objects?bucket={{.Name.String}}">Browse</a> <a class="button-link" href="/buckets/detail?bucket={{.Name.String}}">Settings</a></td>
+</tr>{{else}}<tr><td colspan="4" class="empty">No buckets yet. Create one below.</td></tr>{{end}}
+</tbody></table></div>
 </section>
-<section><h2>Create bucket</h2>
+<section class="card"><h2>Create bucket</h2>
 <form method="post" action="/buckets/create">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
-<label>Bucket name <input name="bucket" required></label>
+<div class="form-grid">
+<label>Bucket name <input name="bucket" required placeholder="my-bucket"></label>
 <label>Owner account <input name="owner" value="{{.Owner}}" maxlength="256" required></label>
-<label><input type="checkbox" name="object_lock" value="true"> Enable object lock (also enables versioning)</label>
-<button type="submit">Create bucket</button>
+</div>
+<div class="actions-row">
+<label class="check"><input type="checkbox" name="object_lock" value="true"> Enable object lock (also enables versioning)</label>
+</div>
+<div class="actions-row"><button type="submit" class="primary">Create bucket</button></div>
 </form></section>
 {{end}}

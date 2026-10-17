@@ -9,19 +9,33 @@
   <script defer src="/static/htmx.min.js"></script>
   <script defer src="/static/admin.js"></script>
 </head>
-<body hx-history="false" hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'>
-  <header>
-    <a class="brand" href="/">Pithos Admin</a>
-    {{if .Authenticated}}<nav aria-label="Administration">
-      <a href="/">Dashboard</a>
-      <a href="/buckets">Buckets</a>
-      <a href="/credentials">Credentials</a>
-      <a href="/policies">Policies</a>
-      <a href="/audit">Audit log</a>
-      <a href="/storage">Storage</a>
-      <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Log out</button></form>
-    </nav>{{end}}
-  </header>
+<body {{if not .Authenticated}}class="auth"{{end}} hx-history="false" hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'>
+  {{if .Authenticated}}<header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">P</span>Pithos <small>Admin</small></a>
+      <nav class="mainnav" aria-label="Administration">
+        <a href="/" {{if eq .Section "Dashboard"}}aria-current="page"{{end}}>Dashboard</a>
+        <a href="/buckets" {{if eq .Section "Buckets"}}aria-current="page"{{end}}>Buckets</a>
+        <a href="/credentials" {{if eq .Section "Credentials"}}aria-current="page"{{end}}>Credentials</a>
+        <a href="/policies" {{if eq .Section "Policies"}}aria-current="page"{{end}}>Policies</a>
+        <a href="/audit" {{if eq .Section "Audit log"}}aria-current="page"{{end}}>Audit log</a>
+        <a href="/storage" {{if eq .Section "Storage"}}aria-current="page"{{end}}>Storage</a>
+      </nav>
+      <div class="session">
+        <span class="who">Signed in as <strong>{{.AccessKeyID}}</strong></span>
+        <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="small">Log out</button></form>
+      </div>
+    </div>
+  </header>{{end}}
   <main id="main">{{.Content}}</main>
 </body>
 </html>{{end}}
+
+{{define "error"}}
+<div class="card">
+  <p><span class="badge bad">{{.Status}} {{.StatusText}}</span></p>
+  <h1>Something went wrong</h1>
+  <p>{{.Message}}</p>
+  <div class="actions-row">{{if .Back}}<a class="button-link primary" href="{{.Back}}">Go back</a>{{end}}<a class="button-link" href="/">Dashboard</a></div>
+</div>
+{{end}}

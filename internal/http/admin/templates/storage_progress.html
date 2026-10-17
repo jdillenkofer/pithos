@@ -1,14 +1,18 @@
 {{define "storage_progress"}}
-<section id="storage-progress" aria-live="polite" {{if .Running}}hx-get="/storage/validate/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
-<h3>Last validation</h3>
-{{if .Started.IsZero}}<p>No validation started.</p>{{else}}
-<p role="status">{{.Message}} · {{.Processed}} objects processed</p>
-<p>Started: {{.Started}} {{if not .Finished.IsZero}} · Finished: {{.Finished}}{{end}}</p>
-{{with .Report}}<dl><dt>Buckets</dt><dd>{{.TotalBuckets}}</dd><dt>Objects</dt><dd>{{.TotalObjects}}</dd><dt>Passed</dt><dd>{{.SuccessfulObjects}}</dd><dt>Failed</dt><dd>{{.FailedObjects}}</dd></dl>
-<p>Backend error details are not displayed because they may contain sensitive configuration.</p>
-<table><thead><tr><th>Bucket</th><th>Object</th><th>Result</th></tr></thead><tbody>{{range .Results}}{{if not .Success}}<tr><td>{{.BucketName}}</td><td>{{.ObjectKey}}</td><td>Integrity check failed</td></tr>{{end}}{{end}}</tbody></table>
-{{if .OmittedResults}}<p role="note">List truncated: {{.OmittedResults}} further failed objects are counted above but not listed.</p>{{end}}
+<div id="storage-progress" class="progress" aria-live="polite" {{if .Running}}hx-get="/storage/validate/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<div class="progress-head"><h3>Last validation</h3>{{if .Running}}<span class="badge info">Running</span>{{else if .Message}}<span class="badge {{if eq .Message "Completed"}}ok{{else}}bad{{end}}">{{.Message}}</span>{{end}}</div>
+{{if .Started.IsZero}}<p class="hint">No validation started yet.</p>{{else}}
+<p role="status">{{.Processed}} objects processed{{if .Running}} · {{.Message}}{{end}}</p>
+<p class="hint">Started {{.Started.Format "2006-01-02 15:04:05"}}{{if not .Finished.IsZero}} · finished {{.Finished.Format "2006-01-02 15:04:05"}}{{end}}</p>
+{{with .Report}}<div class="stats">
+<div class="stat"><div class="label">Buckets</div><div class="value">{{.TotalBuckets}}</div></div>
+<div class="stat"><div class="label">Objects</div><div class="value">{{.TotalObjects}}</div></div>
+<div class="stat"><div class="label">Passed</div><div class="value">{{.SuccessfulObjects}}</div></div>
+<div class="stat"><div class="label">Failed</div><div class="value">{{.FailedObjects}}</div></div>
+</div>
+{{if .FailedObjects}}<div class="table-wrap"><table><thead><tr><th>Bucket</th><th>Object</th><th>Result</th></tr></thead><tbody>{{range .Results}}{{if not .Success}}<tr><td>{{.BucketName}}</td><td class="key">{{.ObjectKey}}</td><td><span class="badge bad plain">Integrity check failed</span></td></tr>{{end}}{{end}}</tbody></table></div>
+{{if .OmittedResults}}<p role="note" class="hint">List truncated: {{.OmittedResults}} further failed objects are counted above but not listed.</p>{{end}}
+<p class="hint">Backend error details are not displayed because they may contain sensitive configuration. Run <code>pithos validate-storage</code> for full details.</p>{{end}}
 {{end}}{{end}}
-<a href="/storage">Refresh storage status</a>
-</section>
+</div>
 {{end}}

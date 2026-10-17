@@ -1,8 +1,6 @@
 {{define "audit_progress"}}
-<section id="audit-progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
-<h3>Last verification</h3>
-{{if .Started.IsZero}}<p>No verification started.</p>{{else}}<p role="status">{{.Message}} · {{.Processed}} entries checked</p><p>Started: {{.Started}} {{if not .Finished.IsZero}} · Finished: {{.Finished}}{{end}}</p>{{end}}
-<p>Verification covers hashes, chain and Merkle roots only; it does not establish signature authenticity.</p>
-<a href="/audit">Refresh audit status</a>
-</section>
+<div id="audit-progress" class="progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<div class="progress-head"><h3>Last verification</h3>{{if .Running}}<span class="badge info">Running</span>{{else if .Message}}<span class="badge {{if eq .Message "Completed"}}ok{{else}}bad{{end}}">{{.Message}}</span>{{end}}</div>
+{{if .Started.IsZero}}<p class="hint">No verification started yet.</p>{{else}}<p role="status">{{.Processed}} entries checked{{if .Running}} · {{.Message}}{{end}}</p><p class="hint">Started {{.Started.Format "2006-01-02 15:04:05"}}{{if not .Finished.IsZero}} · finished {{.Finished.Format "2006-01-02 15:04:05"}}{{end}}</p>{{end}}
+</div>
 {{end}}
