@@ -1,0 +1,14 @@
+{{define "storage_progress"}}
+<section id="storage-progress" aria-live="polite" {{if .Running}}hx-get="/storage/validate/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h3>Last validation</h3>
+{{if .Started.IsZero}}<p>No validation started.</p>{{else}}
+<p role="status">{{.Message}} · {{.Processed}} objects processed</p>
+<p>Started: {{.Started}} {{if not .Finished.IsZero}} · Finished: {{.Finished}}{{end}}</p>
+{{with .Report}}<dl><dt>Buckets</dt><dd>{{.TotalBuckets}}</dd><dt>Objects</dt><dd>{{.TotalObjects}}</dd><dt>Passed</dt><dd>{{.SuccessfulObjects}}</dd><dt>Failed</dt><dd>{{.FailedObjects}}</dd></dl>
+<p>Backend error details are not displayed because they may contain sensitive configuration.</p>
+<table><thead><tr><th>Bucket</th><th>Object</th><th>Result</th></tr></thead><tbody>{{range .Results}}{{if not .Success}}<tr><td>{{.BucketName}}</td><td>{{.ObjectKey}}</td><td>Integrity check failed</td></tr>{{end}}{{end}}</tbody></table>
+{{if .OmittedResults}}<p role="note">List truncated: {{.OmittedResults}} further failed objects are counted above but not listed.</p>{{end}}
+{{end}}{{end}}
+<a href="/storage">Refresh storage status</a>
+</section>
+{{end}}

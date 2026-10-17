@@ -1,0 +1,24 @@
+{{define "audit"}}
+<section>
+<h1>Audit log</h1>
+<p>Newest first · 50 entries per page. Times must use RFC3339 (for example 2026-01-01T00:00:00Z). Entries are displayed as recorded; viewing does not verify authenticity.</p>
+{{if .Sources}}
+<form method="get" action="/audit">
+<label>Log <select name="source">{{range .Sources}}<option value="{{.}}" {{if eq . $.Filter.Source}}selected{{end}}>File log {{.}}</option>{{end}}</select></label>
+<label>Principal <input name="principal" value="{{.Filter.Principal}}" maxlength="256"></label>
+<label>Operation <input name="operation" value="{{.Filter.Operation}}" maxlength="256"></label>
+<label>Bucket <input name="bucket" value="{{.Filter.Bucket}}" maxlength="256"></label>
+<label>From (inclusive) <input name="from" value="{{if not .Filter.From.IsZero}}{{.Filter.From.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
+<label>To (inclusive) <input name="to" value="{{if not .Filter.To.IsZero}}{{.Filter.To.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
+<button type="submit">Filter</button>
+</form>
+<table><thead><tr><th>Time</th><th>Type</th><th>Principal</th><th>Operation</th><th>Bucket</th><th>Key</th><th>Outcome</th></tr></thead>
+<tbody>{{range .Rows}}<tr><td>{{.Timestamp}}</td><td>{{.Type}}</td><td>{{.Principal}}</td><td>{{.Operation}}</td><td>{{.Bucket}}</td><td>{{.Key}}</td><td>{{.Outcome}}</td></tr>{{else}}<tr><td colspan="7">No matching entries.</td></tr>{{end}}</tbody></table>
+<nav aria-label="Audit pages">{{if .Previous}}<a href="{{.Previous}}">Previous</a>{{end}} <span>Page {{.Filter.Page}}</span> {{if .Next}}<a href="{{.Next}}">Next</a>{{end}}</nav>
+<h2>Verify selected log</h2>
+<p>Verifies the complete file snapshot's hashes, chain and Merkle grounding, not just filtered entries. Signature authenticity is not checked: no trusted public verification keys are configured for this viewer. Limits: 128 MiB, 1,000,000 entries, ten minutes. A concurrent incomplete append can require a retry.</p>
+<form method="post" action="/audit/verify"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="source" value="{{.Filter.Source}}"><button type="submit" {{if .Job.Running}}disabled{{end}}>Verify hashes, chain and Merkle roots</button></form>
+{{else}}<p>No configured FileSink audit logs were found.</p>{{end}}
+{{template "audit_progress" .Job}}
+</section>
+{{end}}

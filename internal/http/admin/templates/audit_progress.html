@@ -1,0 +1,8 @@
+{{define "audit_progress"}}
+<section id="audit-progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h3>Last verification</h3>
+{{if .Started.IsZero}}<p>No verification started.</p>{{else}}<p role="status">{{.Message}} · {{.Processed}} entries checked</p><p>Started: {{.Started}} {{if not .Finished.IsZero}} · Finished: {{.Finished}}{{end}}</p>{{end}}
+<p>Verification covers hashes, chain and Merkle roots only; it does not establish signature authenticity.</p>
+<a href="/audit">Refresh audit status</a>
+</section>
+{{end}}
