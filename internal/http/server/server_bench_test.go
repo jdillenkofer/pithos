@@ -26,6 +26,13 @@ const benchBucket = "bench-bucket"
 // store and filesystem part store, so the benchmarks cover the full request
 // path (routing, middlewares, authorization, storage, database).
 func newBenchmarkHandler(b *testing.B) http.Handler {
+	handler, _ := newBenchmarkServer(b)
+	return handler
+}
+
+// newBenchmarkServer additionally returns the backing storage, so large
+// fixtures can be seeded without going through HTTP.
+func newBenchmarkServer(b *testing.B) (http.Handler, storage.Storage) {
 	b.Helper()
 	// Keep INFO-level request logging (as in production) but discard output so
 	// the benchmark measures formatting cost without terminal I/O.
@@ -82,7 +89,7 @@ func newBenchmarkHandler(b *testing.B) http.Handler {
 	if err != nil {
 		b.Fatal(err)
 	}
-	return SetupServer(nil, "us-east-1", "s3.test", "website.test", authorizer, st)
+	return SetupServer(nil, "us-east-1", "s3.test", "website.test", authorizer, st), st
 }
 
 func doBenchRequest(b *testing.B, handler http.Handler, method, target string, body []byte, wantCode int) *httptest.ResponseRecorder {
@@ -185,4 +192,57 @@ func BenchmarkHTTPListObjectsV2Delimiter(b *testing.B) {
 
 func BenchmarkHTTPListObjectsV2Prefix(b *testing.B) {
 	benchmarkHTTPListObjectsV2(b, "prefix=dir-07/&max-keys=100")
+}
+
+// keysPerDir controls fixture size for the scalability benchmarks: a
+// delimiter listing returns the same 20 common prefixes regardless of it, so
+// the cost should not grow with it.
+var keysPerDirSizes = []int{10, 100, 1000}
+
+func BenchmarkHTTPListObjectVersionsDelimiter(b *testing.B) {
+	for _, keysPerDir := range keysPerDirSizes {
+		b.Run(fmt.Sprintf("keysPerDir=%d", keysPerDir), func(b *testing.B) {
+			handler, st := newBenchmarkServer(b)
+			ctx := context.Background()
+			bucketName := storage.MustNewBucketName(benchBucket)
+			status := storage.BucketVersioningStatusEnabled
+			if err := st.PutBucketVersioningConfiguration(ctx, bucketName, &storage.BucketVersioningConfiguration{Status: &status}); err != nil {
+				b.Fatal(err)
+			}
+			for d := range 20 {
+				for f := range keysPerDir {
+					key := storage.MustNewObjectKey(fmt.Sprintf("dir-%02d/file-%04d", d, f))
+					if _, err := st.PutObject(ctx, bucketName, key, nil, bytes.NewReader([]byte("x")), nil, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				doBenchRequest(b, handler, "GET", "/"+benchBucket+"?versions&delimiter=/", nil, 200)
+			}
+		})
+	}
+}
+
+func BenchmarkHTTPListMultipartUploadsDelimiter(b *testing.B) {
+	for _, keysPerDir := range keysPerDirSizes {
+		b.Run(fmt.Sprintf("keysPerDir=%d", keysPerDir), func(b *testing.B) {
+			handler, st := newBenchmarkServer(b)
+			ctx := context.Background()
+			bucketName := storage.MustNewBucketName(benchBucket)
+			for d := range 20 {
+				for f := range keysPerDir {
+					key := storage.MustNewObjectKey(fmt.Sprintf("dir-%02d/file-%04d", d, f))
+					if _, err := st.CreateMultipartUpload(ctx, bucketName, key, nil, nil, nil); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				doBenchRequest(b, handler, "GET", "/"+benchBucket+"?uploads&delimiter=/", nil, 200)
+			}
+		})
+	}
 }
