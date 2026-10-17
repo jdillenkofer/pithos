@@ -183,6 +183,29 @@ func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+// CheckDatabaseHealth is shared by monitoring and the admin dashboard.
+func CheckDatabaseHealth(ctx context.Context, dbs []database.Database) error {
+	for _, db := range dbs {
+		if err := db.PingContext(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := CheckDatabaseHealth(r.Context(), dbs); err != nil {
+			w.WriteHeader(503)
+			w.Write([]byte("Unhealthy"))
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte("Healthy"))
+	}
+}
+
 func SetupMonitoringServer(dbs []database.Database, readiness *Readiness) http.Handler {
 	for i, db := range dbs {
 		for {
