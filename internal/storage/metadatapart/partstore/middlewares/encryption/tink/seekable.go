@@ -37,7 +37,7 @@ type seekableDecryptingReader struct {
 	base int64 // offset in r where the tink ciphertext (incl. tink header) begins
 
 	cipher        cipher.AEAD
-	noncePrefix   []byte
+	nonce         []byte // noncePrefix followed by the per-segment counter and last-segment flag
 	tinkHeaderLen int
 	css           int64 // ciphertextSegmentSize
 	ciphertextLen int64 // total tink ciphertext length including tink header
@@ -49,6 +49,7 @@ type seekableDecryptingReader struct {
 	segStart  int64 // plaintext offset where the buffered segment begins
 	plaintext []byte
 	segBuf    []byte
+	rpos      int64 // current offset in r, so sequential segment loads skip the Seek
 }
 
 const (
@@ -114,17 +115,21 @@ func newSeekableDecryptingReader(r io.ReadSeeker, base int64, mainKey []byte, aa
 		return nil, errors.New("ciphertext too short for segment count")
 	}
 
+	nonce := make([]byte, tinkNonceSize)
+	copy(nonce, noncePrefix)
+
 	return &seekableDecryptingReader{
 		r:             r,
 		base:          base,
 		cipher:        gcm,
-		noncePrefix:   append([]byte(nil), noncePrefix...),
+		nonce:         nonce,
 		tinkHeaderLen: tinkHeaderLen,
 		css:           css,
 		ciphertextLen: ciphertextLen,
 		numSegments:   numSegments,
 		plaintextLen:  plaintextLen,
 		segIndex:      -1,
+		rpos:          base + int64(tinkHeaderLen),
 	}, nil
 }
 
@@ -165,23 +170,29 @@ func (s *seekableDecryptingReader) loadSegment(j int64) error {
 		return errors.New("ciphertext segment shorter than tag")
 	}
 
-	if _, err := s.r.Seek(s.base+ctOff, io.SeekStart); err != nil {
-		return err
+	if s.rpos != s.base+ctOff {
+		if _, err := s.r.Seek(s.base+ctOff, io.SeekStart); err != nil {
+			s.rpos = -1
+			return err
+		}
+		s.rpos = s.base + ctOff
 	}
 	if int64(cap(s.segBuf)) < ctLen {
 		s.segBuf = make([]byte, ctLen)
 	}
 	segment := s.segBuf[:ctLen]
-	if _, err := io.ReadFull(s.r, segment); err != nil {
+	n, err := io.ReadFull(s.r, segment)
+	s.rpos += int64(n)
+	if err != nil {
 		return err
 	}
 
-	nonce := make([]byte, tinkNonceSize)
-	copy(nonce, s.noncePrefix)
 	if j > int64(^uint32(0)) {
 		return errors.New("segment index exceeds nonce counter range")
 	}
+	nonce := s.nonce
 	binary.BigEndian.PutUint32(nonce[tinkNoncePrefixSize:], uint32(j))
+	nonce[tinkNoncePrefixSize+4] = 0
 	if j == s.numSegments-1 {
 		nonce[tinkNoncePrefixSize+4] = 1
 	}
