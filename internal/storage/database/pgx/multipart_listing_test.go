@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -86,27 +87,24 @@ func TestMultipartListingUsesBytewiseOrder(t *testing.T) {
 		}
 	}
 
-	t.Run("repository markers and counts", func(t *testing.T) {
+	t.Run("repository markers", func(t *testing.T) {
 		for markerIndex := -1; markerIndex < len(uploads); markerIndex++ {
 			keyMarker, uploadIDMarker := "", ""
 			if markerIndex >= 0 {
 				keyMarker = uploads[markerIndex].Key.String()
 				uploadIDMarker = uploads[markerIndex].UploadId.String()
 			}
-			remaining, err := objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, "", keyMarker, uploadIDMarker)
+			remaining, err := objectRepository.FindUploadsFromKey(ctx, tx, bucketName, "", keyMarker, uploadIDMarker, "", math.MaxInt32)
 			require.NoError(t, err)
 			actualIDs := make([]storage.UploadId, len(remaining))
 			for i, upload := range remaining {
 				actualIDs[i] = *upload.UploadId
 			}
 			require.Equal(t, expectedIDs[markerIndex+1:], actualIDs)
-			count, err := objectRepository.CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(ctx, tx, bucketName, "", keyMarker, uploadIDMarker)
-			require.NoError(t, err)
-			require.Equal(t, len(remaining), *count)
 		}
 
 		// Omitting the upload-ID marker excludes every upload at the marker key.
-		remaining, err := objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(ctx, tx, bucketName, "", "a", "")
+		remaining, err := objectRepository.FindUploadsFromKey(ctx, tx, bucketName, "", "a", "", "", math.MaxInt32)
 		require.NoError(t, err)
 		require.Len(t, remaining, 2)
 		require.Equal(t, "z", remaining[0].Key.String())

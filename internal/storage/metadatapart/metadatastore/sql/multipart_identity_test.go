@@ -31,22 +31,6 @@ type multipartIdentityObjectRepository struct {
 	uploads []object.Entity
 }
 
-func (r *multipartIdentityObjectRepository) CountUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarker(context.Context, *sql.Tx, storage.BucketName, string, string, string) (*int, error) {
-	count := len(r.uploads)
-	return &count, nil
-}
-
-func (r *multipartIdentityObjectRepository) FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAsc(_ context.Context, _ *sql.Tx, _ storage.BucketName, _ string, keyMarker string, uploadIDMarker string) ([]object.Entity, error) {
-	var uploads []object.Entity
-	for _, upload := range r.uploads {
-		key := upload.Key.String()
-		if key > keyMarker || (key == keyMarker && uploadIDMarker != "" && upload.UploadId.String() > uploadIDMarker) {
-			uploads = append(uploads, upload)
-		}
-	}
-	return uploads, nil
-}
-
 func (r *multipartIdentityObjectRepository) FindUploadsFromKey(_ context.Context, _ *sql.Tx, _ storage.BucketName, prefix, keyMarker, uploadIDMarker, minimumKey string, limit int32) ([]object.Entity, error) {
 	uploads := []object.Entity{}
 	for _, upload := range r.uploads {
