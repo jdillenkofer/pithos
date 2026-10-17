@@ -22,12 +22,12 @@ const (
 	containsBucketObjectsByBucketNameStmt                                                                 = "SELECT id FROM objects WHERE bucket_name = $1"
 	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscStmt                                        = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 AND is_latest = TRUE AND is_delete_marker = FALSE ORDER BY key ASC"
 	findObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAscWithLimitStmt                               = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND key > $3 AND upload_status = $4 AND is_latest = TRUE AND is_delete_marker = FALSE ORDER BY key ASC LIMIT $5"
-	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt          = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND (key > $3 OR ($4 <> '' AND key = $3 AND upload_id > $4)) AND upload_status = $5 ORDER BY key ASC, upload_id ASC"
-	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimitStmt = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key LIKE $2 || '%' AND (key > $3 OR ($4 <> '' AND key = $3 AND upload_id > $4)) AND upload_status = $5 ORDER BY key ASC, upload_id ASC LIMIT $6"
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscStmt          = multipartUploadListingStmt
+	findObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimitStmt = multipartUploadListingStmt + " LIMIT $6"
 	findObjectByBucketNameAndKeyAndUploadIdStmt                                                           = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_id = $3 AND upload_status = $4"
 	findObjectByBucketNameAndKeyStmt                                                                      = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3 AND is_latest = TRUE"
 	countObjectsByBucketNameAndPrefixAndStartAfterStmt                                                    = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND key > $3 AND upload_status = $4 AND is_latest = TRUE AND is_delete_marker = FALSE"
-	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                                    = "SELECT COUNT(*) FROM objects WHERE bucket_name = $1 and key LIKE $2 || '%' AND (key > $3 OR ($4 <> '' AND key = $3 AND upload_id > $4)) AND upload_status = $5"
+	countObjectsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerStmt                                    = "SELECT COUNT(*) FROM objects" + multipartUploadListingFilter
 	// Version ids are ULIDs, so their lexicographic order matches creation
 	// order; the special 'null' version is mapped to '' so it sorts last
 	// within a key instead of comparing greater than every ULID. The marker
@@ -41,6 +41,27 @@ const (
 	clearLatestObjectByBucketNameAndKeyStmt                                                                         = "UPDATE objects SET is_latest = FALSE, updated_at = $3 WHERE bucket_name = $1 AND key = $2 AND upload_status = $4 AND is_latest = TRUE"
 	deleteObjectByIdStmt                                                                                            = "DELETE FROM objects WHERE id = $1"
 	deleteObjectByIdAndOptimisticLockVersionStmt                                                                    = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
+)
+
+// Multipart markers and ordering must use the same bytewise comparison as S3
+// and the metadata store's common-prefix filtering, regardless of database locale.
+const (
+	multipartUploadListingFilter = `
+WHERE bucket_name = $1
+  AND key COLLATE "C" LIKE $2 || '%'
+  AND (key COLLATE "C" > $3
+       OR ($4 <> '' AND key COLLATE "C" = $3 AND upload_id COLLATE "C" > $4))
+  AND upload_status = $5`
+
+	multipartUploadListingStmt = `
+SELECT id, bucket_name, key, content_type, cache_control, content_disposition,
+       content_encoding, content_language, expires, website_redirect_location,
+       etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1,
+       checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest,
+       upload_status, upload_id, optimistic_lock_version, created_at, updated_at,
+       storage_class, checksum_algorithm
+FROM objects` + multipartUploadListingFilter + `
+ORDER BY key COLLATE "C" ASC, upload_id COLLATE "C" ASC`
 )
 
 func NewRepository() (object.Repository, error) {

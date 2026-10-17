@@ -1,0 +1,1 @@
+DROP INDEX objects_pending_listing_idx;
