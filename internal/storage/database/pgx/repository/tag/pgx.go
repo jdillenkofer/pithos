@@ -26,26 +26,17 @@ func NewRepository() (tag.Repository, error) {
 }
 
 func convertRowToTagEntity(tagRows *sql.Rows) (*tag.Entity, error) {
+	tagEntity := &tag.Entity{}
 	var id string
 	var objectId string
-	var key string
-	var value string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := tagRows.Scan(&id, &objectId, &key, &value, &createdAt, &updatedAt)
+	err := tagRows.Scan(&id, &objectId, &tagEntity.Key, &tagEntity.Value, &tagEntity.CreatedAt, &tagEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	tagEntity := tag.Entity{
-		Id:        &ulidId,
-		ObjectId:  ulid.MustParse(objectId),
-		Key:       key,
-		Value:     value,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}
-	return &tagEntity, nil
+	tagEntity.Id = &ulidId
+	tagEntity.ObjectId = ulid.MustParse(objectId)
+	return tagEntity, nil
 }
 
 func (tr *pgxRepository) FindTagsByObjectIdOrderByKeyAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]tag.Entity, error) {

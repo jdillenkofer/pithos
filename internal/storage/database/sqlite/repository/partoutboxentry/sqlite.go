@@ -49,15 +49,10 @@ func (bor *sqliteRepository) FindFirstPartOutboxEntry(ctx context.Context, tx *s
 }
 
 func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry.Entity, error) {
+	partOutboxEntryEntity := &partoutboxentry.Entity{}
 	var id string
-	var operation string
 	var partIdStr string
-	var createdAt time.Time
-	var updatedAt time.Time
-	var claimOwner *string
-	var claimUntil *time.Time
-	var version int64
-	err := partOutboxRow.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
+	err := partOutboxRow.Scan(&id, &partOutboxEntryEntity.Operation, &partIdStr, &partOutboxEntryEntity.CreatedAt, &partOutboxEntryEntity.UpdatedAt, &partOutboxEntryEntity.ClaimOwner, &partOutboxEntryEntity.ClaimUntil, &partOutboxEntryEntity.Version)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -65,44 +60,23 @@ func convertRowToPartOutboxEntryEntity(partOutboxRow *sql.Row) (*partoutboxentry
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	partId := partstore.MustNewPartIdFromString(partIdStr)
-	return &partoutboxentry.Entity{
-		Id:         &ulidId,
-		Operation:  operation,
-		PartId:     *partId,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
-		ClaimOwner: claimOwner,
-		ClaimUntil: claimUntil,
-		Version:    version,
-	}, nil
+	partOutboxEntryEntity.Id = &ulidId
+	partOutboxEntryEntity.PartId = *partstore.MustNewPartIdFromString(partIdStr)
+	return partOutboxEntryEntity, nil
 }
 
 func convertRowsToPartOutboxEntryEntity(partOutboxRows *sql.Rows) (*partoutboxentry.Entity, error) {
+	partOutboxEntryEntity := &partoutboxentry.Entity{}
 	var id string
-	var operation string
 	var partIdStr string
-	var createdAt time.Time
-	var updatedAt time.Time
-	var claimOwner *string
-	var claimUntil *time.Time
-	var version int64
-	err := partOutboxRows.Scan(&id, &operation, &partIdStr, &createdAt, &updatedAt, &claimOwner, &claimUntil, &version)
+	err := partOutboxRows.Scan(&id, &partOutboxEntryEntity.Operation, &partIdStr, &partOutboxEntryEntity.CreatedAt, &partOutboxEntryEntity.UpdatedAt, &partOutboxEntryEntity.ClaimOwner, &partOutboxEntryEntity.ClaimUntil, &partOutboxEntryEntity.Version)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	partId := partstore.MustNewPartIdFromString(partIdStr)
-	return &partoutboxentry.Entity{
-		Id:         &ulidId,
-		Operation:  operation,
-		PartId:     *partId,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
-		ClaimOwner: claimOwner,
-		ClaimUntil: claimUntil,
-		Version:    version,
-	}, nil
+	partOutboxEntryEntity.Id = &ulidId
+	partOutboxEntryEntity.PartId = *partstore.MustNewPartIdFromString(partIdStr)
+	return partOutboxEntryEntity, nil
 }
 
 func (bor *sqliteRepository) FindLastPartOutboxEntryByPartId(ctx context.Context, tx *sql.Tx, outboxId string, partId partstore.PartId) (*partoutboxentry.Entity, error) {
@@ -145,18 +119,14 @@ func (bor *sqliteRepository) FindPartOutboxEntryChunksById(ctx context.Context, 
 
 	var chunks []*partoutboxentry.ContentChunk
 	for rows.Next() {
+		chunk := &partoutboxentry.ContentChunk{}
 		var entryIdStr string
-		var chunkIndex int
-		var content []byte
-		err := rows.Scan(&entryIdStr, &chunkIndex, &content)
+		err := rows.Scan(&entryIdStr, &chunk.ChunkIndex, &chunk.Content)
 		if err != nil {
 			return nil, err
 		}
-		chunks = append(chunks, &partoutboxentry.ContentChunk{
-			OutboxEntryId: ulid.MustParse(entryIdStr),
-			ChunkIndex:    chunkIndex,
-			Content:       content,
-		})
+		chunk.OutboxEntryId = ulid.MustParse(entryIdStr)
+		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
 }

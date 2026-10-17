@@ -30,23 +30,14 @@ type rowScanner interface {
 }
 
 func convertRowToPartContentEntity(scanner rowScanner) (*partcontent.Entity, error) {
+	partContentEntity := &partcontent.Entity{}
 	var idStr string
-	var chunkIndex int
-	var content []byte
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := scanner.Scan(&idStr, &chunkIndex, &content, &createdAt, &updatedAt)
+	err := scanner.Scan(&idStr, &partContentEntity.ChunkIndex, &partContentEntity.Content, &partContentEntity.CreatedAt, &partContentEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	id := partstore.MustNewPartIdFromString(idStr)
-	return &partcontent.Entity{
-		Id:         id,
-		ChunkIndex: chunkIndex,
-		Content:    content,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
-	}, nil
+	partContentEntity.Id = partstore.MustNewPartIdFromString(idStr)
+	return partContentEntity, nil
 }
 
 func (bcr *pgxRepository) FindPartContentChunksById(ctx context.Context, tx *sql.Tx, partStoreId string, id partstore.PartId) ([]*partcontent.Entity, error) {

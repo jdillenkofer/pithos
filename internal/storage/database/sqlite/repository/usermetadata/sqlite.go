@@ -24,26 +24,17 @@ func NewRepository() (usermetadata.Repository, error) {
 }
 
 func convertRowToUserMetadataEntity(userMetadataRows *sql.Rows) (*usermetadata.Entity, error) {
+	userMetadataEntity := &usermetadata.Entity{}
 	var id string
 	var objectId string
-	var key string
-	var value string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := userMetadataRows.Scan(&id, &objectId, &key, &value, &createdAt, &updatedAt)
+	err := userMetadataRows.Scan(&id, &objectId, &userMetadataEntity.Key, &userMetadataEntity.Value, &userMetadataEntity.CreatedAt, &userMetadataEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	userMetadataEntity := usermetadata.Entity{
-		Id:        &ulidId,
-		ObjectId:  ulid.MustParse(objectId),
-		Key:       key,
-		Value:     value,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-	}
-	return &userMetadataEntity, nil
+	userMetadataEntity.Id = &ulidId
+	userMetadataEntity.ObjectId = ulid.MustParse(objectId)
+	return userMetadataEntity, nil
 }
 
 func (ur *sqliteRepository) FindUserMetadataByObjectIdOrderByKeyAsc(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]usermetadata.Entity, error) {

@@ -27,42 +27,17 @@ func NewRepository() (bucket.Repository, error) {
 }
 
 func convertRowToBucketEntity(bucketRows *sql.Rows) (*bucket.Entity, error) {
+	bucketEntity := &bucket.Entity{}
 	var id string
 	var name string
-	var ownerAccountID string
-	var versioningStatus *string
-	var websiteIndexDocumentSuffix *string
-	var websiteErrorDocumentKey *string
-	var websiteRedirectAllHostName *string
-	var websiteRedirectAllProtocol *string
-	var websiteRoutingRulesJSON *string
-	var corsConfigurationJSON *string
-	var lifecycleConfigurationJSON *string
-	var notificationConfigurationJSON *string
-	var createdAt time.Time
-	var updatedAt time.Time
-	err := bucketRows.Scan(&id, &name, &ownerAccountID, &versioningStatus, &websiteIndexDocumentSuffix, &websiteErrorDocumentKey, &websiteRedirectAllHostName, &websiteRedirectAllProtocol, &websiteRoutingRulesJSON, &corsConfigurationJSON, &lifecycleConfigurationJSON, &notificationConfigurationJSON, &createdAt, &updatedAt)
+	err := bucketRows.Scan(&id, &name, &bucketEntity.OwnerAccountID, &bucketEntity.VersioningStatus, &bucketEntity.WebsiteIndexDocumentSuffix, &bucketEntity.WebsiteErrorDocumentKey, &bucketEntity.WebsiteRedirectAllHostName, &bucketEntity.WebsiteRedirectAllProtocol, &bucketEntity.WebsiteRoutingRulesJSON, &bucketEntity.CORSConfigurationJSON, &bucketEntity.LifecycleConfigurationJSON, &bucketEntity.NotificationConfigurationJSON, &bucketEntity.CreatedAt, &bucketEntity.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	ulidId := ulid.MustParse(id)
-	bucketEntity := bucket.Entity{
-		Id:                            &ulidId,
-		Name:                          storage.MustNewBucketName(name),
-		OwnerAccountID:                ownerAccountID,
-		VersioningStatus:              versioningStatus,
-		WebsiteIndexDocumentSuffix:    websiteIndexDocumentSuffix,
-		WebsiteErrorDocumentKey:       websiteErrorDocumentKey,
-		WebsiteRedirectAllHostName:    websiteRedirectAllHostName,
-		WebsiteRedirectAllProtocol:    websiteRedirectAllProtocol,
-		WebsiteRoutingRulesJSON:       websiteRoutingRulesJSON,
-		CORSConfigurationJSON:         corsConfigurationJSON,
-		LifecycleConfigurationJSON:    lifecycleConfigurationJSON,
-		NotificationConfigurationJSON: notificationConfigurationJSON,
-		CreatedAt:                     createdAt,
-		UpdatedAt:                     updatedAt,
-	}
-	return &bucketEntity, nil
+	bucketEntity.Id = &ulidId
+	bucketEntity.Name = storage.MustNewBucketName(name)
+	return bucketEntity, nil
 }
 
 func (br *sqliteRepository) FindAllBuckets(ctx context.Context, tx *sql.Tx) ([]bucket.Entity, error) {
