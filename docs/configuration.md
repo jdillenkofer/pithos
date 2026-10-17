@@ -237,7 +237,7 @@ and container-local healthchecks cannot assume those utilities exist.
 | `PITHOS_ADMIN_PORT` | Port for the admin UI | `9001` |
 | `PITHOS_ADMIN_BIND_ADDRESS` | Admin listener bind address | Inherits `PITHOS_BIND_ADDRESS` (`0.0.0.0`) |
 | `PITHOS_ADMIN_ACCESS_KEYS` | Comma-separated access-key allowlist for global admin UI access | Empty (no logins allowed) |
-| `PITHOS_ADMIN_SECURE_COOKIE` | Require HTTPS for admin session cookies | `false` |
+| `PITHOS_ADMIN_SECURE_COOKIE` | Require HTTPS for admin session cookies; set `false` for plain-HTTP local use | `true` |
 | `PITHOS_ADMIN_SESSION_IDLE_MINUTES` | Session idle timeout in minutes | `30` |
 | `PITHOS_ADMIN_SESSION_MAX_HOURS` | Maximum session lifetime in hours | `12` |
 | `PITHOS_ADMIN_DATABASE_INDEX` | Zero-based configured database index used for admin sessions | `0` |
@@ -246,11 +246,12 @@ See [Admin Web UI](admin-ui.md) for setup, session security, provider support,
 policy saving, and diagnostic limits. A nonempty allowlist requires a valid
 SQLite/PostgreSQL session database at the configured index.
 
-The listener uses plain HTTP, like the S3 and monitoring endpoints. For remote
-access, terminate HTTPS at a reverse proxy and enable
-`PITHOS_ADMIN_SECURE_COOKIE`. The allowlist grants global admin UI access across
-all accounts; it does not change S3 API permissions or policy/Lua authorization.
-Only allowlisted credentials may log in. An empty allowlist grants nobody access.
+The listener uses plain HTTP, like the S3 and monitoring endpoints. Admin
+cookies are Secure by default, so browse the UI through an HTTPS reverse proxy.
+For local plain-HTTP use, opt out with `PITHOS_ADMIN_SECURE_COOKIE=false`.
+The allowlist grants global admin UI access across all accounts; it does not
+change S3 API permissions or policy/Lua authorization. Only allowlisted
+credentials may log in. An empty allowlist grants nobody access.
 
 Equivalent command-line flags are `-adminEnabled`, `-adminPort`,
 `-adminBindAddress`, `-adminAccessKeys`, `-adminSecureCookie`,

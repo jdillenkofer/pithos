@@ -12,7 +12,7 @@ func TestAdminDefaults(t *testing.T) {
 	assert.True(t, s.AdminEnabled())
 	assert.Equal(t, 9001, s.AdminPort())
 	assert.Equal(t, s.BindAddress(), s.AdminBindAddress())
-	assert.False(t, s.AdminSecureCookie())
+	assert.True(t, s.AdminSecureCookie())
 	assert.Equal(t, 30, s.AdminSessionIdleMinutes())
 	assert.Equal(t, 12, s.AdminSessionMaxHours())
 	assert.Equal(t, 0, s.AdminDatabaseIndex())
@@ -37,14 +37,14 @@ func TestAdminBindAddressInheritance(t *testing.T) {
 func TestAdminCommandLineSettings(t *testing.T) {
 	s, err := loadSettingsFromCmdArgs([]string{
 		"-adminEnabled=false", "-adminPort=9101", "-adminBindAddress=127.0.0.2",
-		"-adminSecureCookie=true", "-adminSessionIdleMinutes=15",
+		"-adminSecureCookie=false", "-adminSessionIdleMinutes=15",
 		"-adminSessionMaxHours=8", "-adminDatabaseIndex=2", "-adminAccessKeys= first, ,second ",
 	})
 	require.NoError(t, err)
 	assert.False(t, s.AdminEnabled())
 	assert.Equal(t, 9101, s.AdminPort())
 	assert.Equal(t, "127.0.0.2", s.AdminBindAddress())
-	assert.True(t, s.AdminSecureCookie())
+	assert.False(t, s.AdminSecureCookie())
 	assert.Equal(t, 15, s.AdminSessionIdleMinutes())
 	assert.Equal(t, 8, s.AdminSessionMaxHours())
 	assert.Equal(t, 2, s.AdminDatabaseIndex())
@@ -55,7 +55,7 @@ func TestAdminEnvironmentSettings(t *testing.T) {
 	t.Setenv(adminEnabledEnvKey, "false")
 	t.Setenv(adminPortEnvKey, "9101")
 	t.Setenv(adminBindAddressEnvKey, "127.0.0.2")
-	t.Setenv(adminSecureCookieEnvKey, "true")
+	t.Setenv(adminSecureCookieEnvKey, "false")
 	t.Setenv(adminSessionIdleMinutesEnvKey, "15")
 	t.Setenv(adminSessionMaxHoursEnvKey, "8")
 	t.Setenv(adminDatabaseIndexEnvKey, "2")
@@ -65,7 +65,7 @@ func TestAdminEnvironmentSettings(t *testing.T) {
 	assert.False(t, s.AdminEnabled())
 	assert.Equal(t, 9101, s.AdminPort())
 	assert.Equal(t, "127.0.0.2", s.AdminBindAddress())
-	assert.True(t, s.AdminSecureCookie())
+	assert.False(t, s.AdminSecureCookie())
 	assert.Equal(t, 15, s.AdminSessionIdleMinutes())
 	assert.Equal(t, 8, s.AdminSessionMaxHours())
 	assert.Equal(t, 2, s.AdminDatabaseIndex())

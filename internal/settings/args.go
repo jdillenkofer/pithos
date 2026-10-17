@@ -73,7 +73,7 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	adminEnabledAccessor := registerBoolFlag(serveCommand, "adminEnabled", defaultAdminEnabled, "enable the admin UI listener; automatically disabled when authentication is disabled")
 	adminPortAccessor := registerIntFlag(serveCommand, "adminPort", defaultAdminPort, "the port for the admin UI")
 	adminBindAddressAccessor := registerStringFlag(serveCommand, "adminBindAddress", "", "the admin UI bind address; defaults to bindAddress")
-	adminSecureCookieAccessor := registerBoolFlag(serveCommand, "adminSecureCookie", defaultAdminSecureCookie, "require HTTPS for admin session cookies")
+	adminSecureCookieAccessor := registerBoolFlag(serveCommand, "adminSecureCookie", defaultAdminSecureCookie, "require HTTPS for admin session cookies; set to false for plain-HTTP local use")
 	adminSessionIdleMinutesAccessor := registerIntFlag(serveCommand, "adminSessionIdleMinutes", defaultAdminSessionIdleMinutes, "admin session idle timeout in minutes")
 	adminSessionMaxHoursAccessor := registerIntFlag(serveCommand, "adminSessionMaxHours", defaultAdminSessionMaxHours, "maximum admin session lifetime in hours")
 	adminDatabaseIndexAccessor := registerIntFlag(serveCommand, "adminDatabaseIndex", defaultAdminDatabaseIndex, "zero-based configured database index used for admin sessions")

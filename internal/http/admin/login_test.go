@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -86,12 +87,17 @@ func newSessionTestHandler(t *testing.T) (http.Handler, *sessionTestProvider, *b
 
 func newSessionTestHandlerWithProvider(t *testing.T, adminAccessKeys string, p authentication.CredentialProvider) (http.Handler, *browserTestStore) {
 	t.Helper()
+	return newSessionTestHandlerWithSecureCookie(t, adminAccessKeys, p, false)
+}
+
+func newSessionTestHandlerWithSecureCookie(t *testing.T, adminAccessKeys string, p authentication.CredentialProvider, secureCookie bool) (http.Handler, *browserTestStore) {
+	t.Helper()
 	t.Setenv("PITHOS_AUTHENTICATION_ENABLED", "true")
 	t.Setenv("PITHOS_ADMIN_ACCESS_KEYS", adminAccessKeys)
 	t.Setenv("PITHOS_ADMIN_DATABASE_INDEX", "0")
 	t.Setenv("PITHOS_ADMIN_SESSION_IDLE_MINUTES", "30")
 	t.Setenv("PITHOS_ADMIN_SESSION_MAX_HOURS", "12")
-	t.Setenv("PITHOS_ADMIN_SECURE_COOKIE", "false")
+	t.Setenv("PITHOS_ADMIN_SECURE_COOKIE", strconv.FormatBool(secureCookie))
 	cfg, err := settings.LoadSettings(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +159,31 @@ func sessionCSRF(t *testing.T, h http.Handler, cookie *http.Cookie) string {
 	}
 	return match[1]
 }
+func TestSecureCookieLogin(t *testing.T) {
+	p := &sessionTestProvider{credentials: map[string]authentication.Credential{"admin": {AccessKeyID: "admin", SecretAccessKey: "secret", AccountID: "account", PrincipalID: "principal"}}}
+	h, _ := newSessionTestHandlerWithSecureCookie(t, "admin", p, true)
+	response, cookie := testLogin(t, h, "admin", "secret")
+	if response.Code != 303 || cookie == nil || !cookie.Secure {
+		t.Fatalf("secure login: %d %+v", response.Code, cookie)
+	}
+
+	// A browser on plain HTTP drops the Secure login CSRF cookie.
+	page := httptest.NewRecorder()
+	h.ServeHTTP(page, httptest.NewRequest("GET", "/login", nil))
+	match := csrfInput.FindStringSubmatch(page.Body.String())
+	if len(match) != 2 {
+		t.Fatal("missing login CSRF")
+	}
+	form := url.Values{"csrf_token": {match[1]}, "access_key": {"admin"}, "secret_key": {"secret"}}
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "PITHOS_ADMIN_SECURE_COOKIE=false") {
+		t.Fatalf("missing cookie hint: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestLoginActionsLogout(t *testing.T) {
 	h, _, store := newSessionTestHandler(t)
 	response, cookie := testLogin(t, h, "admin", "secret")

@@ -17,10 +17,13 @@ its access-key ID in the admin allowlist:
 
 ```sh
 export PITHOS_ADMIN_ACCESS_KEYS="my-admin-access-key"
+export PITHOS_ADMIN_SECURE_COOKIE=false # local plain-HTTP use only
 ./pithos serve
 ```
 
 Visit `http://localhost:9001/login` and enter that access key and its secret.
+Admin cookies are Secure by default; the opt-out above is only for trying the
+UI locally without HTTPS (see [Transport and deployment](#transport-and-deployment)).
 The allowlist is comma-separated and read at startup. Restart after changing it.
 An allowlisted ID must also exist in the active credential provider.
 
@@ -40,18 +43,26 @@ session database.
 ## Transport and deployment
 
 Like the existing endpoints, admin serves **plain HTTP**, not built-in TLS.
-For remote use, terminate HTTPS at a reverse proxy and set:
+Session and login-CSRF cookies are Secure by default, so browsers only send
+them over HTTPS. For remote use, terminate HTTPS at a reverse proxy and bind the
+listener locally:
 
 ```sh
-export PITHOS_ADMIN_SECURE_COOKIE=true
 export PITHOS_ADMIN_BIND_ADDRESS=127.0.0.1
 ```
 
-Enable Secure cookies only when the browser accesses the UI through HTTPS.
-The proxy may forward plain HTTP to Pithos. Secure cookies default to `false`
-for consistency with the existing HTTP listeners; **plain HTTP exposes both
-login credentials and session cookies to network observers**. Restrict the
-listener with firewall rules and do not expose it directly to the internet.
+The proxy may forward plain HTTP to Pithos. For local use without HTTPS, opt
+out of Secure cookies:
+
+```sh
+export PITHOS_ADMIN_SECURE_COOKIE=false
+```
+
+Some browsers accept Secure cookies on `http://localhost`, but others do not; if
+login fails with a missing-cookie message, apply the opt-out above. **Plain HTTP
+exposes both login credentials and session cookies to network observers.**
+Restrict the listener with firewall rules and do not expose it directly to the
+internet.
 
 The proxy must preserve the original Host header and forward the admin UI at
 the root of its own origin, not a rewritten subpath. Avoid hosting untrusted
@@ -72,7 +83,7 @@ prevent saving. Never loosen file permissions to work around this.
 | `PITHOS_ADMIN_PORT` | `9001` | Listener port |
 | `PITHOS_ADMIN_BIND_ADDRESS` | `BindAddress` | Listener address, inherited dynamically unless overridden |
 | `PITHOS_ADMIN_ACCESS_KEYS` | Empty | Comma-separated global-admin access-key IDs |
-| `PITHOS_ADMIN_SECURE_COOKIE` | `false` | Add Secure to session and login-CSRF cookies |
+| `PITHOS_ADMIN_SECURE_COOKIE` | `true` | Add Secure to session and login-CSRF cookies; set `false` for plain-HTTP local use |
 | `PITHOS_ADMIN_SESSION_IDLE_MINUTES` | `30` | Session idle timeout |
 | `PITHOS_ADMIN_SESSION_MAX_HOURS` | `12` | Absolute session lifetime |
 | `PITHOS_ADMIN_DATABASE_INDEX` | `0` | Configured session database index |

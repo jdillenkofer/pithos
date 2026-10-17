@@ -97,7 +97,13 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if !a.validLoginCSRF(r) {
 		a.audit(r, "AdminLoginRejected")
-		a.renderLogin(w, r, 403, "Your login form expired. Please sign in again.", "")
+		message := "Your login form expired. Please sign in again."
+		// Browsers drop Secure cookies on plain HTTP, so a missing cookie
+		// usually means the UI is not served through HTTPS.
+		if _, err := r.Cookie(loginCSRFCookieName); err != nil && a.options.Settings.AdminSecureCookie() {
+			message = "Login cookie missing. Admin cookies require HTTPS; for plain-HTTP local use set PITHOS_ADMIN_SECURE_COOKIE=false."
+		}
+		a.renderLogin(w, r, 403, message, "")
 		return
 	}
 	key, secret := r.PostForm.Get("access_key"), r.PostForm.Get("secret_key")
