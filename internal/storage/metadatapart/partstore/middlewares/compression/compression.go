@@ -143,92 +143,144 @@ func (mw *PartStoreMiddleware) Stop(ctx context.Context) error {
 }
 
 func (mw *PartStoreMiddleware) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
-	sample := make([]byte, mw.sampleSize)
+	sampleBuf := sampleBufferPool.Get().(*[]byte)
+	defer sampleBufferPool.Put(sampleBuf)
+	if cap(*sampleBuf) < mw.sampleSize {
+		*sampleBuf = make([]byte, mw.sampleSize)
+	}
+	sample := (*sampleBuf)[:mw.sampleSize]
 	n, err := io.ReadFull(reader, sample)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return err
 	}
 	sample = sample[:n]
 
-	shouldCompress := len(sample) >= mw.minSize
-	if shouldCompress {
-		ratio, err := mw.estimateSampleCompressionRatio(sample)
+	var bytesIn int64
+	var bytesOut int64
+	var compressed *compressedSample
+	if len(sample) >= mw.minSize {
+		compressed, err = mw.compressSample(sample)
 		if err != nil {
 			return err
 		}
-		shouldCompress = ratio <= mw.maxRatio
-	}
-	var bytesIn int64
-	bodyReader := ioutils.NewCountingReader(io.MultiReader(bytes.NewReader(sample), reader), &bytesIn)
-
-	pipeReader, pipeWriter := io.Pipe()
-	go func() {
-		defer pipeWriter.Close()
-
-		algorithm := AlgorithmNone
-		if shouldCompress {
-			algorithm = mw.algorithm
+		if compressed.ratio() > mw.maxRatio {
+			compressed.release()
+			compressed = nil
 		}
+	}
 
-		header := newHeader(algorithm)
+	if compressed == nil {
+		header := newHeader(AlgorithmNone)
+		bodyReader := ioutils.NewCountingReader(io.MultiReader(bytes.NewReader(sample), reader), &bytesIn)
+		err = mw.innerPartStore.PutPart(ctx, tx, partId, ioutils.NewCountingReader(io.MultiReader(bytes.NewReader(header[:]), bodyReader), &bytesOut))
+		mw.recordPut(false, bytesIn, bytesOut)
+		return err
+	}
+
+	bytesIn = int64(len(sample))
+	restReader := ioutils.NewCountingReader(reader, &bytesIn)
+	pipeReader, pipeWriter := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer compressed.release()
+
+		header := newHeader(mw.algorithm)
 		if _, err := pipeWriter.Write(header[:]); err != nil {
 			pipeWriter.CloseWithError(err)
 			return
 		}
-
-		if shouldCompress {
-			compressWriter, err := mw.newCompressionWriter(mw.algorithm, pipeWriter)
-			if err != nil {
-				pipeWriter.CloseWithError(err)
-				return
-			}
-			if _, err := ioutils.Copy(compressWriter, bodyReader); err != nil {
-				_ = compressWriter.Close()
-				pipeWriter.CloseWithError(err)
-				return
-			}
-			if err := compressWriter.Close(); err != nil {
-				pipeWriter.CloseWithError(err)
-				return
-			}
-			return
-		}
-
-		if _, err := ioutils.Copy(pipeWriter, bodyReader); err != nil {
+		if _, err := pipeWriter.Write(compressed.out.Bytes()); err != nil {
 			pipeWriter.CloseWithError(err)
 			return
 		}
+		compressed.target.w = pipeWriter
+		if _, err := ioutils.Copy(compressed.enc, restReader); err != nil {
+			pipeWriter.CloseWithError(err)
+			return
+		}
+		if err := compressed.enc.Close(); err != nil {
+			pipeWriter.CloseWithError(err)
+			return
+		}
+		pipeWriter.Close()
 	}()
 
-	var bytesOut int64
 	err = mw.innerPartStore.PutPart(ctx, tx, partId, ioutils.NewCountingReader(pipeReader, &bytesOut))
-	compressionMetrics.parts.WithLabelValues(strconv.FormatBool(shouldCompress)).Inc()
+	// Unblock the compression goroutine if the inner store stopped reading
+	// early, and wait so it no longer touches reader once we return.
+	pipeReader.CloseWithError(io.ErrClosedPipe)
+	<-done
+	mw.recordPut(true, bytesIn, bytesOut)
+	return err
+}
+
+func (mw *PartStoreMiddleware) recordPut(compressed bool, bytesIn, bytesOut int64) {
+	compressionMetrics.parts.WithLabelValues(strconv.FormatBool(compressed)).Inc()
 	compressionMetrics.bytesIn.Add(float64(bytesIn))
 	compressionMetrics.bytesOut.Add(float64(bytesOut))
 	if bytesIn > 0 {
 		compressionMetrics.ratio.Observe(float64(bytesOut) / float64(bytesIn))
 	}
-	return err
+}
+
+// compressedSample holds an encoder that has consumed the sample and flushed
+// its output into out. Once target.w is set, the encoder writes there
+// instead, so the sample is not compressed a second time.
+type compressedSample struct {
+	pool       *sync.Pool
+	enc        compressor
+	target     *switchWriter
+	out        bytes.Buffer
+	sampleSize int
+}
+
+func (c *compressedSample) ratio() float64 {
+	return float64(c.out.Len()) / float64(c.sampleSize)
+}
+
+func (c *compressedSample) release() {
+	c.enc.Reset(nil)
+	c.pool.Put(c.enc)
+}
+
+type switchWriter struct {
+	w io.Writer
+}
+
+func (s *switchWriter) Write(p []byte) (int, error) {
+	return s.w.Write(p)
+}
+
+func (mw *PartStoreMiddleware) compressSample(sample []byte) (*compressedSample, error) {
+	pool, err := encoderPoolFor(mw.algorithm)
+	if err != nil {
+		return nil, err
+	}
+	c := &compressedSample{pool: pool, enc: pool.Get().(compressor), sampleSize: len(sample)}
+	c.target = &switchWriter{w: &c.out}
+	c.enc.Reset(c.target)
+	if _, err := c.enc.Write(sample); err != nil {
+		c.release()
+		return nil, err
+	}
+	if err := c.enc.Flush(); err != nil {
+		c.release()
+		return nil, err
+	}
+	return c, nil
 }
 
 func (mw *PartStoreMiddleware) estimateSampleCompressionRatio(sample []byte) (float64, error) {
 	if len(sample) == 0 {
 		return 1, nil
 	}
-	var compressed bytes.Buffer
-	compressWriter, err := mw.newCompressionWriter(mw.algorithm, &compressed)
+	c, err := mw.compressSample(sample)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := compressWriter.Write(sample); err != nil {
-		compressWriter.Close()
-		return 0, err
-	}
-	if err := compressWriter.Close(); err != nil {
-		return 0, err
-	}
-
-	return float64(compressed.Len()) / float64(len(sample)), nil
+	defer c.release()
+	return c.ratio(), nil
 }
 
 func (mw *PartStoreMiddleware) Capabilities() partstore.Capabilities {
@@ -241,8 +293,8 @@ func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, part
 		return nil, err
 	}
 
-	header := make([]byte, headerSize)
-	n, err := io.ReadFull(rc, header)
+	var header [headerSize]byte
+	n, err := io.ReadFull(rc, header[:])
 	if err != nil {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
 			rc.Close()
@@ -251,20 +303,20 @@ func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, part
 		return ioutils.NewReadCloserWithCloseHook(io.NopCloser(io.MultiReader(bytes.NewReader(header[:n]), rc)), rc.Close), nil
 	}
 
-	algorithm, ok, err := parseHeader(header)
+	algorithm, ok, err := parseHeader(header[:])
 	if err != nil {
 		rc.Close()
 		return nil, err
 	}
 	if !ok {
-		return ioutils.NewReadCloserWithCloseHook(io.NopCloser(io.MultiReader(bytes.NewReader(header), rc)), rc.Close), nil
+		return ioutils.NewReadCloserWithCloseHook(io.NopCloser(io.MultiReader(bytes.NewReader(header[:]), rc)), rc.Close), nil
 	}
 
 	if algorithm == AlgorithmNone {
 		return rc, nil
 	}
 
-	decompressReader, err := mw.newDecompressionReader(algorithm, rc)
+	decompressReader, err := newDecompressionReader(algorithm, rc)
 	if err != nil {
 		rc.Close()
 		return nil, err
@@ -273,30 +325,87 @@ func (mw *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, part
 	return ioutils.NewReadCloserWithCloseHook(decompressReader, rc.Close), nil
 }
 
-func (mw *PartStoreMiddleware) newCompressionWriter(algorithm Algorithm, w io.Writer) (io.WriteCloser, error) {
+// compressor is the subset of *gzip.Writer and *zstd.Encoder used here.
+type compressor interface {
+	io.WriteCloser
+	Flush() error
+	Reset(w io.Writer)
+}
+
+var (
+	sampleBufferPool = sync.Pool{New: func() any { b := make([]byte, defaultSampleSize); return &b }}
+	gzipEncoderPool  = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}
+	zstdEncoderPool  = sync.Pool{New: func() any {
+		enc, err := zstd.NewWriter(nil)
+		if err != nil {
+			panic(err)
+		}
+		return enc
+	}}
+	gzipDecoderPool sync.Pool
+	zstdDecoderPool = sync.Pool{New: func() any {
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			panic(err)
+		}
+		return dec
+	}}
+)
+
+func encoderPoolFor(algorithm Algorithm) (*sync.Pool, error) {
 	switch algorithm {
 	case AlgorithmGzip:
-		return gzip.NewWriter(w), nil
+		return &gzipEncoderPool, nil
 	case AlgorithmZstd:
-		return zstd.NewWriter(w)
+		return &zstdEncoderPool, nil
 	default:
 		return nil, fmt.Errorf("unsupported compression algorithm: %s", algorithm)
 	}
 }
 
-func (mw *PartStoreMiddleware) newDecompressionReader(algorithm Algorithm, r io.Reader) (io.ReadCloser, error) {
+func newDecompressionReader(algorithm Algorithm, r io.Reader) (io.ReadCloser, error) {
 	switch algorithm {
 	case AlgorithmGzip:
-		return gzip.NewReader(r)
-	case AlgorithmZstd:
-		decoder, err := zstd.NewReader(r)
-		if err != nil {
+		dec, _ := gzipDecoderPool.Get().(*gzip.Reader)
+		if dec == nil {
+			dec = new(gzip.Reader)
+		}
+		if err := dec.Reset(r); err != nil {
+			gzipDecoderPool.Put(dec)
 			return nil, err
 		}
-		return &zstdReadCloser{decoder: decoder}, nil
+		return &gzipReadCloser{decoder: dec}, nil
+	case AlgorithmZstd:
+		dec := zstdDecoderPool.Get().(*zstd.Decoder)
+		if err := dec.Reset(r); err != nil {
+			zstdDecoderPool.Put(dec)
+			return nil, err
+		}
+		return &zstdReadCloser{decoder: dec}, nil
 	default:
 		return nil, fmt.Errorf("unsupported compression algorithm: %s", algorithm)
 	}
+}
+
+type gzipReadCloser struct {
+	decoder *gzip.Reader
+}
+
+func (g *gzipReadCloser) Read(p []byte) (int, error) {
+	if g.decoder == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return g.decoder.Read(p)
+}
+
+func (g *gzipReadCloser) Close() error {
+	if g.decoder == nil {
+		return nil
+	}
+	err := g.decoder.Close()
+	gzipDecoderPool.Put(g.decoder)
+	g.decoder = nil
+	return err
 }
 
 type zstdReadCloser struct {
@@ -304,11 +413,19 @@ type zstdReadCloser struct {
 }
 
 func (z *zstdReadCloser) Read(p []byte) (int, error) {
+	if z.decoder == nil {
+		return 0, io.ErrClosedPipe
+	}
 	return z.decoder.Read(p)
 }
 
 func (z *zstdReadCloser) Close() error {
-	z.decoder.Close()
+	if z.decoder == nil {
+		return nil
+	}
+	_ = z.decoder.Reset(nil)
+	zstdDecoderPool.Put(z.decoder)
+	z.decoder = nil
 	return nil
 }
 
