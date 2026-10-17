@@ -118,3 +118,32 @@ func BenchmarkStoragePutGet1MB(b *testing.B) {
 func BenchmarkStoragePutGet16MB(b *testing.B) {
 	benchmarkPutGet(b, 16*1000*1000)
 }
+
+// BenchmarkStorageGetObjectRangeTail256MB measures a ranged read of the last
+// 1MB of a 256MB object on the plain filesystem part store.
+func BenchmarkStorageGetObjectRangeTail256MB(b *testing.B) {
+	st := newBenchmarkStorage(b)
+	ctx := context.Background()
+	bucketName := storage.MustNewBucketName("bench-bucket")
+	if err := st.CreateBucket(ctx, bucketName); err != nil {
+		b.Fatal(err)
+	}
+	const size = int64(256 * 1000 * 1000)
+	const rangeLen = int64(1000 * 1000)
+	key := putBenchObject(b, st, bucketName, "range-obj", size)
+
+	start := size - rangeLen
+	end := size
+
+	b.SetBytes(rangeLen)
+	b.ResetTimer()
+	for b.Loop() {
+		_, readers, err := st.GetObject(ctx, bucketName, key, []storage.ByteRange{{Start: &start, End: &end}}, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if n := drainReaders(b, readers); n != rangeLen {
+			b.Fatalf("unexpected range read size: %d", n)
+		}
+	}
+}
