@@ -9,6 +9,7 @@ import (
 	"net/textproto"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Shopify/go-lua"
@@ -193,6 +194,23 @@ func pushNullableBoolean(L *lua.State, b *bool) {
 	}
 }
 
+// luaFieldNames caches the Lua field names (lower camel case) of struct
+// types pushed by pushGoType.
+var luaFieldNames sync.Map
+
+func luaFieldNamesOf(t reflect.Type) []string {
+	if names, ok := luaFieldNames.Load(t); ok {
+		return names.([]string)
+	}
+	names := make([]string, t.NumField())
+	for i := range names {
+		name := t.Field(i).Name
+		names[i] = strings.ToLower(name[:1]) + name[1:]
+	}
+	luaFieldNames.Store(t, names)
+	return names
+}
+
 func pushGoType(L *lua.State, obj interface{}) {
 	if obj == nil {
 		L.PushNil()
@@ -200,24 +218,23 @@ func pushGoType(L *lua.State, obj interface{}) {
 	}
 	switch v := obj.(type) {
 	case string:
-		pushNullableString(L, &v)
+		L.PushString(v)
 	case *string:
 		pushNullableString(L, v)
 	case int:
-		pushNullableInt(L, &v)
+		L.PushInteger(v)
 	case *int:
 		pushNullableInt(L, v)
 	case float64:
-		pushNullableNumber(L, &v)
+		L.PushNumber(v)
 	case *float64:
 		pushNullableNumber(L, v)
 	case bool:
-		pushNullableBoolean(L, &v)
+		L.PushBoolean(v)
 	case *bool:
 		pushNullableBoolean(L, v)
 	case time.Duration:
-		var i int = int(v)
-		pushNullableInt(L, &i)
+		L.PushInteger(int(v))
 	default:
 		t := reflect.TypeOf(v)
 
@@ -259,13 +276,12 @@ func pushGoType(L *lua.State, obj interface{}) {
 			if val.Kind() == reflect.Ptr {
 				val = val.Elem()
 			}
+			fieldNames := luaFieldNamesOf(t)
 			for i := 0; i < t.NumField(); i++ {
-				field := t.Field(i)
 				fieldValue := val.Field(i)
 				if fieldValue.CanInterface() {
-					fieldName := strings.ToLower(field.Name[:1]) + field.Name[1:]
 					pushGoType(L, fieldValue.Interface())
-					L.SetField(-2, fieldName)
+					L.SetField(-2, fieldNames[i])
 				}
 			}
 		} else {
