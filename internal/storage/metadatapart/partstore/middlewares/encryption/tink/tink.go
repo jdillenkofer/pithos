@@ -433,12 +433,6 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx dat
 
 	segmentSize := DefaultSegmentSize
 
-	// Create streaming AEAD with the final (possibly hybrid) DEK
-	dekStreamingAEAD, err := streamingaeadsubtle.NewAESGCMHKDF(finalDEK, "SHA256", 32, segmentSize, 0)
-	if err != nil {
-		return err
-	}
-
 	// Encrypt the classical DEK with the master AEAD
 	encryptedDEK, err := mw.masterAEAD.Encrypt(classicalDEK, partId.Bytes())
 	if err != nil {
@@ -461,47 +455,17 @@ func (mw *TinkEncryptionPartStoreMiddleware) PutPart(ctx context.Context, tx dat
 		return err
 	}
 
-	// Create a pipe for the combined data (header + encrypted part)
-	pipeReader, pipeWriter := io.Pipe()
-	go func() {
-		// Make sure we always close writer
-		defer pipeWriter.Close()
+	// The part header (4 bytes big-endian length + header) precedes the
+	// tink ciphertext in the stored part.
+	prefix := make([]byte, 4+len(headerBytes))
+	binary.BigEndian.PutUint32(prefix[:4], uint32(len(headerBytes)))
+	copy(prefix[4:], headerBytes)
 
-		// --- 1. Write header (plaintext) into the same pipe ---
-		// Write the header length + header bytes (4 bytes big-endian length + header)
-		buf := make([]byte, 4+len(headerBytes))
-		binary.BigEndian.PutUint32(buf[:4], uint32(len(headerBytes)))
-		copy(buf[4:], headerBytes)
-		if _, err := pipeWriter.Write(buf); err != nil {
-			pipeWriter.CloseWithError(err)
-			return
-		}
-
-		// --- 2. Wrap SAME PipeWriter in encryption writer ---
-		streamWriter, err := dekStreamingAEAD.NewEncryptingWriter(
-			pipeWriter,
-			partId.Bytes(),
-		)
-		if err != nil {
-			pipeWriter.CloseWithError(err)
-			return
-		}
-
-		// --- 3. Stream body → EncryptingWriter → PipeWriter ---
-		if _, err := ioutils.Copy(streamWriter, reader); err != nil {
-			pipeWriter.CloseWithError(err)
-			return
-		}
-
-		// --- 4. Finalize encryption ---
-		if err := streamWriter.Close(); err != nil {
-			pipeWriter.CloseWithError(err)
-			return
-		}
-
-	}()
-
-	return mw.innerPartStore.PutPart(ctx, tx, partId, pipeReader)
+	encryptingReader, err := newEncryptingReader(reader, prefix, finalDEK, partId.Bytes(), segmentSize)
+	if err != nil {
+		return err
+	}
+	return mw.innerPartStore.PutPart(ctx, tx, partId, encryptingReader)
 }
 
 func (mw *TinkEncryptionPartStoreMiddleware) Capabilities() partstore.Capabilities {
@@ -553,7 +517,10 @@ func (mw *TinkEncryptionPartStoreMiddleware) GetPart(ctx context.Context, tx dat
 				closeUnderlying()
 				return nil, err
 			}
-			return &compositeReadSeekCloser{seekableReader, closerFunc(closeUnderlying)}, nil
+			return &compositeReadSeekCloser{seekableReader, closerFunc(func() error {
+				seekableReader.release()
+				return closeUnderlying()
+			})}, nil
 		})
 		return ioutils.NewReadSeekCloserWithCloseHook(lazyReader, closeUnderlying), nil
 	}

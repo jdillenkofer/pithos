@@ -47,8 +47,8 @@ type seekableDecryptingReader struct {
 	pos       int64 // current plaintext position
 	segIndex  int64 // segment currently buffered, -1 if none
 	segStart  int64 // plaintext offset where the buffered segment begins
-	plaintext []byte
-	segBuf    []byte
+	plaintext []byte  // decrypted in place within segBuf
+	segBuf    *[]byte // pooled when css is DefaultSegmentSize
 	rpos      int64 // current offset in r, so sequential segment loads skip the Seek
 }
 
@@ -177,10 +177,10 @@ func (s *seekableDecryptingReader) loadSegment(j int64) error {
 		}
 		s.rpos = s.base + ctOff
 	}
-	if int64(cap(s.segBuf)) < ctLen {
-		s.segBuf = make([]byte, ctLen)
+	if s.segBuf == nil {
+		s.segBuf = getSegmentBuffer(int(s.css))
 	}
-	segment := s.segBuf[:ctLen]
+	segment := (*s.segBuf)[:ctLen]
 	n, err := io.ReadFull(s.r, segment)
 	s.rpos += int64(n)
 	if err != nil {
@@ -197,8 +197,9 @@ func (s *seekableDecryptingReader) loadSegment(j int64) error {
 		nonce[tinkNoncePrefixSize+4] = 1
 	}
 
-	plaintext, err := s.cipher.Open(s.plaintext[:0], nonce, segment, nil)
+	plaintext, err := s.cipher.Open(segment[:0], nonce, segment, nil)
 	if err != nil {
+		s.segIndex = -1
 		return fmt.Errorf("segment %d decryption failed: %w", j, err)
 	}
 	s.plaintext = plaintext
@@ -239,4 +240,15 @@ func (s *seekableDecryptingReader) Seek(offset int64, whence int) (int64, error)
 	}
 	s.pos = abs
 	return abs, nil
+}
+
+// release returns the segment buffer to the pool. A later Read reloads the
+// segment into a fresh buffer.
+func (s *seekableDecryptingReader) release() {
+	if s.segBuf != nil {
+		putSegmentBuffer(s.segBuf)
+		s.segBuf = nil
+	}
+	s.plaintext = nil
+	s.segIndex = -1
 }
