@@ -87,6 +87,32 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 
 	filename := bs.getFilename(partId)
 	if tx != nil {
+		// Part ids are fresh random ids, so the part usually does not exist
+		// yet. Nothing can reference it before commit, so write it in place
+		// and remove it on rollback, saving the temp file and both renames.
+		// An existing part is replaced atomically via the temp file below.
+		f, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_, err = ioutils.Copy(f, reader)
+			if closeErr := f.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				_ = os.Remove(filename)
+				return err
+			}
+			tx.OnRollback(func(context.Context) error {
+				if err := os.Remove(filename); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return err
+				}
+				return nil
+			})
+			return nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+
 		tempFile, err := os.CreateTemp(bs.root, "."+filepath.Base(filename)+".*.tmp")
 		if err != nil {
 			return err
