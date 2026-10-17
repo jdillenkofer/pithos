@@ -298,3 +298,13 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func BenchmarkNewBucketName(b *testing.B) {
+	names := []string{"bench-bucket", "my.dotted.bucket-name", "logs-2026"}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := NewBucketName(names[i%len(names)]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
