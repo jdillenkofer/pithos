@@ -1,0 +1,26 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Pithos</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">Pithos Admin</a>
+    <nav aria-label="Administration">
+      <a href="/">Dashboard</a>
+      <a href="/buckets">Buckets</a>
+      <a href="/credentials">Credentials</a>
+      <a href="/policies">Policies</a>
+      <a href="/audit">Audit log</a>
+      <a href="/storage">Storage</a>
+    </nav>
+  </header>
+  <main>
+    <h1>{{.Title}}</h1>
+    <p role="status">The admin UI is under development. Login and management are not available yet.</p>
+  </main>
+</body>
+</html>{{end}}

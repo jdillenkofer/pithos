@@ -23,6 +23,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/buildinfo"
 	"github.com/jdillenkofer/pithos/internal/config"
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	"github.com/jdillenkofer/pithos/internal/http/admin"
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	"github.com/jdillenkofer/pithos/internal/http/server"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
@@ -319,12 +320,34 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}
 
+	var httpAdminServer *http.Server
+	if settings.AdminEnabled() {
+		adminHandler, err := admin.NewHandler()
+		if err != nil {
+			return fmt.Errorf("create admin handler: %w", err)
+		}
+		httpAdminServer = &http.Server{
+			BaseContext:       func(net.Listener) context.Context { return ctx },
+			Addr:              net.JoinHostPort(settings.AdminBindAddress(), fmt.Sprint(settings.AdminPort())),
+			Handler:           adminHandler,
+			ReadHeaderTimeout: readHeaderTimeout,
+			WriteTimeout:      writeTimeout,
+			IdleTimeout:       idleTimeout,
+			MaxHeaderBytes:    maxHeaderBytes,
+		}
+	} else if !authenticationEnabled {
+		slog.Info("Admin listener disabled because authentication is disabled")
+	}
+
 	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
 	servers := []*http.Server{httpServer}
 	if httpMonitoringServer != nil {
 		servers = append(servers, httpMonitoringServer)
+	}
+	if httpAdminServer != nil {
+		servers = append(servers, httpAdminServer)
 	}
 	// Bind all listeners before announcing readiness. A failed bind must not
 	// leave a monitoring endpoint reporting a healthy but unavailable S3 API.

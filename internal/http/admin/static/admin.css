@@ -1,0 +1,28 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+body {
+  margin: 0;
+}
+header, main {
+  padding: 1rem 2rem;
+}
+header {
+  border-bottom: 1px solid GrayText;
+}
+.brand {
+  font-size: 1.25rem;
+  font-weight: bold;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+main {
+  max-width: 80rem;
+  margin: auto;
+}
