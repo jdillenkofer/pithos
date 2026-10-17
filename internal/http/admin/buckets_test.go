@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/stretchr/testify/require"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,10 @@ type bucketTestStorage struct {
 	writes  int
 	last    any
 	failure error
+	// lifecycle and website, when set, are returned as the current configuration.
+	lifecycle *storage.BucketLifecycleConfiguration
+	website   *storage.WebsiteConfiguration
+	deleted   string
 }
 
 func (s *bucketTestStorage) ListBuckets(context.Context) ([]storage.Bucket, error) {
@@ -47,6 +52,9 @@ func (s *bucketTestStorage) DeleteBucket(context.Context, storage.BucketName) er
 	return s.failure
 }
 func (s *bucketTestStorage) GetBucketLifecycleConfiguration(context.Context, storage.BucketName) (*storage.BucketLifecycleConfiguration, error) {
+	if s.lifecycle != nil {
+		return s.lifecycle, nil
+	}
 	return nil, storage.ErrNoSuchLifecycleConfiguration
 }
 func (s *bucketTestStorage) GetBucketCORSConfiguration(context.Context, storage.BucketName) (*storage.BucketCORSConfiguration, error) {
@@ -59,6 +67,9 @@ func (s *bucketTestStorage) GetObjectLockConfiguration(context.Context, storage.
 	return nil, storage.ErrObjectLockConfigurationNotFound
 }
 func (s *bucketTestStorage) GetBucketWebsiteConfiguration(context.Context, storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	if s.website != nil {
+		return s.website, nil
+	}
 	return nil, storage.ErrNoSuchWebsiteConfiguration
 }
 func (s *bucketTestStorage) GetBucketTagging(context.Context, storage.BucketName) (map[string]string, error) {
@@ -79,18 +90,22 @@ func (s *bucketTestStorage) PutBucketCORSConfiguration(_ context.Context, _ stor
 }
 func (s *bucketTestStorage) DeleteBucketLifecycleConfiguration(context.Context, storage.BucketName) error {
 	s.writes++
+	s.deleted = "lifecycle"
 	return nil
 }
 func (s *bucketTestStorage) DeleteBucketCORSConfiguration(context.Context, storage.BucketName) error {
 	s.writes++
+	s.deleted = "cors"
 	return nil
 }
 func (s *bucketTestStorage) DeleteBucketWebsiteConfiguration(context.Context, storage.BucketName) error {
 	s.writes++
+	s.deleted = "website"
 	return nil
 }
 func (s *bucketTestStorage) DeleteBucketTagging(context.Context, storage.BucketName) error {
 	s.writes++
+	s.deleted = "tagging"
 	return nil
 }
 func (s *bucketTestStorage) PutBucketVersioningConfiguration(_ context.Context, _ storage.BucketName, c *storage.BucketVersioningConfiguration) error {
@@ -339,12 +354,142 @@ func TestBucketTemplatesEscapeAndCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	data := bucketDetailPage{CSRF: `"><script>`, Bucket: &storage.Bucket{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: `<script>`}, Header: bucketHeader{Name: "valid-bucket", Owner: `<script>`, Active: "properties"}, Tabs: bucketGroupTabs("properties"), Tab: "website", Configuration: `</textarea><script>alert(1)</script>`}
-	if err := pages.ExecuteTemplate(&out, "buckets_detail", data); err != nil {
-		t.Fatal(err)
+	unsafe := `</textarea><script>alert(1)</script>`
+	for _, group := range []string{"properties", "permissions", "management"} {
+		var out bytes.Buffer
+		data := bucketDetailPage{
+			CSRF: `"><script>`, Bucket: &storage.Bucket{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: `<script>`},
+			Header: bucketHeader{Name: "valid-bucket", Owner: `<script>`, Active: group}, Configuration: unsafe,
+			ObjectLock: objectLockView{Enabled: true, Mode: unsafe}, Tags: []keyValue{{unsafe, unsafe}}, Website: websiteView{Enabled: true, Index: unsafe},
+			Notifications: []notificationView{{ID: unsafe}}, CORS: []corsView{{Origins: unsafe}},
+			Lifecycle: []lifecycleView{{ID: unsafe, EditURL: "/x"}}, LifecycleRule: lifecycleFormView{ID: unsafe, Prefix: unsafe},
+		}
+		if err := pages.ExecuteTemplate(&out, "buckets_detail", data); err != nil {
+			t.Fatal(err)
+		}
+		forms, tokens := strings.Count(out.String(), "<form"), strings.Count(out.String(), `name="csrf_token"`)
+		if strings.Contains(out.String(), "<script>") || forms == 0 || forms != tokens {
+			t.Fatalf("%s: unsafe template or missing CSRF (%d forms, %d tokens)", group, forms, tokens)
+		}
 	}
-	if strings.Contains(out.String(), "<script>") || strings.Count(out.String(), `name="csrf_token"`) != 2 {
-		t.Fatal("unsafe template or missing CSRF")
-	}
+}
+
+func structuredBucketRequest(a *App, tab string, form url.Values) *httptest.ResponseRecorder {
+	form.Set("bucket", "valid-bucket")
+	form.Set("tab", tab)
+	form.Set("editor", "form")
+	return bucketRequest(a, "POST", "/buckets/configure", form)
+}
+
+func TestStructuredBucketEditors(t *testing.T) {
+	s := &bucketTestStorage{}
+	a := bucketTestApp(t, s)
+
+	w := structuredBucketRequest(a, "versioning", url.Values{"status": {"Enabled"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, storage.BucketVersioningStatusEnabled, *s.last.(*storage.BucketVersioningConfiguration).Status)
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "versioning", url.Values{"status": {"Disabled"}}).Code)
+
+	w = structuredBucketRequest(a, "tags", url.Values{"tag_key": {"team", " env ", ""}, "tag_value": {"platform", "", ""}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, map[string]string{"team": "platform", "env": ""}, s.last)
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "tags", url.Values{"tag_key": {"a", "a"}, "tag_value": {"1", "2"}}).Code)
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "tags", url.Values{"tag_key": {""}, "tag_value": {"orphan"}}).Code)
+	writes := s.writes
+	require.Equal(t, http.StatusSeeOther, structuredBucketRequest(a, "tags", url.Values{"tag_key": {""}, "tag_value": {""}}).Code)
+	require.Equal(t, "tagging", s.deleted, "removing every tag deletes the tag set")
+	require.Equal(t, writes+1, s.writes)
+
+	w = structuredBucketRequest(a, "object-lock", url.Values{"default_retention": {"enabled"}, "mode": {"COMPLIANCE"}, "period": {"2"}, "unit": {"Years"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	lock := s.last.(*storage.ObjectLockConfiguration)
+	require.Equal(t, storage.RetentionMode("COMPLIANCE"), lock.DefaultRetention.Mode)
+	require.Equal(t, int32(2), *lock.DefaultRetention.Years)
+	require.Nil(t, lock.DefaultRetention.Days)
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "object-lock", url.Values{"default_retention": {"enabled"}, "mode": {"GOVERNANCE"}, "period": {"0"}}).Code)
+	require.Equal(t, http.StatusSeeOther, structuredBucketRequest(a, "object-lock", url.Values{"default_retention": {"disabled"}}).Code)
+	require.Nil(t, s.last.(*storage.ObjectLockConfiguration).DefaultRetention)
+
+	errorDocument := "missing.html"
+	s.website = &storage.WebsiteConfiguration{IndexDocumentSuffix: "old.html", RoutingRules: []storage.WebsiteRoutingRule{{Redirect: storage.WebsiteRedirect{ReplaceKeyWith: &errorDocument}}}}
+	w = structuredBucketRequest(a, "website", url.Values{"website": {"enabled"}, "hosting": {"website"}, "index_document": {"index.html"}, "error_document": {"error.html"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	website := s.last.(*storage.WebsiteConfiguration)
+	require.Equal(t, "index.html", website.IndexDocumentSuffix)
+	require.Equal(t, "error.html", *website.ErrorDocumentKey)
+	require.Len(t, website.RoutingRules, 1, "routing rules without form fields are kept")
+	w = structuredBucketRequest(a, "website", url.Values{"website": {"enabled"}, "hosting": {"redirect"}, "redirect_host": {"example.com"}, "redirect_protocol": {"https"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, "example.com", s.last.(*storage.WebsiteConfiguration).RedirectAllRequestsTo.HostName)
+	require.Equal(t, http.StatusSeeOther, structuredBucketRequest(a, "website", url.Values{"website": {"disabled"}}).Code)
+	require.Equal(t, "website", s.deleted)
+
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "cors", url.Values{}).Code, "CORS has no form editor")
+}
+
+func TestStructuredLifecycleRules(t *testing.T) {
+	s := &bucketTestStorage{}
+	a := bucketTestApp(t, s)
+	w := structuredBucketRequest(a, "lifecycle", url.Values{"rule_id": {"logs"}, "status": {"Enabled"}, "prefix": {"logs/"}, "expire_days": {"30"}, "noncurrent_days": {"7"}, "newer_noncurrent": {"2"}, "abort_days": {"3"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, "/buckets/detail?bucket=valid-bucket&tab=lifecycle#lifecycle", w.Header().Get("Location"))
+	config := s.last.(*storage.BucketLifecycleConfiguration)
+	require.Len(t, config.Rules, 1)
+	rule := config.Rules[0]
+	require.Equal(t, "logs/", *rule.Filter.Prefix)
+	require.Equal(t, int32(30), *rule.Expiration.Days)
+	require.Equal(t, int32(7), *rule.NoncurrentVersionExpiration.NoncurrentDays)
+	require.Equal(t, int32(2), *rule.NoncurrentVersionExpiration.NewerNoncurrentVersions)
+	require.Equal(t, int32(3), *rule.AbortIncompleteMultipartUpload.DaysAfterInitiation)
+
+	s.lifecycle = config
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "lifecycle", url.Values{"rule_id": {"logs"}, "expire_days": {"1"}}).Code, "duplicate rule names are rejected")
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "lifecycle", url.Values{"rule_id": {"empty"}}).Code, "a rule needs an action")
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "lifecycle", url.Values{"rule_id": {"both"}, "expire_days": {"1"}, "expired_delete_markers": {"true"}}).Code)
+
+	w = structuredBucketRequest(a, "lifecycle", url.Values{"rule_id": {"markers"}, "expired_delete_markers": {"true"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	s.lifecycle = s.last.(*storage.BucketLifecycleConfiguration)
+	require.Len(t, s.lifecycle.Rules, 2)
+
+	w = structuredBucketRequest(a, "lifecycle", url.Values{"original_id": {"logs"}, "rule_id": {"logs-renamed"}, "status": {"Disabled"}, "expire_days": {"90"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	s.lifecycle = s.last.(*storage.BucketLifecycleConfiguration)
+	require.Len(t, s.lifecycle.Rules, 2)
+	require.Equal(t, "logs-renamed", *s.lifecycle.Rules[1].ID)
+	require.Equal(t, "Disabled", s.lifecycle.Rules[1].Status)
+
+	page := bucketRequest(a, "GET", "/buckets/detail?bucket=bucket-b&tab=lifecycle&rule=logs-renamed", nil)
+	require.Equal(t, http.StatusNotFound, page.Code, "unknown bucket")
+	s.buckets = []storage.Bucket{{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: "account"}}
+	page = bucketRequest(a, "GET", "/buckets/detail?bucket=valid-bucket&tab=lifecycle&rule=logs-renamed", nil)
+	require.Equal(t, http.StatusOK, page.Code)
+	require.Contains(t, page.Body.String(), `name="original_id" value="logs-renamed"`)
+	require.Contains(t, page.Body.String(), `name="expire_days" value="90"`)
+
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "lifecycle", url.Values{"rule_action": {"delete"}, "original_id": {"missing"}}).Code)
+	w = structuredBucketRequest(a, "lifecycle", url.Values{"rule_action": {"delete"}, "original_id": {"markers"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	s.lifecycle = s.last.(*storage.BucketLifecycleConfiguration)
+	require.Len(t, s.lifecycle.Rules, 1)
+	w = structuredBucketRequest(a, "lifecycle", url.Values{"rule_action": {"delete"}, "original_id": {"logs-renamed"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, "lifecycle", s.deleted, "deleting the last rule deletes the configuration")
+}
+
+func TestBucketCreateWithVersioning(t *testing.T) {
+	s := &bucketTestStorage{}
+	a := bucketTestApp(t, s)
+	w := bucketRequest(a, "POST", "/buckets/create", url.Values{"bucket": {"new-bucket"}, "owner": {"account-a"}, "versioning": {"Enabled"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, "/objects?bucket=new-bucket", w.Header().Get("Location"))
+	require.Equal(t, 2, s.writes)
+	require.Equal(t, storage.BucketVersioningStatusEnabled, *s.last.(*storage.BucketVersioningConfiguration).Status)
+
+	s = &bucketTestStorage{}
+	a = bucketTestApp(t, s)
+	w = bucketRequest(a, "POST", "/buckets/create", url.Values{"bucket": {"locked-bucket"}, "versioning": {"Enabled"}, "object_lock": {"true"}})
+	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
+	require.Equal(t, 1, s.writes, "Object Lock enables versioning itself")
+	require.Equal(t, http.StatusBadRequest, bucketRequest(a, "POST", "/buckets/create", url.Values{"bucket": {"bad-bucket"}, "versioning": {"Suspended"}}).Code)
 }

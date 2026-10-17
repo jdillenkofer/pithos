@@ -11,6 +11,13 @@
   </div>
 </div>
 <div class="container">
+  <div class="container-head"><div><h2>Bucket Versioning</h2><p>Versioning keeps multiple variants of an object in the same bucket, so you can preserve, retrieve and restore every version and recover from unintended deletes and overwrites.</p></div></div>
+  <div class="container-body"><fieldset><legend>Bucket Versioning</legend>
+    <label class="check"><input type="radio" name="versioning" value="Disabled" checked> Disable</label>
+    <label class="check"><input type="radio" name="versioning" value="Enabled"> Enable</label>
+  </fieldset></div>
+</div>
+<div class="container">
   <div class="container-head"><div><h2>Object Lock</h2><p>Store objects using a write-once-read-many (WORM) model. Enabling Object Lock also enables versioning and cannot be undone.</p></div></div>
   <div class="container-body"><label class="check"><input type="checkbox" name="object_lock" value="true"> Enable Object Lock</label></div>
 </div>

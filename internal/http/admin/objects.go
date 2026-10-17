@@ -90,18 +90,23 @@ func formatModified(t time.Time) string {
 }
 
 type objectDetailView struct {
-	CSRF, Bucket, Key, Name, Version, Tags, DownloadURL, BucketURL, VersionsURL string
-	Preview, ViewURL, PreviewText                                               string
-	PreviewTruncated                                                            bool
-	DeleteMarker                                                                bool
-	Crumbs                                                                      []objectLink
-	Overview, Checksums, Metadata, TagList                                      []keyValue
-	StorageClass, Retention, LegalHold                                          string
+	CSRF, Bucket, Key, Name, Version, DownloadURL, BucketURL, VersionsURL, DetailURL string
+	Preview, ViewURL, PreviewText                                                    string
+	PreviewTruncated                                                                 bool
+	DeleteMarker                                                                     bool
+	Crumbs                                                                           []objectLink
+	Overview, Checksums, Metadata, TagList                                           []keyValue
+	StorageClass, Retention, LegalHold                                               string
 }
 
 // objectError exposes only known protocol errors, never backend connection
 // strings, remote URLs, or other provider details embedded in arbitrary errors.
 func (a *App) objectError(w http.ResponseWriter, r *http.Request, err error) {
+	status, message := objectErrorMessage(err)
+	a.fail(w, r, status, message)
+}
+
+func objectErrorMessage(err error) (int, string) {
 	status, message := http.StatusInternalServerError, "Object operation failed"
 	switch {
 	case errors.Is(err, storage.ErrNoSuchKey), errors.Is(err, storage.ErrNoSuchBucket):
@@ -117,7 +122,7 @@ func (a *App) objectError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, storage.ErrPreconditionFailed):
 		status, message = http.StatusConflict, "Object changed concurrently"
 	}
-	a.fail(w, r, status, message)
+	return status, message
 }
 
 func (a *App) registerObjects(mux *http.ServeMux) {
@@ -271,6 +276,7 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Name: path.Base(k.String()), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version), BucketURL: "/objects?" + url.Values{"bucket": {b.String()}}.Encode()}
 	view.Crumbs = prefixCrumbs(b.String(), k.String()[:strings.LastIndex(k.String(), "/")+1], false)
 	view.VersionsURL = "/objects?" + url.Values{"bucket": {b.String()}, "prefix": {k.String()}, "versions": {"true"}}.Encode()
+	view.DetailURL = objectURL("/objects/detail", b.String(), k.String(), "")
 	if errors.As(err, &marker) || errors.As(err, &current) {
 		view.DeleteMarker = true
 		if marker != nil {
@@ -303,8 +309,6 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 		if tags == nil {
 			tags = map[string]string{}
 		}
-		raw, _ := json.MarshalIndent(tags, "", "  ")
-		view.Tags = string(raw)
 		for key, value := range tags {
 			view.TagList = append(view.TagList, keyValue{key, value})
 		}
@@ -529,7 +533,17 @@ func (a *App) objectTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tags map[string]string
-	if json.Unmarshal([]byte(r.FormValue("tags")), &tags) != nil || storage.ValidateTags(tags) != nil {
+	if r.FormValue("editor") == "form" {
+		tags, err = parseTagRows(r.Form)
+		if err != nil {
+			a.fail(w, r, 400, err.Error())
+			return
+		}
+		if err := storage.ValidateTags(tags); err != nil {
+			a.fail(w, r, 400, "Invalid object tags: "+err.Error())
+			return
+		}
+	} else if json.Unmarshal([]byte(r.FormValue("tags")), &tags) != nil || storage.ValidateTags(tags) != nil {
 		a.fail(w, r, 400, "Invalid object tags")
 		return
 	}

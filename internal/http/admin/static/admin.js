@@ -21,3 +21,35 @@ document.addEventListener("htmx:beforeSwap", function (event) {
     window.location.assign("/login");
   }
 });
+
+// Tag editors: "Add new tag" clones the row template, "Remove" deletes a row.
+// Without JavaScript the server-rendered blank row can still add one tag.
+document.addEventListener("click", function (event) {
+  const add = event.target.closest("[data-add-tag]");
+  if (add) {
+    const editor = add.closest("[data-tag-editor]");
+    const rows = editor.querySelector("[data-tag-rows]");
+    if (rows.children.length >= Number(editor.dataset.max)) {
+      return;
+    }
+    rows.appendChild(editor.querySelector("template").content.cloneNode(true));
+    rows.lastElementChild.querySelector("input").focus();
+    updateTagEditor(editor);
+    return;
+  }
+  const remove = event.target.closest("[data-remove-tag]");
+  if (remove) {
+    const editor = remove.closest("[data-tag-editor]");
+    remove.closest("[data-tag-row]").remove();
+    updateTagEditor(editor);
+  }
+});
+
+function updateTagEditor(editor) {
+  const count = editor.querySelector("[data-tag-rows]").children.length;
+  editor.querySelector("[data-add-tag]").disabled = count >= Number(editor.dataset.max);
+  const remaining = editor.querySelector("[data-tag-remaining]");
+  if (remaining) {
+    remaining.textContent = String(Number(editor.dataset.max) - count);
+  }
+}

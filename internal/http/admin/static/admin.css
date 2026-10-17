@@ -273,3 +273,13 @@ details[open] summary { margin-bottom: 12px; }
 .preview audio { width: 100%; }
 .preview pre { margin: 0; max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Tag editor and settings forms */
+.tag-rows { display: grid; gap: 12px; }
+.tag-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+.tag-row label { margin: 0; }
+.container-body > details { margin-top: 16px; }
+.container-body.divider > details { margin-top: 0; }
+fieldset label.check { margin-bottom: 8px; }
+:target { scroll-margin-top: 56px; }
+@media (max-width: 52rem) { .tag-row { grid-template-columns: 1fr; } }

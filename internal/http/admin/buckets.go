@@ -42,6 +42,19 @@ type bucketDetailPage struct {
 	Tabs          []string
 	Tab           string
 	Configuration string
+	Created       string
+
+	// Properties tab
+	Versioning    string
+	ObjectLock    objectLockView
+	Tags          []keyValue
+	Website       websiteView
+	Notifications []notificationView
+
+	// Permissions and Management tabs
+	CORS          []corsView
+	Lifecycle     []lifecycleView
+	LifecycleRule lifecycleFormView
 }
 
 // bucketTabGroups places each configuration on the S3 console tab where it lives.
@@ -148,12 +161,26 @@ func (a *App) createBucket(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, 400, "Invalid object lock value")
 		return
 	}
+	versioning := r.PostForm.Get("versioning")
+	if versioning != "" && versioning != "Enabled" && versioning != "Disabled" {
+		a.fail(w, r, 400, "Invalid versioning value")
+		return
+	}
 	if err := a.options.Storage.CreateBucket(r.Context(), name, storage.CreateBucketOptions{OwnerAccountID: owner, ObjectLockEnabled: lock == "true"}); err != nil {
 		a.bucketError(w, r, err)
 		return
 	}
 	a.audit(r, "CreateBucket")
-	http.Redirect(w, r, "/buckets/detail?bucket="+url.QueryEscape(name.String()), http.StatusSeeOther)
+	// Object Lock already enables versioning on creation.
+	if versioning == "Enabled" && lock != "true" {
+		status := storage.BucketVersioningStatusEnabled
+		if err := a.options.Storage.PutBucketVersioningConfiguration(r.Context(), name, &storage.BucketVersioningConfiguration{Status: &status}); err != nil {
+			a.fail(w, r, http.StatusInternalServerError, "The bucket was created, but enabling versioning failed. Enable it in the bucket properties.")
+			return
+		}
+		a.audit(r, "ConfigureBucket:versioning")
+	}
+	http.Redirect(w, r, "/objects?bucket="+url.QueryEscape(name.String()), http.StatusSeeOther)
 }
 
 func (a *App) deleteBucket(w http.ResponseWriter, r *http.Request) {
@@ -205,40 +232,89 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 		a.bucketError(w, r, err)
 		return
 	}
-	var config any
-	switch tab {
-	case "versioning":
-		config, err = a.options.Storage.GetBucketVersioningConfiguration(r.Context(), name)
-	case "object-lock":
-		config, err = a.options.Storage.GetObjectLockConfiguration(r.Context(), name)
-	case "lifecycle":
-		config, err = a.options.Storage.GetBucketLifecycleConfiguration(r.Context(), name)
-	case "cors":
-		config, err = a.options.Storage.GetBucketCORSConfiguration(r.Context(), name)
-	case "website":
-		config, err = a.options.Storage.GetBucketWebsiteConfiguration(r.Context(), name)
-	case "tags":
-		config, err = a.options.Storage.GetBucketTagging(r.Context(), name)
-	case "notifications":
-		config, err = a.options.Storage.GetBucketNotificationConfiguration(r.Context(), name)
+	group := bucketTabGroups[tab]
+	page := bucketDetailPage{CSRF: csrfToken(r), Bucket: bucket, Header: bucketHeader{Name: name.String(), Owner: bucket.OwnerAccountID, Active: group}, Tabs: bucketGroupTabs(group), Tab: tab}
+	if !bucket.CreationDate.IsZero() {
+		page.Created = bucket.CreationDate.UTC().Format("2006-01-02 15:04") + " UTC"
 	}
-	if err != nil && !missingBucketConfiguration(err) {
-		a.bucketError(w, r, err)
-		return
+	// The advanced JSON editor on each tab edits one configuration.
+	advanced := map[string]string{"properties": "notifications", "permissions": "cors", "management": "lifecycle"}[group]
+	page.Tab = advanced
+	ctx := r.Context()
+	load := func(get func() (any, error)) (any, bool) {
+		config, err := get()
+		if err != nil && !missingBucketConfiguration(err) {
+			a.bucketError(w, r, err)
+			return nil, false
+		}
+		if err != nil {
+			return nil, true
+		}
+		return config, true
 	}
-	text := "{}"
-	if err == nil && config != nil {
-		data, marshalErr := json.MarshalIndent(config, "", "  ")
-		if marshalErr != nil {
-			a.bucketError(w, r, marshalErr)
+	switch group {
+	case "properties":
+		versioning, ok := load(func() (any, error) { return a.options.Storage.GetBucketVersioningConfiguration(ctx, name) })
+		if !ok {
 			return
 		}
-		if string(data) != "null" {
-			text = string(data)
+		page.Versioning = "Disabled"
+		if c, _ := versioning.(*storage.BucketVersioningConfiguration); c != nil && c.Status != nil {
+			page.Versioning = string(*c.Status)
 		}
+		lock, ok := load(func() (any, error) { return a.options.Storage.GetObjectLockConfiguration(ctx, name) })
+		if !ok {
+			return
+		}
+		lockConfig, _ := lock.(*storage.ObjectLockConfiguration)
+		page.ObjectLock = describeObjectLock(lockConfig)
+		tags, ok := load(func() (any, error) { return a.options.Storage.GetBucketTagging(ctx, name) })
+		if !ok {
+			return
+		}
+		tagMap, _ := tags.(map[string]string)
+		page.Tags = sortedTags(tagMap)
+		website, ok := load(func() (any, error) { return a.options.Storage.GetBucketWebsiteConfiguration(ctx, name) })
+		if !ok {
+			return
+		}
+		websiteConfig, _ := website.(*storage.WebsiteConfiguration)
+		page.Website = describeWebsite(websiteConfig)
+		notifications, ok := load(func() (any, error) { return a.options.Storage.GetBucketNotificationConfiguration(ctx, name) })
+		if !ok {
+			return
+		}
+		notificationConfig, _ := notifications.(*storage.BucketNotificationConfiguration)
+		page.Notifications = describeNotifications(notificationConfig)
+		page.Configuration = configurationText(notificationConfig)
+	case "permissions":
+		cors, ok := load(func() (any, error) { return a.options.Storage.GetBucketCORSConfiguration(ctx, name) })
+		if !ok {
+			return
+		}
+		corsConfig, _ := cors.(*storage.BucketCORSConfiguration)
+		page.CORS = describeCORS(corsConfig)
+		page.Configuration = configurationText(corsConfig)
+	case "management":
+		lifecycle, ok := load(func() (any, error) { return a.options.Storage.GetBucketLifecycleConfiguration(ctx, name) })
+		if !ok {
+			return
+		}
+		lifecycleConfig, _ := lifecycle.(*storage.BucketLifecycleConfiguration)
+		page.Lifecycle = describeLifecycle(name.String(), lifecycleConfig)
+		page.LifecycleRule = lifecycleRuleForm(lifecycleConfig, r.URL.Query().Get("rule"))
+		page.Configuration = configurationText(lifecycleConfig)
 	}
-	group := bucketTabGroups[tab]
-	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", bucketDetailPage{CSRF: csrfToken(r), Bucket: bucket, Header: bucketHeader{Name: name.String(), Owner: bucket.OwnerAccountID, Active: group}, Tabs: bucketGroupTabs(group), Tab: tab, Configuration: text})
+	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", page)
+}
+
+// configurationText renders a configuration for the advanced JSON editor.
+func configurationText(config any) string {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil || string(data) == "null" {
+		return "{}"
+	}
+	return string(data)
 }
 
 func missingBucketConfiguration(err error) bool {
@@ -275,8 +351,16 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, 400, "Unknown bucket configuration")
 		return
 	}
+	text, action := r.PostForm.Get("configuration"), r.PostForm.Get("action")
+	if r.PostForm.Get("editor") == "form" {
+		text, action, err = structuredBucketConfiguration(r.Context(), a.options.Storage, name, tab, r.PostForm)
+		if err != nil {
+			a.fail(w, r, 400, err.Error())
+			return
+		}
+	}
 	// Validate before invoking any storage mutation.
-	apply, err := bucketConfigurationMutation(a.options.Storage, name, tab, r.PostForm.Get("configuration"), r.PostForm.Get("action"))
+	apply, err := bucketConfigurationMutation(a.options.Storage, name, tab, text, action)
 	if err != nil {
 		a.fail(w, r, 400, err.Error())
 		return
@@ -286,7 +370,7 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(r, "ConfigureBucket:"+tab)
-	http.Redirect(w, r, "/buckets/detail?bucket="+url.QueryEscape(name.String())+"&tab="+url.QueryEscape(tab), http.StatusSeeOther)
+	http.Redirect(w, r, "/buckets/detail?bucket="+url.QueryEscape(name.String())+"&tab="+url.QueryEscape(tab)+"#"+tab, http.StatusSeeOther)
 }
 
 func bucketConfigurationMutation(st storage.Storage, name storage.BucketName, tab, text, action string) (func(*http.Request) error, error) {

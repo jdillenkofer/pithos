@@ -54,7 +54,7 @@
   <div><h1>{{.Name}}</h1>{{if .DeleteMarker}}<p class="subtitle"><span class="status warn">Delete marker</span></p>{{end}}</div>
   <div class="toolbar">{{if not .DeleteMarker}}{{if .ViewURL}}<a class="button-link" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}</div>
 </div>
-<nav class="tabs" aria-label="Object"><a href="#" aria-current="page">Properties</a><a href="{{.VersionsURL}}">Versions</a></nav>
+<nav class="tabs" aria-label="Object"><a href="{{.DetailURL}}" aria-current="page">Properties</a><a href="{{.VersionsURL}}">Versions</a></nav>
 {{if .DeleteMarker}}<div class="alert warn"><p>This version {{if .Version}}(<code>{{.Version}}</code>) {{end}}is a delete marker and has no content.</p></div>{{else}}
 {{if .Preview}}<div class="container">
   <div class="container-head"><div><h2>Preview</h2>{{if eq .Preview "text"}}<p>Shown as plain text{{if .PreviewTruncated}}; only the first 64 KiB is displayed{{end}}.</p>{{end}}</div></div>
@@ -81,9 +81,12 @@
   <div class="container-head"><div><h2>Tags <span class="count">({{len .TagList}})</span></h2><p>Track storage cost or other criteria by tagging the object.</p></div></div>
   <div class="table-wrap divider"><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>{{range .TagList}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="empty"><strong>No tags</strong>There are no tags associated with this object.</td></tr>{{end}}</tbody></table></div>
   <div class="container-body divider">
-    <details><summary>Edit tags</summary>
-    <form method="post" action="/objects/tags"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-    <label>Tags (JSON object) <textarea name="tags" rows="6" required>{{.Tags}}</textarea></label>
+    <details><summary>Edit</summary>
+    <form method="post" action="/objects/tags"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}"><input type="hidden" name="editor" value="form">
+    <div class="tag-editor" data-tag-editor data-max="10">
+      {{template "tag_rows" .TagList}}
+      <div class="actions-row start"><button type="button" data-add-tag>Add new tag</button><span class="hint">You can add up to 10 tags.</span></div>
+    </div>
     <div class="actions-row"><button class="primary">Save changes</button></div></form>
     </details>
   </div>
