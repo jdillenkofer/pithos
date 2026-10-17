@@ -203,6 +203,7 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 	ioutils.SetSpoolDir(settings.SpoolDir())
 
 	// Set up OpenTelemetry.
+	database.SetQueryTracingEnabled(settings.OtelEnabled())
 	if settings.OtelEnabled() {
 		otelShutdown, err := telemetry.SetupOTelSDK(ctx, settings)
 		if err != nil {
