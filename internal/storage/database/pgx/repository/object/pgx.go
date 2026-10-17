@@ -37,6 +37,7 @@ const (
 	findLatestObjectByBucketNameAndKeyExcludingIDStmt                                                               = "SELECT id, bucket_name, key, content_type, cache_control, content_disposition, content_encoding, content_language, expires, website_redirect_location, etag, checksum_crc32, checksum_crc32c, checksum_crc64nvme, checksum_sha1, checksum_sha256, checksum_type, size, version_id, is_delete_marker, is_latest, upload_status, upload_id, optimistic_lock_version, created_at, updated_at, storage_class, checksum_algorithm FROM objects WHERE bucket_name = $1 AND key = $2 AND upload_status = $3 AND id != $4 ORDER BY created_at DESC LIMIT 1"
 	deleteObjectByIdStmt                                                                                            = "DELETE FROM objects WHERE id = $1"
 	deleteObjectByIdAndOptimisticLockVersionStmt                                                                    = "DELETE FROM objects WHERE id = $1 AND optimistic_lock_version = $2"
+	groupLiveObjectsByBucketStmt                                                                                    = "SELECT b.name, COUNT(o.id), COALESCE(SUM(o.size), 0) FROM buckets b LEFT JOIN objects o ON o.bucket_name = b.name AND o.upload_status = $1 AND o.is_latest = $2 AND o.is_delete_marker = $3 GROUP BY b.name"
 )
 
 // Prefixes are literal UTF-8 ranges, not SQL patterns. The upper bound is
@@ -86,6 +87,23 @@ ORDER BY key COLLATE "C" ASC, COALESCE(NULLIF(version_id, 'null'), '') COLLATE "
 
 func NewRepository() (object.Repository, error) {
 	return &pgxRepository{}, nil
+}
+
+func (or *pgxRepository) GroupLiveObjectsByBucket(ctx context.Context, tx *sql.Tx) ([]object.BucketAggregate, error) {
+	rows, err := tx.QueryContext(ctx, groupLiveObjectsByBucketStmt, object.UploadStatusCompleted, true, false)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []object.BucketAggregate
+	for rows.Next() {
+		var a object.BucketAggregate
+		if err := rows.Scan(&a.BucketName, &a.Count, &a.Size); err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
 }
 
 func convertRowToObjectEntity(objectRows *sql.Rows) (*object.Entity, error) {
