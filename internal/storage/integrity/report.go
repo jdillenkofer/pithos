@@ -18,6 +18,8 @@ type ValidationResult struct {
 	PartFailures   []PartFailure
 	ObjectFailures []string
 	ActionTaken    string // e.g., "None", "Deleted"
+	// OmittedFailures counts failure details dropped by ResultLimits.
+	OmittedFailures int
 }
 
 type PartFailure struct {
@@ -35,6 +37,9 @@ type ValidationReport struct {
 	FailedObjects     int
 	DeletedObjects    int
 	Results           []ValidationResult
+	// OmittedResults counts results dropped by ResultLimits.MaxResults; the
+	// aggregate counts above still include them.
+	OmittedResults int
 }
 
 func (r *ValidationReport) HasFailures() bool {
@@ -82,12 +87,18 @@ func OutputHumanReadable(report *ValidationReport, w io.Writer) error {
 						fmt.Fprintf(w, "      - %s\n", of)
 					}
 				}
+				if result.OmittedFailures > 0 {
+					fmt.Fprintf(w, "    Omitted Failure Details: %d\n", result.OmittedFailures)
+				}
 				if result.ActionTaken != "" {
 					fmt.Fprintf(w, "    Action Taken: %s\n", result.ActionTaken)
 				}
 				fmt.Fprintf(w, "\n")
 			}
 		}
+	}
+	if report.OmittedResults > 0 {
+		fmt.Fprintf(w, "Report truncated: %d further results omitted.\n", report.OmittedResults)
 	}
 
 	return nil

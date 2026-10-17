@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -18,6 +19,38 @@ type Validator struct {
 	storage         storage.Storage
 	deleteCorrupted bool
 	force           bool
+	progress        func(int)
+	limits          ResultLimits
+}
+
+// listPageSize bounds how many object listings are held in memory at once.
+const listPageSize = 1000
+
+// ResultLimits bounds the memory retained by a validation report. Zero values
+// mean unlimited. Aggregate counts in the report are always exact.
+type ResultLimits struct {
+	// FailuresOnly retains only failed results; successes are only counted.
+	FailuresOnly bool
+	// MaxResults caps retained results; the rest are counted in OmittedResults.
+	MaxResults int
+	// MaxFailuresPerResult caps the part and object failure details of one
+	// result; the rest are counted in ValidationResult.OmittedFailures.
+	MaxFailuresPerResult int
+	// MaxErrorLength caps the length in bytes of each retained error message.
+	MaxErrorLength int
+}
+
+// WithProgress reports the number of completed objects on the validation goroutine.
+// The callback must not modify the validator or block indefinitely.
+func (v *Validator) WithProgress(progress func(int)) *Validator {
+	v.progress = progress
+	return v
+}
+
+// WithResultLimits bounds the results retained in the report.
+func (v *Validator) WithResultLimits(limits ResultLimits) *Validator {
+	v.limits = limits
+	return v
 }
 
 func NewValidator(store storage.Storage, deleteCorrupted bool, force bool) *Validator {
@@ -51,7 +84,7 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 	}
 	report.TotalBuckets = len(buckets)
 	for _, bucket := range buckets {
-		opts := storage.ListObjectVersionsOptions{MaxKeys: 1000}
+		opts := storage.ListObjectVersionsOptions{MaxKeys: listPageSize}
 		for {
 			if err := ctx.Err(); err != nil {
 				return report, err
@@ -96,7 +129,10 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 						}
 					}
 				}
-				report.Results = append(report.Results, result)
+				v.retainResult(report, result)
+				if v.progress != nil {
+					v.progress(report.TotalObjects)
+				}
 			}
 			if !page.IsTruncated {
 				break
@@ -108,6 +144,60 @@ func (v *Validator) ValidateAll(ctx context.Context) (*ValidationReport, error) 
 		}
 	}
 	return report, nil
+}
+
+func (v *Validator) retainResult(report *ValidationReport, result ValidationResult) {
+	limits := v.limits
+	if result.Success && limits.FailuresOnly {
+		return
+	}
+	if limits.MaxResults > 0 && len(report.Results) >= limits.MaxResults {
+		report.OmittedResults++
+		return
+	}
+	if limits.MaxFailuresPerResult > 0 {
+		remaining := limits.MaxFailuresPerResult
+		if len(result.PartFailures) > remaining {
+			result.OmittedFailures += len(result.PartFailures) - remaining
+			result.PartFailures = result.PartFailures[:remaining]
+		}
+		remaining -= len(result.PartFailures)
+		if len(result.ObjectFailures) > remaining {
+			result.OmittedFailures += len(result.ObjectFailures) - remaining
+			result.ObjectFailures = result.ObjectFailures[:remaining]
+		}
+	}
+	if limits.MaxErrorLength > 0 {
+		result.ErrorType = truncateError(result.ErrorType, limits.MaxErrorLength)
+		result.ActionTaken = truncateError(result.ActionTaken, limits.MaxErrorLength)
+		for i := range result.PartFailures {
+			result.PartFailures[i].Error = truncateError(result.PartFailures[i].Error, limits.MaxErrorLength)
+		}
+		for i := range result.ObjectFailures {
+			result.ObjectFailures[i] = truncateError(result.ObjectFailures[i], limits.MaxErrorLength)
+		}
+	}
+	report.Results = append(report.Results, result)
+}
+
+const truncationMarker = "... (truncated)"
+
+// truncateError cuts message to at most maxLength bytes without splitting a
+// UTF-8 sequence. The result never aliases a longer message, so the original
+// can be released.
+func truncateError(message string, maxLength int) string {
+	if len(message) <= maxLength {
+		return message
+	}
+	marker := truncationMarker
+	if maxLength <= len(marker) {
+		marker = ""
+	}
+	keep := maxLength - len(marker)
+	for keep > 0 && !utf8.RuneStart(message[keep]) {
+		keep--
+	}
+	return strings.Clone(message[:keep]) + marker
 }
 
 func (v *Validator) validateObject(ctx context.Context, inspector storage.IntegrityInspector, bucket storage.BucketName, version storage.ObjectVersion) ValidationResult {
