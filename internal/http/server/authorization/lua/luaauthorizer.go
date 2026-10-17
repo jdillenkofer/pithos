@@ -348,15 +348,79 @@ func isReadOnly(operation string) bool {
 	return isReadOnly
 }
 
-func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, request *authorization.Request) {
-	clientIP, scheme := authorizer.resolveClientIPAndScheme(request.HttpRequest)
-	request.HttpRequest.ClientIP = clientIP
-	request.HttpRequest.Scheme = scheme
+// lazyTags is a memoized loader over a tag resolver so multiple tag predicates
+// in one policy evaluation cause at most one storage lookup. A nil resolver
+// yields an empty tag set; a resolver error is surfaced to the caller, which
+// raises a Lua error so the whole authorization fails closed.
+type lazyTags struct {
+	resolve func(ctx context.Context) (map[string]string, error)
+	cached  map[string]string
+	loaded  bool
+}
 
-	pushGoType(L, request)
-	L.Field(-1, "httpRequest")
-	if L.IsTable(-1) {
-		L.PushGoFunction(func(L *lua.State) int {
+func (t *lazyTags) load(ctx context.Context) (map[string]string, error) {
+	if t.loaded {
+		return t.cached, nil
+	}
+	if t.resolve == nil {
+		t.cached = map[string]string{}
+		t.loaded = true
+		return t.cached, nil
+	}
+	tags, err := t.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if tags == nil {
+		tags = map[string]string{}
+	}
+	t.cached = tags
+	t.loaded = true
+	return t.cached, nil
+}
+
+// requestMethodContext is the per-request state shared by the methods
+// exposed on the Lua request table.
+type requestMethodContext struct {
+	ctx              context.Context
+	request          *authorization.Request
+	objectTags       lazyTags
+	sourceObjectTags lazyTags
+	requestTags      lazyTags
+}
+
+type methodFactory func(m *requestMethodContext) lua.Function
+
+// pushLazyMethods sets a metatable on the table at the top of the stack whose
+// __index creates a method on first access and caches it on the table.
+// Policies typically call only a handful of the available methods, so building
+// every closure eagerly per request would be wasted work.
+func pushLazyMethods(L *lua.State, methods map[string]methodFactory, m *requestMethodContext) {
+	L.NewTable()
+	L.PushGoFunction(func(L *lua.State) int {
+		if L.TypeOf(2) != lua.TypeString {
+			L.PushNil()
+			return 1
+		}
+		name, _ := L.ToString(2)
+		factory, ok := methods[name]
+		if !ok {
+			L.PushNil()
+			return 1
+		}
+		L.PushGoFunction(factory(m))
+		L.PushString(name)
+		L.PushValue(-2)
+		L.RawSet(1)
+		return 1
+	})
+	L.SetField(-2, "__index")
+	L.SetMetaTable(-2)
+}
+
+var httpRequestMethods = map[string]methodFactory{
+	"isMethod": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			expectedMethod, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
@@ -366,35 +430,38 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 			method, _ := L.ToString(-1)
 			L.PushBoolean(strings.EqualFold(method, expectedMethod))
 			return 1
-		})
-		L.SetField(-2, "isMethod")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"header": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			headerName, ok := L.ToString(2)
 			if !ok {
 				L.PushNil()
 				return 1
 			}
-			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
+			headerValues := getHeaderValuesCaseInsensitive(m.request.HttpRequest.Headers, headerName)
 			if len(headerValues) == 0 {
 				L.PushNil()
 				return 1
 			}
 			L.PushString(headerValues[0])
 			return 1
-		})
-		L.SetField(-2, "header")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"hasHeader": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			headerName, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
+			headerValues := getHeaderValuesCaseInsensitive(m.request.HttpRequest.Headers, headerName)
 			L.PushBoolean(len(headerValues) > 0)
 			return 1
-		})
-		L.SetField(-2, "hasHeader")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"headerEquals": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			headerName, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
@@ -405,44 +472,41 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 				L.PushBoolean(false)
 				return 1
 			}
-			headerValues := getHeaderValuesCaseInsensitive(request.HttpRequest.Headers, headerName)
-			for _, headerValue := range headerValues {
-				if headerValue == expectedValue {
-					L.PushBoolean(true)
-					return 1
-				}
-			}
-			L.PushBoolean(false)
+			headerValues := getHeaderValuesCaseInsensitive(m.request.HttpRequest.Headers, headerName)
+			L.PushBoolean(stringInSlice(expectedValue, headerValues))
 			return 1
-		})
-		L.SetField(-2, "headerEquals")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"queryParam": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			paramName, ok := L.ToString(2)
 			if !ok {
 				L.PushNil()
 				return 1
 			}
-			paramValues := request.HttpRequest.QueryParams[paramName]
+			paramValues := m.request.HttpRequest.QueryParams[paramName]
 			if len(paramValues) == 0 {
 				L.PushNil()
 				return 1
 			}
 			L.PushString(paramValues[0])
 			return 1
-		})
-		L.SetField(-2, "queryParam")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"hasQueryParam": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			paramName, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			paramValues := request.HttpRequest.QueryParams[paramName]
+			paramValues := m.request.HttpRequest.QueryParams[paramName]
 			L.PushBoolean(len(paramValues) > 0)
 			return 1
-		})
-		L.SetField(-2, "hasQueryParam")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"queryParamEquals": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			paramName, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
@@ -453,312 +517,178 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 				L.PushBoolean(false)
 				return 1
 			}
-			queryParamValues := request.HttpRequest.QueryParams[paramName]
-			for _, queryParamValue := range queryParamValues {
-				if queryParamValue == expectedValue {
-					L.PushBoolean(true)
-					return 1
-				}
-			}
-			L.PushBoolean(false)
+			L.PushBoolean(stringInSlice(expectedValue, m.request.HttpRequest.QueryParams[paramName]))
 			return 1
-		})
-		L.SetField(-2, "queryParamEquals")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"pathEquals": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			expectedPath, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(request.HttpRequest.Path == expectedPath)
+			L.PushBoolean(m.request.HttpRequest.Path == expectedPath)
 			return 1
-		})
-		L.SetField(-2, "pathEquals")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"pathHasPrefix": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			prefix, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(strings.HasPrefix(request.HttpRequest.Path, prefix))
+			L.PushBoolean(strings.HasPrefix(m.request.HttpRequest.Path, prefix))
 			return 1
-		})
-		L.SetField(-2, "pathHasPrefix")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"hostEquals": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			expectedHost, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(strings.EqualFold(request.HttpRequest.Host, expectedHost))
+			L.PushBoolean(strings.EqualFold(m.request.HttpRequest.Host, expectedHost))
 			return 1
-		})
-		L.SetField(-2, "hostEquals")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"hostHasSuffix": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			suffix, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(strings.HasSuffix(strings.ToLower(request.HttpRequest.Host), strings.ToLower(suffix)))
+			L.PushBoolean(strings.HasSuffix(strings.ToLower(m.request.HttpRequest.Host), strings.ToLower(suffix)))
 			return 1
-		})
-		L.SetField(-2, "hostHasSuffix")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"isScheme": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			expectedScheme, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(strings.EqualFold(request.HttpRequest.Scheme, expectedScheme))
+			L.PushBoolean(strings.EqualFold(m.request.HttpRequest.Scheme, expectedScheme))
 			return 1
-		})
-		L.SetField(-2, "isScheme")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"isProto": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			expectedProto, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(strings.EqualFold(request.HttpRequest.Proto, expectedProto))
+			L.PushBoolean(strings.EqualFold(m.request.HttpRequest.Proto, expectedProto))
 			return 1
-		})
-		L.SetField(-2, "isProto")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"clientIPInCIDR": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			cidr, ok := L.ToString(2)
-			if !ok || request.HttpRequest.ClientIP == nil {
+			if !ok || m.request.HttpRequest.ClientIP == nil {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(ipInCIDR(*request.HttpRequest.ClientIP, cidr))
+			L.PushBoolean(ipInCIDR(*m.request.HttpRequest.ClientIP, cidr))
 			return 1
-		})
-		L.SetField(-2, "clientIPInCIDR")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"clientIPInCIDRs": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			cidrs, ok := luaStringSliceArg(L, 2)
-			if !ok || request.HttpRequest.ClientIP == nil {
+			if !ok || m.request.HttpRequest.ClientIP == nil {
 				L.PushBoolean(false)
 				return 1
 			}
 			for _, cidr := range cidrs {
-				if ipInCIDR(*request.HttpRequest.ClientIP, cidr) {
+				if ipInCIDR(*m.request.HttpRequest.ClientIP, cidr) {
 					L.PushBoolean(true)
 					return 1
 				}
 			}
 			L.PushBoolean(false)
 			return 1
-		})
-		L.SetField(-2, "clientIPInCIDRs")
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	},
+	"remoteIPInCIDR": func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			cidr, ok := L.ToString(2)
-			if !ok || request.HttpRequest.RemoteIP == nil {
+			if !ok || m.request.HttpRequest.RemoteIP == nil {
 				L.PushBoolean(false)
 				return 1
 			}
-			L.PushBoolean(ipInCIDR(*request.HttpRequest.RemoteIP, cidr))
-			return 1
-		})
-		L.SetField(-2, "remoteIPInCIDR")
-	}
-	L.Pop(1)
-	L.PushGoFunction(func(L *lua.State) int {
-		L.Field(1, "operation")
-		operation, _ := L.ToString(-1)
-		isReadOnly := isReadOnly(operation)
-		L.PushBoolean(isReadOnly)
-		return 1
-	})
-	L.SetField(-2, "isReadOnly")
-	L.PushGoFunction(func(L *lua.State) int {
-		L.Field(1, "operation")
-		operation, _ := L.ToString(-1)
-		L.PushBoolean(!isReadOnly(operation))
-		return 1
-	})
-	L.SetField(-2, "isWriteOperation")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedOperation, ok := L.ToString(2)
-		if !ok {
-			L.PushBoolean(false)
+			L.PushBoolean(ipInCIDR(*m.request.HttpRequest.RemoteIP, cidr))
 			return 1
 		}
-		L.Field(1, "operation")
-		operation, _ := L.ToString(-1)
-		L.PushBoolean(operation == expectedOperation)
-		return 1
-	})
-	L.SetField(-2, "isOperation")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedOperations, ok := luaStringSliceArg(L, 2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.Field(1, "operation")
-		operation, _ := L.ToString(-1)
-		L.PushBoolean(stringInSlice(operation, expectedOperations))
-		return 1
-	})
-	L.SetField(-2, "isOperationIn")
-	L.PushGoFunction(func(L *lua.State) int {
-		L.Field(1, "authorization")
-		L.Field(-1, "accessKeyId")
-		isAnonymous := L.IsNil(-1)
-		L.PushBoolean(isAnonymous)
-		return 1
-	})
-	L.SetField(-2, "isAnonymous")
-	L.PushGoFunction(func(L *lua.State) int {
-		L.Field(1, "authorization")
-		L.Field(-1, "accessKeyId")
-		hasAccessKeyId := !L.IsNil(-1)
-		L.PushBoolean(hasAccessKeyId)
-		return 1
-	})
-	L.SetField(-2, "hasAccessKeyId")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedAccessKeyId, ok := L.ToString(2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.Field(1, "authorization")
-		L.Field(-1, "accessKeyId")
-		accessKeyId, ok := L.ToString(-1)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.PushBoolean(accessKeyId == expectedAccessKeyId)
-		return 1
-	})
-	L.SetField(-2, "accessKeyIdEquals")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedAccessKeyIds, ok := luaStringSliceArg(L, 2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.Field(1, "authorization")
-		L.Field(-1, "accessKeyId")
-		accessKeyId, ok := L.ToString(-1)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.PushBoolean(stringInSlice(accessKeyId, expectedAccessKeyIds))
-		return 1
-	})
-	L.SetField(-2, "accessKeyIdIn")
-	L.PushGoFunction(func(L *lua.State) int {
-		L.Field(1, "authorization")
-		L.Field(-1, "principalId")
-		L.PushBoolean(!L.IsNil(-1))
-		return 1
-	})
-	L.SetField(-2, "hasPrincipalId")
-	L.PushGoFunction(func(L *lua.State) int {
-		expected, ok := L.ToString(2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.Field(1, "authorization")
-		L.Field(-1, "principalId")
-		actual, ok := L.ToString(-1)
-		L.PushBoolean(ok && actual == expected)
-		return 1
-	})
-	L.SetField(-2, "principalIdEquals")
-	L.PushGoFunction(func(L *lua.State) int {
-		expected, ok := luaStringSliceArg(L, 2)
-		if !ok {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.Field(1, "authorization")
-		L.Field(-1, "principalId")
-		actual, ok := L.ToString(-1)
-		L.PushBoolean(ok && stringInSlice(actual, expected))
-		return 1
-	})
-	L.SetField(-2, "principalIdIn")
-	L.PushGoFunction(func(L *lua.State) int {
-		expectedBucket, ok := L.ToString(2)
-		if !ok || request.Bucket == nil {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.PushBoolean(*request.Bucket == expectedBucket)
-		return 1
-	})
-	L.SetField(-2, "bucketEquals")
-	L.PushGoFunction(func(L *lua.State) int {
-		prefix, ok := L.ToString(2)
-		if !ok || request.Key == nil {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.PushBoolean(strings.HasPrefix(*request.Key, prefix))
-		return 1
-	})
-	L.SetField(-2, "keyHasPrefix")
-	L.PushGoFunction(func(L *lua.State) int {
-		suffix, ok := L.ToString(2)
-		if !ok || request.Key == nil {
-			L.PushBoolean(false)
-			return 1
-		}
-		L.PushBoolean(strings.HasSuffix(*request.Key, suffix))
-		return 1
-	})
-	L.SetField(-2, "keyHasSuffix")
+	},
+}
 
-	// makeLazyTagLoader returns a memoized loader over a tag resolver so multiple
-	// tag predicates in one policy evaluation cause at most one storage lookup.
-	// A nil resolver yields an empty tag set; a resolver error is surfaced to the
-	// caller, which raises a Lua error so the whole authorization fails closed.
-	makeLazyTagLoader := func(resolve func(ctx context.Context) (map[string]string, error)) func() (map[string]string, error) {
-		var cached map[string]string
-		loaded := false
-		return func() (map[string]string, error) {
-			if loaded {
-				return cached, nil
+func pushAuthorizationStringEquals(field string) methodFactory {
+	return func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
+			expected, ok := L.ToString(2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
 			}
-			if resolve == nil {
-				cached = map[string]string{}
-				loaded = true
-				return cached, nil
-			}
-			tags, err := resolve(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if tags == nil {
-				tags = map[string]string{}
-			}
-			cached = tags
-			loaded = true
-			return cached, nil
+			L.Field(1, "authorization")
+			L.Field(-1, field)
+			actual, ok := L.ToString(-1)
+			L.PushBoolean(ok && actual == expected)
+			return 1
 		}
 	}
+}
 
-	// registerTagPredicates installs a family of tag predicates on the request
-	// table: <tagsName>() returns the whole tag set as a table, <tagName>(key)
-	// returns a single value or nil, <equalsName>(key, value) and <hasName>(key)
-	// are boolean checks. A loader error raises a Lua error (fail closed).
-	registerTagPredicates := func(tagsName, tagName, equalsName, hasName string, load func() (map[string]string, error)) {
-		loadOrError := func(L *lua.State) (map[string]string, bool) {
-			tags, err := load()
-			if err != nil {
-				lua.Errorf(L, "failed to resolve %s: %v", tagsName, err)
-				return nil, false
+func pushAuthorizationStringIn(field string) methodFactory {
+	return func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
+			expected, ok := luaStringSliceArg(L, 2)
+			if !ok {
+				L.PushBoolean(false)
+				return 1
 			}
-			return tags, true
+			L.Field(1, "authorization")
+			L.Field(-1, field)
+			actual, ok := L.ToString(-1)
+			L.PushBoolean(ok && stringInSlice(actual, expected))
+			return 1
 		}
-		L.PushGoFunction(func(L *lua.State) int {
-			tags, ok := loadOrError(L)
+	}
+}
+
+func pushAuthorizationFieldPresent(field string, present bool) methodFactory {
+	return func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
+			L.Field(1, "authorization")
+			L.Field(-1, field)
+			L.PushBoolean(L.IsNil(-1) != present)
+			return 1
+		}
+	}
+}
+
+// addTagPredicates installs a family of tag predicates: <tagsName>() returns
+// the whole tag set as a table, <tagName>(key) returns a single value or nil,
+// <equalsName>(key, value) and <hasName>(key) are boolean checks. A loader
+// error raises a Lua error (fail closed).
+func addTagPredicates(methods map[string]methodFactory, tagsName, tagName, equalsName, hasName string, tags func(m *requestMethodContext) *lazyTags) {
+	loadOrError := func(L *lua.State, m *requestMethodContext) (map[string]string, bool) {
+		loaded, err := tags(m).load(m.ctx)
+		if err != nil {
+			lua.Errorf(L, "failed to resolve %s: %v", tagsName, err)
+			return nil, false
+		}
+		return loaded, true
+	}
+	methods[tagsName] = func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
+			tags, ok := loadOrError(L, m)
 			if !ok {
 				return 0
 			}
@@ -768,15 +698,16 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 				L.SetField(-2, k)
 			}
 			return 1
-		})
-		L.SetField(-2, tagsName)
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	}
+	methods[tagName] = func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			key, ok := L.ToString(2)
 			if !ok {
 				L.PushNil()
 				return 1
 			}
-			tags, okLoad := loadOrError(L)
+			tags, okLoad := loadOrError(L, m)
 			if !okLoad {
 				return 0
 			}
@@ -786,53 +717,163 @@ func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, 
 				L.PushNil()
 			}
 			return 1
-		})
-		L.SetField(-2, tagName)
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	}
+	methods[equalsName] = func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			key, ok := L.ToString(2)
 			expectedValue, ok2 := L.ToString(3)
 			if !ok || !ok2 {
 				L.PushBoolean(false)
 				return 1
 			}
-			tags, okLoad := loadOrError(L)
+			tags, okLoad := loadOrError(L, m)
 			if !okLoad {
 				return 0
 			}
 			value, exists := tags[key]
 			L.PushBoolean(exists && value == expectedValue)
 			return 1
-		})
-		L.SetField(-2, equalsName)
-		L.PushGoFunction(func(L *lua.State) int {
+		}
+	}
+	methods[hasName] = func(m *requestMethodContext) lua.Function {
+		return func(L *lua.State) int {
 			key, ok := L.ToString(2)
 			if !ok {
 				L.PushBoolean(false)
 				return 1
 			}
-			tags, okLoad := loadOrError(L)
+			tags, okLoad := loadOrError(L, m)
 			if !okLoad {
 				return 0
 			}
 			_, exists := tags[key]
 			L.PushBoolean(exists)
 			return 1
-		})
-		L.SetField(-2, hasName)
+		}
 	}
+}
 
+var requestMethods = func() map[string]methodFactory {
+	methods := map[string]methodFactory{
+		"isReadOnly": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				L.Field(1, "operation")
+				operation, _ := L.ToString(-1)
+				L.PushBoolean(isReadOnly(operation))
+				return 1
+			}
+		},
+		"isWriteOperation": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				L.Field(1, "operation")
+				operation, _ := L.ToString(-1)
+				L.PushBoolean(!isReadOnly(operation))
+				return 1
+			}
+		},
+		"isOperation": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				expectedOperation, ok := L.ToString(2)
+				if !ok {
+					L.PushBoolean(false)
+					return 1
+				}
+				L.Field(1, "operation")
+				operation, _ := L.ToString(-1)
+				L.PushBoolean(operation == expectedOperation)
+				return 1
+			}
+		},
+		"isOperationIn": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				expectedOperations, ok := luaStringSliceArg(L, 2)
+				if !ok {
+					L.PushBoolean(false)
+					return 1
+				}
+				L.Field(1, "operation")
+				operation, _ := L.ToString(-1)
+				L.PushBoolean(stringInSlice(operation, expectedOperations))
+				return 1
+			}
+		},
+		"isAnonymous":       pushAuthorizationFieldPresent("accessKeyId", false),
+		"hasAccessKeyId":    pushAuthorizationFieldPresent("accessKeyId", true),
+		"accessKeyIdEquals": pushAuthorizationStringEquals("accessKeyId"),
+		"accessKeyIdIn":     pushAuthorizationStringIn("accessKeyId"),
+		"hasPrincipalId":    pushAuthorizationFieldPresent("principalId", true),
+		"principalIdEquals": pushAuthorizationStringEquals("principalId"),
+		"principalIdIn":     pushAuthorizationStringIn("principalId"),
+		"bucketEquals": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				expectedBucket, ok := L.ToString(2)
+				if !ok || m.request.Bucket == nil {
+					L.PushBoolean(false)
+					return 1
+				}
+				L.PushBoolean(*m.request.Bucket == expectedBucket)
+				return 1
+			}
+		},
+		"keyHasPrefix": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				prefix, ok := L.ToString(2)
+				if !ok || m.request.Key == nil {
+					L.PushBoolean(false)
+					return 1
+				}
+				L.PushBoolean(strings.HasPrefix(*m.request.Key, prefix))
+				return 1
+			}
+		},
+		"keyHasSuffix": func(m *requestMethodContext) lua.Function {
+			return func(L *lua.State) int {
+				suffix, ok := L.ToString(2)
+				if !ok || m.request.Key == nil {
+					L.PushBoolean(false)
+					return 1
+				}
+				L.PushBoolean(strings.HasSuffix(*m.request.Key, suffix))
+				return 1
+			}
+		},
+	}
 	// Existing object tags (s3:ExistingObjectTag) — the tags currently stored on
 	// the request's target object, resolved lazily.
-	registerTagPredicates("objectTags", "objectTag", "objectTagEquals", "hasObjectTag",
-		makeLazyTagLoader(request.ResolveExistingObjectTags))
+	addTagPredicates(methods, "objectTags", "objectTag", "objectTagEquals", "hasObjectTag",
+		func(m *requestMethodContext) *lazyTags { return &m.objectTags })
 	// Existing tags on the copy source object (CopyObject/UploadPartCopy) — AWS
 	// evaluates s3:ExistingObjectTag against the source for the copy's read side.
-	registerTagPredicates("sourceObjectTags", "sourceObjectTag", "sourceObjectTagEquals", "hasSourceObjectTag",
-		makeLazyTagLoader(request.ResolveExistingSourceObjectTags))
+	addTagPredicates(methods, "sourceObjectTags", "sourceObjectTag", "sourceObjectTagEquals", "hasSourceObjectTag",
+		func(m *requestMethodContext) *lazyTags { return &m.sourceObjectTags })
 	// Request tags (s3:RequestObjectTag) — the tags supplied in the request
 	// itself; already in memory, no resolver needed.
-	registerTagPredicates("requestTags", "requestTag", "requestTagEquals", "hasRequestTag",
-		func() (map[string]string, error) {
+	addTagPredicates(methods, "requestTags", "requestTag", "requestTagEquals", "hasRequestTag",
+		func(m *requestMethodContext) *lazyTags { return &m.requestTags })
+	return methods
+}()
+
+func (authorizer *LuaAuthorizer) pushRequest(ctx context.Context, L *lua.State, request *authorization.Request) {
+	clientIP, scheme := authorizer.resolveClientIPAndScheme(request.HttpRequest)
+	request.HttpRequest.ClientIP = clientIP
+	request.HttpRequest.Scheme = scheme
+
+	m := &requestMethodContext{
+		ctx:              ctx,
+		request:          request,
+		objectTags:       lazyTags{resolve: request.ResolveExistingObjectTags},
+		sourceObjectTags: lazyTags{resolve: request.ResolveExistingSourceObjectTags},
+		requestTags: lazyTags{resolve: func(context.Context) (map[string]string, error) {
 			return request.RequestObjectTags, nil
-		})
+		}},
+	}
+
+	pushGoType(L, request)
+	L.Field(-1, "httpRequest")
+	if L.IsTable(-1) {
+		pushLazyMethods(L, httpRequestMethods, m)
+	}
+	L.Pop(1)
+	pushLazyMethods(L, requestMethods, m)
 }

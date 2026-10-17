@@ -805,3 +805,29 @@ func TestPrincipalHelpersFailClosedWithoutPrincipal(t *testing.T) {
 		assert.Equal(t, authorization.Allow, allowed.Effect)
 	}
 }
+
+func TestRequestMethodsResolveLazilyAndUnknownFieldsAreNil(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	luaCode := `
+	function authorizeRequest(request)
+	  local first = request.isOperation
+	  return request.unknownMethod == nil
+	    and request.httpRequest.unknownMethod == nil
+	    and request[1] == nil
+	    and first == request.isOperation
+	    and request:isOperation("GetObject")
+	    and request:isOperation("GetObject")
+	    and request.httpRequest:isMethod("get")
+	end
+	`
+	authorizer, err := NewLuaAuthorizer(luaCode)
+	assert.Nil(t, err)
+	request := authorization.Request{
+		Operation:   authorization.OperationGetObject,
+		HttpRequest: authorization.HTTPRequest{Method: "GET"},
+	}
+	authorized, err := authorizer.AuthorizeRequest(context.Background(), &request)
+	assert.Nil(t, err)
+	assert.Equal(t, authorization.Allow, authorized.Effect)
+}
