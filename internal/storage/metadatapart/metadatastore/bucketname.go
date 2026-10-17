@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"regexp"
 	"strings"
 )
 
@@ -17,19 +16,57 @@ type BucketName struct {
 var (
 	// ErrInvalidBucketName is returned when a bucket name violates S3 naming rules
 	ErrInvalidBucketName = errors.New("invalid bucket name")
-
-	// bucketNameRegex validates basic bucket name format
-	// Must start and end with lowercase letter or number
-	// Can contain lowercase letters, numbers, hyphens, and dots
-	bucketNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
-
-	// labelRegex validates each label (segment between dots)
-	// Must start and end with lowercase letter or number
-	labelRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
-
-	// singleCharLabelRegex for labels with only one character
-	singleCharLabelRegex = regexp.MustCompile(`^[a-z0-9]$`)
 )
+
+// Bucket names are validated for every row read from the database, so the
+// character checks below are hand-written instead of using regular
+// expressions.
+
+func isLowerAlnum(c byte) bool {
+	return ('a' <= c && c <= 'z') || ('0' <= c && c <= '9')
+}
+
+// hasValidBucketNameFormat reports whether name starts and ends with a
+// lowercase letter or number and only contains lowercase letters, numbers,
+// hyphens and dots (^[a-z0-9][a-z0-9.-]*[a-z0-9]$).
+func hasValidBucketNameFormat(name string) bool {
+	if len(name) < 2 || !isLowerAlnum(name[0]) || !isLowerAlnum(name[len(name)-1]) {
+		return false
+	}
+	for i := 1; i < len(name)-1; i++ {
+		if c := name[i]; !isLowerAlnum(c) && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// hasValidLabelFormat reports whether a multi-character label starts and ends
+// with a lowercase letter or number and only contains lowercase letters,
+// numbers and hyphens (^[a-z0-9][a-z0-9-]*[a-z0-9]$).
+func hasValidLabelFormat(label string) bool {
+	if len(label) < 2 || !isLowerAlnum(label[0]) || !isLowerAlnum(label[len(label)-1]) {
+		return false
+	}
+	for i := 1; i < len(label)-1; i++ {
+		if c := label[i]; !isLowerAlnum(c) && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// couldBeIPAddress reports whether name only consists of digits and dots. Any
+// other character accepted by hasValidBucketNameFormat rules out an IP
+// address, which lets the common case skip net.ParseIP and its allocation.
+func couldBeIPAddress(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; c != '.' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
 
 // NewBucketName creates a new BucketName after validating it against S3 naming rules.
 // Returns an error if the name is invalid.
@@ -84,12 +121,12 @@ func validateBucketName(name string) error {
 	}
 
 	// Basic format check
-	if !bucketNameRegex.MatchString(name) {
+	if !hasValidBucketNameFormat(name) {
 		return errors.New("bucket name must contain only lowercase letters, numbers, dots, and hyphens, and must start and end with a letter or number")
 	}
 
 	// Check for IP address format
-	if net.ParseIP(name) != nil {
+	if couldBeIPAddress(name) && net.ParseIP(name) != nil {
 		return errors.New("bucket name must not be formatted as an IP address")
 	}
 
@@ -118,17 +155,16 @@ func validateBucketName(name string) error {
 
 	// Validate each label (segment between dots)
 	if strings.Contains(name, ".") {
-		labels := strings.Split(name, ".")
-		for _, label := range labels {
+		for label := range strings.SplitSeq(name, ".") {
 			if len(label) == 0 {
 				return errors.New("bucket name must not contain consecutive dots")
 			}
 			if len(label) == 1 {
-				if !singleCharLabelRegex.MatchString(label) {
+				if !isLowerAlnum(label[0]) {
 					return errors.New("each label must contain only lowercase letters, numbers, and hyphens")
 				}
 			} else {
-				if !labelRegex.MatchString(label) {
+				if !hasValidLabelFormat(label) {
 					return errors.New("each label must start and end with a lowercase letter or number")
 				}
 			}
