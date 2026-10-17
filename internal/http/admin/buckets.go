@@ -170,7 +170,7 @@ func (a *App) createBucket(w http.ResponseWriter, r *http.Request) {
 		a.bucketError(w, r, err)
 		return
 	}
-	a.audit(r, "CreateBucket")
+	a.audit(r, "AdminCreateBucket")
 	// Object Lock already enables versioning on creation.
 	if versioning == "Enabled" && lock != "true" {
 		status := storage.BucketVersioningStatusEnabled
@@ -178,7 +178,7 @@ func (a *App) createBucket(w http.ResponseWriter, r *http.Request) {
 			a.fail(w, r, http.StatusInternalServerError, "The bucket was created, but enabling versioning failed. Enable it in the bucket properties.")
 			return
 		}
-		a.audit(r, "ConfigureBucket:versioning")
+		a.audit(r, "AdminPutBucketVersioning")
 	}
 	http.Redirect(w, r, "/objects?bucket="+url.QueryEscape(name.String()), http.StatusSeeOther)
 }
@@ -200,7 +200,7 @@ func (a *App) deleteBucket(w http.ResponseWriter, r *http.Request) {
 		a.bucketError(w, r, err)
 		return
 	}
-	a.audit(r, "DeleteBucket")
+	a.audit(r, "AdminDeleteBucket")
 	http.Redirect(w, r, "/buckets", http.StatusSeeOther)
 }
 
@@ -369,8 +369,21 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 		a.bucketError(w, r, err)
 		return
 	}
-	a.audit(r, "ConfigureBucket:"+tab)
+	a.audit(r, bucketConfigurationEvent(tab, action))
 	http.Redirect(w, r, "/buckets/detail?bucket="+url.QueryEscape(name.String())+"&tab="+url.QueryEscape(tab)+"#"+tab, http.StatusSeeOther)
+}
+
+// bucketConfigurationEvent names the audit event like the S3 operation, for
+// example AdminPutBucketLifecycle or AdminDeleteBucketCors.
+func bucketConfigurationEvent(tab, action string) string {
+	names := map[string]string{
+		"versioning": "BucketVersioning", "object-lock": "ObjectLockConfiguration", "lifecycle": "BucketLifecycle",
+		"cors": "BucketCors", "website": "BucketWebsite", "tags": "BucketTagging", "notifications": "BucketNotification",
+	}
+	if action == "delete" {
+		return "AdminDelete" + names[tab]
+	}
+	return "AdminPut" + names[tab]
 }
 
 func bucketConfigurationMutation(st storage.Storage, name storage.BucketName, tab, text, action string) (func(*http.Request) error, error) {

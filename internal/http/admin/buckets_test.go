@@ -493,3 +493,12 @@ func TestBucketCreateWithVersioning(t *testing.T) {
 	require.Equal(t, 1, s.writes, "Object Lock enables versioning itself")
 	require.Equal(t, http.StatusBadRequest, bucketRequest(a, "POST", "/buckets/create", url.Values{"bucket": {"bad-bucket"}, "versioning": {"Suspended"}}).Code)
 }
+
+func TestBucketConfigurationEventNames(t *testing.T) {
+	require.Equal(t, "AdminPutBucketLifecycle", bucketConfigurationEvent("lifecycle", "save"))
+	require.Equal(t, "AdminPutBucketLifecycle", bucketConfigurationEvent("lifecycle", ""))
+	require.Equal(t, "AdminDeleteBucketCors", bucketConfigurationEvent("cors", "delete"))
+	for _, tab := range bucketTabs {
+		require.NotEqual(t, "AdminPut", bucketConfigurationEvent(tab, "save"), tab)
+	}
+}

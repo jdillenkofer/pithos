@@ -74,12 +74,12 @@ func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 		evaluator, err := validatePolicyCandidate(kind, candidate)
 		if err != nil {
 			page.Message = "Validation failed: " + err.Error()
-			a.audit(r, "PolicyValidationFailed")
+			a.audit(r, "AdminPolicyValidationFailed")
 		} else {
 			switch r.URL.Path {
 			case "/policies/validate":
 				page.Message = "Policy is valid."
-				a.audit(r, "ValidatePolicy")
+				a.audit(r, "AdminValidatePolicy")
 			case "/policies/simulate":
 				decision, err := simulatePolicy(r.Context(), evaluator, page)
 				if err != nil {
@@ -88,28 +88,28 @@ func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 					page.Decision = &decision
 					page.Message = "Simulation complete (candidate only; no policy changes)."
 				}
-				a.audit(r, "SimulatePolicy")
+				a.audit(r, "AdminSimulatePolicy")
 			case "/policies/save":
 				reload, ok := a.policyReloader(kind)
 				if !ok {
-					a.audit(r, "SavePolicyFailed")
+					a.audit(r, "AdminSavePolicyFailed")
 					a.fail(w, r, 503, "Active authorizer does not support immediate reload; no changes saved")
 					return
 				}
 				backup, err := savePolicyCandidate(path, kind, page.Hash, candidate, reload)
 				if errors.Is(err, errPolicyConflict) {
-					a.audit(r, "SavePolicyConflict")
+					a.audit(r, "AdminSavePolicyConflict")
 					a.fail(w, r, 409, err.Error())
 					return
 				}
 				if err != nil {
-					a.audit(r, "SavePolicyFailed")
+					a.audit(r, "AdminSavePolicyFailed")
 					a.fail(w, r, 500, err.Error())
 					return
 				}
 				page.Hash = policyHash(candidate)
 				page.Message = "Policy saved and reloaded. Backup: " + backup
-				a.audit(r, "SavePolicy")
+				a.audit(r, "AdminSavePolicy")
 			}
 		}
 	}

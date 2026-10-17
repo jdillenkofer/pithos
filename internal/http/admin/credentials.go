@@ -84,7 +84,7 @@ func (a *App) createCredential(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	a.audit(r, "credentials.create")
+	a.audit(r, "AdminCreateCredential")
 	// This POST response is the only place the generated secret is presented.
 	// It is never put in a redirect, session, audit record, or listing.
 	a.render(w, r, "Credential created", "credentials-created", credentialCreatedPage{CSRF: csrfToken(r), Credential: credential})
@@ -119,6 +119,6 @@ func (a *App) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	a.audit(r, "credentials.delete")
+	a.audit(r, "AdminDeleteCredential")
 	http.Redirect(w, r, "/credentials", http.StatusSeeOther)
 }
