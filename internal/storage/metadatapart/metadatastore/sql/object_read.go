@@ -13,15 +13,17 @@ import (
 )
 
 func determineCommonPrefix(prefix, key, delimiter string) *string {
-	prefixSegments := strings.Split(prefix, delimiter)
-	keySegments := strings.Split(key, delimiter)
-	if len(prefixSegments) >= len(keySegments) {
+	suffix, matchesPrefix := strings.CutPrefix(key, prefix)
+	if !matchesPrefix || delimiter == "" {
 		return nil
 	}
-	commonPrefix := ""
-	for idx := range prefixSegments {
-		commonPrefix += keySegments[idx] + delimiter
+	// A delimiter must occur entirely after the requested prefix. In particular,
+	// a multicharacter delimiter straddling the prefix boundary does not group the key.
+	delimiterIndex := strings.Index(suffix, delimiter)
+	if delimiterIndex < 0 {
+		return nil
 	}
+	commonPrefix := key[:len(prefix)+delimiterIndex+len(delimiter)]
 	return &commonPrefix
 }
 

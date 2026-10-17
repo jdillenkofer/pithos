@@ -105,6 +105,31 @@ func TestListMultipartUploadsLoadsInitiatorsOnlyForReturnedUploads(t *testing.T)
 	assert.False(t, result.IsTruncated)
 }
 
+func TestListMultipartUploadsDelimiterAcrossPrefixBoundary(t *testing.T) {
+	var uploads []object.Entity
+	for _, key := range []string{"a::b", "a::b::c"} {
+		id := ulid.Make()
+		uploadID := storage.MustNewUploadId(id.String())
+		uploads = append(uploads, object.Entity{Id: &id, Key: storage.MustNewObjectKey(key), UploadId: &uploadID})
+	}
+	store := &sqlMetadataStore{
+		bucketRepository:          &multipartIdentityBucketRepository{},
+		objectRepository:          &multipartIdentityObjectRepository{uploads: uploads},
+		objectInitiatorRepository: &multipartIdentityInitiatorRepository{},
+		tracer:                    otel.Tracer("multipart-prefix-boundary-test"),
+	}
+	prefix, delimiter := "a:", "::"
+	result, err := store.ListMultipartUploads(context.Background(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListMultipartUploadsOptions{
+		Prefix: &prefix, Delimiter: &delimiter, MaxUploads: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Uploads, 1)
+	assert.Equal(t, uploads[0].Key, result.Uploads[0].Key)
+	assert.Equal(t, *uploads[0].UploadId, result.Uploads[0].UploadId)
+	assert.Equal(t, []string{"a::b::"}, result.CommonPrefixes)
+	assert.False(t, result.IsTruncated)
+}
+
 func TestListMultipartUploadsDelimiterPagination(t *testing.T) {
 	// Duplicate uploads at one key require the upload-ID marker; duplicate
 	// prefixes must count only once and must be skipped when resuming.
