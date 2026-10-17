@@ -1,9 +1,11 @@
 package sftp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/sqlite"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -248,4 +251,87 @@ func TestSftpPartStore(t *testing.T) {
 			assert.Nil(t, err)
 		})
 	}
+}
+
+func TestSftpPartStoreTxPutPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testutils.SkipOnWindowsInGitHubActions(t)
+	testutils.SkipOnMacOSInGitHubActions(t)
+
+	testcontainers.SkipIfProviderIsNotHealthy(t)
+
+	ctx := context.Background()
+	sshAddr, clientConfig := prepareSshServer(t, false)
+	db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "pithos.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ps, err := New(sshAddr, clientConfig, "/tmp/pithos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ps.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Stop(ctx)
+
+	partId, err := partstore.NewRandomPartId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	putPartInTx := func(content string, txErr error) error {
+		return database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
+			if err := ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte(content))); err != nil {
+				return err
+			}
+			return txErr
+		})
+	}
+	readPart := func() string {
+		rc, err := ps.GetPart(ctx, nil, *partId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rc.Close()
+		content, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(content)
+	}
+	assertNoLeftoverFiles := func() {
+		store := ps.(*sftpPartStore)
+		entries, err := store.client.ReadDir(store.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			assert.Equal(t, filepath.Base(store.getFilename(*partId)), entry.Name(), "unexpected leftover file")
+		}
+	}
+
+	errRollback := errors.New("rollback")
+
+	// A fresh part is written in place and removed on rollback.
+	err = putPartInTx("staged", errRollback)
+	assert.ErrorIs(t, err, errRollback)
+	_, err = ps.GetPart(ctx, nil, *partId)
+	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	assertNoLeftoverFiles()
+
+	assert.NoError(t, putPartInTx("first", nil))
+	assert.Equal(t, "first", readPart())
+
+	// An existing part goes through the temp file and is restored on
+	// rollback.
+	err = putPartInTx("discarded", errRollback)
+	assert.ErrorIs(t, err, errRollback)
+	assert.Equal(t, "first", readPart())
+	assertNoLeftoverFiles()
+
+	assert.NoError(t, putPartInTx("second", nil))
+	assert.Equal(t, "second", readPart())
+	assertNoLeftoverFiles()
 }
