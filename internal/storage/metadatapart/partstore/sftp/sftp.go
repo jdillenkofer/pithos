@@ -216,12 +216,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		if err != nil {
 			return err
 		}
-		if _, err = f.ReadFrom(reader); err != nil {
-			_ = f.Close()
-			_ = s.client.Remove(tempName)
-			return err
-		}
-		if err = f.Close(); err != nil {
+		if err := writeAndClose(f, reader); err != nil {
 			_ = s.client.Remove(tempName)
 			return err
 		}
@@ -272,12 +267,24 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.ReadFrom(reader)
-	if err != nil {
+	if err := writeAndClose(f, reader); err != nil {
+		_ = s.client.Remove(filename)
 		return err
 	}
 	return nil
+}
+
+// writeAndClose copies reader into f and closes it. File.ReadFrom only
+// pipelines writes for readers with a known size and otherwise waits a full
+// round trip per 32KB packet, so request the concurrent upload explicitly.
+// A failed concurrent upload can leave holes, so callers must remove the
+// file on error.
+func writeAndClose(f *sftp.File, reader io.Reader) error {
+	_, err := f.ReadFromWithConcurrency(reader, 0)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 func (s *sftpPartStore) Capabilities() partstore.Capabilities {
