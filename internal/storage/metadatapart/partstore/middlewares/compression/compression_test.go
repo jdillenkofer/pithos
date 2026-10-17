@@ -2,7 +2,9 @@ package compression
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"errors"
 	"database/sql"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	filesystemPartStore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -380,4 +383,72 @@ func TestCompressionPartStoreMiddleware_InvalidHeaderFallsBackToPlainData(t *tes
 	}
 
 	assert.Equal(t, content, got)
+}
+
+func TestCompressionPartStoreMiddleware_PayloadLargerThanSample(t *testing.T) {
+	ctx := context.Background()
+	content := compressiblePayload(3*defaultSampleSize + 123)
+	for _, algorithm := range []Algorithm{AlgorithmZstd, AlgorithmGzip} {
+		t.Run(string(algorithm), func(t *testing.T) {
+			inner := &benchmarkPartStore{parts: map[partstore.PartId][]byte{}}
+			store, err := NewWithConfig(inner, Config{Algorithm: algorithm})
+			assert.NoError(t, err)
+			partId, err := partstore.NewRandomPartId()
+			assert.NoError(t, err)
+
+			for i := 0; i < 3; i++ {
+				assert.NoError(t, store.PutPart(ctx, nil, *partId, bytes.NewReader(content)))
+				stored := inner.parts[*partId]
+				assert.Less(t, len(stored), len(content)/2)
+
+				algorithmInHeader, ok, err := parseHeader(stored[:headerSize])
+				assert.NoError(t, err)
+				assert.True(t, ok)
+				assert.Equal(t, algorithm, algorithmInHeader)
+
+				// The stored stream must stay readable by a fresh standard decoder.
+				var decoder io.Reader
+				switch algorithm {
+				case AlgorithmGzip:
+					decoder, err = gzip.NewReader(bytes.NewReader(stored[headerSize:]))
+				case AlgorithmZstd:
+					decoder, err = zstd.NewReader(bytes.NewReader(stored[headerSize:]))
+				}
+				assert.NoError(t, err)
+				decoded, err := io.ReadAll(decoder)
+				assert.NoError(t, err)
+				assert.Equal(t, content, decoded)
+
+				rc, err := store.GetPart(ctx, nil, *partId)
+				assert.NoError(t, err)
+				data, err := io.ReadAll(rc)
+				assert.NoError(t, err)
+				assert.NoError(t, rc.Close())
+				assert.Equal(t, content, data)
+			}
+		})
+	}
+}
+
+type failingPartStore struct {
+	benchmarkPartStore
+}
+
+var errInnerPutFailed = errors.New("inner put failed")
+
+func (s *failingPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
+	if _, err := reader.Read(make([]byte, 16)); err != nil {
+		return err
+	}
+	return errInnerPutFailed
+}
+
+func TestCompressionPartStoreMiddleware_InnerPutFailsEarly(t *testing.T) {
+	content := compressiblePayload(4 * defaultSampleSize)
+	store, err := New(&failingPartStore{})
+	assert.NoError(t, err)
+	partId, err := partstore.NewRandomPartId()
+	assert.NoError(t, err)
+	err = store.PutPart(context.Background(), nil, *partId, bytes.NewReader(content))
+	assert.ErrorIs(t, err, errInnerPutFailed)
 }
