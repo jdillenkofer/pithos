@@ -337,11 +337,10 @@ var ErrInvalidStorageClass error = errors.New("InvalidStorageClass")
 var ErrCASFailure error = errors.New("CASFailure")
 
 type ListObjectsOptions struct {
-	Prefix        *string
-	Delimiter     *string
-	StartAfter    *string
-	MaxKeys       int32
-	SkipPartFetch bool
+	Prefix     *string
+	Delimiter  *string
+	StartAfter *string
+	MaxKeys    int32
 }
 
 type ListMultipartUploadsOptions struct {
@@ -801,8 +800,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
 		var err error
 		listBucketResult, err = metadataStore.ListObjects(ctx, tx, bucketName, ListObjectsOptions{
-			MaxKeys:       1000,
-			SkipPartFetch: true,
+			MaxKeys: 1000,
 		})
 		return err
 	})

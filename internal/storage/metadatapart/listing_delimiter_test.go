@@ -80,7 +80,7 @@ func TestDelimiterListingPagination(t *testing.T) {
 								var result *metadatastore.ListBucketResult
 								require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{}, func(ctx context.Context, tx database.Tx) error {
 									var err error
-									result, err = st.metadataStore.ListObjects(ctx, tx.SqlTx(), bucket, metadatastore.ListObjectsOptions{Prefix: &tc.prefix, Delimiter: &tc.delimiter, StartAfter: &marker, MaxKeys: size, SkipPartFetch: true})
+									result, err = st.metadataStore.ListObjects(ctx, tx.SqlTx(), bucket, metadatastore.ListObjectsOptions{Prefix: &tc.prefix, Delimiter: &tc.delimiter, StartAfter: &marker, MaxKeys: size})
 									return err
 								}))
 								entries := append([]string{}, result.CommonPrefixes...)
