@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -830,4 +831,66 @@ func TestCanCreateS3ClientStorageFromJson(t *testing.T) {
 	storage, err := createStorageFromJson([]byte(jsonData))
 	assert.Nil(t, err)
 	assert.NotNil(t, storage)
+}
+
+func TestSigningVerificationKeys(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	mlPriv, err := mldsa.GenerateKey(mldsa.MLDSA87())
+	require.NoError(t, err)
+	encode := base64.StdEncoding.EncodeToString
+
+	derived := &SigningConfiguration{Ed25519: &Ed25519SigningConfiguration{PrivateKey: encode(edPriv)}, MlDsa87: &MlDsa87SigningConfiguration{PrivateKey: encode(mlPriv.Bytes())}}
+	ed, ml, err := derived.VerificationKeys()
+	require.NoError(t, err)
+	require.True(t, ed.Equal(edPub))
+	require.True(t, ml.Equal(mlPriv.PublicKey()))
+
+	_, otherEdPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	pinned := &SigningConfiguration{
+		Ed25519: &Ed25519SigningConfiguration{Vault: &VaultSigningConfiguration{Address: "https://vault", KeyPath: "transit/key"}, PublicKey: encode(edPub)},
+		MlDsa87: &MlDsa87SigningConfiguration{PrivateKey: encode(mlPriv.Bytes()), PublicKey: encode(mlPriv.PublicKey().Bytes())},
+	}
+	ed, _, err = pinned.VerificationKeys()
+	require.NoError(t, err)
+	require.True(t, ed.Equal(edPub), "a pinned public key verifies Vault-held keys")
+
+	vaultOnly := &SigningConfiguration{Ed25519: &Ed25519SigningConfiguration{Vault: &VaultSigningConfiguration{Address: "https://vault", KeyPath: "transit/key"}, PrivateKey: encode(otherEdPriv)}, MlDsa87: derived.MlDsa87}
+	ed, ml, err = vaultOnly.VerificationKeys()
+	require.NoError(t, err)
+	require.Nil(t, ed, "Vault keys without a public key cannot be verified locally")
+	require.NotNil(t, ml)
+
+	_, _, err = (&SigningConfiguration{}).VerificationKeys()
+	require.Error(t, err)
+}
+
+func TestAuditSigningRejectsMismatchedPublicKeys(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	tempDir, cleanup, err := config.CreateTempDir()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
+	otherEdPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	mlPriv, _ := mldsa.GenerateKey(mldsa.MLDSA87())
+	otherMl, _ := mldsa.GenerateKey(mldsa.MLDSA87())
+	encode := base64.StdEncoding.EncodeToString
+	build := func(edPublic, mlPublic string) []byte {
+		return []byte(fmt.Sprintf(`{"type":"AuditStorageMiddleware",
+			"innerStorage":{"type":"MetadataPartStorage","db":{"type":"RegisterDatabaseReference","refName":"db","db":{"type":"SqliteDatabase","dbPath":%s}},
+				"metadataStore":{"type":"SqlMetadataStore","db":{"type":"DatabaseReference","refName":"db"}},"partStore":{"type":"FilesystemPartStore","root":%s}},
+			"sinks":[{"type":"FileSink","path":%s,"serializer":{"type":"BinarySerializer"}}],
+			"signing":{"ed25519":{"privateKey":%s,"publicKey":%s},"mlDsa87":{"privateKey":%s,"publicKey":%s}}}`,
+			strconv.Quote(filepath.Join(*tempDir, "pithos.db")), strconv.Quote(*tempDir), strconv.Quote(filepath.Join(*tempDir, "audit.log")),
+			strconv.Quote(encode(edPriv)), strconv.Quote(edPublic), strconv.Quote(encode(mlPriv.Bytes())), strconv.Quote(mlPublic)))
+	}
+	_, err = createStorageFromJson(build(encode(otherEdPub), encode(mlPriv.PublicKey().Bytes())))
+	require.ErrorContains(t, err, "signing.ed25519.publicKey does not match")
+	_, err = createStorageFromJson(build(encode(edPriv.Public().(ed25519.PublicKey)), encode(otherMl.PublicKey().Bytes())))
+	require.ErrorContains(t, err, "signing.mlDsa87.publicKey does not match")
+	storage, err := createStorageFromJson(build(encode(edPriv.Public().(ed25519.PublicKey)), encode(mlPriv.PublicKey().Bytes())))
+	require.NoError(t, err)
+	require.NotNil(t, storage)
 }
