@@ -1,29 +1,23 @@
 {{define "buckets"}}
-<div class="page-head">
-  <div><h1>Buckets</h1><p class="subtitle">All buckets across every account</p></div>
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Buckets</span></div>
+<div class="container">
+  <div class="container-head">
+    <div><h2>Buckets <span class="count">({{.Total}})</span></h2><p>Buckets are containers for objects. All accounts' buckets are shown.</p></div>
+    <div class="toolbar"><a class="button-link primary" href="/buckets/new">Create bucket</a></div>
+  </div>
+  <div class="filter-bar">
+    <form method="get" action="/buckets" role="search"><input class="search" type="search" name="q" value="{{.Query}}" placeholder="Find buckets by name" aria-label="Find buckets by name"></form>
+  </div>
+  <div class="table-wrap"><table>
+  <thead><tr><th>Name</th><th>Owner account</th><th class="num">Objects</th><th class="num">Size</th><th>Creation date</th></tr></thead>
+  <tbody>
+  {{range .Buckets}}<tr>
+    <td><a href="/objects?bucket={{.Name}}">{{.Name}}</a></td>
+    <td>{{.Owner}}</td>
+    <td class="num">{{.Objects}}</td>
+    <td class="num">{{.Size}}</td>
+    <td class="nowrap">{{.Created}}</td>
+  </tr>{{else}}<tr><td colspan="5" class="empty">{{if .Query}}<strong>No matches</strong>No buckets match “{{.Query}}”.{{else}}<strong>No buckets</strong>You don't have any buckets.{{end}}</td></tr>{{end}}
+  </tbody></table></div>
 </div>
-<section class="card flush" aria-label="All buckets">
-<div class="table-wrap"><table>
-<thead><tr><th>Bucket</th><th>Owner account</th><th>Created</th><th class="num">Actions</th></tr></thead>
-<tbody>
-{{range .Buckets}}<tr>
-  <td><a class="key" href="/objects?bucket={{.Name.String}}">{{.Name.String}}</a></td>
-  <td><span class="chip">{{.OwnerAccountID}}</span></td>
-  <td class="hint">{{if not .CreationDate.IsZero}}{{.CreationDate.Format "2006-01-02 15:04"}}{{end}}</td>
-  <td class="actions"><a class="button-link" href="/objects?bucket={{.Name.String}}">Browse</a> <a class="button-link" href="/buckets/detail?bucket={{.Name.String}}">Settings</a></td>
-</tr>{{else}}<tr><td colspan="4" class="empty">No buckets yet. Create one below.</td></tr>{{end}}
-</tbody></table></div>
-</section>
-<section class="card"><h2>Create bucket</h2>
-<form method="post" action="/buckets/create">
-<input type="hidden" name="csrf_token" value="{{.CSRF}}">
-<div class="form-grid">
-<label>Bucket name <input name="bucket" required placeholder="my-bucket"></label>
-<label>Owner account <input name="owner" value="{{.Owner}}" maxlength="256" required></label>
-</div>
-<div class="actions-row">
-<label class="check"><input type="checkbox" name="object_lock" value="true"> Enable object lock (also enables versioning)</label>
-</div>
-<div class="actions-row"><button type="submit" class="primary">Create bucket</button></div>
-</form></section>
 {{end}}

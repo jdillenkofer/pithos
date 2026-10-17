@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,14 +23,51 @@ type objectCursor struct {
 	Versions                     bool
 }
 type objectLink struct {
-	Label, URL, Version, SizeText, Modified string
-	Size                                    int64
-	DeleteMarker, Latest                    bool
+	Label, URL, Version, SizeText, Modified, Type, StorageClass string
+	Size                                                        int64
+	DeleteMarker, Latest                                        bool
 }
 type objectsView struct {
-	CSRF, Bucket, Prefix, Parent, NextURL, VersionsURL string
-	Versions                                           bool
-	Prefixes, Objects, Crumbs                          []objectLink
+	CSRF, Bucket, Prefix, Parent, NextURL, VersionsURL, UploadURL string
+	Versions                                                      bool
+	Prefixes, Objects, Crumbs                                     []objectLink
+	Header                                                        bucketHeader
+}
+type objectUploadView struct {
+	CSRF, Bucket, Prefix, BackURL string
+	Crumbs                        []objectLink
+}
+
+// objectType mirrors the S3 console's type column: the file extension.
+func objectType(key string) string {
+	if ext := strings.TrimPrefix(path.Ext(key), "."); ext != "" && !strings.Contains(ext, "/") {
+		return strings.ToLower(ext)
+	}
+	return "-"
+}
+
+func storageClassLabel(class *string) string {
+	if class == nil || *class == "" {
+		return "Standard"
+	}
+	return *class
+}
+
+// prefixCrumbs links every enclosing prefix of key or prefix in a bucket.
+func prefixCrumbs(bucket, prefix string, versions bool) []objectLink {
+	var crumbs []objectLink
+	q := url.Values{"bucket": {bucket}}
+	if versions {
+		q.Set("versions", "true")
+	}
+	for i := 0; i < len(prefix); i++ {
+		if prefix[i] == '/' {
+			q.Set("prefix", prefix[:i+1])
+			start := strings.LastIndex(prefix[:i], "/") + 1
+			crumbs = append(crumbs, objectLink{Label: strings.TrimSuffix(prefix[start:i+1], "/"), URL: "/objects?" + q.Encode()})
+		}
+	}
+	return crumbs
 }
 
 func formatModified(t time.Time) string {
@@ -40,9 +78,11 @@ func formatModified(t time.Time) string {
 }
 
 type objectDetailView struct {
-	CSRF, Bucket, Key, Version, JSON, Tags, DownloadURL, BucketURL string
-	DeleteMarker                                                   bool
-	Properties                                                     []usageTile
+	CSRF, Bucket, Key, Name, Version, Tags, DownloadURL, BucketURL, VersionsURL string
+	DeleteMarker                                                                bool
+	Crumbs                                                                      []objectLink
+	Overview, Checksums, Metadata, TagList                                      []keyValue
+	StorageClass, Retention, LegalHold                                          string
 }
 
 // objectError exposes only known protocol errors, never backend connection
@@ -70,6 +110,7 @@ func (a *App) registerObjects(mux *http.ServeMux) {
 	mux.HandleFunc("GET /objects", a.objects)
 	mux.HandleFunc("GET /objects/detail", a.objectDetail)
 	mux.HandleFunc("GET /objects/download", a.download)
+	mux.HandleFunc("GET /objects/upload", a.uploadPage)
 	mux.HandleFunc("POST /objects/upload", a.upload)
 	mux.HandleFunc("POST /objects/delete", a.deleteObject)
 	mux.HandleFunc("POST /objects/tags", a.objectTags)
@@ -128,14 +169,9 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 	}
 	q := url.Values{"bucket": {bucket.String()}, "prefix": {parent}, "versions": {fmt.Sprint(versions)}}
 	view.Parent = "/objects?" + q.Encode()
-	// Breadcrumbs link every enclosing prefix of the current listing.
-	for i := 0; i < len(prefix); i++ {
-		if prefix[i] == '/' {
-			q.Set("prefix", prefix[:i+1])
-			start := strings.LastIndex(prefix[:i], "/") + 1
-			view.Crumbs = append(view.Crumbs, objectLink{Label: prefix[start : i+1], URL: "/objects?" + q.Encode()})
-		}
-	}
+	view.Crumbs = prefixCrumbs(bucket.String(), prefix, versions)
+	view.Header = bucketHeader{Name: bucket.String(), Active: "objects"}
+	view.UploadURL = "/objects/upload?" + url.Values{"bucket": {bucket.String()}, "prefix": {prefix}}.Encode()
 	q.Set("prefix", prefix)
 	q.Set("versions", fmt.Sprint(!versions))
 	view.VersionsURL = "/objects?" + q.Encode()
@@ -160,7 +196,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Versions {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
 		if result.NextKeyMarker != nil {
 			cursor.Key = *result.NextKeyMarker
@@ -181,7 +217,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Objects {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified)})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
 			if o.Key.String() > cursor.Key {
 				cursor.Key = o.Key.String()
 			}
@@ -217,7 +253,9 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 	object, err := a.options.Storage.HeadObject(r.Context(), b, k, &storage.HeadObjectOptions{VersionID: v})
 	var marker *storage.VersionDeleteMarkerMethodNotAllowedError
 	var current *storage.CurrentDeleteMarkerError
-	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version), BucketURL: "/objects?" + url.Values{"bucket": {b.String()}}.Encode()}
+	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Name: path.Base(k.String()), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version), BucketURL: "/objects?" + url.Values{"bucket": {b.String()}}.Encode()}
+	view.Crumbs = prefixCrumbs(b.String(), k.String()[:strings.LastIndex(k.String(), "/")+1], false)
+	view.VersionsURL = "/objects?" + url.Values{"bucket": {b.String()}, "prefix": {k.String()}, "versions": {"true"}}.Encode()
 	if errors.As(err, &marker) || errors.As(err, &current) {
 		view.DeleteMarker = true
 		if marker != nil {
@@ -230,25 +268,7 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 		a.objectError(w, r, err)
 		return
 	} else {
-		raw, _ := json.MarshalIndent(object, "", "  ")
-		view.JSON = string(raw)
-		contentType, storageClass := "—", "STANDARD"
-		if object.ContentType != nil && *object.ContentType != "" {
-			contentType = *object.ContentType
-		}
-		if object.StorageClass != nil && *object.StorageClass != "" {
-			storageClass = *object.StorageClass
-		}
-		view.Properties = []usageTile{
-			{"Size", fmt.Sprintf("%s (%d bytes)", humanBytes(float64(object.Size)), object.Size)},
-			{"Content type", contentType},
-			{"Last modified", formatModified(object.LastModified) + " UTC"},
-			{"ETag", object.ETag},
-			{"Storage class", storageClass},
-		}
-		if object.VersionID != nil && *object.VersionID != "" {
-			view.Properties = append(view.Properties, usageTile{"Version ID", *object.VersionID})
-		}
+		describeObject(&view, b.String(), k.String(), object)
 		tags, tagErr := a.options.Storage.GetObjectTagging(r.Context(), b, k, &storage.ObjectTaggingOptions{VersionID: v})
 		if tagErr != nil {
 			a.objectError(w, r, tagErr)
@@ -257,11 +277,87 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 		if tags == nil {
 			tags = map[string]string{}
 		}
-		raw, _ = json.MarshalIndent(tags, "", "  ")
+		raw, _ := json.MarshalIndent(tags, "", "  ")
 		view.Tags = string(raw)
+		for key, value := range tags {
+			view.TagList = append(view.TagList, keyValue{key, value})
+		}
+		sort.Slice(view.TagList, func(i, j int) bool { return view.TagList[i].Label < view.TagList[j].Label })
 	}
 	a.render(w, r, "Object details", "object-detail", view)
 }
+
+// describeObject fills the S3-console-style property sections.
+func describeObject(view *objectDetailView, bucket, key string, object *storage.Object) {
+	contentType := "-"
+	if object.ContentType != nil && *object.ContentType != "" {
+		contentType = *object.ContentType
+	}
+	version := "null"
+	if object.VersionID != nil && *object.VersionID != "" {
+		version = *object.VersionID
+	}
+	view.Overview = []keyValue{
+		{"Bucket", bucket},
+		{"Key", key},
+		{"S3 URI", "s3://" + bucket + "/" + key},
+		{"Last modified", formatModified(object.LastModified) + " UTC"},
+		{"Size", fmt.Sprintf("%s (%s bytes)", humanBytes(float64(object.Size)), formatCount(float64(object.Size)))},
+		{"Type", contentType},
+		{"Entity tag (ETag)", strings.Trim(object.ETag, `"`)},
+		{"Version ID", version},
+	}
+	view.StorageClass = storageClassLabel(object.StorageClass)
+	for _, checksum := range []struct {
+		name  string
+		value *string
+	}{{"CRC32", object.ChecksumCRC32}, {"CRC32C", object.ChecksumCRC32C}, {"CRC64NVME", object.ChecksumCRC64NVME}, {"SHA1", object.ChecksumSHA1}, {"SHA256", object.ChecksumSHA256}} {
+		if checksum.value != nil && *checksum.value != "" {
+			view.Checksums = append(view.Checksums, keyValue{checksum.name, *checksum.value})
+		}
+	}
+	if object.ChecksumType != nil && *object.ChecksumType != "" && len(view.Checksums) > 0 {
+		view.Checksums = append(view.Checksums, keyValue{"Checksum type", *object.ChecksumType})
+	}
+	view.Metadata = append(view.Metadata, keyValue{"Content-Type", contentType})
+	for _, header := range []struct {
+		name  string
+		value *string
+	}{{"Cache-Control", object.Metadata.CacheControl}, {"Content-Disposition", object.Metadata.ContentDisposition}, {"Content-Encoding", object.Metadata.ContentEncoding}, {"Content-Language", object.Metadata.ContentLanguage}, {"Expires", object.Metadata.Expires}, {"x-amz-website-redirect-location", object.Metadata.WebsiteRedirectLocation}} {
+		if header.value != nil && *header.value != "" {
+			view.Metadata = append(view.Metadata, keyValue{header.name, *header.value})
+		}
+	}
+	userKeys := make([]string, 0, len(object.Metadata.UserMetadata))
+	for name := range object.Metadata.UserMetadata {
+		userKeys = append(userKeys, name)
+	}
+	sort.Strings(userKeys)
+	for _, name := range userKeys {
+		view.Metadata = append(view.Metadata, keyValue{"x-amz-meta-" + name, object.Metadata.UserMetadata[name]})
+	}
+	view.Retention, view.LegalHold = "Disabled", "Off"
+	if retention := object.ObjectLock.Retention; retention != nil {
+		view.Retention = fmt.Sprintf("%s until %s UTC", retention.Mode, retention.RetainUntilDate.UTC().Format("2006-01-02 15:04"))
+	}
+	if hold := object.ObjectLock.LegalHold; hold != nil && *hold == "ON" {
+		view.LegalHold = "On"
+	}
+}
+
+func (a *App) uploadPage(w http.ResponseWriter, r *http.Request) {
+	bucket, err := storage.NewBucketName(r.URL.Query().Get("bucket"))
+	if err != nil {
+		a.fail(w, r, 400, "Invalid bucket")
+		return
+	}
+	prefix := r.URL.Query().Get("prefix")
+	a.render(w, r, "Upload", "object-upload", objectUploadView{
+		CSRF: csrfToken(r), Bucket: bucket.String(), Prefix: prefix, Crumbs: prefixCrumbs(bucket.String(), prefix, false),
+		BackURL: "/objects?" + url.Values{"bucket": {bucket.String()}, "prefix": {prefix}}.Encode(),
+	})
+}
+
 func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	b, k, v, err := objectTarget(r)
 	if err != nil {

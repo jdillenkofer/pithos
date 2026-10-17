@@ -1,33 +1,36 @@
 {{define "policies"}}
-<div class="page-head">
-  <div><h1>Policies</h1><p class="subtitle">Active S3 authorization policy · format <span class="chip">{{.Kind}}</span></p></div>
-</div>
-{{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Policies</span></div>
+<div class="page-head"><div><h1>Authorization policy</h1><p class="subtitle">Active S3 authorization policy · format: {{.Kind}}</p></div></div>
+{{if .Message}}<div class="alert" role="status"><p>{{.Message}}</p></div>{{end}}
 <form method="post" action="/policies/validate">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="hash" value="{{.Hash}}">
-<section class="card">
-<h2>Editor</h2>
-<p class="hint">Shows the configured policy file. Validation and simulation use this candidate, not the running policy. Admin UI access is never affected by policies; S3 clients can still be locked out, so validate and simulate before saving.</p>
-<label>Policy candidate (maximum 1 MiB)<textarea name="candidate" rows="22" required>{{.Candidate}}</textarea></label>
-<div class="actions-row"><button type="submit">Validate</button> <button type="submit" class="primary" formaction="/policies/save">Save and reload</button></div>
-</section>
-<section class="card">
-<h2>Simulate a request</h2>
-<p class="hint">Use a Pithos operation such as <code>GetObject</code> (not <code>s3:GetObject</code>). Leave account and principal empty for an anonymous request. The access key is optional and controls Lua <code>isAnonymous</code> and access-key predicates. No object, tags or HTTP context is supplied, so context-dependent results are not a guarantee of live access. Lua runs are limited to one million VM instructions.</p>
-<div class="form-grid">
-<label>Account <input name="account" value="{{.Account}}"></label>
-<label>Principal <input name="principal" value="{{.Principal}}"></label>
-<label>Access key ID <input name="accessKey" value="{{.AccessKey}}"></label>
-<label>Operation <input name="operation" value="{{.Operation}}" placeholder="GetObject"></label>
-<label>Bucket <input name="bucket" value="{{.Bucket}}"></label>
-<label>Key <input name="key" value="{{.Key}}"></label>
+<div class="container">
+  <div class="container-head"><div><h2>Policy editor</h2><p>Validation and simulation use the candidate below, not the running policy. Admin console access is never affected by policies, but S3 clients can be locked out: validate and simulate before saving.</p></div></div>
+  <div class="container-body">
+    <label>Policy document (maximum 1 MiB)<textarea name="candidate" rows="22" required>{{.Candidate}}</textarea></label>
+    <div class="actions-row"><button type="submit">Validate</button><button type="submit" class="primary" formaction="/policies/save">Save changes</button></div>
+  </div>
 </div>
-<div class="actions-row"><button type="submit" formaction="/policies/simulate">Simulate candidate</button></div>
-{{with .Decision}}<div class="notice result">
-<h3>Result</h3>
-<dl class="props"><dt>Effect</dt><dd>{{.Effect}}</dd><dt>Action</dt><dd class="mono">{{.Action}}</dd><dt>Resource</dt><dd class="mono">{{.Resource}}</dd></dl>
-<h3>Matching statements</h3><ul>{{range .References}}<li>Policy <code>{{.Policy}}</code>, statement <code>{{.Sid}}</code></li>{{else}}<li>No statement references (Lua returns only an effect).</li>{{end}}</ul></div>{{end}}
-</section>
+<div class="container">
+  <div class="container-head"><div><h2>Policy simulator</h2><p>Evaluate the candidate for a single request. Use a Pithos operation such as <code>GetObject</code> (not <code>s3:GetObject</code>); leave account and principal empty for an anonymous request. Object tags and HTTP context are not supplied. Lua runs are limited to one million VM instructions.</p></div></div>
+  <div class="container-body">
+    <div class="form-grid">
+      <label>Account <input name="account" value="{{.Account}}"></label>
+      <label>Principal <input name="principal" value="{{.Principal}}"></label>
+      <label>Access key ID <span class="hint">Optional</span><input name="accessKey" value="{{.AccessKey}}"></label>
+      <label>Operation <input name="operation" value="{{.Operation}}" placeholder="GetObject"></label>
+      <label>Bucket <input name="bucket" value="{{.Bucket}}"></label>
+      <label>Key <input name="key" value="{{.Key}}"></label>
+    </div>
+    <div class="actions-row"><button type="submit" formaction="/policies/simulate">Run simulation</button></div>
+    {{with .Decision}}<div class="progress">
+      <h3>Result</h3>
+      <div class="kv"><div><div class="label">Effect</div><div class="value">{{.Effect}}</div></div><div><div class="label">Action</div><div class="value mono">{{.Action}}</div></div><div><div class="label">Resource</div><div class="value mono">{{.Resource}}</div></div></div>
+      <h3>Matching statements</h3>
+      <ul>{{range .References}}<li>Policy <code>{{.Policy}}</code>, statement <code>{{.Sid}}</code></li>{{else}}<li class="subtitle">No statement references (Lua returns only an effect).</li>{{end}}</ul>
+    </div>{{end}}
+  </div>
+</div>
 </form>
 {{end}}

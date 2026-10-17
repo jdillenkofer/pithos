@@ -1,6 +1,10 @@
 {{define "audit_progress"}}
-<div id="audit-progress" class="progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
-<div class="progress-head"><h3>Last verification</h3>{{if .Running}}<span class="badge info">Running</span>{{else if .Message}}<span class="badge {{if eq .Message "Completed"}}ok{{else}}bad{{end}}">{{.Message}}</span>{{end}}</div>
-{{if .Started.IsZero}}<p class="hint">No verification started yet.</p>{{else}}<p role="status">{{.Processed}} entries checked{{if .Running}} · {{.Message}}{{end}}</p><p class="hint">Started {{.Started.Format "2006-01-02 15:04:05"}}{{if not .Finished.IsZero}} · finished {{.Finished.Format "2006-01-02 15:04:05"}}{{end}}</p>{{end}}
+<div id="audit-progress" aria-live="polite" {{if .Running}}hx-get="/audit/verify/progress" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<div class="kv">
+  <div><div class="label">Status</div><div class="value">{{if .Running}}<span class="status info">In progress</span>{{else if .Message}}<span class="status {{if eq .Message "Completed"}}ok{{else}}bad{{end}}">{{.Message}}</span>{{else}}<span class="status muted">Not started</span>{{end}}</div></div>
+  <div><div class="label">Entries checked</div><div class="value">{{.Processed}}</div></div>
+  <div><div class="label">Started</div><div class="value">{{if .Started.IsZero}}-{{else}}{{.Started.Format "2006-01-02 15:04:05"}}{{end}}</div></div>
+  <div><div class="label">Finished</div><div class="value">{{if .Finished.IsZero}}-{{else}}{{.Finished.Format "2006-01-02 15:04:05"}}{{end}}</div></div>
+</div>
 </div>
 {{end}}

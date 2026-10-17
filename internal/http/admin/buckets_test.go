@@ -148,10 +148,16 @@ func TestBucketsGlobalViewAndCrossAccountDetail(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("%d: %s", w.Code, w.Body.String())
 	}
-	for _, want := range []string{"account-a", "account-b", "/objects?bucket=bucket-b", `name="csrf_token" value="csrf-value"`} {
+	for _, want := range []string{"account-a", "account-b", "/objects?bucket=bucket-b", `href="/buckets/new"`} {
 		if !strings.Contains(w.Body.String(), want) {
 			t.Errorf("missing %s", want)
 		}
+	}
+	if w := bucketRequest(a, "GET", "/buckets/new", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `name="csrf_token" value="csrf-value"`) || !strings.Contains(w.Body.String(), `value="account-a"`) {
+		t.Fatalf("create bucket page: %d %s", w.Code, w.Body.String())
+	}
+	if w := bucketRequest(a, "GET", "/buckets?q=et-a", nil); !strings.Contains(w.Body.String(), "bucket-a") || strings.Contains(w.Body.String(), "/objects?bucket=bucket-b") {
+		t.Fatalf("bucket filter: %s", w.Body.String())
 	}
 	if strings.Index(w.Body.String(), "bucket-a") > strings.Index(w.Body.String(), "bucket-b") {
 		t.Fatal("not sorted")
@@ -334,7 +340,7 @@ func TestBucketTemplatesEscapeAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	data := bucketDetailPage{CSRF: `"><script>`, Bucket: &storage.Bucket{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: `<script>`}, Tabs: bucketTabs, Tab: "cors", Configuration: `</textarea><script>alert(1)</script>`}
+	data := bucketDetailPage{CSRF: `"><script>`, Bucket: &storage.Bucket{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: `<script>`}, Header: bucketHeader{Name: "valid-bucket", Owner: `<script>`, Active: "properties"}, Tabs: bucketGroupTabs("properties"), Tab: "website", Configuration: `</textarea><script>alert(1)</script>`}
 	if err := pages.ExecuteTemplate(&out, "buckets_detail", data); err != nil {
 		t.Fatal(err)
 	}

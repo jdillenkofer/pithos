@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/http/admin/session"
 	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
@@ -18,7 +19,7 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
 
 // NewHandler builds an isolated admin router. Only health, login and embedded
 // static assets are public; all management routes require a fresh credential
@@ -40,7 +41,7 @@ func NewHandler(options ...Options) (http.Handler, error) {
 	}
 	lifetime, cancel := context.WithCancel(opts.Context)
 	opts.Context = lifetime
-	a := &App{options: opts, pages: pages, limiter: session.NewLoginLimiter()}
+	a := &App{options: opts, pages: pages, limiter: session.NewLoginLimiter(), started: time.Now()}
 	ready := false
 	defer func() {
 		if !ready {

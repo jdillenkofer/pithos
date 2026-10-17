@@ -46,7 +46,7 @@ func TestStorageProgressIndicatesTruncatedReport(t *testing.T) {
 	rec := httptest.NewRecorder()
 	renderAdminProgress(rec, "storage_progress", adminJobState{Started: time.Now(), Report: &integrity.ValidationReport{TotalObjects: 5000, FailedObjects: 150, OmittedResults: 50, Results: []integrity.ValidationResult{{BucketName: "bucket", ObjectKey: "listed"}}}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), `<div class="label">Failed</div><div class="value">150</div>`)
+	require.Contains(t, rec.Body.String(), `<div class="label">Failed</div><div class="big">150</div>`)
 	require.Contains(t, rec.Body.String(), "List truncated: 50 further failed objects")
 }
 func TestAdminValidationLimitsAreBounded(t *testing.T) {

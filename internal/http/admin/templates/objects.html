@@ -1,86 +1,110 @@
 {{define "objects"}}
-<div class="page-head">
-  <div>
-    <div class="crumbs"><a href="/buckets">Buckets</a><span class="sep">/</span><a href="/objects?bucket={{.Bucket}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">/</span><a href="{{.URL}}">{{.Label}}</a>{{end}}</div>
-    <h1>{{.Bucket}}</h1>
-    <p class="subtitle">{{if .Prefix}}Prefix <code>{{.Prefix}}</code>{{else}}Bucket root{{end}}{{if .Versions}} · showing all versions and delete markers{{end}}</p>
+{{template "bucket_header" .Header}}
+<div class="container">
+  <div class="container-head">
+    <div><h2>Objects <span class="count">({{len .Objects}}{{if .NextURL}}+{{end}})</span></h2><p>Objects are the fundamental entities stored in a bucket.{{if .Prefix}} Showing prefix <code>{{.Prefix}}</code>.{{end}}</p></div>
+    <div class="toolbar">
+      <a class="button-link" href="{{.VersionsURL}}">{{if .Versions}}Hide versions{{else}}Show versions{{end}}</a>
+      <a class="button-link primary" href="{{.UploadURL}}">Upload</a>
+    </div>
   </div>
-  <div class="actions-row">
-    <a class="button-link" href="{{.VersionsURL}}">{{if .Versions}}Hide versions{{else}}Show versions{{end}}</a>
-    <a class="button-link" href="/buckets/detail?bucket={{.Bucket}}">Bucket settings</a>
+  <div class="filter-bar">
+    <form method="get" action="/objects" role="search"><input type="hidden" name="bucket" value="{{.Bucket}}">{{if .Versions}}<input type="hidden" name="versions" value="true">{{end}}<input class="search" name="prefix" value="{{.Prefix}}" placeholder="Find objects by prefix" aria-label="Find objects by prefix"></form>
+    {{if .NextURL}}<span class="pager"><a href="{{.NextURL}}">Next page</a></span>{{end}}
   </div>
+  {{if .Crumbs}}<div class="filter-bar"><div class="crumbs"><a href="/objects?bucket={{.Bucket}}{{if .Versions}}&amp;versions=true{{end}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">/</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">/</span></div></div>{{end}}
+  <div class="table-wrap"><table>
+  <thead><tr><th>Name</th>{{if .Versions}}<th>Version ID</th>{{end}}<th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th></tr></thead>
+  <tbody>
+  {{range .Prefixes}}<tr><td><a href="{{.URL}}"><span class="icon folder" aria-hidden="true"></span>{{.Label}}</a></td>{{if $.Versions}}<td>-</td>{{end}}<td>Folder</td><td>-</td><td class="num">-</td><td>-</td></tr>{{end}}
+  {{range .Objects}}<tr>
+    <td><a href="{{.URL}}"><span class="icon {{if .DeleteMarker}}marker{{else}}file{{end}}" aria-hidden="true"></span>{{.Label}}</a></td>
+    {{if $.Versions}}<td><span class="key">{{.Version}}</span>{{if .Latest}} <span class="badge">Latest</span>{{end}}</td>{{end}}
+    <td>{{if .DeleteMarker}}Delete marker{{else}}{{.Type}}{{end}}</td>
+    <td class="nowrap">{{.Modified}} UTC</td>
+    <td class="num">{{if .DeleteMarker}}-{{else}}{{.SizeText}}{{end}}</td>
+    <td>{{if .DeleteMarker}}-{{else}}{{.StorageClass}}{{end}}</td>
+  </tr>{{end}}
+  {{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}6{{else}}5{{end}}" class="empty"><strong>No objects</strong>{{if .Prefix}}No objects match this prefix.{{else}}You don't have any objects in this bucket.{{end}}</td></tr>{{end}}
+  </tbody></table></div>
 </div>
-<div class="card">
-<form method="get" action="/objects"><input type="hidden" name="bucket" value="{{.Bucket}}">{{if .Versions}}<input type="hidden" name="versions" value="true">{{end}}
-<div class="form-grid"><label>Filter by prefix <input name="prefix" value="{{.Prefix}}" placeholder="folder/"></label><div><button>Apply</button></div></div>
-</form>
-</div>
-<div class="card flush">
-<div class="table-wrap"><table>
-<thead><tr><th>Name</th>{{if .Versions}}<th>Version</th>{{end}}<th>Last modified (UTC)</th><th class="num">Size</th></tr></thead>
-<tbody>
-{{if .Prefix}}<tr><td colspan="{{if .Versions}}4{{else}}3{{end}}"><a href="{{.Parent}}"><span class="icon" aria-hidden="true">↰</span>Parent folder</a></td></tr>{{end}}
-{{range .Prefixes}}<tr><td><a class="key" href="{{.URL}}"><span class="icon" aria-hidden="true">📁</span>{{.Label}}</a></td>{{if $.Versions}}<td></td>{{end}}<td></td><td class="num hint">Folder</td></tr>{{end}}
-{{range .Objects}}<tr>
-  <td><a class="key" href="{{.URL}}"><span class="icon" aria-hidden="true">{{if .DeleteMarker}}✕{{else}}📄{{end}}</span>{{.Label}}</a></td>
-  {{if $.Versions}}<td><span class="key hint">{{.Version}}</span> {{if .Latest}}<span class="badge info plain">latest</span>{{end}} {{if .DeleteMarker}}<span class="badge warn plain">delete marker</span>{{end}}</td>{{end}}
-  <td class="hint">{{.Modified}}</td>
-  <td class="num">{{if .DeleteMarker}}—{{else}}{{.SizeText}}{{end}}</td>
-</tr>{{end}}
-{{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}4{{else}}3{{end}}" class="empty">No objects here yet.</td></tr>{{end}}
-</tbody></table></div>
-{{if .NextURL}}<div class="pager"><a href="{{.NextURL}}">Next page</a></div>{{end}}
-</div>
-<section class="card">
-<h2>Upload object</h2>
-<form method="post" action="/objects/upload" enctype="multipart/form-data">
+{{end}}
+
+{{define "object-upload"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="/objects?bucket={{.Bucket}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><span>Upload</span></div>
+<div class="page-head"><div><h1>Upload</h1><p class="subtitle">Add a file to <code>s3://{{.Bucket}}/{{.Prefix}}</code></p></div></div>
+<form method="post" action="/objects/upload" enctype="multipart/form-data" class="form-narrow">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="bucket" value="{{.Bucket}}">
-<div class="form-grid">
-<label>Object key <input name="key" value="{{.Prefix}}" maxlength="1024" required></label>
-<label>File <input type="file" name="file" required></label>
-<div><button class="primary">Upload</button></div>
+<div class="container">
+  <div class="container-head"><div><h2>File</h2><p>Uploads stream directly to storage. Resumable multipart uploads are not supported in this console.</p></div></div>
+  <div class="container-body">
+    <label>Object key <input name="key" value="{{.Prefix}}" maxlength="1024" required><span class="hint">The full key, including any prefix. For example <code>{{.Prefix}}report.pdf</code>.</span></label>
+    <label>File <input type="file" name="file" required></label>
+  </div>
 </div>
+<div class="actions-row"><a class="button-link" href="{{.BackURL}}">Cancel</a><button class="primary">Upload</button></div>
 </form>
-<p class="hint">Uploads stream directly to storage. Resumable multipart uploads are not supported in this UI.</p>
-</section>
 {{end}}
 
 {{define "object-detail"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="{{.BucketURL}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><span>{{.Name}}</span></div>
 <div class="page-head">
-  <div>
-    <div class="crumbs"><a href="/buckets">Buckets</a><span class="sep">/</span><a href="{{.BucketURL}}">{{.Bucket}}</a></div>
-    <h1 class="key">{{.Key}}</h1>
-    <p class="subtitle">{{if .Version}}Version <code>{{.Version}}</code>{{else}}Current version{{end}}{{if .DeleteMarker}} · <span class="badge warn plain">delete marker</span>{{end}}</p>
-  </div>
-  {{if not .DeleteMarker}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}
+  <div><h1>{{.Name}}</h1>{{if .DeleteMarker}}<p class="subtitle"><span class="status warn">Delete marker</span></p>{{end}}</div>
+  <div class="toolbar">{{if not .DeleteMarker}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}</div>
 </div>
-{{if .DeleteMarker}}<p class="notice warn">This version is a delete marker and has no content.</p>{{else}}
-<section class="card"><h2>Properties</h2>
-<dl class="props">{{range .Properties}}<dt>{{.Label}}</dt><dd class="mono">{{.Value}}</dd>{{end}}</dl>
-<details><summary class="hint">All metadata, checksums, retention and legal hold (JSON)</summary><pre>{{.JSON}}</pre></details>
-</section>
-<div class="grid two">
-<section class="card"><h2>Tags</h2>
-<form method="post" action="/objects/tags"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-<label>Tags JSON <textarea name="tags" rows="7" required>{{.Tags}}</textarea></label>
-<div class="actions-row"><button class="primary">Save tags</button></div></form>
-</section>
-<section class="card"><h2>Retention</h2>
-<form method="post" action="/objects/retention"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-<div class="form-grid"><label>Mode <select name="mode"><option>GOVERNANCE</option><option>COMPLIANCE</option></select></label><label>Retain until (RFC3339) <input name="retain_until" placeholder="2030-01-01T00:00:00Z" required></label></div>
-<div class="actions-row"><label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label></div>
-<div class="actions-row"><button class="primary">Save retention</button></div></form>
-<h2>Legal hold</h2>
-<form method="post" action="/objects/legal-hold"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-<div class="form-grid"><label>Status <select name="status"><option>ON</option><option>OFF</option></select></label><div><button class="primary">Save legal hold</button></div></div></form>
-</section>
+<nav class="tabs" aria-label="Object"><a href="#" aria-current="page">Properties</a><a href="{{.VersionsURL}}">Versions</a></nav>
+{{if .DeleteMarker}}<div class="alert warn"><p>This version {{if .Version}}(<code>{{.Version}}</code>) {{end}}is a delete marker and has no content.</p></div>{{else}}
+<div class="container">
+  <div class="container-head"><h2>Object overview</h2></div>
+  <div class="container-body"><div class="kv">{{range .Overview}}<div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}</div></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Storage class</h2><p>The storage class determines the part store used for this object.</p></div></div>
+  <div class="container-body"><div class="kv"><div><div class="label">Storage class</div><div class="value">{{.StorageClass}}</div></div></div></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Checksums</h2><p>Additional checksums verify data integrity.</p></div></div>
+  <div class="container-body">{{if .Checksums}}<div class="kv">{{range .Checksums}}<div><div class="label">{{.Label}}</div><div class="value mono">{{.Value}}</div></div>{{end}}</div>{{else}}<p class="subtitle">No additional checksums.</p>{{end}}</div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Tags <span class="count">({{len .TagList}})</span></h2><p>Track storage cost or other criteria by tagging the object.</p></div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>{{range .TagList}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{else}}<tr><td colspan="2" class="empty"><strong>No tags</strong>There are no tags associated with this object.</td></tr>{{end}}</tbody></table></div>
+  <div class="container-body divider">
+    <details><summary>Edit tags</summary>
+    <form method="post" action="/objects/tags"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
+    <label>Tags (JSON object) <textarea name="tags" rows="6" required>{{.Tags}}</textarea></label>
+    <div class="actions-row"><button class="primary">Save changes</button></div></form>
+    </details>
+  </div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Metadata <span class="count">({{len .Metadata}})</span></h2><p>System-defined and user-defined (<code>x-amz-meta-*</code>) metadata.</p></div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>{{range .Metadata}}<tr><td>{{.Label}}</td><td>{{.Value}}</td></tr>{{end}}</tbody></table></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Object Lock retention</h2><p>Prevents this object version from being deleted or overwritten until the retention date.</p></div></div>
+  <div class="container-body">
+    <div class="kv"><div><div class="label">Retention</div><div class="value">{{.Retention}}</div></div><div><div class="label">Legal hold</div><div class="value">{{.LegalHold}}</div></div></div>
+    <details><summary>Edit retention</summary>
+    <form method="post" action="/objects/retention"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
+    <div class="form-grid"><label>Retention mode <select name="mode"><option>GOVERNANCE</option><option>COMPLIANCE</option></select></label><label>Retain until (RFC3339) <input name="retain_until" placeholder="2030-01-01T00:00:00Z" required></label></div>
+    <div class="actions-row"><label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label><button class="primary">Save changes</button></div></form>
+    </details>
+    <details><summary>Edit legal hold</summary>
+    <form method="post" action="/objects/legal-hold"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
+    <div class="form-grid"><label>Legal hold <select name="status"><option>ON</option><option>OFF</option></select></label><div><button class="primary">Save changes</button></div></div></form>
+    </details>
+  </div>
 </div>
 {{end}}
-<section class="card danger-zone"><h2>Delete {{if .Version}}version{{else}}object{{end}}</h2>
-<form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-<label class="check"><input type="checkbox" name="confirm" value="yes" required> I understand this {{if .Version}}permanently deletes this version{{else}}deletes the object (a delete marker is created when versioning is enabled){{end}}</label>
-<label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
-<div class="actions-row"><button class="danger">Delete</button></div></form>
-</section>
+<div class="container danger-zone">
+  <div class="container-head"><div><h2>Delete {{if .Version}}object version{{else}}object{{end}}</h2><p>{{if .Version}}Permanently deletes this version.{{else}}Deletes the object. In a versioned bucket a delete marker is created instead.{{end}}</p></div></div>
+  <div class="container-body">
+  <form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
+  <label class="check"><input type="checkbox" name="confirm" value="yes" required> I confirm the deletion</label>
+  <label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
+  <div class="actions-row start"><button class="danger">Delete</button></div></form>
+  </div>
+</div>
 {{end}}

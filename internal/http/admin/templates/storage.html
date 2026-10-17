@@ -1,20 +1,13 @@
 {{define "storage"}}
-<div class="page-head">
-  <div><h1>Storage</h1><p class="subtitle">Configured storage stack and live integrity validation</p></div>
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Storage</span></div>
+<div class="container">
+  <div class="container-head"><div><h2>Storage configuration</h2><p>Middleware and part stores of the configured storage stack. Endpoints, paths, credentials, keys and tokens are hidden. The file on disk may differ from the running store until restart.</p></div></div>
+  <div class="container-body"><ul class="tree">{{template "storage_node" .Tree}}</ul></div>
 </div>
-<section class="card">
-<h2>Configuration tree</h2>
-<p class="hint">Read-only view of the configured middleware and part stores. Endpoints, paths, credentials, keys and tokens are hidden. The file on disk may differ from the running store until restart.</p>
-<ul class="tree">{{template "storage_node" .Tree}}</ul>
-</section>
-<section class="card">
-<h2>Validate live storage</h2>
-<p class="hint">Checks part and object checksums of the current version of every object on the running store. Historical versions are not scanned and nothing is deleted or repaired. Requires one local database; limited to ten minutes. Concurrent writes may cause spurious failures.</p>
-<form method="post" action="/storage/validate">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Run validation (read-only)</button>
-</form>
-{{template "storage_progress" .Job}}
-</section>
+<div class="container">
+  <div class="container-head"><div><h2>Integrity validation</h2><p>Checks part and object checksums of the current version of every object on the running store. Historical versions are not scanned; nothing is deleted or repaired. Requires one local database and is limited to ten minutes.</p></div>
+  <form method="post" action="/storage/validate"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Run validation</button></form></div>
+  <div class="container-body">{{template "storage_progress" .Job}}</div>
+</div>
 {{end}}
-{{define "storage_node"}}<li><span class="node">{{.Kind}}{{range .Fields}}<span class="chip">{{.Name}}: {{.Value}}</span>{{end}}</span>{{if .Children}}<ul>{{range .Children}}{{template "storage_node" .}}{{end}}</ul>{{end}}</li>{{end}}
+{{define "storage_node"}}<li><span class="node">{{.Kind}}{{range .Fields}}<span class="badge">{{.Name}}: {{.Value}}</span>{{end}}</span>{{if .Children}}<ul>{{range .Children}}{{template "storage_node" .}}{{end}}</ul>{{end}}</li>{{end}}

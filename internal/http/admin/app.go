@@ -43,6 +43,7 @@ type App struct {
 	loginKey      [32]byte
 	dashboardMu   sync.Mutex
 	lastDashboard dashboardSample
+	started       time.Time
 	workers       backgroundWorkers
 }
 
@@ -106,7 +107,7 @@ func (a *App) renderLayout(r *http.Request, title string, content template.HTML)
 // navSection maps a page title to the navigation entry it belongs to.
 func navSection(title string) string {
 	switch {
-	case title == "Objects", title == "Object details", strings.HasPrefix(title, "Bucket: "):
+	case title == "Objects", title == "Object details", title == "Upload", title == "Create bucket", strings.HasPrefix(title, "Bucket: "):
 		return "Buckets"
 	case title == "Credential created":
 		return "Credentials"

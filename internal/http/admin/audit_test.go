@@ -158,7 +158,7 @@ func TestAuditRoutesVerifyAndRejectUserPaths(t *testing.T) {
 		mux.ServeHTTP(progress, httptest.NewRequest(http.MethodGet, "/audit/verify/progress", nil))
 		require.NotContains(t, progress.Body.String(), "<!doctype")
 		if strings.Contains(progress.Body.String(), "Completed") {
-			require.Contains(t, progress.Body.String(), "3 entries checked")
+			require.Contains(t, progress.Body.String(), `<div class="label">Entries checked</div><div class="value">3</div>`)
 			return
 		}
 		time.Sleep(time.Millisecond)

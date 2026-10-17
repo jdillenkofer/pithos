@@ -10,32 +10,38 @@
   <script defer src="/static/admin.js"></script>
 </head>
 <body {{if not .Authenticated}}class="auth"{{end}} hx-history="false" hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'>
-  {{if .Authenticated}}<header class="topbar">
-    <div class="topbar-inner">
-      <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">P</span>Pithos <small>Admin</small></a>
-      <nav class="mainnav" aria-label="Administration">
-        <a href="/" {{if eq .Section "Dashboard"}}aria-current="page"{{end}}>Dashboard</a>
-        <a href="/buckets" {{if eq .Section "Buckets"}}aria-current="page"{{end}}>Buckets</a>
-        <a href="/credentials" {{if eq .Section "Credentials"}}aria-current="page"{{end}}>Credentials</a>
-        <a href="/policies" {{if eq .Section "Policies"}}aria-current="page"{{end}}>Policies</a>
-        <a href="/audit" {{if eq .Section "Audit log"}}aria-current="page"{{end}}>Audit log</a>
-        <a href="/storage" {{if eq .Section "Storage"}}aria-current="page"{{end}}>Storage</a>
-      </nav>
-      <div class="session">
-        <span class="who">Signed in as <strong>{{.AccessKeyID}}</strong></span>
-        <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="small">Log out</button></form>
-      </div>
-    </div>
-  </header>{{end}}
-  <main id="main">{{.Content}}</main>
+{{if .Authenticated}}
+  <header class="topnav">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">P</span>Pithos <small>Console</small></a>
+    <span class="spacer"></span>
+    <span class="who">Global admin · <strong>{{.AccessKeyID}}</strong></span>
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form>
+  </header>
+  <div class="app">
+    <nav class="sidenav" aria-label="Administration">
+      <a class="title" href="/">Pithos S3</a>
+      <a class="item" href="/" {{if eq .Section "Dashboard"}}aria-current="page"{{end}}>Dashboard</a>
+      <a class="item" href="/buckets" {{if eq .Section "Buckets"}}aria-current="page"{{end}}>Buckets</a>
+      <hr>
+      <div class="section">Access management</div>
+      <a class="item" href="/credentials" {{if eq .Section "Credentials"}}aria-current="page"{{end}}>Credentials</a>
+      <a class="item" href="/policies" {{if eq .Section "Policies"}}aria-current="page"{{end}}>Policies</a>
+      <hr>
+      <div class="section">Monitoring</div>
+      <a class="item" href="/audit" {{if eq .Section "Audit log"}}aria-current="page"{{end}}>Audit log</a>
+      <a class="item" href="/storage" {{if eq .Section "Storage"}}aria-current="page"{{end}}>Storage</a>
+    </nav>
+    <main id="main" class="content">{{.Content}}</main>
+  </div>
+{{else}}
+  <main id="main" class="login-wrap">{{.Content}}</main>
+{{end}}
 </body>
 </html>{{end}}
 
 {{define "error"}}
-<div class="card">
-  <p><span class="badge bad">{{.Status}} {{.StatusText}}</span></p>
-  <h1>Something went wrong</h1>
-  <p>{{.Message}}</p>
-  <div class="actions-row">{{if .Back}}<a class="button-link primary" href="{{.Back}}">Go back</a>{{end}}<a class="button-link" href="/">Dashboard</a></div>
-</div>
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Error</span></div>
+<div class="page-head"><h1>{{.Status}} {{.StatusText}}</h1></div>
+<div class="alert bad" role="alert"><p>{{.Message}}</p></div>
+<div class="actions-row start">{{if .Back}}<a class="button-link primary" href="{{.Back}}">Go back</a>{{end}}<a class="button-link" href="/">Dashboard</a></div>
 {{end}}

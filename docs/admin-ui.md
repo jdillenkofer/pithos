@@ -107,19 +107,22 @@ and at most one year when login is configured.
 - Login has a signed pre-login CSRF token. Every authenticated unsafe request
   requires the session CSRF token; htmx sends it in a header and ordinary forms
   send a hidden field. Cross-site Origin/Fetch Metadata requests are rejected.
-- CSP permits only same-origin external scripts/styles; evaluation and inline
+- CSP permits only same-origin external scripts/styles and same-origin or
+  inline `data:` images (used for stylesheet icons); evaluation and inline
   scripts are disabled in htmx. Responses set `frame-ancestors 'none'`,
   `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: same-origin` and
   `Cache-Control: no-store`. Authenticated content is not cached in htmx history.
 
 ## Dashboard
 
-The dashboard polls every ten seconds. It shows the same database health check
-as monitoring, the successfully started storage state, S3 request/error rates
-and interval mean latency from the in-process Prometheus gatherer, storage
-usage gauges, outbox pending entries and replication journal backlog when
-those collectors are present. The first sample establishes a rate baseline;
-missing metrics are not presented as invented values.
+The dashboard polls every ten seconds. It shows a storage snapshot (total
+size, object count, average object size and bucket count), server status from
+the same database health check as monitoring, version and uptime, S3
+request/error rates and interval mean latency from the in-process Prometheus
+gatherer, deduplication, outbox and replication backlogs when those
+collectors are present, and the ten largest buckets. The first sample
+establishes a rate baseline; missing metrics are shown as a dash rather than
+invented values.
 
 Bucket byte/object gauges sample current completed live objects from configured
 metadata databases. Historical versions and delete markers are excluded.

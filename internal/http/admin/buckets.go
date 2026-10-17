@@ -20,24 +20,51 @@ const maxBucketFormSize = 1 << 20
 
 var bucketTabs = []string{"versioning", "object-lock", "lifecycle", "cors", "website", "tags", "notifications"}
 
+type bucketRow struct {
+	Name, Owner, Created, Objects, Size string
+}
+
 type bucketsPage struct {
-	CSRF    string
-	Owner   string
-	Buckets []storage.Bucket
+	CSRF, Owner, Query string
+	Total              int
+	Buckets            []bucketRow
+}
+
+// bucketHeader drives the shared bucket title and S3-console-style tabs.
+type bucketHeader struct {
+	Name, Owner, Active string
 }
 
 type bucketDetailPage struct {
 	CSRF          string
 	Bucket        *storage.Bucket
+	Header        bucketHeader
 	Tabs          []string
 	Tab           string
 	Configuration string
+}
+
+// bucketTabGroups places each configuration on the S3 console tab where it lives.
+var bucketTabGroups = map[string]string{
+	"versioning": "properties", "object-lock": "properties", "tags": "properties", "website": "properties", "notifications": "properties",
+	"cors": "permissions", "lifecycle": "management",
+}
+
+func bucketGroupTabs(group string) []string {
+	var tabs []string
+	for _, tab := range bucketTabs {
+		if bucketTabGroups[tab] == group {
+			tabs = append(tabs, tab)
+		}
+	}
+	return tabs
 }
 
 // registerBuckets must be mounted behind the global-admin session and CSRF
 // middleware. Storage calls deliberately bypass S3 ownership and policy checks.
 func (a *App) registerBuckets(mux *http.ServeMux) {
 	mux.HandleFunc("GET /buckets", a.listBuckets)
+	mux.HandleFunc("GET /buckets/new", a.newBucket)
 	mux.HandleFunc("POST /buckets/create", a.createBucket)
 	mux.HandleFunc("POST /buckets/delete", a.deleteBucket)
 	mux.HandleFunc("GET /buckets/detail", a.bucketDetail)
@@ -67,7 +94,27 @@ func (a *App) listBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.Slice(buckets, func(i, j int) bool { return buckets[i].Name.String() < buckets[j].Name.String() })
-	a.render(w, r, "Buckets", "buckets", bucketsPage{CSRF: csrfToken(r), Owner: currentCredential(r).AccountID, Buckets: buckets})
+	page := bucketsPage{CSRF: csrfToken(r), Owner: currentCredential(r).AccountID, Query: r.URL.Query().Get("q"), Total: len(buckets)}
+	// Usage comes from the periodic bucket gauges; unsampled buckets show a dash.
+	snapshot, _ := gatherMetrics()
+	for _, bucket := range buckets {
+		if page.Query != "" && !strings.Contains(bucket.Name.String(), strings.ToLower(page.Query)) {
+			continue
+		}
+		row := bucketRow{Name: bucket.Name.String(), Owner: bucket.OwnerAccountID, Objects: "—", Size: "—"}
+		if !bucket.CreationDate.IsZero() {
+			row.Created = bucket.CreationDate.UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		if usage, ok := snapshot.buckets[row.Name]; ok {
+			row.Objects, row.Size = formatCount(usage.Objects), humanBytes(usage.Bytes)
+		}
+		page.Buckets = append(page.Buckets, row)
+	}
+	a.render(w, r, "Buckets", "buckets", page)
+}
+
+func (a *App) newBucket(w http.ResponseWriter, r *http.Request) {
+	a.render(w, r, "Create bucket", "buckets_new", bucketsPage{CSRF: csrfToken(r), Owner: currentCredential(r).AccountID})
 }
 
 func (a *App) bucketForm(w http.ResponseWriter, r *http.Request) bool {
@@ -190,7 +237,8 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 			text = string(data)
 		}
 	}
-	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", bucketDetailPage{CSRF: csrfToken(r), Bucket: bucket, Tabs: bucketTabs, Tab: tab, Configuration: text})
+	group := bucketTabGroups[tab]
+	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", bucketDetailPage{CSRF: csrfToken(r), Bucket: bucket, Header: bucketHeader{Name: name.String(), Owner: bucket.OwnerAccountID, Active: group}, Tabs: bucketGroupTabs(group), Tab: tab, Configuration: text})
 }
 
 func missingBucketConfiguration(err error) bool {

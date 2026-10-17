@@ -1,31 +1,29 @@
 {{define "audit"}}
-<div class="page-head">
-  <div><h1>Audit log</h1><p class="subtitle">Newest first · 50 entries per page · entries are shown as recorded, viewing does not verify authenticity</p></div>
-</div>
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Audit log</span></div>
 {{if .Sources}}
-<section class="card">
-<form method="get" action="/audit">
-<div class="form-grid">
-<label>Log <select name="source">{{range .Sources}}<option value="{{.}}" {{if eq . $.Filter.Source}}selected{{end}}>File log {{.}}</option>{{end}}</select></label>
-<label>Principal <input name="principal" value="{{.Filter.Principal}}" maxlength="256"></label>
-<label>Operation <input name="operation" value="{{.Filter.Operation}}" maxlength="256" placeholder="PutObject"></label>
-<label>Bucket <input name="bucket" value="{{.Filter.Bucket}}" maxlength="256"></label>
-<label>From (RFC3339, inclusive) <input name="from" placeholder="2026-01-01T00:00:00Z" value="{{if not .Filter.From.IsZero}}{{.Filter.From.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
-<label>To (RFC3339, inclusive) <input name="to" placeholder="2026-12-31T23:59:59Z" value="{{if not .Filter.To.IsZero}}{{.Filter.To.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
-<div><button type="submit" class="primary">Filter</button></div>
+<div class="container">
+  <div class="container-head"><div><h2>Events</h2><p>Newest first, 50 per page. Entries are shown as recorded; viewing does not verify authenticity.</p></div></div>
+  <div class="container-body">
+  <form method="get" action="/audit">
+  <div class="form-grid">
+    <label>Log <select name="source">{{range .Sources}}<option value="{{.}}" {{if eq . $.Filter.Source}}selected{{end}}>File log {{.}}</option>{{end}}</select></label>
+    <label>Principal <input name="principal" value="{{.Filter.Principal}}" maxlength="256"></label>
+    <label>Operation <input name="operation" value="{{.Filter.Operation}}" maxlength="256" placeholder="PutObject"></label>
+    <label>Bucket <input name="bucket" value="{{.Filter.Bucket}}" maxlength="256"></label>
+    <label>From <input name="from" placeholder="2026-01-01T00:00:00Z" value="{{if not .Filter.From.IsZero}}{{.Filter.From.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
+    <label>To <input name="to" placeholder="2026-12-31T23:59:59Z" value="{{if not .Filter.To.IsZero}}{{.Filter.To.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
+    <div><button type="submit" class="primary">Apply filters</button></div>
+  </div>
+  </form>
+  </div>
+  <div class="table-wrap divider"><table><thead><tr><th>Event time (UTC)</th><th>Type</th><th>Principal</th><th>Operation</th><th>Bucket</th><th>Key</th><th>Outcome</th></tr></thead>
+  <tbody>{{range .Rows}}<tr><td class="nowrap">{{.Timestamp.UTC.Format "2006-01-02 15:04:05"}}</td><td>{{.Type}}</td><td>{{.Principal}}</td><td>{{.Operation}}</td><td>{{.Bucket}}</td><td class="key">{{.Key}}</td><td>{{if .Outcome}}<span class="status {{if eq .Outcome "success"}}ok{{else if eq .Outcome "pending"}}info{{else}}bad{{end}}">{{.Outcome}}</span>{{end}}</td></tr>{{else}}<tr><td colspan="7" class="empty"><strong>No events</strong>No entries match the filters.</td></tr>{{end}}</tbody></table></div>
+  <div class="container-body divider"><nav class="pager" aria-label="Audit pages">{{if .Previous}}<a href="{{.Previous}}">‹ Newer</a>{{end}}<span>Page {{.Filter.Page}}</span>{{if .Next}}<a href="{{.Next}}">Older ›</a>{{end}}</nav></div>
 </div>
-</form>
-</section>
-<section class="card flush">
-<div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Type</th><th>Principal</th><th>Operation</th><th>Bucket</th><th>Key</th><th>Outcome</th></tr></thead>
-<tbody>{{range .Rows}}<tr><td class="hint">{{.Timestamp.UTC.Format "2006-01-02 15:04:05"}}</td><td>{{.Type}}</td><td>{{.Principal}}</td><td class="mono">{{.Operation}}</td><td>{{.Bucket}}</td><td class="key">{{.Key}}</td><td>{{if .Outcome}}<span class="badge plain {{if eq .Outcome "success"}}ok{{else if eq .Outcome "pending"}}info{{else}}bad{{end}}">{{.Outcome}}</span>{{end}}</td></tr>{{else}}<tr><td colspan="7" class="empty">No matching entries.</td></tr>{{end}}</tbody></table></div>
-<nav class="pager" aria-label="Audit pages">{{if .Previous}}<a href="{{.Previous}}">← Newer</a>{{end}} <span>Page {{.Filter.Page}}</span> {{if .Next}}<a href="{{.Next}}">Older →</a>{{end}}</nav>
-</section>
-<section class="card">
-<h2>Verify log integrity</h2>
-<p class="hint">Verifies the complete file's hashes, chain links and Merkle roots, not only the filtered entries. Signature authenticity is not checked here; use <code>pithos audit-log verify</code> with trusted public keys for that. Limits: 128 MiB, 1,000,000 entries, ten minutes.</p>
-<form method="post" action="/audit/verify"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="source" value="{{.Filter.Source}}"><button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Verify selected log</button></form>
-{{template "audit_progress" .Job}}
-</section>
-{{else}}<p class="notice">No audit logs found. Add an <code>AuditStorageMiddleware</code> with a <code>FileSink</code> to the storage configuration to record a signed audit trail.</p>{{end}}
+<div class="container">
+  <div class="container-head"><div><h2>Integrity verification</h2><p>Verifies the complete file's hashes, chain links and Merkle roots. Signature authenticity is not checked here; use <code>pithos audit-log verify</code> with trusted public keys. Limits: 128 MiB, 1,000,000 entries, ten minutes.</p></div>
+  <form method="post" action="/audit/verify"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="source" value="{{.Filter.Source}}"><button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Verify log</button></form></div>
+  <div class="container-body">{{template "audit_progress" .Job}}</div>
+</div>
+{{else}}<div class="alert"><p>No audit logs found. Add an <code>AuditStorageMiddleware</code> with a <code>FileSink</code> to the storage configuration to record a signed audit trail.</p></div>{{end}}
 {{end}}

@@ -1,31 +1,48 @@
 {{define "dashboard"}}
 <section hx-get="/" hx-trigger="every 10s" hx-target="#main" hx-swap="innerHTML">
-<div class="page-head">
-  <div><h1>Dashboard</h1><p class="subtitle">Live server status · refreshes every 10 seconds</p></div>
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Dashboard</span></div>
+<div class="page-head"><div><h1>Dashboard</h1><p class="subtitle">Updates every 10 seconds</p></div></div>
+{{if .MetricsError}}<div role="alert"><p>{{.MetricsError}}</p></div>{{end}}
+<div class="container">
+  <div class="container-head"><div><h2>Storage snapshot</h2><p>Current versions of all objects across every account</p></div></div>
+  <div class="container-body">
+    <div class="kv split">
+      <div><div class="label">Total storage</div><div class="big">{{.TotalSize}}</div></div>
+      <div><div class="label">Object count</div><div class="big">{{.Objects}}</div></div>
+      <div><div class="label">Average object size</div><div class="big">{{.AverageSize}}</div></div>
+      <div><div class="label">Buckets</div><div class="big">{{.Buckets}}</div></div>
+    </div>
+    {{if not .Sampled}}<p class="hint">Usage is sampled periodically; the first sample appears shortly after startup.</p>{{end}}
+  </div>
 </div>
-<div class="stats">
-  <div class="stat"><div class="label">Database</div><div class="value small"><span class="badge {{if .DatabaseHealthy}}ok{{else}}bad{{end}}">{{.DatabaseHealth}}</span></div></div>
-  <div class="stat"><div class="label">Storage</div><div class="value small"><span class="badge {{if .StorageStarted}}ok{{else}}warn{{end}}">{{.StorageState}}</span></div></div>
-  <div class="stat"><div class="label">S3 requests</div><div class="value">{{.RequestRate}}</div></div>
-  <div class="stat"><div class="label">S3 errors (4xx/5xx)</div><div class="value">{{.ErrorRate}}</div></div>
-  <div class="stat"><div class="label">Mean latency</div><div class="value">{{.Latency}}</div></div>
+<div class="container">
+  <div class="container-head"><div><h2>Server</h2></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Status</div><div class="value">{{if .DatabaseHealthy}}<span class="status ok">Online</span>{{else}}<span class="status bad">Database unavailable</span>{{end}}</div></div>
+      <div><div class="label">Version</div><div class="value mono">{{.Version}}</div></div>
+      <div><div class="label">Uptime</div><div class="value">{{.Uptime}}</div></div>
+      {{range .Storage}}<div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}
+    </div>
+  </div>
 </div>
-{{if .MetricsError}}<p role="alert">{{.MetricsError}}</p>{{end}}
-{{if .Usage}}<div class="stats">{{range .Usage}}<div class="stat"><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}</div>{{end}}
-<div class="card flush">
-  <h2>Bucket usage</h2>
-  <p class="hint card-pad">Current live objects; historical versions and delete markers are excluded. Sampled periodically, so recent writes may take a moment to appear.</p>
-  <div class="table-wrap"><table>
-  <thead><tr><th>Bucket</th><th>Database</th><th class="num">Objects</th><th class="num">Size</th></tr></thead>
-  <tbody>{{range .Buckets}}<tr><td><a href="/objects?bucket={{.Bucket}}">{{.Bucket}}</a></td><td><span class="chip">db {{.Database}}</span></td><td class="num">{{.Objects}}</td><td class="num">{{.Size}}</td></tr>{{else}}<tr><td colspan="4" class="empty">No bucket usage sampled yet.</td></tr>{{end}}</tbody>
-  </table></div>
+<div class="container">
+  <div class="container-head"><div><h2>S3 API activity</h2><p>Since the previous refresh</p></div></div>
+  <div class="container-body">
+    <div class="kv">
+      <div><div class="label">Requests</div><div class="big">{{.RequestRate}}</div></div>
+      <div><div class="label">Errors (4xx and 5xx)</div><div class="big">{{.ErrorRate}}</div></div>
+      <div><div class="label">Mean latency</div><div class="big">{{.Latency}}</div></div>
+    </div>
+  </div>
 </div>
-{{if .Metrics}}<div class="card flush">
-  <h2>Storage and queues</h2>
-  <div class="table-wrap"><table>
-  <thead><tr><th>Metric</th><th>Labels</th><th class="num">Value</th></tr></thead>
-  <tbody>{{range .Metrics}}<tr><td>{{.Label}}</td><td>{{range .Labels}}<span class="chip">{{.}}</span>{{end}}</td><td class="num">{{.Value}}</td></tr>{{end}}</tbody>
-  </table></div>
-</div>{{end}}
+<div class="container">
+  <div class="container-head"><div><h2>Largest buckets</h2><p>Top 10 by size</p></div><a class="button-link" href="/buckets">View all buckets</a></div>
+  <div class="container-body">
+    {{if .TopBuckets}}<div class="usage">
+    {{range .TopBuckets}}<a class="key" href="/objects?bucket={{.Name}}">{{.Name}}</a><meter min="0" max="{{$.MaxBytes}}" value="{{.Bytes}}" title="{{.Size}}">{{.Size}}</meter><span class="num">{{.Objects}} objects</span><span class="num">{{.Size}}</span>
+    {{end}}</div>{{else}}<p class="subtitle">No bucket usage sampled yet.</p>{{end}}
+  </div>
+</div>
 </section>
 {{end}}
