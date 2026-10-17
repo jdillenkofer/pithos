@@ -77,6 +77,45 @@ func TestMiddlewareTracksOperationsAndForwardsCapabilities(t *testing.T) {
 	})
 }
 
+type seekablePartStore struct {
+	fakePartStore
+}
+
+type nopReadSeekCloser struct {
+	*bytes.Reader
+}
+
+func (nopReadSeekCloser) Close() error { return nil }
+
+func (f *seekablePartStore) GetPart(context.Context, database.Tx, partstore.PartId) (io.ReadCloser, error) {
+	return nopReadSeekCloser{bytes.NewReader(f.content)}, nil
+}
+
+func TestMiddlewarePreservesSeekOnGetPart(t *testing.T) {
+	pithostesting.WithTestRegisterer(t, func(_ client.Registerer) {
+		id, err := partstore.NewRandomPartId()
+		require.NoError(t, err)
+
+		seekable := New(&seekablePartStore{fakePartStore{content: []byte("abcdef")}}, nil, "seekable", 0)
+		reader, err := seekable.GetPart(context.Background(), nil, *id)
+		require.NoError(t, err)
+		seeker, ok := reader.(io.Seeker)
+		require.True(t, ok, "reader of a seekable part store must stay seekable")
+		_, err = seeker.Seek(4, io.SeekCurrent)
+		require.NoError(t, err)
+		data, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		require.Equal(t, "ef", string(data))
+		require.Equal(t, float64(2), counterValue(t, metrics.bytesRead.WithLabelValues("seekable")))
+
+		plain := New(&fakePartStore{content: []byte("abcdef")}, nil, "plain", 0)
+		reader, err = plain.GetPart(context.Background(), nil, *id)
+		require.NoError(t, err)
+		_, ok = reader.(io.Seeker)
+		require.False(t, ok, "reader of a non-seekable part store must not claim to be seekable")
+	})
+}
+
 func TestRefreshUsesCheapStatsProvider(t *testing.T) {
 	pithostesting.WithTestRegisterer(t, func(_ client.Registerer) {
 		db, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "metrics.db"))

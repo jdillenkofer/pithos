@@ -437,10 +437,10 @@ func (psm *prometheusStorageMiddleware) GetObject(ctx context.Context, bucketNam
 	}
 
 	// Wrap each reader with stats tracking
+	bytesDownloaded := psm.totalBytesDownloadedByBucket.WithLabelValues(bucketName.String())
+	onRead := func(n int) { bytesDownloaded.Add(float64(n)) }
 	for i, reader := range readers {
-		readers[i] = ioutils.NewStatsReadCloser(reader, func(n int) {
-			psm.totalBytesDownloadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
-		})
+		readers[i] = ioutils.NewStatsReadCloser(reader, onRead)
 	}
 
 	return object, readers, nil
@@ -450,8 +450,9 @@ func (psm *prometheusStorageMiddleware) PutObject(ctx context.Context, bucketNam
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.PutObject")
 	defer span.End()
 
+	bytesUploaded := psm.totalBytesUploadedByBucket.WithLabelValues(bucketName.String())
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
-		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
+		bytesUploaded.Add(float64(n))
 	})
 
 	finish := psm.startOperation("PutObject")
@@ -468,8 +469,9 @@ func (psm *prometheusStorageMiddleware) AppendObject(ctx context.Context, bucket
 	ctx, span := psm.tracer.Start(ctx, "PrometheusStorageMiddleware.AppendObject")
 	defer span.End()
 
+	bytesUploaded := psm.totalBytesUploadedByBucket.WithLabelValues(bucketName.String())
 	reader = ioutils.NewStatsReadCloser(ioutils.NewNopSeekCloser(reader), func(n int) {
-		psm.totalBytesUploadedByBucket.With(prometheus.Labels{"bucket": bucketName.String()}).Add(float64(n))
+		bytesUploaded.Add(float64(n))
 	})
 
 	finish := psm.startOperation("AppendObject")

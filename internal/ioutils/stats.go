@@ -28,6 +28,28 @@ func (s *statsReadCloser) Close() error {
 	return s.innerReadCloser.Close()
 }
 
+type statsReadSeekCloser struct {
+	statsReadCloser
+	innerSeeker io.Seeker
+}
+
+// NewStatsReadSeekCloser is NewStatsReadCloser for readers that also support
+// seeking; the wrapper preserves the Seek method so callers can still
+// discover it via type assertion (e.g. SkipNBytes for range reads).
+func NewStatsReadSeekCloser(innerReadSeekCloser io.ReadSeekCloser, readCallback func(n int)) io.ReadSeekCloser {
+	return &statsReadSeekCloser{
+		statsReadCloser: statsReadCloser{
+			innerReadCloser: innerReadSeekCloser,
+			readCallback:    readCallback,
+		},
+		innerSeeker: innerReadSeekCloser,
+	}
+}
+
+func (s *statsReadSeekCloser) Seek(offset int64, whence int) (int64, error) {
+	return s.innerSeeker.Seek(offset, whence)
+}
+
 type CountingReader struct {
 	Reader io.Reader
 	Count  *int64

@@ -102,7 +102,14 @@ func (m *PartStoreMiddleware) GetPart(ctx context.Context, tx database.Tx, id pa
 	if err != nil {
 		return nil, err
 	}
-	return ioutils.NewStatsReadCloser(reader, func(n int) { metrics.bytesRead.WithLabelValues(m.name).Add(float64(n)) }), nil
+	bytesRead := metrics.bytesRead.WithLabelValues(m.name)
+	onRead := func(n int) { bytesRead.Add(float64(n)) }
+	// Preserve Seek so range reads can skip to their offset instead of
+	// reading and discarding everything before it.
+	if rsc, ok := reader.(io.ReadSeekCloser); ok {
+		return ioutils.NewStatsReadSeekCloser(rsc, onRead), nil
+	}
+	return ioutils.NewStatsReadCloser(reader, onRead), nil
 }
 
 func (m *PartStoreMiddleware) GetPartIds(ctx context.Context, tx database.Tx) ([]partstore.PartId, error) {
