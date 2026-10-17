@@ -139,9 +139,10 @@ VALUES
     ('new-key', 'new-secret', 'storage-account', 'storage-client');
 ```
 
-Set `enabled` to `FALSE` or delete a row to revoke it. The `version`,
-`created_at`, and `updated_at` columns are reserved for managed updates by a
-future administration API. Secret access keys are stored in reversible form
+Set `enabled` to `FALSE` or delete a row to revoke it. Direct database edits
+take effect at the next reload. The [admin UI](admin-ui.md) can also create
+and delete SQL credentials; its changes take effect immediately. The `version`,
+`created_at`, and `updated_at` columns are reserved for future managed updates. Secret access keys are stored in reversible form
 because SigV4 verification requires them; protect the database with strict
 access controls and storage-level encryption.
 
@@ -241,8 +242,9 @@ and container-local healthchecks cannot assume those utilities exist.
 | `PITHOS_ADMIN_SESSION_MAX_HOURS` | Maximum session lifetime in hours | `12` |
 | `PITHOS_ADMIN_DATABASE_INDEX` | Zero-based configured database index used for admin sessions | `0` |
 
-The admin UI is under development. These settings establish its configuration;
-login and management functionality are not yet available.
+See [Admin Web UI](admin-ui.md) for setup, session security, provider support,
+policy saving, and diagnostic limits. A nonempty allowlist requires a valid
+SQLite/PostgreSQL session database at the configured index.
 
 The listener uses plain HTTP, like the S3 and monitoring endpoints. For remote
 access, terminate HTTPS at a reverse proxy and enable
