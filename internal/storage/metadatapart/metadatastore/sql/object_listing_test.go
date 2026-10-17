@@ -59,7 +59,7 @@ func TestDelimiterListingSeeksPastHugeSubtree(t *testing.T) {
 			repo.keys = append(repo.keys, "a0", "z")
 			store := &sqlMetadataStore{objectRepository: repo, tagRepository: &listingTagRepository{}}
 			delimiter := "/"
-			result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, MaxKeys: 1, SkipPartFetch: true})
+			result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, MaxKeys: 1})
 			require.NoError(t, err)
 			require.Equal(t, []string{"a/"}, result.CommonPrefixes)
 			require.Empty(t, result.Objects)
@@ -74,7 +74,7 @@ func TestDelimiterListingSeeksPastHugeSubtree(t *testing.T) {
 
 			repo.minimums = nil
 			marker := "a/050000"
-			result, err = store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, StartAfter: &marker, MaxKeys: 1, SkipPartFetch: true})
+			result, err = store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, StartAfter: &marker, MaxKeys: 1})
 			require.NoError(t, err)
 			require.Empty(t, result.CommonPrefixes)
 			require.Len(t, result.Objects, 1)
@@ -94,7 +94,7 @@ func TestDelimiterListingBatchesDirectObjects(t *testing.T) {
 			}
 			store := &sqlMetadataStore{objectRepository: repo, tagRepository: &listingTagRepository{}}
 			delimiter := "/"
-			result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, MaxKeys: 1000, SkipPartFetch: true})
+			result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, MaxKeys: 1000})
 			require.NoError(t, err)
 			require.Len(t, result.Objects, min(count, 1000))
 			require.Empty(t, result.CommonPrefixes)
@@ -138,7 +138,7 @@ func TestDelimiterListingBatchBoundaries(t *testing.T) {
 					got := []string{}
 					for page := 0; ; page++ {
 						require.Less(t, page, len(expected)+1)
-						result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, StartAfter: &marker, MaxKeys: pageSize, SkipPartFetch: true})
+						result, err := store.listObjects(t.Context(), nil, storage.MustNewBucketName("bucket"), metadatastore.ListObjectsOptions{Delimiter: &delimiter, StartAfter: &marker, MaxKeys: pageSize})
 						require.NoError(t, err)
 						entries := append([]string{}, result.CommonPrefixes...)
 						for _, entity := range result.Objects {

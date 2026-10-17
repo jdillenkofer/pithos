@@ -57,11 +57,10 @@ func (mbs *metadataPartStorage) ListObjects(ctx context.Context, bucketName stor
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error
 		mListBucketResult, err = mbs.metadataStore.ListObjects(ctx, tx.SqlTx(), bucketName, metadatastore.ListObjectsOptions{
-			Prefix:        opts.Prefix,
-			Delimiter:     opts.Delimiter,
-			StartAfter:    opts.StartAfter,
-			MaxKeys:       opts.MaxKeys,
-			SkipPartFetch: true,
+			Prefix:     opts.Prefix,
+			Delimiter:  opts.Delimiter,
+			StartAfter: opts.StartAfter,
+			MaxKeys:    opts.MaxKeys,
 		})
 		return err
 	})

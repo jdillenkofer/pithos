@@ -111,28 +111,6 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 	}
 
 	for _, objectEntity := range objectEntities {
-		var parts []metadatastore.Part = nil
-		if !opts.SkipPartFetch {
-			// @Perf: Consider optimizing part fetch to reduce database calls
-			partEntities, err := sms.partRepository.FindPartsByObjectIdOrderBySequenceNumberAsc(ctx, tx, *objectEntity.Id)
-			if err != nil {
-				return nil, err
-			}
-			for _, partEntity := range partEntities {
-				partStruc := metadatastore.Part{
-					Id:                partEntity.PartId,
-					ETag:              partEntity.ETag,
-					ChecksumCRC32:     partEntity.ChecksumCRC32,
-					ChecksumCRC32C:    partEntity.ChecksumCRC32C,
-					ChecksumCRC64NVME: partEntity.ChecksumCRC64NVME,
-					ChecksumSHA1:      partEntity.ChecksumSHA1,
-					ChecksumSHA256:    partEntity.ChecksumSHA256,
-					Size:              partEntity.Size,
-					StoreName:         partEntity.PartStoreName,
-				}
-				parts = append(parts, partStruc)
-			}
-		}
 		objects = append(objects, metadatastore.Object{
 			Key:               objectEntity.Key,
 			LastModified:      objectEntity.UpdatedAt,
@@ -147,7 +125,6 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 			ChecksumType:      objectEntity.ChecksumType,
 			Size:              objectEntity.Size,
 			StorageClass:      objectEntity.StorageClass,
-			Parts:             parts,
 		})
 		listedObjectIds = append(listedObjectIds, *objectEntity.Id)
 	}
