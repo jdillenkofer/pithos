@@ -74,7 +74,8 @@ pre { background: var(--bg-layout); border: 1px solid var(--divider); border-rad
 .topnav { background: var(--topnav); height: 40px; display: flex; align-items: center; padding: 0 20px; gap: 16px; position: sticky; top: 0; z-index: 10; }
 .brand { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 700; font-size: 16px; }
 .brand:hover { color: #fff; text-decoration: none; }
-.brand-mark { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; background: #ff9900; color: #0f141a; font-size: 14px; font-weight: 800; }
+.brand-logo { display: block; width: 26px; height: 26px; flex: none; }
+.login-card .brand-logo { width: 34px; height: 34px; }
 .brand small { font-weight: 400; color: #d1d5db; font-size: 14px; }
 .topnav .spacer { flex: 1; }
 .topnav .who { color: #d1d5db; font-size: 13px; }

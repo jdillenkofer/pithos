@@ -60,7 +60,7 @@ func NewHandler(options ...Options) (http.Handler, error) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	for _, file := range []struct{ name, kind string }{{"admin.css", "text/css; charset=utf-8"}, {"admin.js", "text/javascript; charset=utf-8"}, {"htmx.min.js", "text/javascript; charset=utf-8"}} {
+	for _, file := range []struct{ name, kind string }{{"admin.css", "text/css; charset=utf-8"}, {"admin.js", "text/javascript; charset=utf-8"}, {"htmx.min.js", "text/javascript; charset=utf-8"}, {"logo.svg", "image/svg+xml"}} {
 		contents, err := assets.ReadFile("static/" + file.name)
 		if err != nil {
 			return nil, fmt.Errorf("read admin asset: %w", err)

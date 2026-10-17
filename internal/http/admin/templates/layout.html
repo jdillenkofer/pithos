@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{.CSRF}}">
   <title>{{.Title}} · Pithos</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/admin.css">
   <script defer src="/static/htmx.min.js"></script>
   <script defer src="/static/admin.js"></script>
@@ -12,7 +13,7 @@
 <body {{if not .Authenticated}}class="auth"{{end}} hx-history="false" hx-headers='{"X-CSRF-Token":"{{.CSRF}}"}'>
 {{if .Authenticated}}
   <header class="topnav">
-    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">P</span>Pithos <small>Console</small></a>
+    <a class="brand" href="/"><img class="brand-logo" src="/static/logo.svg" alt="" width="26" height="26">Pithos <small>Console</small></a>
     <span class="spacer"></span>
     <span class="who">Global admin · <strong>{{.AccessKeyID}}</strong></span>
     <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button>Sign out</button></form>

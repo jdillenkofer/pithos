@@ -22,6 +22,7 @@ func TestRouter(t *testing.T) {
 		{http.MethodGet, "/", http.StatusSeeOther, "/login"},
 		{http.MethodGet, "/login", http.StatusOK, "Sign in"},
 		{http.MethodGet, "/static/admin.css", http.StatusOK, "color-scheme"},
+		{http.MethodGet, "/static/logo.svg", http.StatusOK, "<title>Pithos</title>"},
 		{http.MethodGet, "/missing", http.StatusSeeOther, "/login"},
 		{http.MethodGet, "/static/missing.js", http.StatusSeeOther, "/login"},
 		{http.MethodGet, "/templates/layout.html", http.StatusSeeOther, "/login"},
