@@ -24,6 +24,7 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/klauspost/reedsolomon v1.14.2
 	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/moby/moby/api v1.56.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/pkg/sftp v1.13.11
 	github.com/prometheus/client_golang v1.25.0
@@ -110,7 +111,6 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.3 // indirect
-	github.com/moby/moby/api v1.56.0 // indirect
 	github.com/moby/moby/client v0.6.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect

@@ -31,14 +31,14 @@ func SkipIfNotIntegration(t *testing.T) {
 }
 
 // SkipOnWindowsInGitHubActions skips the test if it is running on Windows in GitHub Actions
-func SkipOnWindowsInGitHubActions(t *testing.T) {
+func SkipOnWindowsInGitHubActions(t testing.TB) {
 	if runtime.GOOS == "windows" && os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("Skipping test on Windows in GitHub Actions")
 	}
 }
 
 // SkipOnMacOSInGitHubActions skips the test if it is running on macOS in GitHub Actions
-func SkipOnMacOSInGitHubActions(t *testing.T) {
+func SkipOnMacOSInGitHubActions(t testing.TB) {
 	if runtime.GOOS == "darwin" && os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("Skipping test on macOS in GitHub Actions")
 	}
