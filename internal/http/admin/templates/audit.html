@@ -53,8 +53,7 @@
   </tr>{{else}}<tr><td colspan="7" class="empty"><strong>No events</strong>No events match these filters. Try a wider time range.</td></tr>{{end}}</tbody></table></div>
 </div>
 <div class="container">
-  <div class="container-head"><div><h2>Integrity verification</h2><p>Verifies the complete file's hashes, chain links and Merkle roots. Signature authenticity is not checked here; use <code>pithos audit-log verify</code> with trusted public keys. Limits: 128 MiB, 1,000,000 entries, ten minutes.</p></div>
-  <form method="post" action="/audit/verify"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="source" value="{{.Filter.Source}}"><button type="submit" class="primary" {{if .Job.Running}}disabled{{end}}>Verify log</button></form></div>
+  <div class="container-head"><div><h2>Integrity verification</h2><p>Reads the whole log and verifies every entry hash, chain link and Merkle root, and the Ed25519 and ML-DSA-87 signatures with the keys configured for this log. There is no size or time limit; progress is shown while it runs.</p></div></div>
   <div class="container-body">{{template "audit_progress" .Job}}</div>
 </div>
 {{else}}<div class="alert"><p>No audit logs found. Add an <code>AuditStorageMiddleware</code> with a <code>FileSink</code> to the storage configuration to record a signed audit trail.</p></div>{{end}}

@@ -254,13 +254,20 @@ Console actions are recorded as `Admin…` events, for example `AdminLogin`,
 `AdminCreateBucket`, `AdminPutBucketLifecycle`, `AdminDeleteObjectVersion` or
 `AdminSavePolicy`.
 
-Verification runs in the background and polls progress. It reuses the audit
-validator for entry hashes, chain links and Merkle grounding. It does **not**
-verify signature authenticity without trusted public keys; use the existing
-`audit-log verify` CLI with trusted Ed25519/ML-DSA public keys for that guarantee.
-Each scan is a finite regular-file snapshot, limited to 128 MiB and 1,000,000
-entries. Viewing has a ten-second limit; verification has a ten-minute limit.
-A concurrently incomplete append is reported and may require retrying.
+Verification runs in the background with a progress bar, throughput and
+remaining time, and can be started again in place once finished. It reads the
+whole file with no size, entry or time limit and checks every entry hash,
+chain link and Merkle root, the Ed25519 signature of every entry and Merkle
+root, and the ML-DSA-87 signature of every Merkle root. The verification keys
+are the `publicKey` values of the log's signing configuration, or are derived
+from its local private keys; they therefore prove that the log was signed by
+the keys this server is configured with. An Ed25519 key held in Vault can only
+be checked when `signing.ed25519.publicKey` is configured; otherwise those
+signatures are skipped and the result says so. A failure names the first
+failing entry and the reason. Verification is a snapshot of the file's length
+when it started; a concurrently incomplete append is reported and may require
+retrying. Viewing pages keeps its 128 MiB, 1,000,000-entry and ten-second
+limits.
 
 Login, failed credential logins, logout and admin actions go to structured logs
 and to the normal signed audit chain when AuditStorageMiddleware is configured
@@ -278,20 +285,21 @@ Validation runs against the **live** store, not a second instantiated storage
 stack. It uses the same integrity validator as `validate-storage`, with deletion
 and force disabled. No request parameter can enable `-delete-corrupted`. The
 current validator requires exactly one local database. One validation runs at a
-time, it has a ten-minute deadline, and the latest report is retained in memory.
+time with no time limit, and the latest report is retained in memory.
 Progress is polled through authenticated routes and shown as a progress bar
-with throughput and remaining time, estimated from the sampled bucket usage;
+with throughput and remaining time, estimated from the stored part bytes;
 a finished validation can be started again in place. Reports are lost on
 restart.
 
-Validation checks the **current** version of each object, as returned by a
-normal object listing. Historical (noncurrent) object versions, delete markers
-and incomplete multipart uploads are not checked. Objects written or deleted
-while validation runs may be reported as failures; rerun validation to confirm.
+Validation checks **every version** of every object, current and noncurrent,
+against the checksums stored for that version. Delete markers carry no data
+and are skipped; incomplete multipart uploads are not checked. Objects written
+or deleted while validation runs may be reported as failures; rerun validation
+to confirm.
 
-Objects are listed and validated one page of 1,000 at a time, so memory use
+Versions are listed and validated one page of 1,000 at a time, so memory use
 does not grow with bucket size. The report keeps exact counts of scanned,
-passed and failed objects, but lists at most 100 failed objects; the page states
+passed and failed versions, but lists at most 100 failures; the page states
 how many further failures were omitted. Backend error details are not shown in
 the UI. For a complete failure list, including error details, run the
 `validate-storage` command, whose report is not truncated.

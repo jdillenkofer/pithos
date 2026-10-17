@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/auditlog"
 	"github.com/jdillenkofer/pithos/internal/auditlog/serialization"
 	serialconfig "github.com/jdillenkofer/pithos/internal/auditlog/serialization/config"
+	"github.com/jdillenkofer/pithos/internal/auditlog/signing"
 	sinkconfig "github.com/jdillenkofer/pithos/internal/auditlog/sink/config"
 	storageconfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
@@ -33,6 +35,9 @@ const maxAuditEntries = 1000000
 type auditSource struct {
 	Path       string
 	Serializer serialization.Serializer
+	// Signing is the configuration of the middleware writing this log; its
+	// keys verify the log's signatures.
+	Signing *storageconfig.SigningConfiguration
 }
 
 // Traverse only decoded storage nodes and known FileSink configurations. Request
@@ -58,7 +63,7 @@ func auditSources(si storageconfig.StorageInstantiator) []auditSource {
 					serializer = &serialization.TextSerializer{}
 				}
 				if serializer != nil {
-					sources = append(sources, auditSource{f.Path, serializer})
+					sources = append(sources, auditSource{f.Path, serializer, s.Signing})
 				}
 			}
 			walk(s.InnerStorageInstantiator)
@@ -265,6 +270,7 @@ type auditContextReader struct {
 	ctx      context.Context
 	reader   io.Reader
 	consumed int64
+	onRead   func(int64)
 }
 
 func (r *auditContextReader) Read(p []byte) (int, error) {
@@ -273,12 +279,23 @@ func (r *auditContextReader) Read(p []byte) (int, error) {
 	}
 	n, err := r.reader.Read(p)
 	r.consumed += int64(n)
+	if r.onRead != nil && n > 0 {
+		r.onRead(int64(n))
+	}
 	return n, err
+}
+
+// auditScanOptions configures one pass over a log file.
+type auditScanOptions struct {
+	// Unbounded lifts the size and entry limits that keep page views fast.
+	Unbounded bool
+	// OnRead receives the number of bytes read from the file.
+	OnRead func(int64)
 }
 
 // Scan a finite snapshot of a regular file. Appends cannot extend a job forever;
 // a concurrently incomplete trailing entry is reported, never silently trusted.
-func scanAudit(ctx context.Context, source auditSource, visit func(*auditlog.Entry, int) error) error {
+func scanAudit(ctx context.Context, source auditSource, opts auditScanOptions, visit func(*auditlog.Entry, int) error) error {
 	info, err := os.Stat(source.Path)
 	if err != nil {
 		return err
@@ -298,10 +315,10 @@ func scanAudit(ctx context.Context, source auditSource, visit func(*auditlog.Ent
 	if !stat.Mode().IsRegular() {
 		return errors.New("audit source is not a regular file")
 	}
-	if stat.Size() > maxAuditBytes {
+	if !opts.Unbounded && stat.Size() > maxAuditBytes {
 		return errors.New("audit log exceeds scan limit")
 	}
-	reader := &auditContextReader{ctx: ctx, reader: io.NewSectionReader(f, 0, stat.Size())}
+	reader := &auditContextReader{ctx: ctx, reader: io.NewSectionReader(f, 0, stat.Size()), onRead: opts.OnRead}
 	dec := source.Serializer.NewDecoder(reader)
 	_, binaryInput := source.Serializer.(*serialization.BinarySerializer)
 	for index := 0; ; index++ {
@@ -319,7 +336,7 @@ func scanAudit(ctx context.Context, source auditSource, visit func(*auditlog.Ent
 		if err != nil {
 			return fmt.Errorf("cannot decode entry %d", index)
 		}
-		if index >= maxAuditEntries {
+		if !opts.Unbounded && index >= maxAuditEntries {
 			return errors.New("audit entry limit exceeded")
 		}
 		if err := validateAuditEnvelope(e); err != nil {
@@ -361,7 +378,7 @@ func readAuditPage(ctx context.Context, source auditSource, filter auditFilter) 
 	rows := &auditRowHeap{}
 	limit := filter.Page*auditPageSize + 1
 	operations, principals, buckets := auditChoices{}, auditChoices{}, auditChoices{}
-	err := scanAudit(ctx, source, func(e *auditlog.Entry, index int) error {
+	err := scanAudit(ctx, source, auditScanOptions{}, func(e *auditlog.Entry, index int) error {
 		row := auditEntryRow(e, index)
 		operations.add(row.Operation)
 		principals.add(row.Principal)
@@ -401,7 +418,7 @@ type auditPageData struct {
 	RangeLabels    map[string]string
 	Previous, Next string
 	CSRFToken      string
-	Job            adminJobState
+	Job            jobProgressView
 }
 
 func (a *App) registerAudit(mux *http.ServeMux) {
@@ -424,7 +441,7 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 			a.fail(w, r, http.StatusInternalServerError, "Unable to discover audit logs")
 			return
 		}
-		data := auditPageData{Filter: filter, CSRFToken: csrfToken(r), Job: job.snapshot(), RangeLabels: map[string]string{}}
+		data := auditPageData{Filter: filter, CSRFToken: csrfToken(r), Job: jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r), Source: filter.Source}, RangeLabels: map[string]string{}}
 		for _, preset := range auditRanges {
 			data.Ranges = append(data.Ranges, preset.Value)
 			data.RangeLabels[preset.Value] = preset.Label
@@ -468,7 +485,16 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 		}
 		a.auditEvent(w, r, sources)
 	})
-	mux.HandleFunc("GET /audit/verify/progress", func(w http.ResponseWriter, r *http.Request) { renderAdminProgress(w, "audit_progress", job.snapshot()) })
+	progressView := func(r *http.Request, source int) jobProgressView {
+		return jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r), Source: source}
+	}
+	mux.HandleFunc("GET /audit/verify/progress", func(w http.ResponseWriter, r *http.Request) {
+		source, err := strconv.Atoi(r.URL.Query().Get("source"))
+		if err != nil || source < 0 {
+			source = 0
+		}
+		renderAdminProgress(w, "audit_progress", progressView(r, source))
+	})
 	mux.HandleFunc("POST /audit/verify", func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			a.fail(w, r, http.StatusBadRequest, "Invalid form")
@@ -485,26 +511,69 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 			return
 		}
 		source := sources[filter.Source]
-		if !job.start(a.options.Context, func(ctx context.Context, progress func(int)) (*integrity.ValidationReport, error) {
-			validator := auditlog.NewValidator(nil, nil)
-			err := scanAudit(ctx, source, func(e *auditlog.Entry, index int) error {
-				if err := validator.ValidateEntry(e); err != nil {
-					return err
-				}
-				progress(index + 1)
-				return nil
-			})
-			if err == nil && validator.Index == 0 {
-				err = errors.New("empty audit log")
-			}
-			return nil, err
-		}) {
+		started := job.start(a.options.Context, func(ctx context.Context, progress func(int)) (*integrity.ValidationReport, error) {
+			return nil, verifyAuditLog(ctx, source, job, progress)
+		})
+		htmx := r.Header.Get("HX-Request") == "true"
+		if !started && !htmx {
 			a.fail(w, r, http.StatusConflict, "A verification is already running or shutdown has begun")
 			return
 		}
-		a.audit(r, "AdminVerifyAuditLog")
+		if started {
+			a.audit(r, "AdminVerifyAuditLog")
+		}
+		if htmx {
+			renderAdminProgress(w, "audit_progress", progressView(r, filter.Source))
+			return
+		}
 		http.Redirect(w, r, "/audit?source="+strconv.Itoa(filter.Source), http.StatusSeeOther)
 	})
+}
+
+// verifyAuditLog checks the whole log: entry hashes, chain links, Merkle
+// roots and, with the configured keys, Ed25519 and ML-DSA-87 signatures. It
+// has no size, entry or time limit.
+func verifyAuditLog(ctx context.Context, source auditSource, job *adminJob, progress func(int)) error {
+	if info, err := os.Stat(source.Path); err == nil {
+		job.setEstimate(0, info.Size())
+	}
+	var edVerifier, mlVerifier signing.Verifier
+	notes := []string{"Entry hashes, chain links and Merkle roots"}
+	edKey, mlKey, err := source.Signing.VerificationKeys()
+	if err != nil {
+		slog.ErrorContext(ctx, "Load audit verification keys", "error", err)
+		return jobFailure{"The signing keys of this log could not be loaded, so signatures cannot be verified."}
+	}
+	if edKey != nil {
+		edVerifier = signing.NewEd25519Verifier(edKey)
+		notes = append(notes, "Ed25519 signatures of every entry and Merkle root")
+	} else {
+		notes = append(notes, "Ed25519 signatures not checked: the key is held in Vault; set signing.ed25519.publicKey to verify them")
+	}
+	mlVerifier = signing.NewMlDsa87Verifier(mlKey)
+	notes = append(notes, "ML-DSA-87 signatures of every Merkle root")
+	job.setNotes(notes...)
+
+	validator := auditlog.NewValidator(edVerifier, mlVerifier)
+	err = scanAudit(ctx, source, auditScanOptions{Unbounded: true, OnRead: func(n int64) { job.bytes.Add(n) }}, func(e *auditlog.Entry, index int) error {
+		if err := validator.ValidateEntry(e); err != nil {
+			return err
+		}
+		progress(index + 1)
+		return nil
+	})
+	var verification *auditlog.VerificationError
+	switch {
+	case errors.As(err, &verification):
+		return jobFailure{fmt.Sprintf("Entry %d failed verification: %s.", verification.EntryIndex, verification.Reason)}
+	case err != nil && ctx.Err() == nil:
+		return jobFailure{"The log could not be read completely: " + err.Error() + "."}
+	case err != nil:
+		return err
+	case validator.Index == 0:
+		return jobFailure{"The audit log is empty."}
+	}
+	return nil
 }
 
 var errAuditEntryFound = errors.New("audit entry found")
@@ -512,7 +581,7 @@ var errAuditEntryFound = errors.New("audit entry found")
 // readAuditEntry returns the entry at index, scanning the same bounded snapshot.
 func readAuditEntry(ctx context.Context, source auditSource, index int) (*auditlog.Entry, error) {
 	var found *auditlog.Entry
-	err := scanAudit(ctx, source, func(e *auditlog.Entry, i int) error {
+	err := scanAudit(ctx, source, auditScanOptions{}, func(e *auditlog.Entry, i int) error {
 		if i == index {
 			found = e
 			return errAuditEntryFound

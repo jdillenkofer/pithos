@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -40,6 +41,21 @@ type adminJobState struct {
 	// are zero when no estimate is available.
 	ProcessedBytes           int64
 	TotalObjects, TotalBytes int64
+	// Notes describe what the job checked; Failure explains a failed job when
+	// the error is safe to show.
+	Notes   []string
+	Failure string
+}
+
+// jobFailure is an error whose message may be shown in the console.
+type jobFailure struct{ message string }
+
+func (e jobFailure) Error() string { return e.message }
+
+func (j *adminJob) setNotes(notes ...string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.state.Notes = notes
 }
 
 func (j *adminJob) snapshot() adminJobState {
@@ -63,9 +79,9 @@ func (j *adminJob) start(parent context.Context, work func(context.Context, func
 	}
 	j.state = adminJobState{Running: true, Started: time.Now(), Message: "Running", Report: j.state.Report}
 	j.bytes.Store(0)
+	// Jobs have no time limit; they end with the application's lifetime.
 	run := func() {
-		ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
-		defer cancel()
+		ctx := parent
 		report, err := work(ctx, func(n int) { j.mu.Lock(); j.state.Processed = n; j.mu.Unlock() })
 		j.mu.Lock()
 		defer j.mu.Unlock()
@@ -76,11 +92,17 @@ func (j *adminJob) start(parent context.Context, work func(context.Context, func
 		}
 		j.state.Message = "Completed"
 		if err != nil {
-			j.state.Message = "Validation failed; consult server logs"
-			slog.ErrorContext(ctx, "Admin validation failed", "error", err)
+			j.state.Message = "Failed"
+			var failure jobFailure
+			if errors.As(err, &failure) {
+				j.state.Failure = failure.message
+			} else {
+				j.state.Failure = "Consult the server logs for details."
+			}
+			slog.ErrorContext(ctx, "Admin job failed", "error", err)
 		}
 		if ctx.Err() != nil {
-			j.state.Message = "Cancelled or time limit exceeded"
+			j.state.Message, j.state.Failure = "Cancelled", "The server is shutting down."
 		}
 	}
 	if j.workers != nil {
@@ -97,17 +119,19 @@ func (j *adminJob) start(parent context.Context, work func(context.Context, func
 
 var adminProgressTemplates = template.Must(template.ParseFS(assets, "templates/audit_progress.html", "templates/storage_progress.html"))
 
-// storageProgressView adds display helpers and the CSRF token for the
+// jobProgressView adds display helpers and the CSRF token for the
 // restart form to a validation job snapshot.
-type storageProgressView struct {
+type jobProgressView struct {
 	adminJobState
 	CSRFToken string
+	// Source is the audit log a verification fragment restarts.
+	Source int
 }
 
 // Percent is the validated share of the estimated bytes, or of the estimated
 // objects when no bytes are known. Unfinished jobs never report 100%, because
 // estimates come from periodically sampled gauges and may be stale.
-func (v storageProgressView) Percent() int {
+func (v jobProgressView) Percent() int {
 	if v.Message == "Completed" && !v.Running {
 		return 100
 	}
@@ -123,16 +147,16 @@ func (v storageProgressView) Percent() int {
 	return int(min(percent, 99))
 }
 
-func (v storageProgressView) BytesText() string { return humanBytes(float64(v.ProcessedBytes)) }
+func (v jobProgressView) BytesText() string { return humanBytes(float64(v.ProcessedBytes)) }
 
-func (v storageProgressView) TotalText() string {
+func (v jobProgressView) TotalText() string {
 	if v.TotalBytes == 0 {
 		return ""
 	}
 	return humanBytes(float64(v.TotalBytes))
 }
 
-func (v storageProgressView) elapsed() time.Duration {
+func (v jobProgressView) elapsed() time.Duration {
 	end := v.Finished
 	if v.Running || end.IsZero() {
 		end = time.Now()
@@ -140,7 +164,7 @@ func (v storageProgressView) elapsed() time.Duration {
 	return end.Sub(v.Started)
 }
 
-func (v storageProgressView) RateText() string {
+func (v jobProgressView) RateText() string {
 	seconds := v.elapsed().Seconds()
 	if seconds < 1 || v.ProcessedBytes == 0 {
 		return "-"
@@ -148,7 +172,7 @@ func (v storageProgressView) RateText() string {
 	return humanBytes(float64(v.ProcessedBytes)/seconds) + "/s"
 }
 
-func (v storageProgressView) DurationText() string {
+func (v jobProgressView) DurationText() string {
 	if v.Started.IsZero() {
 		return "-"
 	}
@@ -156,7 +180,7 @@ func (v storageProgressView) DurationText() string {
 }
 
 // RemainingText estimates the time left from the current throughput.
-func (v storageProgressView) RemainingText() string {
+func (v jobProgressView) RemainingText() string {
 	seconds := v.elapsed().Seconds()
 	if !v.Running || v.TotalBytes == 0 || v.ProcessedBytes == 0 || seconds < 2 {
 		return "-"
@@ -311,12 +335,12 @@ func (a *App) registerStorage(mux *http.ServeMux) {
 		}
 		a.render(w, r, "Storage", "storage", struct {
 			Tree      storageNode
-			Job       storageProgressView
+			Job       jobProgressView
 			CSRFToken string
-		}{storageTree(si), storageProgressView{job.snapshot(), csrfToken(r)}, csrfToken(r)})
+		}{storageTree(si), jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r)}, csrfToken(r)})
 	})
 	mux.HandleFunc("GET /storage/validate/progress", func(w http.ResponseWriter, r *http.Request) {
-		renderAdminProgress(w, "storage_progress", storageProgressView{job.snapshot(), csrfToken(r)})
+		renderAdminProgress(w, "storage_progress", jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r)})
 	})
 	mux.HandleFunc("POST /storage/validate", func(w http.ResponseWriter, r *http.Request) {
 		if len(a.options.Databases) != 1 {
@@ -324,14 +348,10 @@ func (a *App) registerStorage(mux *http.ServeMux) {
 			return
 		}
 		if !job.start(a.options.Context, func(ctx context.Context, progress func(int)) (*integrity.ValidationReport, error) {
-			// Validation scans the same current objects the usage gauges count.
-			if snapshot, err := gatherMetrics(); err == nil {
-				var objects, bytes float64
-				for _, usage := range snapshot.buckets {
-					objects += usage.Objects
-					bytes += usage.Bytes
-				}
-				job.setEstimate(int64(objects), int64(bytes))
+			// Validation reads the parts of every version, current and
+			// noncurrent, so the stored part bytes estimate the total best.
+			if snapshot, err := gatherMetrics(); err == nil && snapshot.hasParts {
+				job.setEstimate(0, int64(snapshot.logicalBytes))
 			}
 			dbs := config.NewDbContainer()
 			for _, db := range a.options.Databases {
@@ -346,7 +366,7 @@ func (a *App) registerStorage(mux *http.ServeMux) {
 		}) {
 			if r.Header.Get("HX-Request") == "true" {
 				// The fragment already shows the running job; just refresh it.
-				renderAdminProgress(w, "storage_progress", storageProgressView{job.snapshot(), csrfToken(r)})
+				renderAdminProgress(w, "storage_progress", jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r)})
 				return
 			}
 			a.fail(w, r, http.StatusConflict, "A validation is already running or shutdown has begun")
@@ -354,7 +374,7 @@ func (a *App) registerStorage(mux *http.ServeMux) {
 		}
 		a.audit(r, "AdminValidateStorage")
 		if r.Header.Get("HX-Request") == "true" {
-			renderAdminProgress(w, "storage_progress", storageProgressView{job.snapshot(), csrfToken(r)})
+			renderAdminProgress(w, "storage_progress", jobProgressView{adminJobState: job.snapshot(), CSRFToken: csrfToken(r)})
 			return
 		}
 		http.Redirect(w, r, "/storage", http.StatusSeeOther)

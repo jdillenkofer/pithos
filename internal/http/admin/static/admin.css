@@ -365,3 +365,4 @@ dialog.modal form { padding: 20px 24px; display: grid; gap: 12px; }
 dialog.modal p { margin: 0; color: var(--muted); }
 dialog.modal .actions-row { margin-top: 8px; }
 @media (prefers-color-scheme: dark) { dialog.modal { border: 1px solid var(--border); } }
+.checks { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
