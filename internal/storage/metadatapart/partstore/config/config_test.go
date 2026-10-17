@@ -150,7 +150,8 @@ func TestCanCreateSftpPartStoreFromJson(t *testing.T) {
 							 ],
 							 "connectionTimeout": "5s"
 				 },
-				 "root": %s
+				 "root": %s,
+				 "connectionPoolSize": 4
 			 }`, strconv.Quote(addr), strconv.Quote(privateKeyPath), strconv.Quote(privateKeyWithPassphrasePath), strconv.Quote(passphrase), strconv.Quote(hostKey), strconv.Quote(storagePath))
 
 	partStore, err := createPartStoreFromJson([]byte(jsonData))
