@@ -14,6 +14,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/auditlog"
@@ -86,10 +87,56 @@ type auditFilter struct {
 	Source                       int
 	Principal, Operation, Bucket string
 	From, To                     time.Time
+	// Range is a relative preset such as "1h"; empty or "custom" uses From/To.
+	Range string
+	// All includes request start phases and chain entries (genesis, grounding).
+	All bool
+}
+
+// auditRanges are the relative time presets, as in CloudTrail's event history.
+var auditRanges = []struct {
+	Value, Label string
+	Duration     time.Duration
+}{
+	{"15m", "15 minutes", 15 * time.Minute}, {"1h", "1 hour", time.Hour}, {"12h", "12 hours", 12 * time.Hour},
+	{"24h", "1 day", 24 * time.Hour}, {"7d", "7 days", 7 * 24 * time.Hour}, {"30d", "30 days", 30 * 24 * time.Hour},
+}
+
+// auditTimeLayouts accept RFC3339 and the values of datetime-local inputs,
+// which carry no zone and are interpreted as UTC.
+var auditTimeLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02T15:04"}
+
+func parseAuditTime(value string) (time.Time, error) {
+	for _, layout := range auditTimeLayouts {
+		if t, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, errors.New("invalid time")
+}
+
+// LocalInput formats a filter time for a datetime-local input.
+func (f auditFilter) LocalInput(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("2006-01-02T15:04:05")
+}
+
+func (f auditFilter) RangeLabel() string {
+	for _, preset := range auditRanges {
+		if preset.Value == f.Range {
+			return "Last " + preset.Label
+		}
+	}
+	if f.From.IsZero() && f.To.IsZero() {
+		return "All time"
+	}
+	return "Custom range"
 }
 
 func parseAuditFilter(q url.Values) (auditFilter, error) {
-	f := auditFilter{Page: 1, Principal: q.Get("principal"), Operation: q.Get("operation"), Bucket: q.Get("bucket")}
+	f := auditFilter{Page: 1, Principal: q.Get("principal"), Operation: q.Get("operation"), Bucket: q.Get("bucket"), Range: q.Get("range"), All: q.Get("all") == "true"}
 	var err error
 	if q.Get("page") != "" {
 		f.Page, err = strconv.Atoi(q.Get("page"))
@@ -106,16 +153,28 @@ func parseAuditFilter(q url.Values) (auditFilter, error) {
 	if len(f.Principal) > 256 || len(f.Operation) > 256 || len(f.Bucket) > 256 {
 		return f, errors.New("filter too long")
 	}
+	if f.Range != "" && f.Range != "custom" {
+		found := false
+		for _, preset := range auditRanges {
+			if preset.Value == f.Range {
+				f.From, found = time.Now().UTC().Add(-preset.Duration), true
+			}
+		}
+		if !found {
+			return f, errors.New("invalid time range")
+		}
+		return f, nil
+	}
 	if q.Get("from") != "" {
-		f.From, err = time.Parse(time.RFC3339, q.Get("from"))
+		f.From, err = parseAuditTime(q.Get("from"))
 		if err != nil {
-			return f, errors.New("invalid from time; use RFC3339")
+			return f, errors.New("invalid start time")
 		}
 	}
 	if q.Get("to") != "" {
-		f.To, err = time.Parse(time.RFC3339, q.Get("to"))
+		f.To, err = parseAuditTime(q.Get("to"))
 		if err != nil {
-			return f, errors.New("invalid to time; use RFC3339")
+			return f, errors.New("invalid end time")
 		}
 	}
 	if !f.From.IsZero() && !f.To.IsZero() && f.From.After(f.To) {
@@ -129,9 +188,16 @@ type auditRow struct {
 	Index                                      int
 	Type                                       auditlog.EntryType
 	Principal, Operation, Bucket, Key, Outcome string
+	Phase                                      auditlog.Phase
+	StatusCode                                 int32
+	ErrorCode, ClientIP                        string
+	DurationMs                                 int64
 }
 
 func (f auditFilter) matches(row auditRow) bool {
+	if !f.All && (row.Type != auditlog.EntryTypeLog || row.Phase == auditlog.PhaseStart) {
+		return false
+	}
 	return (f.Principal == "" || f.Principal == row.Principal) && (f.Operation == "" || f.Operation == row.Operation) && (f.Bucket == "" || f.Bucket == row.Bucket) && (f.From.IsZero() || !row.Timestamp.Before(f.From)) && (f.To.IsZero() || !row.Timestamp.After(f.To))
 }
 func auditEntryRow(e *auditlog.Entry, index int) auditRow {
@@ -145,8 +211,41 @@ func auditEntryRow(e *auditlog.Entry, index int) auditRow {
 		row.Bucket = d.Resource.Bucket
 		row.Key = d.Resource.Key
 		row.Outcome = string(d.Outcome.Outcome)
+		row.Phase = d.Phase
+		row.StatusCode, row.ErrorCode, row.DurationMs = d.Outcome.StatusCode, d.Outcome.ErrorCode, d.Outcome.DurationMs
+		row.ClientIP = d.Request.ClientIP
 	}
 	return row
+}
+
+// maxAuditChoices bounds the distinct values offered in filter suggestions.
+const maxAuditChoices = 500
+
+// auditChoices collects distinct filter values seen while scanning.
+type auditChoices map[string]struct{}
+
+func (c auditChoices) add(value string) {
+	if value != "" && len(c) < maxAuditChoices {
+		c[value] = struct{}{}
+	}
+}
+
+func (c auditChoices) sorted(selected string) []string {
+	if selected != "" {
+		c[selected] = struct{}{}
+	}
+	values := make([]string, 0, len(c))
+	for value := range c {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
+}
+
+type auditPage struct {
+	Rows                            []auditRow
+	HasNext                         bool
+	Operations, Principals, Buckets []string
 }
 
 type auditRowHeap []auditRow
@@ -258,11 +357,15 @@ func validateAuditEnvelope(e *auditlog.Entry) error {
 	return nil
 }
 
-func readAuditPage(ctx context.Context, source auditSource, filter auditFilter) ([]auditRow, bool, error) {
+func readAuditPage(ctx context.Context, source auditSource, filter auditFilter) (auditPage, error) {
 	rows := &auditRowHeap{}
 	limit := filter.Page*auditPageSize + 1
+	operations, principals, buckets := auditChoices{}, auditChoices{}, auditChoices{}
 	err := scanAudit(ctx, source, func(e *auditlog.Entry, index int) error {
 		row := auditEntryRow(e, index)
+		operations.add(row.Operation)
+		principals.add(row.Principal)
+		buckets.add(row.Bucket)
 		if !filter.matches(row) {
 			return nil
 		}
@@ -273,25 +376,29 @@ func readAuditPage(ctx context.Context, source auditSource, filter auditFilter) 
 		return nil
 	})
 	if err != nil {
-		return nil, false, err
+		return auditPage{}, err
 	}
+	page := auditPage{Operations: operations.sorted(filter.Operation), Principals: principals.sorted(filter.Principal), Buckets: buckets.sorted(filter.Bucket)}
 	sort.Sort(sort.Reverse(rows))
 	start := (filter.Page - 1) * auditPageSize
 	if start >= len(*rows) {
-		return nil, false, nil
+		return page, nil
 	}
 	end := start + auditPageSize
-	hasNext := len(*rows) > end
+	page.HasNext = len(*rows) > end
 	if end > len(*rows) {
 		end = len(*rows)
 	}
-	return (*rows)[start:end], hasNext, nil
+	page.Rows = (*rows)[start:end]
+	return page, nil
 }
 
 type auditPageData struct {
-	Rows           []auditRow
+	auditPage
 	Sources        []int
 	Filter         auditFilter
+	Ranges         []string
+	RangeLabels    map[string]string
 	Previous, Next string
 	CSRFToken      string
 	Job            adminJobState
@@ -317,7 +424,11 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 			a.fail(w, r, http.StatusInternalServerError, "Unable to discover audit logs")
 			return
 		}
-		data := auditPageData{Filter: filter, CSRFToken: csrfToken(r), Job: job.snapshot()}
+		data := auditPageData{Filter: filter, CSRFToken: csrfToken(r), Job: job.snapshot(), RangeLabels: map[string]string{}}
+		for _, preset := range auditRanges {
+			data.Ranges = append(data.Ranges, preset.Value)
+			data.RangeLabels[preset.Value] = preset.Label
+		}
 		for i := range sources {
 			data.Sources = append(data.Sources, i)
 		}
@@ -328,12 +439,13 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 			defer cancel()
-			rows, next, err := readAuditPage(ctx, sources[filter.Source], filter)
+			page, err := readAuditPage(ctx, sources[filter.Source], filter)
 			if err != nil {
 				a.fail(w, r, http.StatusUnprocessableEntity, "Unable to read audit log: malformed, unavailable, or scan limit exceeded")
 				return
 			}
-			data.Rows = rows
+			data.auditPage = page
+			next := page.HasNext
 			link := func(page int) string {
 				q := r.URL.Query()
 				q.Set("page", strconv.Itoa(page))
@@ -347,6 +459,14 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 			}
 		}
 		a.render(w, r, "Audit log", "audit", data)
+	})
+	mux.HandleFunc("GET /audit/event", func(w http.ResponseWriter, r *http.Request) {
+		sources, err := getSources()
+		if err != nil {
+			a.fail(w, r, http.StatusInternalServerError, "Unable to discover audit logs")
+			return
+		}
+		a.auditEvent(w, r, sources)
 	})
 	mux.HandleFunc("GET /audit/verify/progress", func(w http.ResponseWriter, r *http.Request) { renderAdminProgress(w, "audit_progress", job.snapshot()) })
 	mux.HandleFunc("POST /audit/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -385,4 +505,140 @@ func (a *App) registerAudit(mux *http.ServeMux) {
 		a.audit(r, "AdminVerifyAuditLog")
 		http.Redirect(w, r, "/audit?source="+strconv.Itoa(filter.Source), http.StatusSeeOther)
 	})
+}
+
+var errAuditEntryFound = errors.New("audit entry found")
+
+// readAuditEntry returns the entry at index, scanning the same bounded snapshot.
+func readAuditEntry(ctx context.Context, source auditSource, index int) (*auditlog.Entry, error) {
+	var found *auditlog.Entry
+	err := scanAudit(ctx, source, func(e *auditlog.Entry, i int) error {
+		if i == index {
+			found = e
+			return errAuditEntryFound
+		}
+		return nil
+	})
+	if errors.Is(err, errAuditEntryFound) {
+		return found, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, errors.New("audit entry not found")
+}
+
+type auditSection struct {
+	Title  string
+	Fields []keyValue
+}
+
+type auditEventView struct {
+	Source, Index        int
+	Title, Time, BackURL string
+	Sections             []auditSection
+}
+
+func addField(fields []keyValue, label, value string) []keyValue {
+	if value == "" {
+		return fields
+	}
+	return append(fields, keyValue{label, value})
+}
+
+// describeAuditEntry lists an entry's recorded fields. Backend error messages
+// are omitted, as elsewhere in the console; the error code is shown.
+func describeAuditEntry(e *auditlog.Entry, index int) auditEventView {
+	view := auditEventView{Index: index, Title: string(e.Type), Time: e.Timestamp.UTC().Format("2006-01-02 15:04:05.000") + " UTC"}
+	event := []keyValue{{"Event time", view.Time}, {"Entry type", string(e.Type)}, {"Entry index", strconv.Itoa(index)}}
+	if d, ok := e.Details.(*auditlog.LogDetails); ok && d != nil {
+		view.Title = string(d.Operation)
+		event = addField(event, "Operation", string(d.Operation))
+		event = addField(event, "Phase", string(d.Phase))
+		view.Sections = append(view.Sections, auditSection{"Event", event})
+		var identity []keyValue
+		identity = addField(identity, "Principal ID", d.Actor.PrincipalID)
+		identity = addField(identity, "Account ID", d.Actor.AccountID)
+		identity = addField(identity, "Access key ID", d.Actor.CredentialID)
+		identity = addField(identity, "Authentication", string(d.Actor.AuthType))
+		if len(identity) == 0 {
+			identity = []keyValue{{"Principal", "Anonymous"}}
+		}
+		view.Sections = append(view.Sections, auditSection{"Identity", identity})
+		var request []keyValue
+		request = addField(request, "Source IP address", d.Request.ClientIP)
+		request = addField(request, "Request ID", d.Request.RequestID)
+		request = addField(request, "Trace ID", d.Request.TraceID)
+		if len(request) > 0 {
+			view.Sections = append(view.Sections, auditSection{"Request", request})
+		}
+		var resource []keyValue
+		resource = addField(resource, "Bucket", d.Resource.Bucket)
+		resource = addField(resource, "Key", d.Resource.Key)
+		resource = addField(resource, "Version ID", d.Resource.VersionID)
+		resource = addField(resource, "Upload ID", d.Resource.UploadID)
+		if d.Resource.PartNumber != 0 {
+			resource = addField(resource, "Part number", strconv.Itoa(int(d.Resource.PartNumber)))
+		}
+		resource = addField(resource, "Copy source bucket", d.Resource.SourceBucket)
+		resource = addField(resource, "Copy source key", d.Resource.SourceKey)
+		if len(resource) > 0 {
+			view.Sections = append(view.Sections, auditSection{"Resource", resource})
+		}
+		var outcome []keyValue
+		outcome = addField(outcome, "Outcome", string(d.Outcome.Outcome))
+		if d.Outcome.StatusCode != 0 {
+			outcome = addField(outcome, "HTTP status", strconv.Itoa(int(d.Outcome.StatusCode)))
+		}
+		outcome = addField(outcome, "Error code", d.Outcome.ErrorCode)
+		if d.Phase != auditlog.PhaseStart {
+			outcome = addField(outcome, "Duration", strconv.FormatInt(d.Outcome.DurationMs, 10)+" ms")
+		}
+		view.Sections = append(view.Sections, auditSection{"Outcome", outcome})
+		if lock := d.ObjectLock; lock != nil {
+			var fields []keyValue
+			fields = addField(fields, "Requested mode", lock.Requested.Mode)
+			fields = addField(fields, "Requested retain until", lock.Requested.RetainUntilDate)
+			fields = addField(fields, "Requested legal hold", lock.Requested.LegalHold)
+			fields = addField(fields, "Effective mode", lock.Effective.Mode)
+			fields = addField(fields, "Effective retain until", lock.Effective.RetainUntilDate)
+			fields = addField(fields, "Effective legal hold", lock.Effective.LegalHold)
+			fields = append(fields, keyValue{"Governance bypass", fmt.Sprintf("requested %t, authorized %t, used %t", lock.BypassRequested, lock.BypassAuthorized, lock.BypassUsed)})
+			view.Sections = append(view.Sections, auditSection{"Object Lock", fields})
+		}
+	} else {
+		view.Sections = append(view.Sections, auditSection{"Event", event})
+	}
+	view.Sections = append(view.Sections, auditSection{"Integrity", []keyValue{
+		{"Entry hash (SHA-512)", fmt.Sprintf("%x", e.Hash)},
+		{"Previous hash", fmt.Sprintf("%x", e.PreviousHash)},
+	}})
+	return view
+}
+
+func (a *App) auditEvent(w http.ResponseWriter, r *http.Request, sources []auditSource) {
+	source, err := strconv.Atoi(r.URL.Query().Get("source"))
+	if err != nil || source < 0 || source >= len(sources) {
+		a.fail(w, r, http.StatusBadRequest, "Unknown audit source")
+		return
+	}
+	index, err := strconv.Atoi(r.URL.Query().Get("index"))
+	if err != nil || index < 0 || index >= maxAuditEntries {
+		a.fail(w, r, http.StatusBadRequest, "Invalid audit entry")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	entry, err := readAuditEntry(ctx, sources[source], index)
+	if err != nil {
+		a.fail(w, r, http.StatusNotFound, "Audit entry not found or log unreadable")
+		return
+	}
+	view := describeAuditEntry(entry, index)
+	view.Source = source
+	view.BackURL = "/audit?source=" + strconv.Itoa(source)
+	if back := sameOriginBackLink(r); strings.HasPrefix(back, "/audit?") {
+		view.BackURL = back
+	}
+	a.render(w, r, "Audit log", "audit-event", view)
 }

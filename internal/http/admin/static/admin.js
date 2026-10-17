@@ -61,3 +61,26 @@ document.addEventListener("click", function (event) {
     event.preventDefault();
   }
 });
+
+// Audit filters: picking a relative range applies it at once; editing a
+// date or time switches the range to "Custom".
+document.addEventListener("change", function (event) {
+  const form = event.target.closest("form[data-audit-filter]");
+  if (!form) {
+    return;
+  }
+  if (event.target.name === "range" && event.target.value !== "custom") {
+    form.querySelectorAll("[data-range-input]").forEach(function (input) { input.value = ""; });
+    form.requestSubmit();
+  } else if (event.target.name === "operation") {
+    form.requestSubmit();
+  }
+});
+document.addEventListener("input", function (event) {
+  if (event.target.matches("[data-range-input]")) {
+    const custom = event.target.form.querySelector("[data-custom-range]");
+    if (custom) {
+      custom.checked = true;
+    }
+  }
+});

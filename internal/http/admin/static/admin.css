@@ -318,3 +318,28 @@ th.select, td.select { width: 1%; padding-right: 0; }
 .option .option-body { display: grid; gap: 8px; }
 .option .option-title { font-weight: 700; cursor: pointer; }
 .option .hint { font-size: 12px; }
+
+/* Audit event history filters */
+.audit-filters { display: grid; gap: 16px; padding: 4px 20px 16px; }
+.audit-filters .field { margin: 0; }
+.filter-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 16px 20px; }
+.time-range { margin: 0; border: 0; padding: 0; display: grid; gap: 12px; }
+.time-range legend { padding: 0; margin-bottom: 4px; }
+.segmented { display: inline-flex; flex-wrap: wrap; border: 2px solid var(--input-border); border-radius: 8px; overflow: hidden; width: fit-content; }
+.segmented label { display: block; margin: 0; font-weight: 400; cursor: pointer; }
+.segmented label + label { border-left: 1px solid var(--divider); }
+.segmented input[type="radio"] { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; border: 0; pointer-events: none; }
+.segmented span { display: block; padding: 4px 14px; color: var(--text); white-space: nowrap; }
+.segmented label:hover span { background: var(--selected); color: var(--primary-hover); }
+.segmented input:checked + span { background: var(--primary); color: var(--primary-text); font-weight: 700; }
+.segmented input:focus-visible + span { outline: 2px solid var(--link); outline-offset: -4px; }
+.custom-range { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.custom-range .field { min-width: 15rem; }
+.custom-range input[type="datetime-local"] { font-variant-numeric: tabular-nums; }
+.range-sep { padding-bottom: 7px; color: var(--muted); }
+.filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.filter-actions .spacer { flex: 1; }
+.filter-actions label.check { margin: 0; }
+.audit-table td.mono { font-size: 12px; }
+input[type="datetime-local"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.7; }
+@media (prefers-color-scheme: dark) { input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(1); } }

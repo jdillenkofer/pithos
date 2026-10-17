@@ -234,9 +234,18 @@ without recording policy contents.
 ## Audit log
 
 The viewer discovers FileSink paths and serializers by decoding the configured
-storage tree. Users cannot submit arbitrary filesystem paths. Select a file
-source to browse newest-first pages and filter by principal, operation, bucket
-or inclusive RFC3339 time range.
+storage tree. Users cannot submit arbitrary filesystem paths. The event history
+lists entries newest first and filters by operation (a list of the operations
+present in the log), principal and bucket (with suggestions from the log), and
+time: relative presets from 15 minutes to 30 days, or a custom range picked
+with date/time pickers. All times are UTC. Request start phases and chain
+entries (genesis and grounding) are hidden unless requested. Selecting an
+event shows its identity, request, resource, outcome, Object Lock and
+integrity details; backend error messages are omitted, the error code is shown.
+
+Console actions are recorded as `Admin…` events, for example `AdminLogin`,
+`AdminCreateBucket`, `AdminPutBucketLifecycle`, `AdminDeleteObjectVersion` or
+`AdminSavePolicy`.
 
 Verification runs in the background and polls progress. It reuses the audit
 validator for entry hashes, chain links and Merkle grounding. It does **not**

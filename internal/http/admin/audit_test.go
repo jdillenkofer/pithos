@@ -54,8 +54,27 @@ func TestParseAuditFilter(t *testing.T) {
 		_, err = parseAuditFilter(q)
 		require.Error(t, err, query)
 	}
-	q, _ := url.ParseQuery("page=2&source=1&principal=alice&operation=GetObject&bucket=bucket&from=2026-01-01T00:00:00Z")
+	for _, query := range []string{"range=2h", "range=../../x", "from=2026-13-01T00:00"} {
+		q, err := url.ParseQuery(query)
+		require.NoError(t, err)
+		_, err = parseAuditFilter(q)
+		require.Error(t, err, query)
+	}
+	q, _ := url.ParseQuery("from=2026-01-02T03:04&to=2026-01-02T03:05:06")
 	f, err := parseAuditFilter(q)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC), f.From, "datetime-local values are UTC")
+	require.Equal(t, time.Date(2026, 1, 2, 3, 5, 6, 0, time.UTC), f.To)
+	require.Equal(t, "2026-01-02T03:04:00", f.LocalInput(f.From))
+	require.Equal(t, "Custom range", f.RangeLabel())
+	q, _ = url.ParseQuery("range=1h&from=2020-01-01T00:00:00Z")
+	f, err = parseAuditFilter(q)
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now().Add(-time.Hour), f.From, time.Minute, "presets override explicit times")
+	require.True(t, f.To.IsZero())
+	require.Equal(t, "Last 1 hour", f.RangeLabel())
+	q, _ = url.ParseQuery("page=2&source=1&principal=alice&operation=GetObject&bucket=bucket&from=2026-01-01T00:00:00Z")
+	f, err = parseAuditFilter(q)
 	require.NoError(t, err)
 	require.Equal(t, 2, f.Page)
 	require.Equal(t, 1, f.Source)
@@ -65,24 +84,33 @@ func TestAuditPageNewestFirstAllSerializers(t *testing.T) {
 	for name, serializer := range map[string]serialization.Serializer{"json": &serialization.JsonSerializer{Indent: true}, "binary": &serialization.BinarySerializer{MaxFieldBytes: 1 << 20}, "text": &serialization.TextSerializer{}} {
 		t.Run(name, func(t *testing.T) {
 			source := auditTestSource(t, serializer, 121)
-			rows, next, err := readAuditPage(t.Context(), source, auditFilter{Page: 1})
+			page, err := readAuditPage(t.Context(), source, auditFilter{Page: 1, All: true})
+			rows, next := page.Rows, page.HasNext
 			require.NoError(t, err)
 			require.True(t, next)
 			require.Len(t, rows, 50)
 			require.Equal(t, 120, rows[0].Index)
 			require.Equal(t, 71, rows[49].Index)
-			rows, next, err = readAuditPage(t.Context(), source, auditFilter{Page: 2})
+			page, err = readAuditPage(t.Context(), source, auditFilter{Page: 2, All: true})
+			rows, next = page.Rows, page.HasNext
 			require.NoError(t, err)
 			require.True(t, next)
 			require.Equal(t, 70, rows[0].Index)
-			rows, next, err = readAuditPage(t.Context(), source, auditFilter{Page: 3})
+			page, err = readAuditPage(t.Context(), source, auditFilter{Page: 3, All: true})
+			rows, next = page.Rows, page.HasNext
 			require.NoError(t, err)
 			require.False(t, next)
 			require.Len(t, rows, 21)
 			require.Equal(t, 0, rows[20].Index)
-			rows, _, err = readAuditPage(t.Context(), source, auditFilter{Page: 1, Principal: "principal", Operation: "GetObject", Bucket: "bucket", From: time.Date(2026, 1, 1, 0, 1, 59, 0, time.UTC)})
+			page, err = readAuditPage(t.Context(), source, auditFilter{Page: 1, Principal: "principal", Operation: "GetObject", Bucket: "bucket", From: time.Date(2026, 1, 1, 0, 1, 59, 0, time.UTC)})
 			require.NoError(t, err)
-			require.Len(t, rows, 2)
+			require.Len(t, page.Rows, 2)
+			require.Equal(t, []string{"GetObject"}, page.Operations)
+			require.Equal(t, []string{"principal"}, page.Principals)
+			require.Equal(t, []string{"bucket"}, page.Buckets)
+			page, err = readAuditPage(t.Context(), source, auditFilter{Page: 3})
+			require.NoError(t, err)
+			require.Len(t, page.Rows, 20, "the genesis entry is hidden unless all entries are requested")
 			validator := auditlog.NewValidator(nil, nil)
 			require.NoError(t, scanAudit(t.Context(), source, func(e *auditlog.Entry, _ int) error { return validator.ValidateEntry(e) }))
 			require.Equal(t, 121, validator.Index)
@@ -117,7 +145,7 @@ func TestScanAuditRejectsMalformedAndCancelled(t *testing.T) {
 	_, err = file.WriteString("{\"truncated\":")
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
-	_, _, err = readAuditPage(t.Context(), source, auditFilter{Page: 1})
+	_, err = readAuditPage(t.Context(), source, auditFilter{Page: 1})
 	require.Error(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -181,4 +209,32 @@ func TestAuditSourcesTypedTraversal(t *testing.T) {
 	require.Len(t, sources, 2)
 	require.Equal(t, "configured-one", sources[0].Path)
 	require.Equal(t, "configured-two", sources[1].Path)
+}
+
+func TestAuditFilterHidesStartPhasesAndChainEntries(t *testing.T) {
+	filter := auditFilter{}
+	require.False(t, filter.matches(auditRow{Type: auditlog.EntryTypeGrounding}))
+	require.False(t, filter.matches(auditRow{Type: auditlog.EntryTypeLog, Phase: auditlog.PhaseStart}))
+	require.True(t, filter.matches(auditRow{Type: auditlog.EntryTypeLog, Phase: auditlog.PhaseComplete}))
+	filter.All = true
+	require.True(t, filter.matches(auditRow{Type: auditlog.EntryTypeGrounding}))
+	require.True(t, filter.matches(auditRow{Type: auditlog.EntryTypeLog, Phase: auditlog.PhaseStart}))
+}
+
+func TestAuditEventDetails(t *testing.T) {
+	source := auditTestSource(t, &serialization.JsonSerializer{}, 5)
+	entry, err := readAuditEntry(t.Context(), source, 3)
+	require.NoError(t, err)
+	view := describeAuditEntry(entry, 3)
+	require.Equal(t, "GetObject", view.Title)
+	titles := []string{}
+	for _, section := range view.Sections {
+		titles = append(titles, section.Title)
+	}
+	require.Equal(t, []string{"Event", "Identity", "Resource", "Outcome", "Integrity"}, titles)
+	_, err = readAuditEntry(t.Context(), source, 99)
+	require.Error(t, err)
+	genesis, err := readAuditEntry(t.Context(), source, 0)
+	require.NoError(t, err)
+	require.Equal(t, "GENESIS", describeAuditEntry(genesis, 0).Title)
 }

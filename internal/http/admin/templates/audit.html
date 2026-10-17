@@ -2,23 +2,55 @@
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Audit log</span></div>
 {{if .Sources}}
 <div class="container">
-  <div class="container-head"><div><h2>Events</h2><p>Newest first, 50 per page. Entries are shown as recorded; viewing does not verify authenticity.</p></div></div>
-  <div class="container-body">
-  <form method="get" action="/audit">
-  <div class="form-grid">
-    <label>Log <select name="source">{{range .Sources}}<option value="{{.}}" {{if eq . $.Filter.Source}}selected{{end}}>File log {{.}}</option>{{end}}</select></label>
-    <label>Principal <input name="principal" value="{{.Filter.Principal}}" maxlength="256"></label>
-    <label>Operation <input name="operation" value="{{.Filter.Operation}}" maxlength="256" placeholder="PutObject"></label>
-    <label>Bucket <input name="bucket" value="{{.Filter.Bucket}}" maxlength="256"></label>
-    <label>From <input name="from" placeholder="2026-01-01T00:00:00Z" value="{{if not .Filter.From.IsZero}}{{.Filter.From.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
-    <label>To <input name="to" placeholder="2026-12-31T23:59:59Z" value="{{if not .Filter.To.IsZero}}{{.Filter.To.Format "2006-01-02T15:04:05.999999999Z07:00"}}{{end}}"></label>
-    <div><button type="submit" class="primary">Apply filters</button></div>
+  <div class="container-head">
+    <div><h2>Event history</h2><p>Signed records of S3 and console activity, newest first. Times are in UTC; viewing does not verify authenticity.</p></div>
+    <nav class="pager" aria-label="Audit pages">{{if .Previous}}<a href="{{.Previous}}">‹ Newer</a>{{end}}<span>Page {{.Filter.Page}}</span>{{if .Next}}<a href="{{.Next}}">Older ›</a>{{end}}</nav>
   </div>
+  <form method="get" action="/audit" class="audit-filters" data-audit-filter>
+    {{if gt (len .Sources) 1}}<label class="field">Log <select name="source">{{range .Sources}}<option value="{{.}}" {{if eq . $.Filter.Source}}selected{{end}}>File log {{.}}</option>{{end}}</select></label>{{else}}<input type="hidden" name="source" value="{{.Filter.Source}}">{{end}}
+    <div class="filter-row">
+      <label class="field">Operation
+        <select name="operation"><option value="">All operations</option>{{range .Operations}}<option {{if eq . $.Filter.Operation}}selected{{end}}>{{.}}</option>{{end}}</select>
+      </label>
+      <label class="field">Principal
+        <input name="principal" value="{{.Filter.Principal}}" maxlength="256" list="audit-principals" placeholder="Any principal" autocomplete="off">
+        <datalist id="audit-principals">{{range .Principals}}<option value="{{.}}">{{end}}</datalist>
+      </label>
+      <label class="field">Bucket
+        <input name="bucket" value="{{.Filter.Bucket}}" maxlength="256" list="audit-buckets" placeholder="Any bucket" autocomplete="off">
+        <datalist id="audit-buckets">{{range .Buckets}}<option value="{{.}}">{{end}}</datalist>
+      </label>
+    </div>
+    <fieldset class="time-range"><legend>Time range</legend>
+      <div class="segmented" role="radiogroup" aria-label="Relative time range">
+        <label><input type="radio" name="range" value="" {{if and (eq .Filter.Range "") .Filter.From.IsZero .Filter.To.IsZero}}checked{{end}}><span>All time</span></label>
+        {{range .Ranges}}<label><input type="radio" name="range" value="{{.}}" {{if eq . $.Filter.Range}}checked{{end}}><span>{{index $.RangeLabels .}}</span></label>{{end}}
+        <label><input type="radio" name="range" value="custom" data-custom-range {{if or (eq .Filter.Range "custom") (and (eq .Filter.Range "") (or (not .Filter.From.IsZero) (not .Filter.To.IsZero)))}}checked{{end}}><span>Custom</span></label>
+      </div>
+      <div class="custom-range">
+        <label class="field">Start (UTC) <input type="datetime-local" name="from" step="1" value="{{if eq .Filter.Range "" "custom"}}{{.Filter.LocalInput .Filter.From}}{{end}}" data-range-input></label>
+        <span class="range-sep" aria-hidden="true">→</span>
+        <label class="field">End (UTC) <input type="datetime-local" name="to" step="1" value="{{if eq .Filter.Range "" "custom"}}{{.Filter.LocalInput .Filter.To}}{{end}}" data-range-input></label>
+      </div>
+    </fieldset>
+    <div class="filter-actions">
+      <label class="check"><input type="checkbox" name="all" value="true" {{if .Filter.All}}checked{{end}}> Show request start phases and chain entries</label>
+      <span class="spacer"></span>
+      <a class="button-link" href="/audit?source={{.Filter.Source}}">Clear filters</a>
+      <button type="submit" class="primary">Apply</button>
+    </div>
   </form>
-  </div>
-  <div class="table-wrap divider"><table><thead><tr><th>Event time (UTC)</th><th>Type</th><th>Principal</th><th>Operation</th><th>Bucket</th><th>Key</th><th>Outcome</th></tr></thead>
-  <tbody>{{range .Rows}}<tr><td class="nowrap">{{.Timestamp.UTC.Format "2006-01-02 15:04:05"}}</td><td>{{.Type}}</td><td>{{.Principal}}</td><td>{{.Operation}}</td><td>{{.Bucket}}</td><td class="key">{{.Key}}</td><td>{{if .Outcome}}<span class="status {{if eq .Outcome "success"}}ok{{else if eq .Outcome "pending"}}info{{else}}bad{{end}}">{{.Outcome}}</span>{{end}}</td></tr>{{else}}<tr><td colspan="7" class="empty"><strong>No events</strong>No entries match the filters.</td></tr>{{end}}</tbody></table></div>
-  <div class="container-body divider"><nav class="pager" aria-label="Audit pages">{{if .Previous}}<a href="{{.Previous}}">‹ Newer</a>{{end}}<span>Page {{.Filter.Page}}</span>{{if .Next}}<a href="{{.Next}}">Older ›</a>{{end}}</nav></div>
+  <div class="table-wrap divider"><table class="audit-table">
+  <thead><tr><th>Event time</th><th>Operation</th><th>Principal</th><th>Bucket</th><th>Key</th><th>Source IP</th><th>Outcome</th></tr></thead>
+  <tbody>{{range .Rows}}<tr>
+    <td class="nowrap mono">{{.Timestamp.UTC.Format "2006-01-02 15:04:05"}}</td>
+    <td><a href="/audit/event?source={{$.Filter.Source}}&amp;index={{.Index}}">{{if .Operation}}{{.Operation}}{{else}}{{.Type}}{{end}}</a>{{if eq (printf "%s" .Phase) "START"}} <span class="badge">start</span>{{end}}</td>
+    <td>{{if .Principal}}{{.Principal}}{{else if eq (printf "%s" .Type) "LOG"}}<span class="subtitle">anonymous</span>{{else}}-{{end}}</td>
+    <td>{{if .Bucket}}{{.Bucket}}{{else}}-{{end}}</td>
+    <td class="key">{{if .Key}}{{.Key}}{{else}}-{{end}}</td>
+    <td class="nowrap mono">{{if .ClientIP}}{{.ClientIP}}{{else}}-{{end}}</td>
+    <td class="nowrap">{{if eq .Outcome "success"}}<span class="status ok">Success</span>{{else if eq .Outcome "denied"}}<span class="status bad">Denied</span>{{else if eq .Outcome "error"}}<span class="status bad">Error</span>{{else if eq .Outcome "pending"}}<span class="status info">Started</span>{{else}}<span class="status muted">{{.Type}}</span>{{end}}{{if .StatusCode}} <span class="subtitle">{{.StatusCode}}</span>{{end}}{{if .ErrorCode}} <span class="subtitle">{{.ErrorCode}}</span>{{end}}</td>
+  </tr>{{else}}<tr><td colspan="7" class="empty"><strong>No events</strong>No events match these filters. Try a wider time range.</td></tr>{{end}}</tbody></table></div>
 </div>
 <div class="container">
   <div class="container-head"><div><h2>Integrity verification</h2><p>Verifies the complete file's hashes, chain links and Merkle roots. Signature authenticity is not checked here; use <code>pithos audit-log verify</code> with trusted public keys. Limits: 128 MiB, 1,000,000 entries, ten minutes.</p></div>
@@ -26,4 +58,15 @@
   <div class="container-body">{{template "audit_progress" .Job}}</div>
 </div>
 {{else}}<div class="alert"><p>No audit logs found. Add an <code>AuditStorageMiddleware</code> with a <code>FileSink</code> to the storage configuration to record a signed audit trail.</p></div>{{end}}
+{{end}}
+
+{{define "audit-event"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="{{.BackURL}}">Audit log</a><span class="sep">›</span><span>{{.Title}}</span></div>
+<div class="page-head"><div><h1>{{.Title}}</h1><p class="subtitle">{{.Time}}</p></div><a class="button-link" href="{{.BackURL}}">Back to event history</a></div>
+{{range .Sections}}
+<div class="container">
+  <div class="container-head"><h2>{{.Title}}</h2></div>
+  <div class="container-body"><div class="kv">{{range .Fields}}<div><div class="label">{{.Label}}</div><div class="value{{if or (eq .Label "Entry hash (SHA-512)") (eq .Label "Previous hash") (eq .Label "Request ID") (eq .Label "Trace ID")}} mono{{end}}">{{.Value}}</div></div>{{end}}</div></div>
+</div>
+{{end}}
 {{end}}
