@@ -130,6 +130,7 @@ func (a *App) registerObjects(mux *http.ServeMux) {
 	mux.HandleFunc("GET /objects/detail", a.objectDetail)
 	mux.HandleFunc("GET /objects/download", a.download)
 	mux.HandleFunc("GET /objects/view", a.view)
+	a.registerVersions(mux)
 	mux.HandleFunc("GET /objects/upload", a.uploadPage)
 	mux.HandleFunc("POST /objects/upload", a.upload)
 	mux.HandleFunc("POST /objects/delete", a.deleteObject)
@@ -275,7 +276,7 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 	var current *storage.CurrentDeleteMarkerError
 	view := objectDetailView{CSRF: csrfToken(r), Bucket: b.String(), Key: k.String(), Name: path.Base(k.String()), Version: version, DownloadURL: objectURL("/objects/download", b.String(), k.String(), version), BucketURL: "/objects?" + url.Values{"bucket": {b.String()}}.Encode()}
 	view.Crumbs = prefixCrumbs(b.String(), k.String()[:strings.LastIndex(k.String(), "/")+1], false)
-	view.VersionsURL = "/objects?" + url.Values{"bucket": {b.String()}, "prefix": {k.String()}, "versions": {"true"}}.Encode()
+	view.VersionsURL = objectURL("/objects/versions", b.String(), k.String(), "")
 	view.DetailURL = objectURL("/objects/detail", b.String(), k.String(), "")
 	if errors.As(err, &marker) || errors.As(err, &current) {
 		view.DeleteMarker = true

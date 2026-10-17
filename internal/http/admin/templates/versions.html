@@ -1,0 +1,65 @@
+{{define "object_header"}}
+<div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="{{.BucketURL}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><a href="{{.DetailURL}}">{{.Name}}</a></div>
+<div class="page-head"><div><h1>{{.Name}}</h1></div></div>
+{{end}}
+
+{{define "object-versions"}}
+{{template "object_header" .}}
+<nav class="tabs" aria-label="Object"><a href="{{.DetailURL}}">Properties</a><a href="{{.VersionsURL}}" aria-current="page">Versions</a></nav>
+<form method="get" action="/objects/delete-versions">
+<input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}">
+<div class="container">
+  <div class="container-head">
+    <div><h2>Versions <span class="count">({{len .Versions}}{{if .Truncated}}+{{end}})</span></h2><p>Every version of this object, newest first. Deleting a version is permanent; deleting a delete marker restores the previous version.</p></div>
+    <div class="toolbar"><button type="submit" {{if not .Versions}}disabled{{end}}>Delete</button></div>
+  </div>
+  <div class="table-wrap"><table>
+  <thead><tr><th class="select"><span class="visually-hidden">Select</span></th><th>Version ID</th><th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead>
+  <tbody>
+  {{range .Versions}}<tr>
+    <td class="select"><input type="checkbox" name="version" value="{{.Version}}" aria-label="Select version {{.Version}}"></td>
+    <td><a class="key" href="{{.DetailURL}}">{{.Version}}</a>{{if .Latest}} <span class="badge">Current version</span>{{end}}</td>
+    <td>{{if .DeleteMarker}}<span class="icon marker" aria-hidden="true"></span>Delete marker{{else}}Object{{end}}</td>
+    <td class="nowrap">{{.Modified}} UTC</td>
+    <td class="num">{{if .DeleteMarker}}-{{else}}{{.SizeText}}{{end}}</td>
+    <td>{{if .DeleteMarker}}-{{else}}{{.StorageClass}}{{end}}</td>
+    <td class="actions">{{if .ViewURL}}<a class="button-link small" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a> {{end}}{{if .DownloadURL}}<a class="button-link small" href="{{.DownloadURL}}">Download</a>{{end}}</td>
+  </tr>{{else}}<tr><td colspan="7" class="empty"><strong>No versions</strong>This object has no versions.</td></tr>{{end}}
+  </tbody></table></div>
+  {{if .Truncated}}<div class="container-body divider"><p class="hint">Only the newest 1,000 versions are shown.</p></div>{{end}}
+</div>
+</form>
+{{end}}
+
+{{define "delete-versions"}}
+{{template "object_header" .}}
+{{if .Results}}
+<div class="alert {{if eq .Deleted (len .Results)}}ok{{else}}bad{{end}}" role="status"><p>Deleted {{.Deleted}} of {{len .Results}} versions.</p></div>
+<div class="container">
+  <div class="container-head"><h2>Results</h2><a class="button-link primary" href="{{.VersionsURL}}">Back to versions</a></div>
+  <div class="table-wrap"><table><thead><tr><th>Version ID</th><th>Status</th></tr></thead><tbody>
+  {{range .Results}}<tr><td class="key">{{.Version}}</td><td>{{if .Error}}<span class="status bad">{{.Error}}</span>{{else}}<span class="status ok">Deleted</span>{{end}}</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+{{else}}
+<div class="page-head"><h1>Delete versions</h1></div>
+<div class="alert warn"><p>Deleting the specified versions cannot be undone. Deleting a delete marker makes the previous version current again.</p></div>
+<form method="post" action="/objects/delete-versions">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}">
+<div class="container">
+  <div class="container-head"><h2>Specified versions <span class="count">({{len .Selected}})</span></h2></div>
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Version ID</th></tr></thead><tbody>
+  {{range .Selected}}<tr><td>{{$.Name}}</td><td class="key">{{.}}<input type="hidden" name="version" value="{{.}}"></td></tr>{{end}}
+  </tbody></table></div>
+</div>
+<div class="container">
+  <div class="container-head"><div><h2>Permanently delete versions?</h2><p>To confirm deletion, type <em>permanently delete</em> in the text input field.</p></div></div>
+  <div class="container-body">
+    <label>Confirmation <input name="confirm_text" required autocomplete="off" placeholder="permanently delete" pattern="permanently delete"></label>
+    <label class="check"><input type="checkbox" name="bypass_governance" value="yes"> Bypass governance retention</label>
+  </div>
+</div>
+<div class="actions-row"><a class="button-link" href="{{.VersionsURL}}">Cancel</a><button type="submit" class="danger">Delete versions</button></div>
+</form>
+{{end}}
+{{end}}

@@ -283,3 +283,4 @@ details[open] summary { margin-bottom: 12px; }
 fieldset label.check { margin-bottom: 8px; }
 :target { scroll-margin-top: 56px; }
 @media (max-width: 52rem) { .tag-row { grid-template-columns: 1fr; } }
+th.select, td.select { width: 1%; padding-right: 0; }
