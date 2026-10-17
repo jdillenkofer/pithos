@@ -516,6 +516,15 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 			}
 		}
 
+		// ReconstructData leaves parity shards nil, so healing a parity shard
+		// needs the full reconstruction.
+		healingParity := false
+		for i := e.dataShards; i < e.totalShards; i++ {
+			if healPipeWriters[i] != nil {
+				healingParity = true
+			}
+		}
+
 		enc := e.enc
 		for stripeIndex := uint64(0); ; stripeIndex++ {
 			shards := make([][]byte, e.totalShards)
@@ -575,7 +584,11 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				_ = pw.CloseWithError(fmt.Errorf("insufficient shards in stripe %d", stripeIndex))
 				return
 			}
-			if err := enc.ReconstructData(shards); err != nil {
+			reconstruct := enc.ReconstructData
+			if healingParity {
+				reconstruct = enc.Reconstruct
+			}
+			if err := reconstruct(shards); err != nil {
 				closeHealingWriters(err)
 				_ = pw.CloseWithError(err)
 				return
