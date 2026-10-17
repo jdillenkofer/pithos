@@ -102,6 +102,11 @@ func BenchmarkTinkEncryptionPartStore(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			// Store the part up front so the Get benchmarks also work when
+			// run without the Put ones.
+			if err := store.PutPart(ctx, nil, *partId, bytes.NewReader(payload)); err != nil {
+				b.Fatal(err)
+			}
 			name := fmt.Sprintf("%s/%s", mode.name, s.name)
 
 			b.Run("Put/"+name, func(b *testing.B) {
