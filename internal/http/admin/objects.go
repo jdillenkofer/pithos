@@ -23,9 +23,9 @@ type objectCursor struct {
 	Versions                     bool
 }
 type objectLink struct {
-	Label, URL, Version, SizeText, Modified, Type, StorageClass string
-	Size                                                        int64
-	DeleteMarker, Latest                                        bool
+	Label, URL, ViewURL, Version, SizeText, Modified, Type, StorageClass string
+	Size                                                                 int64
+	DeleteMarker, Latest                                                 bool
 }
 type objectsView struct {
 	CSRF, Bucket, Prefix, Parent, NextURL, VersionsURL, UploadURL string
@@ -36,6 +36,18 @@ type objectsView struct {
 type objectUploadView struct {
 	CSRF, Bucket, Prefix, BackURL string
 	Crumbs                        []objectLink
+}
+
+// listViewURL links viewable list rows to the inline viewer. Listings carry
+// no content type, so the decision uses the key's extension.
+func listViewURL(bucket, key, version string, deleteMarker bool) string {
+	if deleteMarker {
+		return ""
+	}
+	if kind, _ := previewOf(nil, key); kind == "" {
+		return ""
+	}
+	return objectURL("/objects/view", bucket, key, version)
 }
 
 // objectType mirrors the S3 console's type column: the file extension.
@@ -79,6 +91,8 @@ func formatModified(t time.Time) string {
 
 type objectDetailView struct {
 	CSRF, Bucket, Key, Name, Version, Tags, DownloadURL, BucketURL, VersionsURL string
+	Preview, ViewURL, PreviewText                                               string
+	PreviewTruncated                                                            bool
 	DeleteMarker                                                                bool
 	Crumbs                                                                      []objectLink
 	Overview, Checksums, Metadata, TagList                                      []keyValue
@@ -110,6 +124,7 @@ func (a *App) registerObjects(mux *http.ServeMux) {
 	mux.HandleFunc("GET /objects", a.objects)
 	mux.HandleFunc("GET /objects/detail", a.objectDetail)
 	mux.HandleFunc("GET /objects/download", a.download)
+	mux.HandleFunc("GET /objects/view", a.view)
 	mux.HandleFunc("GET /objects/upload", a.uploadPage)
 	mux.HandleFunc("POST /objects/upload", a.upload)
 	mux.HandleFunc("POST /objects/delete", a.deleteObject)
@@ -196,7 +211,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Versions {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
 		if result.NextKeyMarker != nil {
 			cursor.Key = *result.NextKeyMarker
@@ -217,7 +232,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Objects {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), ViewURL: listViewURL(bucket.String(), o.Key.String(), "", false), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
 			if o.Key.String() > cursor.Key {
 				cursor.Key = o.Key.String()
 			}
@@ -269,6 +284,17 @@ func (a *App) objectDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	} else {
 		describeObject(&view, b.String(), k.String(), object)
+		if kind, _ := previewOf(object.ContentType, k.String()); kind != "" {
+			view.Preview, view.ViewURL = kind, objectURL("/objects/view", b.String(), k.String(), version)
+			if kind == previewText {
+				text, truncated, err := a.textPreview(r.Context(), b, k, pinnedVersion(v, object), object.Size)
+				if err != nil {
+					a.objectError(w, r, err)
+					return
+				}
+				view.PreviewText, view.PreviewTruncated = text, truncated
+			}
+		}
 		tags, tagErr := a.options.Storage.GetObjectTagging(r.Context(), b, k, &storage.ObjectTaggingOptions{VersionID: v})
 		if tagErr != nil {
 			a.objectError(w, r, tagErr)

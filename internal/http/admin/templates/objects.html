@@ -14,9 +14,9 @@
   </div>
   {{if .Crumbs}}<div class="filter-bar"><div class="crumbs"><a href="/objects?bucket={{.Bucket}}{{if .Versions}}&amp;versions=true{{end}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">/</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">/</span></div></div>{{end}}
   <div class="table-wrap"><table>
-  <thead><tr><th>Name</th>{{if .Versions}}<th>Version ID</th>{{end}}<th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th></tr></thead>
+  <thead><tr><th>Name</th>{{if .Versions}}<th>Version ID</th>{{end}}<th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead>
   <tbody>
-  {{range .Prefixes}}<tr><td><a href="{{.URL}}"><span class="icon folder" aria-hidden="true"></span>{{.Label}}</a></td>{{if $.Versions}}<td>-</td>{{end}}<td>Folder</td><td>-</td><td class="num">-</td><td>-</td></tr>{{end}}
+  {{range .Prefixes}}<tr><td><a href="{{.URL}}"><span class="icon folder" aria-hidden="true"></span>{{.Label}}</a></td>{{if $.Versions}}<td>-</td>{{end}}<td>Folder</td><td>-</td><td class="num">-</td><td>-</td><td></td></tr>{{end}}
   {{range .Objects}}<tr>
     <td><a href="{{.URL}}"><span class="icon {{if .DeleteMarker}}marker{{else}}file{{end}}" aria-hidden="true"></span>{{.Label}}</a></td>
     {{if $.Versions}}<td><span class="key">{{.Version}}</span>{{if .Latest}} <span class="badge">Latest</span>{{end}}</td>{{end}}
@@ -24,8 +24,9 @@
     <td class="nowrap">{{.Modified}} UTC</td>
     <td class="num">{{if .DeleteMarker}}-{{else}}{{.SizeText}}{{end}}</td>
     <td>{{if .DeleteMarker}}-{{else}}{{.StorageClass}}{{end}}</td>
+    <td class="actions">{{if .ViewURL}}<a class="button-link small" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}</td>
   </tr>{{end}}
-  {{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}6{{else}}5{{end}}" class="empty"><strong>No objects</strong>{{if .Prefix}}No objects match this prefix.{{else}}You don't have any objects in this bucket.{{end}}</td></tr>{{end}}
+  {{if and (not .Prefixes) (not .Objects)}}<tr><td colspan="{{if .Versions}}7{{else}}6{{end}}" class="empty"><strong>No objects</strong>{{if .Prefix}}No objects match this prefix.{{else}}You don't have any objects in this bucket.{{end}}</td></tr>{{end}}
   </tbody></table></div>
 </div>
 {{end}}
@@ -51,10 +52,19 @@
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="{{.BucketURL}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><span>{{.Name}}</span></div>
 <div class="page-head">
   <div><h1>{{.Name}}</h1>{{if .DeleteMarker}}<p class="subtitle"><span class="status warn">Delete marker</span></p>{{end}}</div>
-  <div class="toolbar">{{if not .DeleteMarker}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}</div>
+  <div class="toolbar">{{if not .DeleteMarker}}{{if .ViewURL}}<a class="button-link" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}</div>
 </div>
 <nav class="tabs" aria-label="Object"><a href="#" aria-current="page">Properties</a><a href="{{.VersionsURL}}">Versions</a></nav>
 {{if .DeleteMarker}}<div class="alert warn"><p>This version {{if .Version}}(<code>{{.Version}}</code>) {{end}}is a delete marker and has no content.</p></div>{{else}}
+{{if .Preview}}<div class="container">
+  <div class="container-head"><div><h2>Preview</h2>{{if eq .Preview "text"}}<p>Shown as plain text{{if .PreviewTruncated}}; only the first 64 KiB is displayed{{end}}.</p>{{end}}</div></div>
+  <div class="container-body preview">
+    {{if eq .Preview "image"}}<img src="{{.ViewURL}}" alt="{{.Name}}">
+    {{else if eq .Preview "video"}}<video src="{{.ViewURL}}" controls preload="metadata"></video>
+    {{else if eq .Preview "audio"}}<audio src="{{.ViewURL}}" controls preload="metadata"></audio>
+    {{else if eq .Preview "text"}}<pre>{{.PreviewText}}</pre>{{end}}
+  </div>
+</div>{{end}}
 <div class="container">
   <div class="container-head"><h2>Object overview</h2></div>
   <div class="container-body"><div class="kv">{{range .Overview}}<div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}</div></div>

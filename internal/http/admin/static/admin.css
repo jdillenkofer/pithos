@@ -267,3 +267,9 @@ details[open] summary { margin-bottom: 12px; }
 .progress-bar .progress-percent { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .progress-head + .kv, .progress-bar + .hint + .kv { margin-top: 16px; }
 
+/* Object preview */
+.preview img, .preview video { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; border-radius: 8px; background: var(--bg-layout); }
+.preview video { width: 100%; background: #000; }
+.preview audio { width: 100%; }
+.preview pre { margin: 0; max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

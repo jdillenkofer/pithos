@@ -19,7 +19,7 @@ import (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+const contentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
 
 // NewHandler builds an isolated admin router. Only health, login and embedded
 // static assets are public; all management routes require a fresh credential
