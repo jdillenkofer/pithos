@@ -70,6 +70,14 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 	portAccessor := registerIntFlag(serveCommand, "port", defaultPort, "the port for the s3 api")
 	monitoringPortAccessor := registerIntFlag(serveCommand, "monitoringPort", defaultMonitoringPort, "the monitoring port of pithos")
 	monitoringPortEnabledAccessor := registerBoolFlag(serveCommand, "monitoringPortEnabled", defaultMonitoringPortEnabled, "determines if the monitoring port of pithos is enabled or not")
+	adminEnabledAccessor := registerBoolFlag(serveCommand, "adminEnabled", defaultAdminEnabled, "enable the admin UI listener; automatically disabled when authentication is disabled")
+	adminPortAccessor := registerIntFlag(serveCommand, "adminPort", defaultAdminPort, "the port for the admin UI")
+	adminBindAddressAccessor := registerStringFlag(serveCommand, "adminBindAddress", "", "the admin UI bind address; defaults to bindAddress")
+	adminSecureCookieAccessor := registerBoolFlag(serveCommand, "adminSecureCookie", defaultAdminSecureCookie, "require HTTPS for admin session cookies")
+	adminSessionIdleMinutesAccessor := registerIntFlag(serveCommand, "adminSessionIdleMinutes", defaultAdminSessionIdleMinutes, "admin session idle timeout in minutes")
+	adminSessionMaxHoursAccessor := registerIntFlag(serveCommand, "adminSessionMaxHours", defaultAdminSessionMaxHours, "maximum admin session lifetime in hours")
+	adminDatabaseIndexAccessor := registerIntFlag(serveCommand, "adminDatabaseIndex", defaultAdminDatabaseIndex, "zero-based configured database index used for admin sessions")
+	adminAccessKeysAccessor := registerStringFlag(serveCommand, "adminAccessKeys", "", "comma-separated access keys allowed full global admin UI access; empty permits no logins")
 	storageJsonPathAccessor := registerStringFlag(serveCommand, "storageJsonPath", defaultStorageJsonPath, "the path to the storage.json configuration")
 	authorizerPathAccessor := registerStringFlag(serveCommand, "authorizerPath", defaultAuthorizerPath, "the path to the authorizer script")
 	authorizerTypeAccessor := registerStringFlag(serveCommand, "authorizerType", defaultAuthorizerType, "authorizer backend: lua or policy")
@@ -102,6 +110,16 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		}
 	}
 
+	var adminAccessKeys []string
+	if raw := adminAccessKeysAccessor(); raw != nil {
+		adminAccessKeys = []string{}
+		for _, part := range strings.Split(*raw, ",") {
+			if key := strings.TrimSpace(part); key != "" {
+				adminAccessKeys = append(adminAccessKeys, key)
+			}
+		}
+	}
+
 	return &Settings{
 		authenticationEnabled:            authenticationEnabledAccessor(),
 		credentialsProvider:              credentialsProviderAccessor(),
@@ -115,6 +133,14 @@ func loadSettingsFromCmdArgs(cmdArgs []string) (*Settings, error) {
 		port:                             portAccessor(),
 		monitoringPort:                   monitoringPortAccessor(),
 		monitoringPortEnabled:            monitoringPortEnabledAccessor(),
+		adminEnabled:                     adminEnabledAccessor(),
+		adminPort:                        adminPortAccessor(),
+		adminBindAddress:                 adminBindAddressAccessor(),
+		adminSecureCookie:                adminSecureCookieAccessor(),
+		adminSessionIdleMinutes:          adminSessionIdleMinutesAccessor(),
+		adminSessionMaxHours:             adminSessionMaxHoursAccessor(),
+		adminDatabaseIndex:               adminDatabaseIndexAccessor(),
+		adminAccessKeys:                  adminAccessKeys,
 		storageJsonPath:                  storageJsonPathAccessor(),
 		authorizerPath:                   authorizerPathAccessor(),
 		authorizerType:                   authorizerTypeAccessor(),

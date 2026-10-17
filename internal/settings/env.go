@@ -21,6 +21,14 @@ const bindAddressEnvKey = envKeyPrefix + "_BIND_ADDRESS"
 const portEnvKey = envKeyPrefix + "_PORT"
 const monitoringPortEnvKey = envKeyPrefix + "_MONITORING_PORT"
 const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
+const adminEnabledEnvKey = envKeyPrefix + "_ADMIN_ENABLED"
+const adminPortEnvKey = envKeyPrefix + "_ADMIN_PORT"
+const adminBindAddressEnvKey = envKeyPrefix + "_ADMIN_BIND_ADDRESS"
+const adminSecureCookieEnvKey = envKeyPrefix + "_ADMIN_SECURE_COOKIE"
+const adminSessionIdleMinutesEnvKey = envKeyPrefix + "_ADMIN_SESSION_IDLE_MINUTES"
+const adminSessionMaxHoursEnvKey = envKeyPrefix + "_ADMIN_SESSION_MAX_HOURS"
+const adminDatabaseIndexEnvKey = envKeyPrefix + "_ADMIN_DATABASE_INDEX"
+const adminAccessKeysEnvKey = envKeyPrefix + "_ADMIN_ACCESS_KEYS"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
@@ -116,6 +124,30 @@ func loadSettingsFromEnv() (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
+	adminEnabled, err := getBoolFromEnv(adminEnabledEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminPort, err := getIntFromEnv(adminPortEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSecureCookie, err := getBoolFromEnv(adminSecureCookieEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSessionIdleMinutes, err := getIntFromEnv(adminSessionIdleMinutesEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminSessionMaxHours, err := getIntFromEnv(adminSessionMaxHoursEnvKey)
+	if err != nil {
+		return nil, err
+	}
+	adminDatabaseIndex, err := getIntFromEnv(adminDatabaseIndexEnvKey)
+	if err != nil {
+		return nil, err
+	}
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
@@ -159,6 +191,14 @@ func loadSettingsFromEnv() (*Settings, error) {
 		port:                             port,
 		monitoringPort:                   monitoringPort,
 		monitoringPortEnabled:            monitoringPortEnabled,
+		adminEnabled:                     adminEnabled,
+		adminPort:                        adminPort,
+		adminBindAddress:                 getStringFromEnv(adminBindAddressEnvKey),
+		adminSecureCookie:                adminSecureCookie,
+		adminSessionIdleMinutes:          adminSessionIdleMinutes,
+		adminSessionMaxHours:             adminSessionMaxHours,
+		adminDatabaseIndex:               adminDatabaseIndex,
+		adminAccessKeys:                  getStringSliceFromEnv(adminAccessKeysEnvKey),
 		storageJsonPath:                  storageJsonPath,
 		authorizerPath:                   authorizerPath,
 		authorizerType:                   authorizerType,

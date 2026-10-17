@@ -18,6 +18,12 @@ const defaultBindAddress = "0.0.0.0"
 const defaultPort = 9000
 const defaultMonitoringPort = 9090
 const defaultMonitoringPortEnabled = false
+const defaultAdminEnabled = true
+const defaultAdminPort = 9001
+const defaultAdminSecureCookie = false
+const defaultAdminSessionIdleMinutes = 30
+const defaultAdminSessionMaxHours = 12
+const defaultAdminDatabaseIndex = 0
 const defaultStorageJsonPath = "./storage.json"
 const defaultAuthorizerPath = "./authorizer.lua"
 const defaultAuthorizerType = "lua"
@@ -47,6 +53,14 @@ type Settings struct {
 	port                             *int     `mergable:""`
 	monitoringPort                   *int     `mergable:""`
 	monitoringPortEnabled            *bool    `mergable:""`
+	adminEnabled                     *bool    `mergable:""`
+	adminPort                        *int     `mergable:""`
+	adminBindAddress                 *string  `mergable:""`
+	adminSecureCookie                *bool    `mergable:""`
+	adminSessionIdleMinutes          *int     `mergable:""`
+	adminSessionMaxHours             *int     `mergable:""`
+	adminDatabaseIndex               *int     `mergable:""`
+	adminAccessKeys                  []string `mergable:""`
 	storageJsonPath                  *string  `mergable:""`
 	authorizerPath                   *string  `mergable:""`
 	authorizerType                   *string  `mergable:""`
@@ -116,6 +130,42 @@ func (s *Settings) MonitoringPort() int {
 
 func (s *Settings) MonitoringPortEnabled() bool {
 	return valueOrDefault(s.monitoringPortEnabled, defaultMonitoringPortEnabled)
+}
+
+// AdminEnabled reports whether the admin listener should run. Admin access
+// always requires authentication, even when the listener is enabled by default.
+func (s *Settings) AdminEnabled() bool {
+	return s.AuthenticationEnabled() && valueOrDefault(s.adminEnabled, defaultAdminEnabled)
+}
+
+func (s *Settings) AdminPort() int {
+	return valueOrDefault(s.adminPort, defaultAdminPort)
+}
+
+func (s *Settings) AdminBindAddress() string {
+	return valueOrDefault(s.adminBindAddress, s.BindAddress())
+}
+
+func (s *Settings) AdminSecureCookie() bool {
+	return valueOrDefault(s.adminSecureCookie, defaultAdminSecureCookie)
+}
+
+func (s *Settings) AdminSessionIdleMinutes() int {
+	return valueOrDefault(s.adminSessionIdleMinutes, defaultAdminSessionIdleMinutes)
+}
+
+func (s *Settings) AdminSessionMaxHours() int {
+	return valueOrDefault(s.adminSessionMaxHours, defaultAdminSessionMaxHours)
+}
+
+func (s *Settings) AdminDatabaseIndex() int {
+	return valueOrDefault(s.adminDatabaseIndex, defaultAdminDatabaseIndex)
+}
+
+// AdminAccessKeys lists credentials granted global admin UI access. It does not
+// change their permissions on the S3 API. An empty allowlist permits no logins.
+func (s *Settings) AdminAccessKeys() []string {
+	return append([]string{}, s.adminAccessKeys...)
 }
 
 func (s *Settings) StorageJsonPath() string {
