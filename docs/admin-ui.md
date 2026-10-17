@@ -133,23 +133,45 @@ may not provide these gauges.
 
 ## Buckets and objects
 
-Buckets are listed across all accounts. Creation accepts an explicit owner
-account (defaulting to the logged-in credential's account). Deletion requires
-typing the bucket name and still fails for a nonempty or protected bucket.
+The console follows the layout of the AWS S3 console. Buckets are listed
+across all accounts with their sampled object count and size, and can be
+filtered by name. Creation accepts an explicit owner account (defaulting to
+the logged-in credential's account) and can enable versioning or Object Lock.
+Deletion requires typing the bucket name and still fails for a nonempty or
+protected bucket.
 
-Bucket detail tabs expose JSON editors for versioning, Object Lock, lifecycle,
-CORS, website, tags and notifications. Typed input is validated with the same
-storage/S3 validation helpers used by the API. Lifecycle and CORS are editable;
-configuration removal is available where the storage API supports it.
+Each bucket has Objects, Properties, Permissions and Management tabs:
 
-The object browser supports prefix/delimiter navigation, bounded pages with
-continuation tokens, and version listings including delete markers. Details
-show metadata, checksums, tags, retention and legal hold. Tags, retention and
-legal hold are editable for the selected version.
+- **Properties:** overview, Bucket Versioning, tags, Object Lock default
+  retention, static website hosting and event notifications. Versioning,
+  tags, Object Lock and website hosting have forms; notifications are edited
+  as JSON.
+- **Permissions:** CORS rules, edited as JSON as in the S3 console.
+- **Management:** lifecycle rules with forms to create, edit and delete
+  prefix-scoped rules (expiration, noncurrent version deletion, expired
+  delete markers, incomplete multipart uploads). Tag or size filters, dated
+  actions and transitions are edited in the lifecycle JSON.
 
-Downloads stream as `application/octet-stream` with `Content-Disposition:
-attachment`, `nosniff` and a sandbox CSP. Object HTML and other active content
-are never rendered inline by the UI.
+Forms are converted into the same configuration documents as the JSON
+editors and validated with the same storage/S3 validation helpers as the API.
+Website forms keep existing redirection rules.
+
+The object browser supports prefix navigation with breadcrumbs, bounded
+pages with continuation tokens, and version listings including delete
+markers. Object pages show an overview, storage class, checksums, metadata,
+tags and Object Lock state; tags are edited as key/value rows, and retention
+and legal hold are editable for the selected version. The Versions tab lists
+every version of the key; selected versions are deleted after typing
+`permanently delete`.
+
+Images, video and audio can be opened in the browser and are previewed on
+the object page; video supports seeking through HTTP range requests.
+Text-like objects, including HTML and SVG, are only ever shown as plain text,
+with the first 64 KiB previewed. Other types, including PDF, are download-only.
+Viewed and downloaded responses carry `nosniff` and a sandbox CSP, and
+downloads use `Content-Disposition: attachment` with
+`application/octet-stream`, so object content never runs as active content in
+the console's origin.
 
 Uploads use a streaming `multipart/form-data` request directly into `PutObject`,
 without buffering a whole object or using temporary upload files. The first
@@ -241,7 +263,10 @@ stack. It uses the same integrity validator as `validate-storage`, with deletion
 and force disabled. No request parameter can enable `-delete-corrupted`. The
 current validator requires exactly one local database. One validation runs at a
 time, it has a ten-minute deadline, and the latest report is retained in memory.
-Progress is polled through authenticated routes. Reports are lost on restart.
+Progress is polled through authenticated routes and shown as a progress bar
+with throughput and remaining time, estimated from the sampled bucket usage;
+a finished validation can be started again in place. Reports are lost on
+restart.
 
 Validation checks the **current** version of each object, as returned by a
 normal object listing. Historical (noncurrent) object versions, delete markers
