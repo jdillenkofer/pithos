@@ -212,9 +212,16 @@ memory limit, and a single call into a built-in library function (for example
 A Lua candidate can therefore still use substantial CPU time and memory while
 it is validated or simulated, so only trusted administrators should be
 allowlisted. Candidates are limited to 1 MiB. The simulator evaluates
-the candidate for the supplied principal/account, operation and bucket/key,
-showing the effect and matching statement IDs available from the authorizer.
-It does not perform an S3 request or change the active policy.
+the candidate for one request: a caller (anonymous, or account, principal and
+access key, which can be filled from a listed credential), an operation from
+the supported list, and an optional bucket, key and copy source. Like the S3
+server, it resolves bucket owners (`aws:ResourceAccount`), sets the signature
+authentication context, answers `NoSuchBucket` for missing buckets, and
+denies callers from other accounts at the account boundary before policies
+run; the policies' own verdict is still shown. Results explain the effect and
+list the action, resource and matching statement IDs. Object tags, headers,
+source IP and query parameters are not simulated. The simulator does not
+perform an S3 request or change the active policy.
 
 Saving is serialized in-process. It checks the SHA-256 hash captured when the
 file was loaded, validates the exact candidate, creates a private durable

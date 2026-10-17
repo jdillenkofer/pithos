@@ -1,35 +1,63 @@
 {{define "policies"}}
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><span>Policies</span></div>
-<div class="page-head"><div><h1>Authorization policy</h1><p class="subtitle">Active S3 authorization policy · format: {{.Kind}}</p></div></div>
-{{if .Message}}<div class="alert" role="status"><p>{{.Message}}</p></div>{{end}}
+<div class="page-head"><div><h1>Authorization policy</h1><p class="subtitle">The active S3 authorization policy ({{if eq .Kind "lua"}}Lua script{{else}}JSON policies{{end}}). The admin console is never restricted by it.</p></div></div>
+{{with .Notice}}<div class="alert {{.Kind}}" role="status"><p>{{.Text}}</p></div>{{end}}
 <form method="post" action="/policies/validate">
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="hash" value="{{.Hash}}">
 <div class="container">
-  <div class="container-head"><div><h2>Policy editor</h2><p>Validation and simulation use the candidate below, not the running policy. Admin console access is never affected by policies, but S3 clients can be locked out: validate and simulate before saving.</p></div></div>
+  <div class="container-head"><div><h2>Policy editor</h2><p>Validate and simulate before saving: a policy change can lock S3 clients out. Saving writes a backup of the current file and reloads the policy immediately.</p></div></div>
   <div class="container-body">
-    <label>Policy document (maximum 1 MiB)<textarea name="candidate" rows="22" required>{{.Candidate}}</textarea></label>
+    <label class="field"><span class="field-label">Policy document <span class="hint">- maximum 1 MiB</span></span><textarea name="candidate" rows="22" required spellcheck="false">{{.Candidate}}</textarea></label>
     <div class="actions-row"><button type="submit">Validate</button><button type="submit" class="primary" formaction="/policies/save">Save changes</button></div>
   </div>
 </div>
-<div class="container">
-  <div class="container-head"><div><h2>Policy simulator</h2><p>Evaluate the candidate for a single request. Use a Pithos operation such as <code>GetObject</code> (not <code>s3:GetObject</code>); leave account and principal empty for an anonymous request. Object tags and HTTP context are not supplied. Lua runs are limited to one million VM instructions.</p></div></div>
+
+<div class="container" id="simulator">
+  <div class="container-head"><div><h2>Policy simulator</h2><p>Evaluates one request against the policy document above, including the account boundary S3 applies before any policy runs. Nothing is saved or executed against storage.</p></div></div>
   <div class="container-body">
-    <div class="form-grid">
-      <label>Account <input name="account" value="{{.Account}}"></label>
-      <label>Principal <input name="principal" value="{{.Principal}}"></label>
-      <label>Access key ID <span class="hint">Optional</span><input name="accessKey" value="{{.AccessKey}}"></label>
-      <label>Operation <input name="operation" value="{{.Operation}}" placeholder="GetObject"></label>
-      <label>Bucket <input name="bucket" value="{{.Bucket}}"></label>
-      <label>Key <input name="key" value="{{.Key}}"></label>
+    <div class="simulator">
+      <fieldset class="sim-group"><legend>Caller</legend>
+        {{if .Identities}}<label class="field"><span class="field-label">Fill from credential <span class="hint">- optional</span></span>
+          <select data-sim-identity>
+            <option value="">Choose a credential…</option>
+            <option value="" data-anonymous>Anonymous request</option>
+            {{range .Identities}}<option value="{{.AccessKey}}" data-account="{{.Account}}" data-principal="{{.Principal}}">{{.AccessKey}} ({{.Principal}} in {{.Account}})</option>{{end}}
+          </select></label>{{end}}
+        <div class="form-grid">
+          <label class="field"><span class="field-label">Account ID</span><input name="account" value="{{.Simulation.Account}}" placeholder="Anonymous" data-sim-field="account"></label>
+          <label class="field"><span class="field-label">Principal ID</span><input name="principal" value="{{.Simulation.Principal}}" placeholder="Anonymous" data-sim-field="principal"></label>
+          <label class="field"><span class="field-label">Access key ID</span><input name="accessKey" value="{{.Simulation.AccessKey}}" placeholder="Anonymous" data-sim-field="accessKey"></label>
+        </div>
+        <p class="hint">Authenticated requests need all three fields; leave them empty to simulate an anonymous request.</p>
+      </fieldset>
+      <fieldset class="sim-group"><legend>Request</legend>
+        <div class="form-grid">
+          <label class="field"><span class="field-label">Operation</span><select name="operation" required>{{range .Operations}}<option {{if eq . $.Simulation.Operation}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+          <label class="field"><span class="field-label">Bucket</span><input name="bucket" value="{{.Simulation.Bucket}}" placeholder="my-bucket"></label>
+          <label class="field"><span class="field-label">Key <span class="hint">- optional</span></span><input name="key" value="{{.Simulation.Key}}" placeholder="path/to/object"></label>
+        </div>
+        <div class="form-grid sim-copy">
+          <label class="field"><span class="field-label">Copy source bucket <span class="hint">- CopyObject and UploadPartCopy only</span></span><input name="sourceBucket" value="{{.Simulation.SourceBucket}}"></label>
+          <label class="field"><span class="field-label">Copy source key</span><input name="sourceKey" value="{{.Simulation.SourceKey}}"></label>
+        </div>
+      </fieldset>
     </div>
-    <div class="actions-row"><button type="submit" formaction="/policies/simulate">Run simulation</button></div>
-    {{with .Decision}}<div class="progress">
-      <h3>Result</h3>
-      <div class="kv"><div><div class="label">Effect</div><div class="value">{{.Effect}}</div></div><div><div class="label">Action</div><div class="value mono">{{.Action}}</div></div><div><div class="label">Resource</div><div class="value mono">{{.Resource}}</div></div></div>
-      <h3>Matching statements</h3>
-      <ul>{{range .References}}<li>Policy <code>{{.Policy}}</code>, statement <code>{{.Sid}}</code></li>{{else}}<li class="subtitle">No statement references (Lua returns only an effect).</li>{{end}}</ul>
-    </div>{{end}}
+    <div class="actions-row"><span class="hint spacer-left">Object tags, headers, source IP and query parameters are not simulated.</span><button type="submit" class="primary" formaction="/policies/simulate#simulator">Run simulation</button></div>
+    {{with .Result}}
+    <div class="sim-result {{if .Allowed}}allowed{{else}}denied{{end}}" role="status">
+      <div class="sim-verdict"><span class="status {{if .Allowed}}ok{{else}}bad{{end}}">{{.Title}}</span></div>
+      <p>{{.Explanation}}</p>
+      {{if .PolicyEffect}}<p class="hint">Evaluated on their own, the policies would result in: {{.PolicyEffect}}.</p>{{end}}
+      <div class="kv">
+        {{if .Action}}<div><div class="label">Action</div><div class="value mono">{{.Action}}</div></div>{{end}}
+        {{if .Resource}}<div><div class="label">Resource</div><div class="value mono">{{.Resource}}</div></div>{{end}}
+        {{range .Context}}<div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>{{end}}
+      </div>
+      {{if .References}}<h3>Matching statements</h3>
+      <div class="table-wrap"><table><thead><tr><th>Policy</th><th>Statement ID</th></tr></thead><tbody>{{range .References}}<tr><td>{{.Policy}}</td><td>{{if .Sid}}{{.Sid}}{{else}}<span class="subtitle">no Sid</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{end}}
+    </div>
+    {{end}}
   </div>
 </div>
 </form>

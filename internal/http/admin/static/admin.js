@@ -84,3 +84,20 @@ document.addEventListener("input", function (event) {
     }
   }
 });
+
+// Policy simulator: choosing a credential fills the caller fields.
+document.addEventListener("change", function (event) {
+  const select = event.target.closest("[data-sim-identity]");
+  if (!select) {
+    return;
+  }
+  const option = select.selectedOptions[0];
+  const form = select.form;
+  const anonymous = option.hasAttribute("data-anonymous");
+  if (!anonymous && !option.value) {
+    return;
+  }
+  form.querySelector('[data-sim-field="account"]').value = anonymous ? "" : option.dataset.account;
+  form.querySelector('[data-sim-field="principal"]').value = anonymous ? "" : option.dataset.principal;
+  form.querySelector('[data-sim-field="accessKey"]').value = anonymous ? "" : option.value;
+});

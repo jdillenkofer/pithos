@@ -343,3 +343,17 @@ th.select, td.select { width: 1%; padding-right: 0; }
 .audit-table td.mono { font-size: 12px; }
 input[type="datetime-local"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.7; }
 @media (prefers-color-scheme: dark) { input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(1); } }
+
+/* Policy simulator */
+.simulator { display: grid; gap: 20px; }
+.sim-group { margin: 0; display: grid; gap: 12px; }
+.sim-group > .field { max-width: 32rem; }
+.sim-copy { margin-top: 4px; }
+.spacer-left { margin-right: auto; }
+.sim-result { margin-top: 20px; border: 2px solid var(--divider); border-radius: 12px; padding: 16px 20px; display: grid; gap: 12px; }
+.sim-result.allowed { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 5%, var(--container)); }
+.sim-result.denied { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 4%, var(--container)); }
+.sim-result p { margin: 0; }
+.sim-verdict .status { font-size: 18px; font-weight: 700; }
+.sim-result table { background: var(--container); border-radius: 8px; }
+.alert.info { border-color: var(--info); }

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	policylua "github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
@@ -29,10 +30,18 @@ const policyFormLimit = 3*policySizeLimit + 16384
 var policiesWriter sync.Mutex
 var errPolicyConflict = errors.New("policy changed; reload the page before saving")
 
+// policyNotice is the outcome banner of a validate, simulate or save action.
+type policyNotice struct {
+	Kind, Text string // Kind is "ok", "bad" or "info".
+}
+
 type policiesPage struct {
-	CSRF, Kind, Candidate, Hash, Message                  string
-	Account, Principal, AccessKey, Operation, Bucket, Key string
-	Decision                                              *authorization.Decision
+	CSRF, Kind, Candidate, Hash string
+	Notice                      *policyNotice
+	Simulation                  simulationInput
+	Result                      *simulationResult
+	Operations                  []string
+	Identities                  []simulatorIdentity
 }
 
 func (a *App) registerPolicies(mux *http.ServeMux) {
@@ -51,7 +60,7 @@ func (a *App) policyLocation() (kind, path string) {
 
 func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 	kind, path := a.policyLocation()
-	page := policiesPage{CSRF: csrfToken(r), Kind: kind}
+	page := policiesPage{CSRF: csrfToken(r), Kind: kind, Operations: policy.SupportedOperations(), Identities: a.simulatorIdentities(r.Context())}
 	if r.Method == http.MethodGet {
 		data, err := readPolicyFile(path)
 		if err != nil {
@@ -59,61 +68,89 @@ func (a *App) policies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		page.Candidate, page.Hash = string(data), policyHash(data)
-	} else {
-		// ParseForm must never read an unbounded request, even for
-		// validation-only submissions.
-		r.Body = http.MaxBytesReader(w, r.Body, policyFormLimit)
-		if err := r.ParseForm(); err != nil {
-			a.fail(w, r, 413, "Policy form is too large or malformed")
-			return
-		}
-		page.Candidate, page.Hash = r.PostForm.Get("candidate"), r.PostForm.Get("hash")
-		page.Account, page.Principal, page.AccessKey = r.PostForm.Get("account"), r.PostForm.Get("principal"), r.PostForm.Get("accessKey")
-		page.Operation, page.Bucket, page.Key = r.PostForm.Get("operation"), r.PostForm.Get("bucket"), r.PostForm.Get("key")
-		candidate := []byte(page.Candidate)
-		evaluator, err := validatePolicyCandidate(kind, candidate)
+		page.Simulation.Operation = authorization.OperationGetObject
+		a.render(w, r, "Policies", "policies", page)
+		return
+	}
+	// ParseForm must never read an unbounded request, even for
+	// validation-only submissions.
+	r.Body = http.MaxBytesReader(w, r.Body, policyFormLimit)
+	if err := r.ParseForm(); err != nil {
+		a.fail(w, r, 413, "Policy form is too large or malformed")
+		return
+	}
+	page.Candidate, page.Hash = r.PostForm.Get("candidate"), r.PostForm.Get("hash")
+	page.Simulation = simulationInputFrom(r.PostForm)
+	candidate := []byte(page.Candidate)
+	evaluator, err := validatePolicyCandidate(kind, candidate)
+	if err != nil {
+		page.Notice = &policyNotice{"bad", "The policy is invalid: " + err.Error()}
+		a.audit(r, "AdminPolicyValidationFailed")
+		a.render(w, r, "Policies", "policies", page)
+		return
+	}
+	switch r.URL.Path {
+	case "/policies/validate":
+		page.Notice = &policyNotice{"ok", "The policy is valid."}
+		a.audit(r, "AdminValidatePolicy")
+	case "/policies/simulate":
+		result, err := simulate(r.Context(), kind, evaluator, page.Simulation, a.bucketOwner)
 		if err != nil {
-			page.Message = "Validation failed: " + err.Error()
-			a.audit(r, "AdminPolicyValidationFailed")
+			page.Notice = &policyNotice{"bad", "Simulation failed: " + err.Error()}
 		} else {
-			switch r.URL.Path {
-			case "/policies/validate":
-				page.Message = "Policy is valid."
-				a.audit(r, "AdminValidatePolicy")
-			case "/policies/simulate":
-				decision, err := simulatePolicy(r.Context(), evaluator, page)
-				if err != nil {
-					page.Message = "Simulation failed: " + err.Error()
-				} else {
-					page.Decision = &decision
-					page.Message = "Simulation complete (candidate only; no policy changes)."
-				}
-				a.audit(r, "AdminSimulatePolicy")
-			case "/policies/save":
-				reload, ok := a.policyReloader(kind)
-				if !ok {
-					a.audit(r, "AdminSavePolicyFailed")
-					a.fail(w, r, 503, "Active authorizer does not support immediate reload; no changes saved")
-					return
-				}
-				backup, err := savePolicyCandidate(path, kind, page.Hash, candidate, reload)
-				if errors.Is(err, errPolicyConflict) {
-					a.audit(r, "AdminSavePolicyConflict")
-					a.fail(w, r, 409, err.Error())
-					return
-				}
-				if err != nil {
-					a.audit(r, "AdminSavePolicyFailed")
-					a.fail(w, r, 500, err.Error())
-					return
-				}
-				page.Hash = policyHash(candidate)
-				page.Message = "Policy saved and reloaded. Backup: " + backup
-				a.audit(r, "AdminSavePolicy")
-			}
+			page.Result = &result
+		}
+		a.audit(r, "AdminSimulatePolicy")
+	case "/policies/save":
+		if !a.savePolicy(w, r, kind, path, &page, candidate) {
+			return
 		}
 	}
 	a.render(w, r, "Policies", "policies", page)
+}
+
+// savePolicy replaces the active policy. It returns false after it has
+// already written an error response.
+func (a *App) savePolicy(w http.ResponseWriter, r *http.Request, kind, path string, page *policiesPage, candidate []byte) bool {
+	reload, ok := a.policyReloader(kind)
+	if !ok {
+		a.audit(r, "AdminSavePolicyFailed")
+		a.fail(w, r, 503, "Active authorizer does not support immediate reload; no changes saved")
+		return false
+	}
+	backup, err := savePolicyCandidate(path, kind, page.Hash, candidate, reload)
+	if errors.Is(err, errPolicyConflict) {
+		a.audit(r, "AdminSavePolicyConflict")
+		a.fail(w, r, 409, err.Error())
+		return false
+	}
+	if err != nil {
+		a.audit(r, "AdminSavePolicyFailed")
+		a.fail(w, r, 500, err.Error())
+		return false
+	}
+	page.Hash = policyHash(candidate)
+	page.Notice = &policyNotice{"ok", "Policy saved and reloaded. Backup: " + backup}
+	a.audit(r, "AdminSavePolicy")
+	return true
+}
+
+// simulatorIdentities offers the known credentials as simulator callers. It
+// returns metadata only; secrets never reach the page.
+func (a *App) simulatorIdentities(ctx context.Context) []simulatorIdentity {
+	lister, ok := a.options.CredentialProvider.(authentication.CredentialLister)
+	if !ok {
+		return nil
+	}
+	credentials, err := lister.List(ctx)
+	if err != nil {
+		return nil
+	}
+	identities := make([]simulatorIdentity, 0, len(credentials))
+	for _, credential := range credentials {
+		identities = append(identities, simulatorIdentity{AccessKey: credential.AccessKeyID, Account: credential.AccountID, Principal: credential.PrincipalID})
+	}
+	return identities
 }
 
 func (a *App) policyReloader(kind string) (func([]byte) error, bool) {
@@ -143,23 +180,6 @@ func validatePolicyCandidate(kind string, data []byte) (authorization.RequestAut
 		return nil, fmt.Errorf("unsupported policy format")
 	}
 	return policylua.NewSimulator(string(data))
-}
-
-func simulatePolicy(ctx context.Context, evaluator authorization.RequestAuthorizer, p policiesPage) (authorization.Decision, error) {
-	if p.Operation == "" {
-		return authorization.Decision{}, fmt.Errorf("operation is required")
-	}
-	if (p.Account == "") != (p.Principal == "") {
-		return authorization.Decision{}, fmt.Errorf("account and principal must be supplied together (leave both empty for anonymous)")
-	}
-	optional := func(s string) *string {
-		if s == "" {
-			return nil
-		}
-		return &s
-	}
-	request := &authorization.Request{Operation: p.Operation, Bucket: optional(p.Bucket), Key: optional(p.Key), Authorization: authorization.Authorization{AccountId: optional(p.Account), PrincipalId: optional(p.Principal), AccessKeyId: optional(p.AccessKey)}}
-	return evaluator.AuthorizeRequest(ctx, request)
 }
 
 func policyHash(data []byte) string { return fmt.Sprintf("%x", sha256.Sum256(data)) }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/stretchr/testify/require"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -42,12 +43,13 @@ func TestPolicyValidationAndSimulation(t *testing.T) {
 		{"reader", "private/a", authorization.ExplicitDeny, "deny"},
 		{"unknown", "public/a", authorization.ImplicitDeny, ""},
 	} {
-		decision, err := simulatePolicy(context.Background(), evaluator, policiesPage{Account: "account", Principal: tc.principal, Operation: "GetObject", Bucket: "demo", Key: tc.key})
-		if err != nil || decision.Effect != tc.effect {
-			t.Fatalf("simulation = %+v, %v", decision, err)
+		result, err := simulate(context.Background(), "policy", evaluator, simulationInput{Account: "account", Principal: tc.principal, AccessKey: "key", Operation: "GetObject", Bucket: "demo", Key: tc.key}, ownedBy("account"))
+		_, title, _ := effectExplanation("policy", tc.effect)
+		if err != nil || result.Title != title || result.Allowed != (tc.effect == authorization.Allow) {
+			t.Fatalf("simulation = %+v, %v", result, err)
 		}
-		if tc.sid != "" && (len(decision.References) == 0 || decision.References[len(decision.References)-1].Sid != tc.sid) {
-			t.Fatalf("missing match: %+v", decision)
+		if tc.sid != "" && (len(result.References) == 0 || result.References[len(result.References)-1].Sid != tc.sid) {
+			t.Fatalf("missing match: %+v", result)
 		}
 	}
 }
@@ -63,13 +65,9 @@ func TestLuaPolicyValidationAndSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []string{"public/a", "private/a"} {
-		decision, err := simulatePolicy(context.Background(), evaluator, policiesPage{Account: "account", Principal: "reader", Operation: "GetObject", Bucket: "demo", Key: key})
-		expected := authorization.Allow
-		if key == "private/a" {
-			expected = authorization.ExplicitDeny
-		}
-		if err != nil || decision.Effect != expected {
-			t.Fatalf("simulation = %+v, %v", decision, err)
+		result, err := simulate(context.Background(), "lua", evaluator, simulationInput{Account: "account", Principal: "reader", AccessKey: "key", Operation: "GetObject", Bucket: "demo", Key: key}, ownedBy("account"))
+		if err != nil || result.Allowed != (key == "public/a") {
+			t.Fatalf("simulation = %+v, %v", result, err)
 		}
 	}
 	// A branch not exercised by constructor dry-run must still be bounded.
@@ -77,7 +75,7 @@ func TestLuaPolicyValidationAndSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = simulatePolicy(context.Background(), evaluator, policiesPage{Operation: "GetObject", Bucket: "loop"}); err == nil {
+	if _, err = simulate(context.Background(), "lua", evaluator, simulationInput{Operation: "GetObject", Bucket: "loop"}, ownedBy("account")); err == nil {
 		t.Fatal("unbounded simulator")
 	}
 }
@@ -196,7 +194,7 @@ func TestPoliciesTemplateEscapesCandidateAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err = page.ExecuteTemplate(&out, "policies", policiesPage{Candidate: `</textarea><script>alert(1)</script>`, CSRF: `\"><script>`, Message: `<script>`}); err != nil {
+	if err = page.ExecuteTemplate(&out, "policies", policiesPage{Candidate: `</textarea><script>alert(1)</script>`, CSRF: `\"><script>`, Notice: &policyNotice{"bad", `<script>`}, Simulation: simulationInput{Account: `<script>`}, Operations: []string{`<script>`}, Identities: []simulatorIdentity{{AccessKey: `<script>`, Account: `<script>`, Principal: `<script>`}}, Result: &simulationResult{Title: `<script>`, Explanation: `<script>`, Context: []keyValue{{`<script>`, `<script>`}}, References: []authorization.StatementReference{{Policy: `<script>`, Sid: `<script>`}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "<script>") || !strings.Contains(out.String(), `name="csrf_token"`) {
@@ -247,7 +245,7 @@ func TestPolicyRoutes(t *testing.T) {
 				t.Fatalf("GET: %d %s", get.Code, get.Body.String())
 			}
 			submit := func(endpoint, hash, code string) *httptest.ResponseRecorder {
-				form := url.Values{"candidate": {code}, "hash": {hash}, "operation": {"GetObject"}, "bucket": {"demo"}, "key": {"public/a"}, "account": {"account"}, "principal": {"reader"}}
+				form := url.Values{"candidate": {code}, "hash": {hash}, "operation": {"GetObject"}, "bucket": {"demo"}, "key": {"public/a"}, "account": {"account"}, "principal": {"reader"}, "accessKey": {"key"}}
 				request := httptest.NewRequest("POST", endpoint, strings.NewReader(form.Encode()))
 				request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 				recorder := httptest.NewRecorder()
@@ -301,7 +299,7 @@ func TestMaximumPolicyCandidatePassesWrappedRouter(t *testing.T) {
 		t.Fatalf("candidate does not exercise encoding overhead: %d bytes", encoded)
 	}
 	w := post(maximum)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Policy is valid.") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "The policy is valid.") {
 		t.Fatalf("maximum candidate rejected: %d %.300s", w.Code, w.Body.String())
 	}
 	w = post(maximum + "\t")
@@ -314,5 +312,58 @@ func TestMaximumPolicyCandidatePassesWrappedRouter(t *testing.T) {
 	}
 	if limit := csrfBodyLimit("/credentials/delete"); limit != 1024*1024 {
 		t.Fatalf("ordinary form limit changed: %d", limit)
+	}
+}
+
+// ownedBy resolves every bucket to owner, except "missing".
+func ownedBy(owner string) bucketOwnerFunc {
+	return func(_ context.Context, bucket string) (string, bool, error) {
+		return owner, bucket != "missing", nil
+	}
+}
+
+func TestSimulatorAppliesAccountBoundaryAndContext(t *testing.T) {
+	evaluator, err := validatePolicyCandidate("policy", []byte(`{"schemaVersion":1,"policies":{"all":{"Version":"2012-10-17","Statement":{"Effect":"Allow","Action":"s3:*","Resource":["arn:aws:s3:::*","arn:aws:s3:::*/*"],"Condition":{"StringEquals":{"aws:ResourceAccount":"owner","s3:authType":"REST-HEADER"}}}}},"bindings":[{"policy":"all","subjects":[{"type":"principal","accountId":"owner","principalId":"p"},{"type":"principal","accountId":"other","principalId":"p"}]}]}`))
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	result, err := simulate(ctx, "policy", evaluator, simulationInput{Account: "owner", Principal: "p", AccessKey: "key", Operation: "GetObject", Bucket: "bucket", Key: "k"}, ownedBy("owner"))
+	require.NoError(t, err)
+	require.True(t, result.Allowed, "the resolved owner and auth type satisfy the conditions: %+v", result)
+	require.Equal(t, "arn:aws:s3:::bucket/k", result.Resource)
+
+	result, err = simulate(ctx, "policy", evaluator, simulationInput{Account: "other", Principal: "p", AccessKey: "key", Operation: "GetObject", Bucket: "bucket", Key: "k"}, ownedBy("owner"))
+	require.NoError(t, err)
+	require.False(t, result.Allowed)
+	require.Equal(t, "Denied by the account boundary", result.Title)
+	require.NotEmpty(t, result.PolicyEffect)
+
+	result, err = simulate(ctx, "policy", evaluator, simulationInput{Operation: "GetObject", Bucket: "bucket", Key: "k"}, ownedBy("owner"))
+	require.NoError(t, err)
+	require.False(t, result.Allowed, "anonymous callers have no binding")
+	require.Equal(t, "Denied implicitly", result.Title)
+
+	result, err = simulate(ctx, "policy", evaluator, simulationInput{Account: "owner", Principal: "p", AccessKey: "key", Operation: "CreateBucket", Bucket: "missing"}, ownedBy("owner"))
+	require.NoError(t, err)
+	require.True(t, result.Allowed, "a new bucket is owned by the caller: %+v", result)
+
+	_, err = simulate(ctx, "policy", evaluator, simulationInput{Account: "owner", Principal: "p", AccessKey: "key", Operation: "GetObject", Bucket: "missing"}, ownedBy("owner"))
+	require.ErrorContains(t, err, "NoSuchBucket")
+
+	result, err = simulate(ctx, "policy", evaluator, simulationInput{Account: "owner", Principal: "p", AccessKey: "key", Operation: "CopyObject", Bucket: "bucket", Key: "k", SourceBucket: "source", SourceKey: "s"}, ownedBy("owner"))
+	require.NoError(t, err)
+	require.True(t, result.Allowed, "%+v", result)
+
+	for _, in := range []simulationInput{
+		{Operation: "s3:GetObject"},
+		{Operation: "GetObject", Account: "owner"},
+		{Operation: "GetObject", Account: "owner", Principal: "p"},
+		{Operation: "GetObject", AccessKey: "key"},
+		{Operation: "GetObject", Bucket: "Bad_Bucket"},
+		{Operation: "GetObject", Key: "orphan"},
+		{Operation: "CopyObject", Bucket: "bucket", Key: "k"},
+	} {
+		_, err := simulate(ctx, "policy", evaluator, in, ownedBy("owner"))
+		require.Error(t, err, "%+v", in)
 	}
 }

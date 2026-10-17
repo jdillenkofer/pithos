@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 )
@@ -106,6 +107,17 @@ func appendObjectLockChecks(checks []check, r *authorization.Request, resource s
 		checks = append(checks, check{"s3:PutObjectLegalHold", resource, false})
 	}
 	return checks
+}
+
+// SupportedOperations lists the Pithos operation names this authorizer
+// evaluates, sorted. Copy operations additionally require a copy source.
+func SupportedOperations() []string {
+	operations := []string{authorization.OperationCopyObject, authorization.OperationUploadPartCopy}
+	for operation := range operationActions {
+		operations = append(operations, operation)
+	}
+	sort.Strings(operations)
+	return operations
 }
 
 func SupportedActions() []string {
