@@ -67,28 +67,40 @@ func (sms *sqlMetadataStore) listObjects(ctx context.Context, tx *sql.Tx, bucket
 				return &metadatastore.ListBucketResult{Objects: objects, CommonPrefixes: commonPrefixes}, nil
 			}
 		}
+	listing:
 		for {
-			entity, err := sms.objectRepository.FindNextObject(ctx, tx, bucketName, prefix, startAfter, minimumKey)
+			// Batch direct objects to avoid one round trip per result. Descendants
+			// already buffered are discarded; the next query seeks past the group.
+			// The cap bounds overfetch even when every row belongs to one group.
+			remaining := int64(maxKeys) - int64(len(objectEntities)+len(commonPrefixes))
+			limit := int32(min(64, remaining+1))
+			batch, err := sms.objectRepository.FindObjectsFromKey(ctx, tx, bucketName, prefix, startAfter, minimumKey, limit)
 			if err != nil {
 				return nil, err
 			}
-			if entity == nil {
-				break
-			}
-			// Probe one extra logical result, not one extra descendant row.
-			if len(objectEntities)+len(commonPrefixes) >= int(maxKeys) {
-				isTruncated = true
-				break
-			}
-			if group := determineCommonPrefix(prefix, entity.Key.String(), delimiter); group != nil {
-				commonPrefixes = append(commonPrefixes, *group)
-				minimumKey = object.PrefixUpperBound(*group)
-				if minimumKey == "" {
-					break
+			for _, entity := range batch {
+				if entity.Key.String() < minimumKey {
+					continue
 				}
-			} else {
-				objectEntities = append(objectEntities, *entity)
-				startAfter = entity.Key.String()
+				// Probe one extra logical result, not one extra descendant row.
+				if remaining == 0 {
+					isTruncated = true
+					break listing
+				}
+				if group := determineCommonPrefix(prefix, entity.Key.String(), delimiter); group != nil {
+					commonPrefixes = append(commonPrefixes, *group)
+					minimumKey = object.PrefixUpperBound(*group)
+					if minimumKey == "" {
+						break listing
+					}
+				} else {
+					objectEntities = append(objectEntities, entity)
+					startAfter = entity.Key.String()
+				}
+				remaining--
+			}
+			if len(batch) < int(limit) {
+				break
 			}
 		}
 	}

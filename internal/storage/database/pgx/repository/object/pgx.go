@@ -247,24 +247,46 @@ func (or *pgxRepository) ContainsBucketObjectsByBucketName(ctx context.Context, 
 	return &containsObjects, nil
 }
 
-// FindNextObject supports inclusive subtree-successor seeks without losing a
-// key equal to the successor. The original prefix still supplies the upper bound.
-func (or *pgxRepository) FindNextObject(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, startAfter, minimumKey string) (*object.Entity, error) {
-	rows, err := tx.QueryContext(ctx, objectListingSelect+objectListingFilter+`
- AND key COLLATE "C" >= $6
- ORDER BY key COLLATE "C" ASC LIMIT 1`, bucketName.String(), prefix, startAfter, object.UploadStatusCompleted, object.PrefixUpperBound(prefix), minimumKey)
+// Use a single effective lower bound: with several parameterized bounds,
+// SQLite may seek from a weaker one and filter every descendant before the
+// subtree successor. Choose inclusivity in Go instead of using an SQL OR.
+const findObjectsFromKeyStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key COLLATE "C" >= $2
+ AND upload_status = $3 AND is_latest = TRUE AND is_delete_marker = FALSE
+ AND ($4 = '' OR key COLLATE "C" < $4)
+ ORDER BY key COLLATE "C" ASC LIMIT $5`
+
+const findObjectsAfterKeyStmt = objectListingSelect + `
+ WHERE bucket_name = $1
+ AND key COLLATE "C" > $2
+ AND upload_status = $3 AND is_latest = TRUE AND is_delete_marker = FALSE
+ AND ($4 = '' OR key COLLATE "C" < $4)
+ ORDER BY key COLLATE "C" ASC LIMIT $5`
+
+// FindObjectsFromKey supports inclusive subtree-successor seeks without losing
+// a key equal to the successor. The original prefix still supplies the upper bound.
+func (or *pgxRepository) FindObjectsFromKey(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix, startAfter, minimumKey string, limit int32) ([]object.Entity, error) {
+	lowerBound := max(prefix, minimumKey)
+	stmt := findObjectsFromKeyStmt
+	if startAfter >= lowerBound {
+		lowerBound = startAfter
+		stmt = findObjectsAfterKeyStmt
+	}
+	rows, err := tx.QueryContext(ctx, stmt, bucketName.String(), lowerBound, object.UploadStatusCompleted, object.PrefixUpperBound(prefix), limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	if !rows.Next() {
-		return nil, rows.Err()
+	entities := []object.Entity{}
+	for rows.Next() {
+		entity, err := convertRowToObjectEntity(rows)
+		if err != nil {
+			return nil, err
+		}
+		entities = append(entities, *entity)
 	}
-	entity, err := convertRowToObjectEntity(rows)
-	if err != nil {
-		return nil, err
-	}
-	return entity, rows.Err()
+	return entities, rows.Err()
 }
 
 func (or *pgxRepository) FindObjectsByBucketNameAndPrefixAndStartAfterOrderByKeyAsc(ctx context.Context, tx *sql.Tx, bucketName storage.BucketName, prefix string, startAfter string) ([]object.Entity, error) {
