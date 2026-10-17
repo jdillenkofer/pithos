@@ -20,6 +20,7 @@ type Validator struct {
 	deleteCorrupted bool
 	force           bool
 	progress        func(int)
+	byteProgress    func(int64)
 	limits          ResultLimits
 }
 
@@ -44,6 +45,14 @@ type ResultLimits struct {
 // The callback must not modify the validator or block indefinitely.
 func (v *Validator) WithProgress(progress func(int)) *Validator {
 	v.progress = progress
+	return v
+}
+
+// WithByteProgress reports the number of part bytes read since the previous
+// call, as validation reads them. It is called frequently on the validation
+// goroutine and must be cheap.
+func (v *Validator) WithByteProgress(progress func(int64)) *Validator {
+	v.byteProgress = progress
 	return v
 }
 
@@ -215,8 +224,12 @@ func (v *Validator) validateObject(ctx context.Context, inspector storage.Integr
 				result.PartFailures = append(result.PartFailures, PartFailure{PartID: part.ID, SequenceNumber: i + 1, Error: fmt.Sprintf("GetPart failed: %v", err)})
 				continue
 			}
+			var partData io.Reader = reader
+			if v.byteProgress != nil {
+				partData = &progressReader{reader: reader, progress: v.byteProgress}
+			}
 			var size int64
-			_, calculated, readErr := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
+			_, calculated, readErr := checksumutils.CalculateChecksumsStreaming(ctx, partData, func(r io.Reader) error {
 				var err error
 				size, err = io.Copy(io.Discard, r)
 				return err
@@ -279,6 +292,20 @@ func (v *Validator) validateObject(ctx context.Context, inspector storage.Integr
 		result.Corrupted = false
 	}
 	return result
+}
+
+// progressReader reports every successful read to a progress callback.
+type progressReader struct {
+	reader   io.Reader
+	progress func(int64)
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 {
+		r.progress(int64(n))
+	}
+	return n, err
 }
 
 func sameMarker(a, b *string) bool {

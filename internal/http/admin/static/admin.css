@@ -256,3 +256,14 @@ details[open] summary { margin-bottom: 12px; }
   .usage { grid-template-columns: 1fr auto; }
   .usage meter { grid-column: 1 / -1; }
 }
+
+/* Progress bars */
+.progress-head { justify-content: space-between; flex-wrap: wrap; }
+.progress-bar { display: flex; align-items: center; gap: 12px; margin: 12px 0 6px; }
+.progress-bar progress { flex: 1; height: 8px; appearance: none; border: 0; border-radius: 4px; background: var(--meter-track); overflow: hidden; }
+.progress-bar progress::-webkit-progress-bar { background: var(--meter-track); border-radius: 4px; }
+.progress-bar progress::-webkit-progress-value { background: var(--meter); border-radius: 4px; transition: width 0.4s ease; }
+.progress-bar progress::-moz-progress-bar { background: var(--meter); border-radius: 4px; }
+.progress-bar .progress-percent { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.progress-head + .kv, .progress-bar + .hint + .kv { margin-top: 16px; }
+
