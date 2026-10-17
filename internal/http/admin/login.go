@@ -197,6 +197,8 @@ func csrfBodyLimit(path string) int64 {
 	switch path {
 	case "/objects/upload":
 		return storage.MaxEntitySize + 1024*1024
+	case "/policies/validate", "/policies/simulate", "/policies/save":
+		return policyFormLimit
 	default:
 		return 1024 * 1024
 	}

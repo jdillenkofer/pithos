@@ -1,0 +1,24 @@
+{{define "policies"}}
+<section><h1>Policies</h1>
+<p>Active format: {{.Kind}}. The editor shows the configured file; simulations evaluate the candidate, not the running snapshot.</p>
+<p>Admin lockout check: not applicable. The global admin access-key allowlist bypasses JSON and Lua policies; a policy cannot lock administrators out of this UI. S3 authorization is unchanged.</p>
+<p role="status">{{.Message}}</p>
+<form method="post" action="/policies/validate">
+<input type="hidden" name="csrf_token" value="{{.CSRF}}">
+<input type="hidden" name="hash" value="{{.Hash}}">
+<label>Policy candidate (maximum 1 MiB)<textarea name="candidate" rows="24" cols="100" required>{{.Candidate}}</textarea></label>
+<p><button type="submit">Validate</button> <button type="submit" formaction="/policies/save">Save and reload</button></p>
+<fieldset><legend>Candidate simulator</legend>
+<p>Use a Pithos operation such as GetObject (not s3:GetObject). Leave account and principal empty for anonymous. Access key is optional and controls Lua isAnonymous and access-key predicates. No storage, source object, tags or HTTP context is supplied; context-dependent results are not a guarantee of live access. Lua execution is limited to one million VM instructions, including top-level initialization.</p>
+<label>Account <input name="account" value="{{.Account}}"></label>
+<label>Principal <input name="principal" value="{{.Principal}}"></label>
+<label>Access key ID <input name="accessKey" value="{{.AccessKey}}"></label>
+<label>Operation <input name="operation" value="{{.Operation}}" placeholder="GetObject"></label>
+<label>Bucket <input name="bucket" value="{{.Bucket}}"></label>
+<label>Key <input name="key" value="{{.Key}}"></label>
+<button type="submit" formaction="/policies/simulate">Simulate candidate</button>
+</fieldset></form>
+{{with .Decision}}<section><h2>Simulation result</h2><dl><dt>Effect</dt><dd>{{.Effect}}</dd><dt>Action</dt><dd>{{.Action}}</dd><dt>Resource</dt><dd>{{.Resource}}</dd></dl>
+<h3>Matching statements</h3><ul>{{range .References}}<li>Policy: {{.Policy}}; statement: {{.Sid}}</li>{{else}}<li>No statement references (Lua returns only an effect).</li>{{end}}</ul></section>{{end}}
+</section>
+{{end}}

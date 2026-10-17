@@ -77,6 +77,7 @@ func NewHandler(options ...Options) (http.Handler, error) {
 	a.registerBuckets(protected)
 	a.registerObjects(protected)
 	a.registerCredentials(protected)
+	a.registerPolicies(protected)
 	public.Handle("/", a.requireSession(a.requireCSRF(protected)))
 	ready = true
 	return &Handler{Handler: securityHeaders(public), cancel: cancel, workers: &a.workers}, nil
