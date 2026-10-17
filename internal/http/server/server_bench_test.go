@@ -199,24 +199,43 @@ func BenchmarkHTTPListObjectsV2Prefix(b *testing.B) {
 // the cost should not grow with it.
 var keysPerDirSizes = []int{10, 100, 1000}
 
+func newVersionedBenchmarkServer(b *testing.B, keysPerDir int) http.Handler {
+	handler, st := newBenchmarkServer(b)
+	ctx := context.Background()
+	bucketName := storage.MustNewBucketName(benchBucket)
+	status := storage.BucketVersioningStatusEnabled
+	if err := st.PutBucketVersioningConfiguration(ctx, bucketName, &storage.BucketVersioningConfiguration{Status: &status}); err != nil {
+		b.Fatal(err)
+	}
+	for d := range 20 {
+		for f := range keysPerDir {
+			key := storage.MustNewObjectKey(fmt.Sprintf("dir-%02d/file-%04d", d, f))
+			if _, err := st.PutObject(ctx, bucketName, key, nil, bytes.NewReader([]byte("x")), nil, nil); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	return handler
+}
+
+// BenchmarkHTTPListObjectVersions pages the first 100 versions; the cost
+// should not depend on how many versions follow.
+func BenchmarkHTTPListObjectVersions(b *testing.B) {
+	for _, keysPerDir := range keysPerDirSizes {
+		b.Run(fmt.Sprintf("keysPerDir=%d", keysPerDir), func(b *testing.B) {
+			handler := newVersionedBenchmarkServer(b, keysPerDir)
+			b.ReportAllocs()
+			for b.Loop() {
+				doBenchRequest(b, handler, "GET", "/"+benchBucket+"?versions&max-keys=100", nil, 200)
+			}
+		})
+	}
+}
+
 func BenchmarkHTTPListObjectVersionsDelimiter(b *testing.B) {
 	for _, keysPerDir := range keysPerDirSizes {
 		b.Run(fmt.Sprintf("keysPerDir=%d", keysPerDir), func(b *testing.B) {
-			handler, st := newBenchmarkServer(b)
-			ctx := context.Background()
-			bucketName := storage.MustNewBucketName(benchBucket)
-			status := storage.BucketVersioningStatusEnabled
-			if err := st.PutBucketVersioningConfiguration(ctx, bucketName, &storage.BucketVersioningConfiguration{Status: &status}); err != nil {
-				b.Fatal(err)
-			}
-			for d := range 20 {
-				for f := range keysPerDir {
-					key := storage.MustNewObjectKey(fmt.Sprintf("dir-%02d/file-%04d", d, f))
-					if _, err := st.PutObject(ctx, bucketName, key, nil, bytes.NewReader([]byte("x")), nil, nil); err != nil {
-						b.Fatal(err)
-					}
-				}
-			}
+			handler := newVersionedBenchmarkServer(b, keysPerDir)
 			b.ReportAllocs()
 			for b.Loop() {
 				doBenchRequest(b, handler, "GET", "/"+benchBucket+"?versions&delimiter=/", nil, 200)
