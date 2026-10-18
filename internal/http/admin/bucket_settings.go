@@ -13,9 +13,9 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
 
-// Structured editors post editor=form. Their fields are translated into the
-// same JSON configuration the advanced editors submit, so every change goes
-// through bucketConfigurationMutation and its S3 validation.
+// Structured editors post editor=form. Their fields are translated into typed
+// configuration documents, so every change goes through
+// bucketConfigurationMutation and its S3 validation.
 
 // parseTagRows reads the tag editor's repeated tag_key/tag_value fields.
 // Rows with an empty key and value are ignored, so blank rows can be left.
@@ -123,6 +123,8 @@ func structuredBucketConfiguration(ctx context.Context, st storage.Storage, name
 			config.RoutingRules = current.RoutingRules
 		}
 		return mustMarshal(config)
+	case "notifications":
+		return notificationFromForm(ctx, st, name, form)
 	case "cors":
 		return corsFromForm(ctx, st, name, form)
 	case "lifecycle":
@@ -241,7 +243,8 @@ type websiteView struct {
 }
 
 type notificationView struct {
-	ID, Type, Destination, Events string
+	ID, Type, Destination, Events, Prefix, Suffix string
+	Kind, Index                                   string
 }
 
 type corsView struct {
@@ -323,11 +326,19 @@ func describeNotifications(config *storage.BucketNotificationConfiguration) []no
 	}
 	var views []notificationView
 	for _, group := range []struct {
-		kind  string
+		label string
+		kind  storage.NotificationDestinationType
 		rules []storage.NotificationConfigurationRule
-	}{{"SNS topic", config.TopicConfigurations}, {"SQS queue", config.QueueConfigurations}, {"Lambda function", config.CloudFunctionConfigurations}} {
-		for _, rule := range group.rules {
-			view := notificationView{ID: "-", Type: group.kind, Destination: rule.DestinationARN, Events: joinOrDash(rule.Events)}
+	}{{"SNS topic", storage.NotificationDestinationTopic, config.TopicConfigurations}, {"SQS queue", storage.NotificationDestinationQueue, config.QueueConfigurations}, {"Lambda function", storage.NotificationDestinationCloudFunction, config.CloudFunctionConfigurations}} {
+		for i, rule := range group.rules {
+			view := notificationView{ID: "-", Type: group.label, Kind: string(group.kind), Index: strconv.Itoa(i), Destination: rule.DestinationARN, Events: joinOrDash(rule.Events)}
+			for _, filter := range rule.FilterRules {
+				if filter.Name == "prefix" {
+					view.Prefix = filter.Value
+				} else if filter.Name == "suffix" {
+					view.Suffix = filter.Value
+				}
+			}
 			if rule.ID != nil && *rule.ID != "" {
 				view.ID = *rule.ID
 			}

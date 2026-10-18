@@ -21,7 +21,10 @@
 
 {{define "buckets_detail"}}
 {{template "bucket_header" .Header}}
-{{if eq .Header.Active "properties"}}
+{{if .NotificationEditor}}
+{{template "notification_editor" .}}
+{{end}}
+{{if and (eq .Header.Active "properties") (not .NotificationEditor)}}
 <div class="container">
   <div class="container-head"><h2>Bucket overview</h2></div>
   <div class="container-body"><div class="kv">
@@ -132,18 +135,7 @@
   </div>
 </div>
 
-<div class="container" id="notifications">
-  <div class="container-head"><div><h2>Event notifications <span class="count">({{len .Notifications}})</span></h2><p>Send a notification when specific events occur in this bucket.</p></div></div>
-  <div class="table-wrap divider"><table><thead><tr><th>Name</th><th>Event types</th><th>Destination type</th><th>Destination</th></tr></thead><tbody>{{range .Notifications}}<tr><td>{{.ID}}</td><td>{{.Events}}</td><td>{{.Type}}</td><td class="key">{{.Destination}}</td></tr>{{else}}<tr><td colspan="4" class="empty"><strong>No event notifications</strong>Choose Edit to create one.</td></tr>{{end}}</tbody></table></div>
-  <div class="container-body divider">
-    <details><summary>Edit (JSON)</summary>
-    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="notifications">
-      <label>Notification configuration <textarea name="configuration" rows="12" required>{{.Configuration}}</textarea><span class="hint">Use <code>{}</code> to remove all notifications. Destinations are always validated.</span></label>
-      <div class="actions-row"><button type="submit" name="action" value="save" class="primary">Save changes</button></div>
-    </form>
-    </details>
-  </div>
-</div>
+{{template "notification_settings" .}}
 
 <div class="container danger-zone">
   <div class="container-head"><div><h2>Delete bucket</h2><p>Only empty buckets can be deleted. To confirm, enter the bucket name <code>{{.Bucket.Name.String}}</code>.</p></div></div>

@@ -2,10 +2,31 @@ package server
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/jdillenkofer/pithos/internal/storage"
 )
+
+func TestSupportedNotificationEventsMatchesValidator(t *testing.T) {
+	events := SupportedNotificationEvents()
+	if len(events) != len(supportedNotificationEvents) || !sort.StringsAreSorted(events) {
+		t.Fatal("event options must be a sorted copy of the validation registry")
+	}
+	for _, event := range events {
+		config := &storage.BucketNotificationConfiguration{QueueConfigurations: []storage.NotificationConfigurationRule{{
+			DestinationARN: "arn:aws:sqs:eu-central-1:123456789012:queue", Events: []string{event},
+		}}}
+		if _, err := ValidateNotificationConfiguration(config); err != nil {
+			t.Fatalf("advertised event %s was rejected: %v", event, err)
+		}
+	}
+	original := events[0]
+	events[0] = "changed"
+	if SupportedNotificationEvents()[0] != original {
+		t.Fatal("callers must not be able to modify shared event options")
+	}
+}
 
 func TestReusableWebsiteValidationMatchesS3(t *testing.T) {
 	httpProtocol, ftp, badCode, prefix, key := "http", "ftp", "200", "prefix", "key"

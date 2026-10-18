@@ -154,9 +154,14 @@ protected bucket.
 Each bucket has Objects, Properties, Permissions and Management tabs:
 
 - **Properties:** overview, Bucket Versioning, tags, Object Lock default
-  retention, static website hosting and event notifications. Versioning,
-  tags, Object Lock and website hosting have forms; notifications are edited
-  as JSON.
+  retention, static website hosting and event notifications. Event notification
+  forms support SNS topics, SQS queues and Lambda functions, event-type
+  checkboxes, and optional literal prefix/suffix filters. Create, edit or delete
+  individual rules, including unnamed rules created through the API. Edits
+  preserve other rules, and stale forms are rejected. Deleting one rule or all
+  rules requires confirmation. EventBridge has a separate enable/disable form;
+  changing it keeps the rules, and deleting rules keeps the EventBridge setting.
+  Notification destinations are validated when saving.
 - **Permissions:** CORS rules are managed through forms. Create, edit or delete
   individual rules with an optional name, allowed origins, HTTP method
   checkboxes, allowed/exposed headers and an optional preflight cache lifetime.

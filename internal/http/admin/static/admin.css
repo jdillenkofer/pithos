@@ -94,7 +94,7 @@ pre { background: var(--bg-layout); border: 1px solid var(--divider); border-rad
 .sidenav a.item { display: block; padding: 4px 28px; color: var(--muted); font-weight: 400; }
 .sidenav a.item:hover { color: var(--link-hover); text-decoration: none; }
 .sidenav a.item[aria-current="page"] { color: var(--link); font-weight: 700; }
-.content { padding: 20px 40px 48px; max-width: 1400px; width: 100%; }
+.content { padding: 20px 40px 48px; max-width: 1400px; width: 100%; min-width: 0; }
 
 /* Breadcrumbs and page header */
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; color: var(--muted); }
@@ -147,7 +147,7 @@ pre { background: var(--bg-layout); border: 1px solid var(--divider); border-rad
 .badge.ok { background: var(--ok); color: #fff; }
 
 /* Tables */
-.table-wrap { overflow-x: auto; }
+.table-wrap { position: relative; overflow-x: auto; }
 table { width: 100%; border-collapse: separate; border-spacing: 0; }
 th { text-align: left; font-weight: 700; color: var(--muted); padding: 8px 16px; border-bottom: 1px solid var(--border); vertical-align: bottom; }
 th:first-child, td:first-child { padding-left: 20px; }
@@ -320,11 +320,15 @@ th.select, td.select { width: 1%; padding-right: 0; }
 .option .option-title { font-weight: 700; cursor: pointer; }
 .option .hint { font-size: 12px; }
 
-/* CORS fields use one spacing rhythm, including fieldsets and nested grids. */
-.cors-editor .form-stack { max-width: none; }
-.cors-editor fieldset, .cors-editor .actions-row, .cors-editor label.check { margin: 0; }
-.cors-editor .form-grid { align-items: start; }
-.cors-editor fieldset > .hint { margin: 0; }
+/* Rule editors share one spacing rhythm, including fieldsets and nested grids. */
+:is(.cors-editor, .notification-editor) .form-stack { max-width: none; }
+:is(.cors-editor, .notification-editor) :is(fieldset, .actions-row, label.check) { margin: 0; }
+:is(.cors-editor, .notification-editor) .form-grid { align-items: start; }
+:is(.cors-editor, .notification-editor) fieldset > .hint { margin: 0; }
+.notification-event-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 12px 20px; }
+.notification-event-options .check span { min-width: 0; overflow-wrap: anywhere; }
+.notification-editor .notification-destination { gap: 20px; }
+.notification-editor .notification-destination input { max-width: none; }
 
 /* Audit event history filters */
 .audit-filters { display: grid; gap: 16px; padding: 4px 20px 16px; }

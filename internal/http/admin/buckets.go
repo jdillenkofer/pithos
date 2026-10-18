@@ -37,20 +37,26 @@ type bucketHeader struct {
 }
 
 type bucketDetailPage struct {
-	CSRF          string
-	Bucket        *storage.Bucket
-	Header        bucketHeader
-	Tabs          []string
-	Tab           string
-	Configuration string
-	Created       string
+	CSRF    string
+	Bucket  *storage.Bucket
+	Header  bucketHeader
+	Tabs    []string
+	Tab     string
+	Created string
 
 	// Properties tab
-	Versioning    string
-	ObjectLock    objectLockView
-	Tags          []keyValue
-	Website       websiteView
-	Notifications []notificationView
+	Versioning string
+	ObjectLock objectLockView
+	Tags       []keyValue
+	Website    websiteView
+
+	Notifications            []notificationView
+	NotificationRule         notificationFormView
+	NotificationEventGroups  []notificationEventGroup
+	NotificationHash         string
+	NotificationEditor       bool
+	NotificationAdvancedOpen bool
+	EventBridgeEnabled       bool
 
 	// Permissions and Management tabs
 	CORS            []corsView
@@ -243,9 +249,6 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 	if !bucket.CreationDate.IsZero() {
 		page.Created = bucket.CreationDate.UTC().Format("2006-01-02 15:04") + " UTC"
 	}
-	// The advanced JSON editor on each tab edits one configuration.
-	advanced := map[string]string{"properties": "notifications", "permissions": "cors", "management": "lifecycle"}[group]
-	page.Tab = advanced
 	ctx := r.Context()
 	load := func(get func() (any, error)) (any, bool) {
 		config, err := get()
@@ -291,8 +294,34 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		notificationConfig, _ := notifications.(*storage.BucketNotificationConfiguration)
+		if notificationConfig == nil {
+			notificationConfig = &storage.BucketNotificationConfiguration{}
+		}
 		page.Notifications = describeNotifications(notificationConfig)
-		page.Configuration = configurationText(notificationConfig)
+		page.EventBridgeEnabled = notificationConfig.EventBridgeEnabled
+		page.NotificationHash = policyHash([]byte(configurationText(notificationConfig)))
+		page.NotificationRule = notificationRuleForm(storage.NotificationConfigurationRule{}, "", "")
+		if tab == "notifications" {
+			query := r.URL.Query()
+			page.NotificationEditor = query.Get("editor") == "create" || query.Has("rule_index") || query.Has("rule_type")
+			if query.Has("rule_index") || query.Has("rule_type") {
+				rules := notificationRules(notificationConfig, query.Get("rule_type"))
+				index, err := strconv.Atoi(query.Get("rule_index"))
+				if err != nil || rules == nil || index < 0 || index >= len(*rules) {
+					a.fail(w, r, http.StatusNotFound, "Notification rule not found")
+					return
+				}
+				page.NotificationRule = notificationRuleForm((*rules)[index], query.Get("rule_type"), strconv.Itoa(index))
+			}
+		}
+		page.NotificationEventGroups = notificationGroups(page.NotificationRule.Events)
+		for _, group := range page.NotificationEventGroups {
+			if group.Advanced {
+				for _, event := range group.Events {
+					page.NotificationAdvancedOpen = page.NotificationAdvancedOpen || page.NotificationRule.Events[event]
+				}
+			}
+		}
 	case "permissions":
 		cors, ok := load(func() (any, error) { return a.options.Storage.GetBucketCORSConfiguration(ctx, name) })
 		if !ok {
@@ -340,12 +369,11 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 			a.fail(w, r, http.StatusNotFound, "Lifecycle rule not found")
 			return
 		}
-		page.Configuration = configurationText(lifecycleConfig)
 	}
 	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", page)
 }
 
-// configurationText renders a configuration for the advanced JSON editor.
+// configurationText formats configurations for snapshot hashes and typed validation.
 func configurationText(config any) string {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil || string(data) == "null" {
@@ -421,8 +449,16 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 }
 
 // bucketDeletionConfirmation describes configuration removals, including
-// deleting one lifecycle rule, which need explicit confirmation.
+// individual rule deletions, which need explicit confirmation.
 func bucketDeletionConfirmation(bucket, tab, action string, form url.Values) (confirmation, bool) {
+	if tab == "notifications" {
+		switch form.Get("notification_action") {
+		case "delete":
+			return confirmation{Title: "Delete event notification?", Message: "This rule is removed from bucket " + bucket + ". Events will no longer be sent through this rule. Other rules and EventBridge are kept.", Action: "Delete notification"}, true
+		case "delete_all":
+			return confirmation{Title: "Delete all event notification rules?", Message: "All event notification rules are removed from bucket " + bucket + ". The EventBridge setting is kept.", Action: "Delete all rules"}, true
+		}
+	}
 	if tab == "cors" && form.Get("cors_action") == "delete" {
 		return confirmation{Title: "Delete CORS rule?", Message: "This rule is removed from bucket " + bucket + ". Browser applications relying on it may lose cross-origin access.", Action: "Delete rule"}, true
 	}

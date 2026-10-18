@@ -1,6 +1,21 @@
 package server
 
-import "github.com/jdillenkofer/pithos/internal/storage"
+import (
+	"sort"
+
+	"github.com/jdillenkofer/pithos/internal/storage"
+)
+
+// SupportedNotificationEvents returns the event names accepted by notification
+// validation. Callers receive a sorted copy, not the shared validation registry.
+func SupportedNotificationEvents() []string {
+	events := make([]string, 0, len(supportedNotificationEvents))
+	for event := range supportedNotificationEvents {
+		events = append(events, event)
+	}
+	sort.Strings(events)
+	return events
+}
 
 // ValidateWebsiteConfiguration reuses the S3 website conversion and validation.
 // The returned configuration includes S3 default redirect codes.

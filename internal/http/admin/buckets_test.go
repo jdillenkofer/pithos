@@ -26,11 +26,13 @@ type bucketTestStorage struct {
 	writes  int
 	last    any
 	failure error
-	// lifecycle and website, when set, are returned as the current configuration.
-	lifecycle *storage.BucketLifecycleConfiguration
-	cors      *storage.BucketCORSConfiguration
-	website   *storage.WebsiteConfiguration
-	deleted   string
+	// Configurations, when set, are returned as the current storage snapshot.
+	lifecycle           *storage.BucketLifecycleConfiguration
+	cors                *storage.BucketCORSConfiguration
+	website             *storage.WebsiteConfiguration
+	notifications       *storage.BucketNotificationConfiguration
+	notificationFailure error
+	deleted             string
 }
 
 func (s *bucketTestStorage) ListBuckets(context.Context) ([]storage.Bucket, error) {
@@ -81,7 +83,7 @@ func (s *bucketTestStorage) GetBucketTagging(context.Context, storage.BucketName
 	return map[string]string{"team": "platform"}, nil
 }
 func (s *bucketTestStorage) GetBucketNotificationConfiguration(context.Context, storage.BucketName) (*storage.BucketNotificationConfiguration, error) {
-	return &storage.BucketNotificationConfiguration{}, nil
+	return s.notifications, s.notificationFailure
 }
 func (s *bucketTestStorage) PutBucketLifecycleConfiguration(_ context.Context, _ storage.BucketName, c *storage.BucketLifecycleConfiguration) error {
 	s.writes++
@@ -184,7 +186,7 @@ func TestBucketsGlobalViewAndCrossAccountDetail(t *testing.T) {
 	}
 	for _, tab := range bucketTabs {
 		w = bucketRequest(a, "GET", "/buckets/detail?bucket=bucket-b&tab="+tab, nil)
-		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") || (bucketTabGroups[tab] == "properties" && !strings.Contains(w.Body.String(), `name="configuration"`)) {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") {
 			t.Fatalf("cross-account detail (%s): %d %s", tab, w.Code, w.Body.String())
 		}
 	}
@@ -364,7 +366,7 @@ func TestBucketTemplatesEscapeAndCSRF(t *testing.T) {
 		var out bytes.Buffer
 		data := bucketDetailPage{
 			CSRF: `"><script>`, Bucket: &storage.Bucket{Name: storage.MustNewBucketName("valid-bucket"), OwnerAccountID: `<script>`},
-			Header: bucketHeader{Name: "valid-bucket", Owner: `<script>`, Active: group}, Configuration: unsafe,
+			Header:     bucketHeader{Name: "valid-bucket", Owner: `<script>`, Active: group},
 			ObjectLock: objectLockView{Enabled: true, Mode: unsafe}, Tags: []keyValue{{unsafe, unsafe}}, Website: websiteView{Enabled: true, Index: unsafe},
 			Notifications: []notificationView{{ID: unsafe}}, CORS: []corsView{{Origins: unsafe}},
 			Lifecycle: []lifecycleView{{ID: unsafe, EditURL: "/x"}}, LifecycleRule: lifecycleFormView{ID: unsafe, Prefix: unsafe},

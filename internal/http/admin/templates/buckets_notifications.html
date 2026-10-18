@@ -1,0 +1,59 @@
+{{define "notification_form_fields"}}{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="notifications"><input type="hidden" name="editor" value="form"><input type="hidden" name="notification_hash" value="{{.NotificationHash}}">{{end}}
+
+{{define "notification_settings"}}
+<div class="container" id="notifications">
+  <div class="container-head"><div><h2>Event notifications <span class="count">({{len .Notifications}})</span></h2><p>Send a notification when specific events occur in this bucket.</p></div><div class="header-actions">
+    {{if .Notifications}}<form method="post" action="/buckets/configure">{{template "notification_form_fields" .}}<button name="notification_action" value="delete_all" data-confirm="All event notification rules are removed. The EventBridge setting is kept." data-confirm-title="Delete all event notification rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}
+    <a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=notifications&amp;editor=create">Create event notification</a>
+  </div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Name</th><th>Event types</th><th>Prefix</th><th>Suffix</th><th>Destination type</th><th>Destination</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    {{range .Notifications}}<tr><td>{{.ID}}</td><td>{{.Events}}</td><td class="key">{{if .Prefix}}{{.Prefix}}{{else}}-{{end}}</td><td class="key">{{if .Suffix}}{{.Suffix}}{{else}}-{{end}}</td><td>{{.Type}}</td><td class="key">{{.Destination}}</td><td class="actions">
+      <a class="button-link small" href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab=notifications&amp;rule_type={{.Kind}}&amp;rule_index={{.Index}}">Edit</a>
+      <form method="post" action="/buckets/configure">{{template "notification_form_fields" $}}<input type="hidden" name="rule_type" value="{{.Kind}}"><input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="notification_action" value="delete" data-confirm="Events will no longer be sent through this rule. Other rules and EventBridge are kept." data-confirm-title="Delete event notification?" data-confirm-action="Delete notification">Delete</button></form>
+    </td></tr>{{else}}<tr><td colspan="7" class="empty"><strong>No event notifications</strong>Create a notification to choose events and a destination.</td></tr>{{end}}
+  </tbody></table></div>
+  <div class="container-body divider">
+    <div class="kv"><div><div class="label">Amazon EventBridge</div><div class="value">{{if .EventBridgeEnabled}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">Disabled</span>{{end}}</div></div></div>
+    <details><summary>Edit EventBridge setting</summary>
+      <form method="post" action="/buckets/configure">{{template "notification_form_fields" .}}
+        <fieldset><legend>Send events to Amazon EventBridge</legend>
+          <label class="check"><input type="radio" name="eventbridge" value="disabled" {{if not .EventBridgeEnabled}}checked{{end}}> Disable</label>
+          <label class="check"><input type="radio" name="eventbridge" value="enabled" {{if .EventBridgeEnabled}}checked{{end}}> Enable</label>
+          <p class="hint">EventBridge is configured separately from the notification rules above. Changing this setting keeps those rules.</p>
+        </fieldset>
+        <div class="actions-row"><button class="primary" name="notification_action" value="eventbridge">Save changes</button></div>
+      </form>
+    </details>
+  </div>
+</div>
+{{end}}
+
+{{define "notification_event_group"}}
+<fieldset><legend>{{.Name}}</legend><div class="notification-event-options">{{range .Events}}<label class="check"><input type="checkbox" name="events" value="{{.}}" {{if index $.Selected .}}checked{{end}}><span class="mono">{{.}}</span></label>{{end}}</div></fieldset>
+{{end}}
+
+{{define "notification_editor"}}
+<form method="post" action="/buckets/configure">
+{{template "notification_form_fields" .}}<input type="hidden" name="rule_type" value="{{.NotificationRule.OriginalType}}"><input type="hidden" name="rule_index" value="{{.NotificationRule.Index}}">
+<div class="container notification-editor" id="notification-rule">
+  <div class="container-head"><div><h2>{{if .NotificationRule.Index}}Edit event notification{{else}}Create event notification{{end}}</h2><p>Choose the events, optional object-key filters and destination for this notification.</p></div></div>
+  <div class="container-body form-stack">
+    <label class="field"><span class="field-label">Notification name <span class="hint">- optional</span></span><input name="id" maxlength="255" value="{{.NotificationRule.ID}}" placeholder="image-uploads"></label>
+    <div class="form-grid">
+      <label class="field"><span class="field-label">Prefix <span class="hint">- optional</span></span><input name="prefix" value="{{.NotificationRule.Prefix}}" placeholder="images/"><span class="hint">Only object keys starting with this text match. Spaces are literal; wildcards are not expanded.</span></label>
+      <label class="field"><span class="field-label">Suffix <span class="hint">- optional</span></span><input name="suffix" value="{{.NotificationRule.Suffix}}" placeholder=".jpg"><span class="hint">Only object keys ending with this text match. When both filters are set, both must match.</span></label>
+    </div>
+    <div class="option-group">
+      <div><h3>Event types</h3><p class="hint">Select at least one event type. An option ending in * includes all events in that category. Delivery depends on the events emitted by the configured storage backend.</p></div>
+      {{range .NotificationEventGroups}}{{if not .Advanced}}{{template "notification_event_group" .}}{{end}}{{end}}
+      <details {{if .NotificationAdvancedOpen}}open{{end}}><summary>Other event types</summary><div class="option-group">{{range .NotificationEventGroups}}{{if .Advanced}}{{template "notification_event_group" .}}{{end}}{{end}}</div></details>
+    </div>
+    <fieldset class="notification-destination"><legend>Destination</legend>
+      <label class="field"><span class="field-label">Destination type</span><select name="destination_type" required><option value="Topic" {{if eq .NotificationRule.Type "Topic"}}selected{{end}}>SNS topic</option><option value="Queue" {{if eq .NotificationRule.Type "Queue"}}selected{{end}}>SQS queue</option><option value="CloudFunction" {{if eq .NotificationRule.Type "CloudFunction"}}selected{{end}}>Lambda function</option></select></label>
+      <label class="field"><span class="field-label">Destination ARN</span><input name="destination_arn" value="{{.NotificationRule.Destination}}" required spellcheck="false" placeholder="arn:aws:sns:eu-central-1:123456789012:uploads"><span class="hint">The ARN service must match the selected destination type: sns, sqs or lambda. Destinations are validated when saving.</span></label>
+    </fieldset>
+    <div class="actions-row"><a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=notifications#notifications">Cancel</a><button class="primary" name="notification_action" value="save">Save notification</button></div>
+  </div>
+</div>
+</form>
+{{end}}
