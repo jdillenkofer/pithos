@@ -1,0 +1,36 @@
+{{define "cors_form_fields"}}{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="cors"><input type="hidden" name="editor" value="form"><input type="hidden" name="cors_hash" value="{{.CORSHash}}">{{end}}
+
+{{define "cors_settings"}}
+{{if not .CORSEditor}}
+<div class="container" id="cors">
+  <div class="container-head"><div><h2>Cross-origin resource sharing (CORS) <span class="count">({{len .CORS}})</span></h2><p>Allow web applications on other origins to access this bucket. Rules are evaluated in order.</p></div><div class="header-actions">
+    {{if .CORS}}<form method="post" action="/buckets/configure">{{template "cors_form_fields" .}}<button name="action" value="delete" data-confirm="All CORS rules of this bucket are removed. This cannot be undone." data-confirm-title="Delete all CORS rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}
+    <a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=cors&amp;editor=create">Create CORS rule</a>
+  </div></div>
+  <div class="table-wrap divider"><table><thead><tr><th>Rule</th><th>Allowed origins</th><th>Allowed methods</th><th>Allowed headers</th><th>Expose headers</th><th>Max age</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    {{range .CORS}}<tr><td>{{.ID}}</td><td>{{.Origins}}</td><td>{{.Methods}}</td><td>{{.Headers}}</td><td>{{.Expose}}</td><td>{{.MaxAge}}</td><td class="actions">
+      <a class="button-link small" href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab=cors&amp;rule_index={{.Index}}">Edit</a>
+      <form method="post" action="/buckets/configure">{{template "cors_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="cors_action" value="delete" data-confirm="Browser applications relying on this rule may lose cross-origin access." data-confirm-title="Delete CORS rule?" data-confirm-action="Delete rule">Delete</button></form>
+    </td></tr>{{else}}<tr><td colspan="7" class="empty"><strong>No CORS rules</strong>No cross-origin access is allowed. Create a rule to get started.</td></tr>{{end}}
+  </tbody></table></div>
+</div>
+{{else}}
+<form method="post" action="/buckets/configure">
+{{template "cors_form_fields" .}}<input type="hidden" name="rule_index" value="{{.CORSRule.Index}}">
+<div class="container cors-editor" id="cors-rule">
+  <div class="container-head"><div><h2>{{if .CORSRule.Index}}Edit CORS rule{{else}}Create CORS rule{{end}}</h2><p>Choose which origins, methods and headers browsers may use.</p></div></div>
+  <div class="container-body form-stack">
+    <label class="field"><span class="field-label">Rule name <span class="hint">- optional</span></span><input name="id" maxlength="255" value="{{.CORSRule.ID}}" placeholder="website-access"></label>
+    <label class="field"><span class="field-label">Allowed origins</span><textarea name="origins" rows="4" required spellcheck="false" placeholder="https://example.com">{{.CORSRule.Origins}}</textarea><span class="hint">One origin per line. Use * for any origin, or at most one * within an origin pattern.</span></label>
+    <fieldset><legend>Allowed methods</legend><div class="form-grid">{{range .CORSMethods}}<label class="check"><input type="checkbox" name="methods" value="{{.}}" {{if index $.CORSRule.Methods .}}checked{{end}}> {{.}}</label>{{end}}</div><p class="hint">Select at least one HTTP method.</p></fieldset>
+    <div class="form-grid">
+      <label class="field"><span class="field-label">Allowed headers <span class="hint">- optional, one per line</span></span><textarea name="headers" rows="4" spellcheck="false" placeholder="Content-Type&#10;x-amz-*">{{.CORSRule.Headers}}</textarea><span class="hint">Request headers browsers may send. Use * to allow any header.</span></label>
+      <label class="field"><span class="field-label">Expose headers <span class="hint">- optional, one per line</span></span><textarea name="expose" rows="4" spellcheck="false" placeholder="ETag&#10;x-amz-version-id">{{.CORSRule.Expose}}</textarea><span class="hint">Response headers browser JavaScript may read.</span></label>
+    </div>
+    <label class="field short"><span class="field-label">Maximum age <span class="hint">- optional, seconds</span></span><input type="number" name="max_age" min="0" step="1" value="{{.CORSRule.MaxAge}}" placeholder="3000"><span class="hint">How long browsers may cache a preflight response. Leave empty to omit the cache lifetime.</span></label>
+    <div class="actions-row"><a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=cors">Cancel</a><button class="primary" name="cors_action" value="save">Save rule</button></div>
+  </div>
+</div>
+</form>
+{{end}}
+{{end}}

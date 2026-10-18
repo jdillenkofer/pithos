@@ -44,7 +44,7 @@
 <input type="hidden" name="original_id" value="{{.LifecycleRule.OriginalID}}">
 <input type="hidden" name="original_index" value="{{.LifecycleRule.OriginalIndex}}">
 <div class="container lifecycle-editor" id="lifecycle-rule">
-  <div class="container-head"><div><h2>{{if or .LifecycleRule.OriginalID .LifecycleRule.OriginalIndex}}Edit lifecycle rule{{else}}Create lifecycle rule{{end}}</h2><p>Choose the scope and actions, then review before saving. No JSON required.</p></div></div>
+  <div class="container-head"><div><h2>{{if or .LifecycleRule.OriginalID .LifecycleRule.OriginalIndex}}Edit lifecycle rule{{else}}Create lifecycle rule{{end}}</h2><p>Choose the scope and actions, then review before saving.</p></div></div>
   <div class="container-body">
     <div class="form-stack">
       <label class="field"><span class="field-label">Lifecycle rule name</span><input name="rule_id" value="{{.LifecycleRule.ID}}" maxlength="255" {{if not .LifecycleRule.OriginalIndex}}required{{end}}><span class="hint">Up to 255 characters. Existing unnamed rules may remain unnamed.</span></label>

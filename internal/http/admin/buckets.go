@@ -54,6 +54,10 @@ type bucketDetailPage struct {
 
 	// Permissions and Management tabs
 	CORS            []corsView
+	CORSRule        corsFormView
+	CORSMethods     []string
+	CORSHash        string
+	CORSEditor      bool
 	Lifecycle       []lifecycleView
 	LifecycleRule   lifecycleFormView
 	LifecycleEditor bool
@@ -295,8 +299,22 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		corsConfig, _ := cors.(*storage.BucketCORSConfiguration)
+		if corsConfig == nil {
+			corsConfig = &storage.BucketCORSConfiguration{}
+		}
 		page.CORS = describeCORS(corsConfig)
-		page.Configuration = configurationText(corsConfig)
+		page.CORSHash = policyHash([]byte(configurationText(corsConfig)))
+		page.CORSMethods = corsMethods
+		page.CORSEditor = r.URL.Query().Get("editor") == "create" || r.URL.Query().Has("rule_index")
+		page.CORSRule = corsRuleForm(storage.CORSRule{}, "")
+		if r.URL.Query().Has("rule_index") {
+			index, err := strconv.Atoi(r.URL.Query().Get("rule_index"))
+			if err != nil || index < 0 || index >= len(corsConfig.Rules) {
+				a.fail(w, r, http.StatusNotFound, "CORS rule not found")
+				return
+			}
+			page.CORSRule = corsRuleForm(corsConfig.Rules[index], strconv.Itoa(index))
+		}
 	case "management":
 		lifecycle, ok := load(func() (any, error) { return a.options.Storage.GetBucketLifecycleConfiguration(ctx, name) })
 		if !ok {
@@ -405,6 +423,9 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 // bucketDeletionConfirmation describes configuration removals, including
 // deleting one lifecycle rule, which need explicit confirmation.
 func bucketDeletionConfirmation(bucket, tab, action string, form url.Values) (confirmation, bool) {
+	if tab == "cors" && form.Get("cors_action") == "delete" {
+		return confirmation{Title: "Delete CORS rule?", Message: "This rule is removed from bucket " + bucket + ". Browser applications relying on it may lose cross-origin access.", Action: "Delete rule"}, true
+	}
 	if form.Get("rule_action") == "delete" {
 		rule := form.Get("original_id")
 		return confirmation{Title: "Delete lifecycle rule " + rule + "?", Message: "The rule is removed from bucket " + bucket + " and its actions stop applying.", Action: "Delete rule"}, true

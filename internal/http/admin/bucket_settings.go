@@ -123,6 +123,8 @@ func structuredBucketConfiguration(ctx context.Context, st storage.Storage, name
 			config.RoutingRules = current.RoutingRules
 		}
 		return mustMarshal(config)
+	case "cors":
+		return corsFromForm(ctx, st, name, form)
 	case "lifecycle":
 		return lifecycleFromForm(ctx, st, name, form)
 	}
@@ -244,6 +246,7 @@ type notificationView struct {
 
 type corsView struct {
 	ID, Origins, Methods, Headers, Expose, MaxAge string
+	Index                                         string
 }
 
 type lifecycleView struct {
@@ -339,8 +342,8 @@ func describeCORS(config *storage.BucketCORSConfiguration) []corsView {
 		return nil
 	}
 	views := make([]corsView, 0, len(config.Rules))
-	for _, rule := range config.Rules {
-		view := corsView{ID: "-", Origins: joinOrDash(rule.AllowedOrigins), Methods: joinOrDash(rule.AllowedMethods), Headers: joinOrDash(rule.AllowedHeaders), Expose: joinOrDash(rule.ExposeHeaders), MaxAge: "-"}
+	for i, rule := range config.Rules {
+		view := corsView{ID: "-", Index: strconv.Itoa(i), Origins: joinOrDash(rule.AllowedOrigins), Methods: joinOrDash(rule.AllowedMethods), Headers: joinOrDash(rule.AllowedHeaders), Expose: joinOrDash(rule.ExposeHeaders), MaxAge: "-"}
 		if rule.ID != nil && *rule.ID != "" {
 			view.ID = *rule.ID
 		}

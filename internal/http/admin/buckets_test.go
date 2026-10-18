@@ -28,6 +28,7 @@ type bucketTestStorage struct {
 	failure error
 	// lifecycle and website, when set, are returned as the current configuration.
 	lifecycle *storage.BucketLifecycleConfiguration
+	cors      *storage.BucketCORSConfiguration
 	website   *storage.WebsiteConfiguration
 	deleted   string
 }
@@ -59,6 +60,9 @@ func (s *bucketTestStorage) GetBucketLifecycleConfiguration(context.Context, sto
 	return nil, storage.ErrNoSuchLifecycleConfiguration
 }
 func (s *bucketTestStorage) GetBucketCORSConfiguration(context.Context, storage.BucketName) (*storage.BucketCORSConfiguration, error) {
+	if s.cors != nil {
+		return s.cors, nil
+	}
 	return &storage.BucketCORSConfiguration{}, nil
 }
 func (s *bucketTestStorage) GetBucketVersioningConfiguration(context.Context, storage.BucketName) (*storage.BucketVersioningConfiguration, error) {
@@ -180,7 +184,7 @@ func TestBucketsGlobalViewAndCrossAccountDetail(t *testing.T) {
 	}
 	for _, tab := range bucketTabs {
 		w = bucketRequest(a, "GET", "/buckets/detail?bucket=bucket-b&tab="+tab, nil)
-		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") || (tab != "lifecycle" && !strings.Contains(w.Body.String(), `name="configuration"`)) {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") || (bucketTabGroups[tab] == "properties" && !strings.Contains(w.Body.String(), `name="configuration"`)) {
 			t.Fatalf("cross-account detail (%s): %d %s", tab, w.Code, w.Body.String())
 		}
 	}
@@ -426,7 +430,7 @@ func TestStructuredBucketEditors(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, structuredBucketRequest(a, "website", url.Values{"website": {"disabled"}}).Code)
 	require.Equal(t, "website", s.deleted)
 
-	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "cors", url.Values{}).Code, "CORS has no form editor")
+	require.Equal(t, http.StatusBadRequest, structuredBucketRequest(a, "cors", url.Values{}).Code, "CORS submissions require a snapshot hash")
 }
 
 func TestStructuredLifecycleRules(t *testing.T) {

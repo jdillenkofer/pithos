@@ -320,6 +320,12 @@ th.select, td.select { width: 1%; padding-right: 0; }
 .option .option-title { font-weight: 700; cursor: pointer; }
 .option .hint { font-size: 12px; }
 
+/* CORS fields use one spacing rhythm, including fieldsets and nested grids. */
+.cors-editor .form-stack { max-width: none; }
+.cors-editor fieldset, .cors-editor .actions-row, .cors-editor label.check { margin: 0; }
+.cors-editor .form-grid { align-items: start; }
+.cors-editor fieldset > .hint { margin: 0; }
+
 /* Audit event history filters */
 .audit-filters { display: grid; gap: 16px; padding: 4px 20px 16px; }
 .audit-filters .field { margin: 0; }
