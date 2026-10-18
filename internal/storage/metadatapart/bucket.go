@@ -22,7 +22,11 @@ func (mbs *metadataPartStorage) DeleteBucket(ctx context.Context, bucketName sto
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.DeleteBucket")
 	defer span.End()
 	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		return mbs.metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
+		deleteBucketResult, err := mbs.metadataStore.DeleteBucket(ctx, tx.SqlTx(), bucketName)
+		if err != nil {
+			return err
+		}
+		return mbs.deleteUnreferencedParts(ctx, tx, deleteBucketResult.UnreferencedParts)
 	})
 }
 

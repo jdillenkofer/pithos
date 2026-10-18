@@ -472,26 +472,7 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 		return nil, metadatastore.ErrNoSuchKey
 	}
 
-	parts, err := sms.removePartRowsByObjectId(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := sms.deleteObjectInitiator(ctx, tx, *objectEntity.Id); err != nil {
-		return nil, err
-	}
-
-	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, *objectEntity.Id)
+	parts, err := sms.deletePendingUpload(ctx, tx, *objectEntity.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -499,6 +480,36 @@ func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.T
 	return &metadatastore.AbortMultipartResult{
 		UnreferencedParts: parts,
 	}, nil
+}
+
+// deletePendingUpload removes a pending multipart upload row together with its
+// tags, user metadata and initiator, and returns the parts no longer referenced.
+func (sms *sqlMetadataStore) deletePendingUpload(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]metadatastore.Part, error) {
+	parts, err := sms.removePartRowsByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := sms.deleteObjectInitiator(ctx, tx, objectId); err != nil {
+		return nil, err
+	}
+
+	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, objectId)
+	if err != nil {
+		return nil, err
+	}
+
+	return parts, nil
 }
 
 func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListMultipartUploadsOptions) (*metadatastore.ListMultipartUploadsResult, error) {

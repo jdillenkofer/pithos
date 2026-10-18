@@ -108,3 +108,50 @@ func TestListPartsZeroLimitRetainsUploadMetadata(t *testing.T) {
 	require.Empty(t, result.Parts)
 	require.False(t, result.IsTruncated)
 }
+
+func TestDeleteBucketAbortsInProgressMultipartUploads(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	t.Cleanup(cleanup)
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{}))
+	for _, k := range []string{"a", "b", "b"} {
+		key := storage.MustNewObjectKey(k)
+		upload, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, &storage.CreateMultipartUploadOptions{Tags: map[string]string{"k": "v"}})
+		require.NoError(t, err)
+		_, err = st.UploadPart(ctx, bucket, key, upload.UploadId, 1, bytes.NewBufferString("part"), nil)
+		require.NoError(t, err)
+	}
+	require.NotEmpty(t, physicalPartIDs(t, st))
+
+	require.NoError(t, st.DeleteBucket(ctx, bucket))
+	require.Empty(t, physicalPartIDs(t, st))
+	_, err := st.HeadBucket(ctx, bucket)
+	require.ErrorIs(t, err, storage.ErrNoSuchBucket)
+
+	// A recreated bucket of the same name starts without the old uploads.
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{}))
+	uploads, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	require.Empty(t, uploads.Uploads)
+}
+
+func TestDeleteBucketWithObjectsKeepsInProgressMultipartUploads(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := newTestStorage(t)
+	t.Cleanup(cleanup)
+	bucket := storage.MustNewBucketName("bucket")
+	require.NoError(t, st.CreateBucket(ctx, bucket, storage.CreateBucketOptions{}))
+	key := storage.MustNewObjectKey("key")
+	upload, err := st.CreateMultipartUpload(ctx, bucket, key, nil, nil, nil)
+	require.NoError(t, err)
+	_, err = st.UploadPart(ctx, bucket, key, upload.UploadId, 1, bytes.NewBufferString("part"), nil)
+	require.NoError(t, err)
+	_, err = st.PutObject(ctx, bucket, storage.MustNewObjectKey("object"), nil, bytes.NewBufferString("data"), nil, nil)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, st.DeleteBucket(ctx, bucket), storage.ErrBucketNotEmpty)
+	uploads, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1000})
+	require.NoError(t, err)
+	require.Len(t, uploads.Uploads, 1)
+}

@@ -10,6 +10,8 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 )
 
+const deleteBucketUploadBatchSize = 1000
+
 func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, options ...metadatastore.CreateBucketOptions) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.CreateBucket")
 	defer span.End()
@@ -45,36 +47,56 @@ func (sms *sqlMetadataStore) CreateBucket(ctx context.Context, tx *sql.Tx, bucke
 	return nil
 }
 
-func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) error {
+func (sms *sqlMetadataStore) DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName) (*metadatastore.DeleteBucketResult, error) {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.DeleteBucket")
 	defer span.End()
 
 	if err := sms.lockBucket(ctx, tx, bucketName); err != nil {
-		return err
+		return nil, err
 	}
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !*exists {
-		return metadatastore.ErrNoSuchBucket
+		return nil, metadatastore.ErrNoSuchBucket
+	}
+
+	// Like S3 general purpose buckets, in-progress multipart uploads do not
+	// block deletion; they are aborted together with the bucket.
+	unreferencedParts := []metadatastore.Part{}
+	for {
+		uploadEntities, err := sms.objectRepository.FindUploadsByBucketNameAndPrefixAndKeyMarkerAndUploadIdMarkerOrderByKeyAscAndUploadIdAscWithLimit(ctx, tx, bucketName, "", "", "", deleteBucketUploadBatchSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, uploadEntity := range uploadEntities {
+			parts, err := sms.deletePendingUpload(ctx, tx, *uploadEntity.Id)
+			if err != nil {
+				return nil, err
+			}
+			unreferencedParts = append(unreferencedParts, parts...)
+		}
+		if len(uploadEntities) < deleteBucketUploadBatchSize {
+			break
+		}
 	}
 
 	containsBucketObjects, err := sms.objectRepository.ContainsBucketObjectsByBucketName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if *containsBucketObjects {
-		return metadatastore.ErrBucketNotEmpty
+		return nil, metadatastore.ErrBucketNotEmpty
 	}
 
 	err = sms.bucketRepository.DeleteBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &metadatastore.DeleteBucketResult{UnreferencedParts: unreferencedParts}, nil
 }
 
 func (sms *sqlMetadataStore) ListBuckets(ctx context.Context, tx *sql.Tx) ([]metadatastore.Bucket, error) {
