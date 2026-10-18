@@ -89,3 +89,57 @@ func TestObjectErrorsDoNotExposeProviderSecrets(t *testing.T) {
 		t.Fatal("backend details leaked")
 	}
 }
+
+type prefixLabelStore struct {
+	storage.Storage
+	prefix string
+}
+
+func (s *prefixLabelStore) ListObjects(_ context.Context, _ storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	s.prefix = *opts.Prefix
+	return &storage.ListBucketResult{
+		Objects:        []storage.Object{{Key: storage.MustNewObjectKey("reports/2026/q1-summary.txt")}},
+		CommonPrefixes: []string{"reports/2026/quarterly/"},
+	}, nil
+}
+
+func (s *prefixLabelStore) ListObjectVersions(_ context.Context, _ storage.BucketName, opts storage.ListObjectVersionsOptions) (*storage.ListObjectVersionsResult, error) {
+	s.prefix = *opts.Prefix
+	return &storage.ListObjectVersionsResult{
+		Versions:       []storage.ObjectVersion{{Key: storage.MustNewObjectKey("reports/2026/q1-summary.txt"), VersionID: "v1"}},
+		CommonPrefixes: []string{"reports/2026/quarterly/"},
+	}, nil
+}
+
+func TestObjectLabelsPreservePartialFilenamePrefix(t *testing.T) {
+	pages, err := template.ParseFS(assets, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"reports/2026/q", "reports/2026/", ""} {
+		for _, versions := range []string{"false", "true"} {
+			t.Run(prefix+"/versions="+versions, func(t *testing.T) {
+				store := &prefixLabelStore{}
+				app := &App{options: Options{Storage: store}, pages: pages}
+				response := httptest.NewRecorder()
+				app.objects(response, httptest.NewRequest("GET", "/objects?bucket=test-bucket&prefix="+prefix+"&versions="+versions, nil))
+				if response.Code != http.StatusOK {
+					t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+				}
+				if store.prefix != prefix {
+					t.Fatalf("storage prefix = %q, want %q", store.prefix, prefix)
+				}
+				folder := ""
+				if prefix != "" {
+					folder = "reports/2026/"
+				}
+				for _, key := range []string{"reports/2026/q1-summary.txt", "reports/2026/quarterly/"} {
+					label := strings.TrimPrefix(key, folder)
+					if !strings.Contains(response.Body.String(), ">"+label+"</a>") {
+						t.Fatalf("missing label %q: %s", label, response.Body.String())
+					}
+				}
+			})
+		}
+	}
+}

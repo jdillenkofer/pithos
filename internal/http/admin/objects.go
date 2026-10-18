@@ -200,6 +200,8 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 	q.Set("versions", fmt.Sprint(!versions))
 	view.VersionsURL = "/objects?" + q.Encode()
 	q.Set("versions", fmt.Sprint(versions))
+	// Only hide the enclosing folder, not the partial filename used to filter.
+	displayPrefix := prefix[:strings.LastIndex(prefix, "/")+1]
 	delimiter := "/"
 	var prefixes []string
 	var truncated bool
@@ -220,7 +222,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Versions {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Select: objectRef{Key: o.Key.String(), Version: o.VersionID}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), displayPrefix), Version: o.VersionID, URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), o.VersionID), ViewURL: listViewURL(bucket.String(), o.Key.String(), o.VersionID, o.IsDeleteMarker), Select: objectRef{Key: o.Key.String(), Version: o.VersionID}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass), DeleteMarker: o.IsDeleteMarker, Latest: o.IsLatest})
 		}
 		if result.NextKeyMarker != nil {
 			cursor.Key = *result.NextKeyMarker
@@ -241,7 +243,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 		prefixes = result.CommonPrefixes
 		truncated = result.IsTruncated
 		for _, o := range result.Objects {
-			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), prefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), ViewURL: listViewURL(bucket.String(), o.Key.String(), "", false), Select: objectRef{Key: o.Key.String()}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
+			view.Objects = append(view.Objects, objectLink{Label: strings.TrimPrefix(o.Key.String(), displayPrefix), URL: objectURL("/objects/detail", bucket.String(), o.Key.String(), ""), ViewURL: listViewURL(bucket.String(), o.Key.String(), "", false), Select: objectRef{Key: o.Key.String()}.Value(), Size: o.Size, SizeText: humanBytes(float64(o.Size)), Modified: formatModified(o.LastModified), Type: objectType(o.Key.String()), StorageClass: storageClassLabel(o.StorageClass)})
 			if o.Key.String() > cursor.Key {
 				cursor.Key = o.Key.String()
 			}
@@ -254,7 +256,7 @@ func (a *App) objects(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range prefixes {
 		q.Set("prefix", p)
-		view.Prefixes = append(view.Prefixes, objectLink{Label: strings.TrimPrefix(p, prefix), URL: "/objects?" + q.Encode()})
+		view.Prefixes = append(view.Prefixes, objectLink{Label: strings.TrimPrefix(p, displayPrefix), URL: "/objects?" + q.Encode()})
 	}
 	if truncated {
 		b, _ := json.Marshal(cursor)
