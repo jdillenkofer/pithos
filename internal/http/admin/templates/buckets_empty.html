@@ -2,7 +2,7 @@
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><span>Empty bucket</span></div>
 <div class="page-head"><div><h1>Empty bucket</h1></div></div>
 <form method="post" action="/buckets/empty" class="form-narrow">
-<div class="alert warn"><p>Emptying the bucket permanently deletes all objects, object versions and delete markers, and aborts incomplete multipart uploads. This cannot be undone. Objects written while the bucket is being emptied might also be deleted. Versions under compliance retention or legal hold are kept.</p></div>
+<div class="alert warn"><p>Emptying the bucket permanently deletes all objects, object versions and delete markers. This cannot be undone. Objects written while the bucket is being emptied might also be deleted. Versions under compliance retention or legal hold are kept.</p></div>
 <input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Name}}">
 <div class="container">
   <div class="container-head"><div><h2>Permanently delete all objects in bucket “{{.Name}}”?</h2><p>To confirm deletion, type <em>{{.Confirmation}}</em> in the text input field.</p></div></div>
@@ -26,20 +26,19 @@
 {{if .Running}}<div class="alert info"><p>Emptying bucket <strong>{{.Bucket}}</strong>…</p></div>
 {{else if .Succeeded}}<div class="alert ok" role="status"><p>Successfully emptied bucket <strong>{{.Bucket}}</strong>.</p></div>
 {{else if .Failure}}<div class="alert bad" role="alert"><p>Emptying bucket <strong>{{.Bucket}}</strong> {{if eq .Message "Cancelled"}}was cancelled{{else}}failed{{end}}. {{.Failure}}</p></div>
-{{else}}<div class="alert bad" role="alert"><p>Bucket <strong>{{.Bucket}}</strong> was not fully emptied.{{if .Failed}} {{.Failed}} {{if eq .Failed 1}}item{{else}}items{{end}} could not be removed.{{end}}{{if .Remaining}} The bucket still contains objects or multipart uploads, possibly written while it was being emptied.{{end}}</p></div>{{end}}
+{{else}}<div class="alert bad" role="alert"><p>Bucket <strong>{{.Bucket}}</strong> was not fully emptied.{{if .Failed}} {{.Failed}} {{if eq .Failed 1}}item{{else}}items{{end}} could not be removed.{{end}}{{if .Remaining}} The bucket still contains objects, possibly written while it was being emptied.{{end}}</p></div>{{end}}
 <div class="container">
   <div class="container-head"><h2>Summary</h2>{{if not .Running}}<div class="toolbar">{{if .Succeeded}}<a class="button-link danger-outline" href="/buckets/delete?bucket={{.Bucket}}">Delete bucket</a>{{else}}<a class="button-link" href="/buckets/empty?bucket={{.Bucket}}">Empty again</a>{{end}}<a class="button-link primary" href="/buckets">Exit</a></div>{{end}}</div>
   <div class="container-body"><div class="kv">
     <div><div class="label">Deleted versions and delete markers</div><div class="big">{{.Deleted}}</div></div>
-    <div><div class="label">Aborted multipart uploads</div><div class="big">{{.Aborted}}</div></div>
     <div><div class="label">Failed</div><div class="big">{{.Failed}}</div></div>
     <div><div class="label">{{if .Running}}Elapsed{{else}}Duration{{end}}</div><div class="value">{{.DurationText}}</div></div>
   </div>{{if .Bypass}}<p class="hint">Governance retention was bypassed.</p>{{end}}</div>
 </div>
 {{if .Failures}}<div class="container">
   <div class="container-head"><div><h2>Failed to delete <span class="count">({{.Failed}})</span></h2>{{if gt .Failed (len .Failures)}}<p>Only the first {{len .Failures}} failures are listed.</p>{{end}}</div></div>
-  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Version ID or upload ID</th><th>Error</th></tr></thead><tbody>
-  {{range .Failures}}<tr><td class="key">{{.Key}}</td><td class="key">{{if .Version}}{{.Version}}{{else if .Upload}}{{.Upload}}{{else}}-{{end}}</td><td><span class="status bad">{{.Error}}</span></td></tr>{{end}}
+  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Version ID</th><th>Error</th></tr></thead><tbody>
+  {{range .Failures}}<tr><td class="key">{{.Key}}</td><td class="key">{{if .Version}}{{.Version}}{{else}}-{{end}}</td><td><span class="status bad">{{.Error}}</span></td></tr>{{end}}
   </tbody></table></div>
 </div>{{end}}
 </div>

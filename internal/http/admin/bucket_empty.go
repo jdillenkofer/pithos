@@ -22,19 +22,18 @@ var emptyBucketPageSize int32 = 1000
 const maxEmptyBucketFailures = 100
 
 type emptyBucketFailure struct {
-	Key, Version, Upload, Error string
+	Key, Version, Error string
 }
 
 type emptyBucketState struct {
 	Bucket            string
 	Running, Bypass   bool
 	Started, Finished time.Time
-	// Deleted counts object versions and delete markers; Aborted counts
-	// incomplete multipart uploads.
-	Deleted, Aborted, Failed int
-	Failures                 []emptyBucketFailure
-	Message, Failure         string
-	// Remaining reports that objects or uploads were still found afterwards,
+	// Deleted counts object versions and delete markers.
+	Deleted, Failed  int
+	Failures         []emptyBucketFailure
+	Message, Failure string
+	// Remaining reports that objects were still found afterwards,
 	// for example because they were written while the job ran.
 	Remaining bool
 }
@@ -207,8 +206,8 @@ func (a *App) emptyBucketProgress(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// runEmptyBucket permanently deletes every object version and delete marker
-// and aborts every incomplete multipart upload, which also block DeleteBucket.
+// runEmptyBucket permanently deletes every object version and delete marker.
+// Incomplete multipart uploads are left alone; DeleteBucket aborts them.
 func runEmptyBucket(ctx context.Context, st storage.Storage, bucket storage.BucketName, job *emptyBucketJob) {
 	err := emptyBucketContents(ctx, st, bucket, job)
 	remaining := false
@@ -271,42 +270,13 @@ func emptyBucketContents(ctx context.Context, st storage.Storage, bucket storage
 		}
 		options.KeyMarker, options.VersionIDMarker = page.NextKeyMarker, page.NextVersionIDMarker
 	}
-	uploads := storage.ListMultipartUploadsOptions{MaxUploads: emptyBucketPageSize}
-	for {
-		page, err := st.ListMultipartUploads(ctx, bucket, uploads)
-		if err != nil {
-			return err
-		}
-		for _, upload := range page.Uploads {
-			err := st.AbortMultipartUpload(ctx, bucket, upload.Key, upload.UploadId)
-			job.mu.Lock()
-			if err != nil {
-				job.fail(emptyBucketFailure{Key: upload.Key.String(), Upload: upload.UploadId.String(), Error: "Aborting the multipart upload failed"})
-			} else {
-				job.state.Aborted++
-			}
-			job.mu.Unlock()
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-		}
-		if !page.IsTruncated || page.NextKeyMarker == "" {
-			break
-		}
-		keyMarker, uploadMarker := page.NextKeyMarker, page.NextUploadIdMarker
-		uploads.KeyMarker, uploads.UploadIdMarker = &keyMarker, &uploadMarker
-	}
 	return nil
 }
 
 func bucketHasContents(ctx context.Context, st storage.Storage, bucket storage.BucketName) (bool, error) {
 	versions, err := st.ListObjectVersions(ctx, bucket, storage.ListObjectVersionsOptions{MaxKeys: 1})
-	if err != nil || len(versions.Versions) > 0 {
-		return err == nil, err
-	}
-	uploads, err := st.ListMultipartUploads(ctx, bucket, storage.ListMultipartUploadsOptions{MaxUploads: 1})
 	if err != nil {
 		return false, err
 	}
-	return len(uploads.Uploads) > 0, nil
+	return len(versions.Versions) > 0, nil
 }

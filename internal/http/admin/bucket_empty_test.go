@@ -65,7 +65,7 @@ func emptyBucketRun(t *testing.T, st storage.Storage, bucket string, bypass bool
 	return a, a.emptyJobs.get(bucket).snapshot()
 }
 
-func TestEmptyBucketRemovesVersionsMarkersAndUploads(t *testing.T) {
+func TestEmptyBucketRemovesVersionsAndMarkers(t *testing.T) {
 	previous := emptyBucketPageSize
 	emptyBucketPageSize = 2
 	t.Cleanup(func() { emptyBucketPageSize = previous })
@@ -84,13 +84,13 @@ func TestEmptyBucketRemovesVersionsMarkersAndUploads(t *testing.T) {
 	require.NoError(t, err)
 	put("locked.txt")
 	require.NoError(t, st.PutObjectRetention(ctx, bucket, storage.MustNewObjectKey("locked.txt"), &storage.ObjectRetention{Mode: storage.RetentionModeGovernance, RetainUntilDate: time.Now().Add(time.Hour)}, nil))
+	// Incomplete uploads are left to DeleteBucket, which aborts them.
 	_, err = st.CreateMultipartUpload(ctx, bucket, storage.MustNewObjectKey("upload.bin"), nil, nil, nil)
 	require.NoError(t, err)
 
 	a, state := emptyBucketRun(t, st, bucket.String(), false)
 	require.Equal(t, "Completed", state.Message)
 	require.Equal(t, 4, state.Deleted, "two versions of a.txt, nested/b.txt and its delete marker")
-	require.Equal(t, 1, state.Aborted)
 	require.Equal(t, 1, state.Failed)
 	require.True(t, state.Remaining)
 	require.False(t, state.Succeeded())

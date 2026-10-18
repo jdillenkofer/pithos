@@ -32,7 +32,7 @@
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><span>Delete bucket</span></div>
 <div class="page-head"><div><h1>Delete bucket</h1></div></div>
 <form method="post" action="/buckets/delete" class="form-narrow">
-<div class="alert warn"><p>Deleting a bucket cannot be undone. Only empty buckets can be deleted; <a href="/buckets/empty?bucket={{.Name}}">empty the bucket</a> first to delete all objects, object versions and incomplete multipart uploads. After deletion the bucket name can be used again.</p></div>
+<div class="alert warn"><p>Deleting a bucket cannot be undone. Only empty buckets can be deleted; <a href="/buckets/empty?bucket={{.Name}}">empty the bucket</a> first to delete all objects and object versions. Incomplete multipart uploads are aborted with the bucket. After deletion the bucket name can be used again.</p></div>
 <input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Name}}">
 <div class="container">
   <div class="container-head"><div><h2>Delete bucket “{{.Name}}”?</h2><p>To confirm deletion, enter the name of the bucket in the text input field.</p></div></div>
