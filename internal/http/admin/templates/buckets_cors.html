@@ -4,13 +4,13 @@
 {{if not .CORSEditor}}
 <div class="container" id="cors">
   <div class="container-head"><div><h2>Cross-origin resource sharing (CORS) <span class="count">({{len .CORS}})</span></h2><p>Allow web applications on other origins to access this bucket. Rules are evaluated in order.</p></div><div class="header-actions">
-    {{if .CORS}}<form method="post" action="/buckets/configure">{{template "cors_form_fields" .}}<button name="action" value="delete" data-confirm="All CORS rules of this bucket are removed. This cannot be undone." data-confirm-title="Delete all CORS rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}
+    {{if .CORS}}<form method="post" action="/buckets/configure">{{template "cors_form_fields" .}}<button class="danger-outline" name="action" value="delete" data-confirm="All CORS rules of this bucket are removed. This cannot be undone." data-confirm-title="Delete all CORS rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}
     <a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=cors&amp;editor=create">Create CORS rule</a>
   </div></div>
   <div class="table-wrap divider"><table><thead><tr><th>Rule</th><th>Allowed origins</th><th>Allowed methods</th><th>Allowed headers</th><th>Expose headers</th><th>Max age</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
     {{range .CORS}}<tr><td>{{.ID}}</td><td>{{.Origins}}</td><td>{{.Methods}}</td><td>{{.Headers}}</td><td>{{.Expose}}</td><td>{{.MaxAge}}</td><td class="actions">
       <a class="button-link small" href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab=cors&amp;rule_index={{.Index}}">Edit</a>
-      <form method="post" action="/buckets/configure">{{template "cors_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="cors_action" value="delete" data-confirm="Browser applications relying on this rule may lose cross-origin access." data-confirm-title="Delete CORS rule?" data-confirm-action="Delete rule">Delete</button></form>
+      <form method="post" action="/buckets/configure">{{template "cors_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small danger-outline" name="cors_action" value="delete" data-confirm="Browser applications relying on this rule may lose cross-origin access." data-confirm-title="Delete CORS rule?" data-confirm-action="Delete rule">Delete</button></form>
     </td></tr>{{else}}<tr><td colspan="7" class="empty"><strong>No CORS rules</strong>No cross-origin access is allowed. Create a rule to get started.</td></tr>{{end}}
   </tbody></table></div>
 </div>

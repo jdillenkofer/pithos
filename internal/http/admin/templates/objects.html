@@ -5,11 +5,11 @@
     <div><h2>Objects <span class="count">({{len .Objects}}{{if .NextURL}}+{{end}})</span></h2><p>Objects are the fundamental entities stored in a bucket.{{if .Prefix}} Showing prefix <code>{{.Prefix}}</code>.{{end}}</p></div>
     <div class="toolbar">
       <a class="button-link" href="{{.VersionsURL}}">{{if .Versions}}Hide versions{{else}}Show versions{{end}}</a>
-      <button type="submit" form="delete-selection" {{if not .Objects}}disabled{{end}}>Delete</button>
+      <button type="submit" form="delete-selection" class="danger-outline" {{if not .Objects}}disabled{{end}}>Delete</button>
       <a class="button-link primary" href="{{.UploadURL}}">Upload</a>
     </div>
-    <form id="delete-selection" method="get" action="/objects/delete-objects"><input type="hidden" name="bucket" value="{{.Bucket}}"></form>
   </div>
+  <form id="delete-selection" method="get" action="/objects/delete-objects"><input type="hidden" name="bucket" value="{{.Bucket}}"></form>
   <div class="filter-bar">
     <form method="get" action="/objects" role="search"><input type="hidden" name="bucket" value="{{.Bucket}}">{{if .Versions}}<input type="hidden" name="versions" value="true">{{end}}<input class="search" name="prefix" value="{{.Prefix}}" placeholder="Find objects by prefix" aria-label="Find objects by prefix"></form>
     {{if .NextURL}}<span class="pager"><a href="{{.NextURL}}">Next page</a></span>{{end}}
@@ -57,7 +57,7 @@
   <div><h1>{{.Name}}</h1>{{if .DeleteMarker}}<p class="subtitle"><span class="status warn">Delete marker</span></p>{{end}}</div>
   <div class="toolbar">
     <form method="post" action="/objects/delete"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><input type="hidden" name="bucket" value="{{.Bucket}}"><input type="hidden" name="key" value="{{.Key}}"><input type="hidden" name="version" value="{{.Version}}">
-      <button data-confirm="{{if .Version}}This version is deleted permanently. This cannot be undone.{{else}}The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.{{end}}" data-confirm-title="Delete {{.Name}}?" data-confirm-action="{{if .Version}}Delete version{{else}}Delete object{{end}}">Delete</button></form>
+      <button data-confirm="{{if .Version}}This version is deleted permanently. This cannot be undone.{{else}}The object is deleted. In a versioned bucket a delete marker is created and earlier versions are kept.{{end}}" data-confirm-title="Delete {{.Name}}?" data-confirm-action="{{if .Version}}Delete version{{else}}Delete object{{end}}" class="danger-outline">Delete</button></form>
     {{if not .DeleteMarker}}{{if .ViewURL}}<a class="button-link" href="{{.ViewURL}}" target="_blank" rel="noopener noreferrer">Open</a>{{end}}<a class="button-link primary" href="{{.DownloadURL}}">Download</a>{{end}}
   </div>
 </div>

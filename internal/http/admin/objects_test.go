@@ -143,3 +143,27 @@ func TestObjectLabelsPreservePartialFilenamePrefix(t *testing.T) {
 		}
 	}
 }
+func TestObjectToolbarKeepsActionsTogether(t *testing.T) {
+	pages, err := template.ParseFS(assets, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{options: Options{Storage: &prefixLabelStore{}}, pages: pages}
+	response := httptest.NewRecorder()
+	app.objects(response, httptest.NewRequest("GET", "/objects?bucket=test-bucket", nil))
+	body := response.Body.String()
+	// The selection form follows the header so it is not a flex item that
+	// pushes the toolbar away from the right edge.
+	head := regexp.MustCompile(`(?s)<div class="container-head">(.*?<div class="toolbar">(.*?)</div>)\s*</div>\s*<form id="delete-selection"`).FindStringSubmatch(body)
+	if len(head) != 3 || strings.Contains(head[1], "<form") {
+		t.Fatalf("toolbar must be the last item of the header: %s", body)
+	}
+	toolbar := head[1:]
+	actions := regexp.MustCompile(`>(Show versions|Delete|Upload)</`).FindAllStringSubmatch(toolbar[1], -1)
+	if len(actions) != 3 || actions[0][1] != "Show versions" || actions[1][1] != "Delete" || actions[2][1] != "Upload" {
+		t.Fatalf("toolbar actions: %v", actions)
+	}
+	if !strings.Contains(toolbar[1], `form="delete-selection" class="danger-outline"`) || !strings.Contains(toolbar[1], `class="button-link primary" href="/objects/upload`) {
+		t.Fatalf("delete must be secondary destructive and upload primary: %s", toolbar[1])
+	}
+}

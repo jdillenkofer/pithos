@@ -193,6 +193,37 @@ func TestBucketsGlobalViewAndCrossAccountDetail(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") {
 			t.Fatalf("cross-account detail (%s): %d %s", tab, w.Code, w.Body.String())
 		}
+		if strings.Contains(w.Body.String(), "/buckets/delete") {
+			t.Fatalf("bucket deletion belongs to the bucket list, not the %s tab", tab)
+		}
+	}
+}
+func TestBucketDeleteFromList(t *testing.T) {
+	s := &bucketTestStorage{buckets: []storage.Bucket{{Name: storage.MustNewBucketName("bucket-b"), OwnerAccountID: "account-b"}}}
+	a := bucketTestApp(t, s)
+	body := bucketRequest(a, "GET", "/buckets", nil).Body.String()
+	for _, want := range []string{`<form id="delete-bucket" method="get" action="/buckets/delete">`, `type="radio" form="delete-bucket" name="bucket" value="bucket-b" required`, `form="delete-bucket" class="danger-outline"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("bucket list missing %s", want)
+		}
+	}
+	if body := bucketRequest(a, "GET", "/buckets?q=none", nil).Body.String(); !strings.Contains(body, `class="danger-outline" disabled`) {
+		t.Error("delete must be disabled without buckets")
+	}
+	w := bucketRequest(a, "GET", "/buckets/delete?bucket=bucket-b", nil)
+	if w.Code != 200 || s.writes != 0 {
+		t.Fatalf("confirmation page: %d %s", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`method="post" action="/buckets/delete"`, `name="csrf_token" value="csrf-value"`, `name="bucket" value="bucket-b"`, `name="confirm" required`, "Only empty buckets can be deleted", "account-b"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("confirmation page missing %s", want)
+		}
+	}
+	if w := bucketRequest(a, "GET", "/buckets/delete", nil); w.Code != 400 {
+		t.Fatalf("missing selection: %d", w.Code)
+	}
+	if w := bucketRequest(a, "GET", "/buckets/delete?bucket=missing-bucket", nil); w.Code != 404 {
+		t.Fatalf("unknown bucket: %d", w.Code)
 	}
 }
 func TestBucketCreateOwnerAndDeleteConfirmation(t *testing.T) {

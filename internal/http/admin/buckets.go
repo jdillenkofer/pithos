@@ -25,6 +25,10 @@ type bucketRow struct {
 	Name, Owner, Created, Objects, Size string
 }
 
+type bucketDeleteView struct {
+	CSRF, Name, Owner string
+}
+
 type bucketsPage struct {
 	CSRF, Owner, Query string
 	Total              int
@@ -96,6 +100,7 @@ func (a *App) registerBuckets(mux *http.ServeMux) {
 	mux.HandleFunc("GET /buckets", a.listBuckets)
 	mux.HandleFunc("GET /buckets/new", a.newBucket)
 	mux.HandleFunc("POST /buckets/create", a.createBucket)
+	mux.HandleFunc("GET /buckets/delete", a.confirmDeleteBucket)
 	mux.HandleFunc("POST /buckets/delete", a.deleteBucket)
 	mux.HandleFunc("GET /buckets/detail", a.bucketDetail)
 	mux.HandleFunc("POST /buckets/configure", a.configureBucket)
@@ -198,6 +203,22 @@ func (a *App) createBucket(w http.ResponseWriter, r *http.Request) {
 		a.audit(r, "AdminPutBucketVersioning")
 	}
 	http.Redirect(w, r, "/objects?bucket="+url.QueryEscape(name.String()), http.StatusSeeOther)
+}
+
+// confirmDeleteBucket shows the S3-console-style deletion page for the
+// bucket selected in the bucket list. The POST still checks the typed name.
+func (a *App) confirmDeleteBucket(w http.ResponseWriter, r *http.Request) {
+	name, err := storage.NewBucketName(r.URL.Query().Get("bucket"))
+	if err != nil {
+		a.fail(w, r, 400, "Select a bucket to delete")
+		return
+	}
+	bucket, err := a.options.Storage.HeadBucket(r.Context(), name)
+	if err != nil {
+		a.bucketError(w, r, err)
+		return
+	}
+	a.render(w, r, "Delete bucket", "buckets_delete", bucketDeleteView{CSRF: csrfToken(r), Name: name.String(), Owner: bucket.OwnerAccountID})
 }
 
 func (a *App) deleteBucket(w http.ResponseWriter, r *http.Request) {

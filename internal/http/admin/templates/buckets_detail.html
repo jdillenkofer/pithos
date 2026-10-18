@@ -142,15 +142,6 @@
 {{template "website_routing_settings" .}}
 
 {{template "notification_settings" .}}
-
-<div class="container danger-zone">
-  <div class="container-head"><div><h2>Delete bucket</h2><p>Only empty buckets can be deleted. To confirm, enter the bucket name <code>{{.Bucket.Name.String}}</code>.</p></div></div>
-  <div class="container-body">
-  <form method="post" action="/buckets/delete">{{template "bucket_form_fields" .}}
-    <div class="form-grid"><label>Bucket name <input name="confirm" required autocomplete="off" placeholder="{{.Bucket.Name.String}}"></label><div><button type="submit" class="danger">Delete bucket</button></div></div>
-  </form>
-  </div>
-</div>
 {{end}}
 
 {{if eq .Header.Active "permissions"}}
@@ -160,11 +151,11 @@
 {{if eq .Header.Active "management"}}
 {{if not .LifecycleEditor}}
 <div class="container" id="lifecycle">
-  <div class="container-head"><div><h2>Lifecycle rules <span class="count">({{len .Lifecycle}})</span></h2><p>Lifecycle rules define actions on objects during their lifetime, such as expiring them or deleting old versions.</p></div><div class="header-actions">{{if .Lifecycle}}<form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="lifecycle"><button name="action" value="delete" data-confirm="All lifecycle rules will be removed. Existing objects are not deleted by this action." data-confirm-title="Delete all lifecycle rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}<a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle&amp;editor=create">Create lifecycle rule</a></div></div>
+  <div class="container-head"><div><h2>Lifecycle rules <span class="count">({{len .Lifecycle}})</span></h2><p>Lifecycle rules define actions on objects during their lifetime, such as expiring them or deleting old versions.</p></div><div class="header-actions">{{if .Lifecycle}}<form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="lifecycle"><button class="danger-outline" name="action" value="delete" data-confirm="All lifecycle rules will be removed. Existing objects are not deleted by this action." data-confirm-title="Delete all lifecycle rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}<a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle&amp;editor=create">Create lifecycle rule</a></div></div>
   <div class="table-wrap divider"><table><thead><tr><th>Lifecycle rule name</th><th>Status</th><th>Scope</th><th>Current version actions</th><th>Noncurrent versions actions</th><th>Other actions</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
   {{range .Lifecycle}}<tr><td>{{.ID}}</td><td>{{if eq .Status "Enabled"}}<span class="status ok">Enabled</span>{{else}}<span class="status muted">{{.Status}}</span>{{end}}</td><td>{{.Scope}}</td><td>{{.Current}}</td><td>{{.Noncurrent}}</td><td>{{.Other}}</td>
     <td class="actions">{{if .EditURL}}<a class="button-link small" href="{{.EditURL}}">Edit</a>
-      <form method="post" action="/buckets/configure">{{template "bucket_form_fields" $}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="rule_action" value="delete"><input type="hidden" name="original_id" value="{{.ID}}"><input type="hidden" name="original_index" value="{{.Index}}"><button class="small" data-confirm="The rule is removed and its actions stop applying." data-confirm-title="Delete lifecycle rule {{.ID}}?" data-confirm-action="Delete rule">Delete</button></form>{{end}}</td></tr>
+      <form method="post" action="/buckets/configure">{{template "bucket_form_fields" $}}<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form"><input type="hidden" name="rule_action" value="delete"><input type="hidden" name="original_id" value="{{.ID}}"><input type="hidden" name="original_index" value="{{.Index}}"><button class="small danger-outline" data-confirm="The rule is removed and its actions stop applying." data-confirm-title="Delete lifecycle rule {{.ID}}?" data-confirm-action="Delete rule">Delete</button></form>{{end}}</td></tr>
   {{else}}<tr><td colspan="7" class="empty"><strong>No lifecycle rules</strong>There are no lifecycle rules for this bucket.</td></tr>{{end}}
   </tbody></table></div>
 </div>

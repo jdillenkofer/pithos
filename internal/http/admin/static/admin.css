@@ -114,8 +114,8 @@ pre { background: var(--bg-layout); border: 1px solid var(--divider); border-rad
 .container-body { padding: 4px 20px 20px; }
 .container-body.flush { padding: 0; }
 .divider { border-top: 1px solid var(--divider); }
-.container.danger-zone .container-head h2 { color: var(--danger); }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.container-head > :is(.toolbar, .header-actions) { margin-left: auto; justify-content: flex-end; }
 .filter-bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 0 20px 12px; }
 .filter-bar form { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 16rem; max-width: 40rem; }
 .filter-bar input.search { flex: 1; padding-left: 32px; background: var(--container) no-repeat 10px 50% / 14px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235f6b7a' stroke-width='2'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='M11 11l4 4'/%3E%3C/svg%3E"); }
@@ -217,6 +217,8 @@ button.primary, .button-link.primary { background: var(--primary); border-color:
 button.primary:hover, .button-link.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--primary-text); }
 button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 button.danger:hover { filter: brightness(0.9); background: var(--danger); color: #fff; border-color: var(--danger); }
+button.danger-outline { border-color: var(--danger); color: var(--danger); }
+button.danger-outline:hover { background: color-mix(in srgb, var(--danger) 8%, var(--container)); border-color: var(--danger); color: var(--danger); }
 button.small, .button-link.small { min-height: 26px; padding: 0 14px; font-size: 13px; }
 button:disabled { border-color: var(--divider); background: var(--divider); color: var(--muted); cursor: not-allowed; }
 
@@ -272,6 +274,7 @@ details[open] summary { margin-bottom: 12px; }
   .sidenav a.item { padding: 4px 14px; }
   .content { padding: 16px 16px 40px; }
   .topnav .who { display: none; }
+  .container-head > :is(.toolbar, .header-actions) { margin-left: 0; justify-content: flex-start; }
   .usage { grid-template-columns: 1fr auto; }
   .usage meter { grid-column: 1 / -1; }
 }

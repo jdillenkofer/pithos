@@ -11,7 +11,7 @@
 <div class="container">
   <div class="container-head">
     <div><h2>Versions <span class="count">({{len .Versions}}{{if .Truncated}}+{{end}})</span></h2><p>Every version of this object, newest first. Deleting a version is permanent; deleting a delete marker restores the previous version.</p></div>
-    <div class="toolbar"><button type="submit" {{if not .Versions}}disabled{{end}}>Delete</button></div>
+    <div class="toolbar"><button type="submit" class="danger-outline" {{if not .Versions}}disabled{{end}}>Delete</button></div>
   </div>
   <div class="table-wrap"><table>
   <thead><tr><th class="select"><span class="visually-hidden">Select</span></th><th>Version ID</th><th>Type</th><th>Last modified</th><th class="num">Size</th><th>Storage class</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead>
