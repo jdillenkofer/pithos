@@ -117,7 +117,7 @@ func (j *adminJob) start(parent context.Context, work func(context.Context, func
 	return true
 }
 
-var adminProgressTemplates = template.Must(template.ParseFS(assets, "templates/audit_progress.html", "templates/storage_progress.html"))
+var adminProgressTemplates = template.Must(template.ParseFS(assets, "templates/audit_progress.html", "templates/storage_progress.html", "templates/buckets_empty.html"))
 
 // jobProgressView adds display helpers and the CSRF token for the
 // restart form to a validation job snapshot.

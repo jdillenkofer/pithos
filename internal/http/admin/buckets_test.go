@@ -202,7 +202,7 @@ func TestBucketDeleteFromList(t *testing.T) {
 	s := &bucketTestStorage{buckets: []storage.Bucket{{Name: storage.MustNewBucketName("bucket-b"), OwnerAccountID: "account-b"}}}
 	a := bucketTestApp(t, s)
 	body := bucketRequest(a, "GET", "/buckets", nil).Body.String()
-	for _, want := range []string{`<form id="delete-bucket" method="get" action="/buckets/delete">`, `type="radio" form="delete-bucket" name="bucket" value="bucket-b" required`, `form="delete-bucket" class="danger-outline"`} {
+	for _, want := range []string{`<form id="bucket-selection" method="get" action="/buckets/delete">`, `type="radio" form="bucket-selection" name="bucket" value="bucket-b" required`, `form="bucket-selection" class="danger-outline"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("bucket list missing %s", want)
 		}

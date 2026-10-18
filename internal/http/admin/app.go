@@ -45,6 +45,7 @@ type App struct {
 	lastDashboard dashboardSample
 	started       time.Time
 	workers       backgroundWorkers
+	emptyJobs     emptyBucketJobs
 }
 
 type requestState struct {

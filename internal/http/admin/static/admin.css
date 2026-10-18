@@ -217,8 +217,8 @@ button.primary, .button-link.primary { background: var(--primary); border-color:
 button.primary:hover, .button-link.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--primary-text); }
 button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 button.danger:hover { filter: brightness(0.9); background: var(--danger); color: #fff; border-color: var(--danger); }
-button.danger-outline { border-color: var(--danger); color: var(--danger); }
-button.danger-outline:hover { background: color-mix(in srgb, var(--danger) 8%, var(--container)); border-color: var(--danger); color: var(--danger); }
+:is(button, .button-link).danger-outline { border-color: var(--danger); color: var(--danger); }
+:is(button, .button-link).danger-outline:hover { background: color-mix(in srgb, var(--danger) 8%, var(--container)); border-color: var(--danger); color: var(--danger); }
 button.small, .button-link.small { min-height: 26px; padding: 0 14px; font-size: 13px; }
 button:disabled { border-color: var(--divider); background: var(--divider); color: var(--muted); cursor: not-allowed; }
 

@@ -104,6 +104,7 @@ func (a *App) registerBuckets(mux *http.ServeMux) {
 	mux.HandleFunc("POST /buckets/delete", a.deleteBucket)
 	mux.HandleFunc("GET /buckets/detail", a.bucketDetail)
 	mux.HandleFunc("POST /buckets/configure", a.configureBucket)
+	a.registerEmptyBucket(mux)
 }
 
 func (a *App) bucketError(w http.ResponseWriter, r *http.Request, err error) {

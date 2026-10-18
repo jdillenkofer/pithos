@@ -58,7 +58,7 @@ func TestManagementRoutesAreNotExposed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/buckets", "/buckets/create", "/buckets/delete", "/buckets/detail", "/buckets/configure", "/objects", "/objects/detail", "/objects/download", "/objects/upload", "/objects/delete", "/objects/tags", "/objects/retention", "/objects/legal-hold", "/credentials", "/credentials/create", "/credentials/delete", "/policies", "/policies/save", "/policies/validate", "/policies/simulate", "/audit", "/audit/verify", "/audit/verify/progress", "/storage", "/storage/validate", "/storage/validate/progress", "/logout"} {
+	for _, path := range []string{"/", "/buckets", "/buckets/create", "/buckets/delete", "/buckets/empty", "/buckets/empty/status", "/buckets/empty/progress", "/buckets/detail", "/buckets/configure", "/objects", "/objects/detail", "/objects/download", "/objects/upload", "/objects/delete", "/objects/tags", "/objects/retention", "/objects/legal-hold", "/credentials", "/credentials/create", "/credentials/delete", "/policies", "/policies/save", "/policies/validate", "/policies/simulate", "/audit", "/audit/verify", "/audit/verify/progress", "/storage", "/storage/validate", "/storage/validate/progress", "/logout"} {
 		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, httptest.NewRequest(method, path, nil))
