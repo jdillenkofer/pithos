@@ -321,10 +321,12 @@ th.select, td.select { width: 1%; padding-right: 0; }
 .option .hint { font-size: 12px; }
 
 /* Rule editors share one spacing rhythm, including fieldsets and nested grids. */
-:is(.cors-editor, .notification-editor) .form-stack { max-width: none; }
-:is(.cors-editor, .notification-editor) :is(fieldset, .actions-row, label.check) { margin: 0; }
-:is(.cors-editor, .notification-editor) .form-grid { align-items: start; }
-:is(.cors-editor, .notification-editor) fieldset > .hint { margin: 0; }
+:is(.cors-editor, .notification-editor, .website-routing-editor) .form-stack { max-width: none; }
+:is(.cors-editor, .notification-editor, .website-routing-editor) :is(fieldset, .actions-row, label.check) { margin: 0; }
+:is(.cors-editor, .notification-editor, .website-routing-editor) .form-grid { align-items: start; }
+:is(.cors-editor, .notification-editor, .website-routing-editor) fieldset > .hint { margin: 0; }
+.website-routing-editor fieldset { gap: 20px; }
+.website-rule-option { display: grid; gap: 8px; }
 .notification-event-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 12px 20px; }
 .notification-event-options .check span { min-width: 0; overflow-wrap: anywhere; }
 .notification-editor .notification-destination { gap: 20px; }

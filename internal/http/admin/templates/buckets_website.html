@@ -1,0 +1,57 @@
+{{define "website_routing_form_fields"}}{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="website"><input type="hidden" name="editor" value="form"><input type="hidden" name="website_hash" value="{{.WebsiteHash}}">{{end}}
+
+{{define "website_routing_settings"}}
+<div class="container" id="website-routing">
+  <div class="container-head"><div><h2>Website redirection rules <span class="count">({{len .WebsiteRouting}})</span></h2><p>Rules are evaluated in order. The first matching rule determines the redirect.</p></div>{{if and .Website.Enabled (not .Website.Redirect)}}<div class="header-actions">
+    {{if .WebsiteRouting}}<form method="post" action="/buckets/configure">{{template "website_routing_form_fields" .}}<button name="website_rule_action" value="delete_all" data-confirm="All redirection rules are removed. Website hosting settings are kept." data-confirm-title="Delete all website redirection rules?" data-confirm-action="Delete all rules">Delete all rules</button></form>{{end}}
+    <a class="button-link primary" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=website&amp;editor=create">Create redirection rule</a>
+  </div>{{end}}</div>
+  {{if and .Website.Enabled (not .Website.Redirect)}}
+  <div class="table-wrap divider"><table><thead><tr><th>Order</th><th>Condition</th><th>Redirect</th><th>HTTP status</th><th class="num"><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    {{range .WebsiteRouting}}<tr><td>{{.Position}}</td><td>{{.Condition}}</td><td>{{.Redirect}}</td><td>{{.Code}}</td><td class="actions">
+      {{if .CanMoveUp}}<form method="post" action="/buckets/configure">{{template "website_routing_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="website_rule_action" value="up" aria-label="Move rule {{.Position}} up">Move up</button></form>{{end}}
+      {{if .CanMoveDown}}<form method="post" action="/buckets/configure">{{template "website_routing_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="website_rule_action" value="down" aria-label="Move rule {{.Position}} down">Move down</button></form>{{end}}
+      <a class="button-link small" href="/buckets/detail?bucket={{$.Bucket.Name.String}}&amp;tab=website&amp;rule_index={{.Index}}">Edit</a>
+      <form method="post" action="/buckets/configure">{{template "website_routing_form_fields" $}}<input type="hidden" name="rule_index" value="{{.Index}}"><button class="small" name="website_rule_action" value="delete" data-confirm="This redirection rule is removed. Other rules and website hosting settings are kept." data-confirm-title="Delete website redirection rule?" data-confirm-action="Delete rule">Delete</button></form>
+    </td></tr>{{else}}<tr><td colspan="5" class="empty"><strong>No redirection rules</strong>Create a rule to redirect matching website requests.</td></tr>{{end}}
+  </tbody></table></div>
+  {{else}}<div class="container-body"><p class="hint">{{if .Website.Redirect}}Routing rules are not available while all requests are redirected. Switch to static website hosting to add rules.{{else}}Enable static website hosting before adding redirection rules.{{end}} <a href="#website">Edit website hosting</a></p></div>{{end}}
+</div>
+{{end}}
+
+{{define "website_routing_editor"}}
+<form method="post" action="/buckets/configure">
+{{template "website_routing_form_fields" .}}<input type="hidden" name="rule_index" value="{{.WebsiteRoutingRule.Index}}"><input type="hidden" name="website_rule_action" value="save">
+<div class="container website-routing-editor" id="website-rule">
+  <div class="container-head"><div><h2>{{if .WebsiteRoutingRule.Index}}Edit website redirection rule{{else}}Create website redirection rule{{end}}</h2><p>Choose when a website request matches and how it is redirected, then review before saving.</p></div></div>
+  <div class="container-body form-stack">
+    <label class="field short"><span class="field-label">Rule position</span><input type="number" name="position" min="1" max="{{.WebsiteRoutingRule.MaxPosition}}" value="{{.WebsiteRoutingRule.Position}}" required><span class="hint">Rules are evaluated from first to last. Only the first matching rule is used.</span></label>
+    <fieldset><legend>Conditions</legend>
+      <div class="website-rule-option">
+        <label class="check"><input type="checkbox" name="match_prefix" value="enabled" {{if .WebsiteRoutingRule.PrefixSet}}checked{{end}}> Match an object key prefix</label>
+        <label class="field"><span class="field-label">Key prefix</span><input name="key_prefix" value="{{.WebsiteRoutingRule.Prefix}}" placeholder="old/"><span class="hint">Used only when prefix matching is selected. Spaces are literal. An empty prefix matches any key.</span></label>
+      </div>
+      <div class="website-rule-option">
+        <label class="check"><input type="checkbox" name="match_error" value="enabled" {{if .WebsiteRoutingRule.ErrorSet}}checked{{end}}> Match an HTTP error status</label>
+        <label class="field short"><span class="field-label">HTTP error status</span><input name="error_code" inputmode="numeric" maxlength="3" value="{{.WebsiteRoutingRule.ErrorCode}}" placeholder="404"><span class="hint">Enter a status from 400 to 599 when error matching is selected.</span></label>
+      </div>
+      <p class="hint">When both conditions are selected, both must match. With neither selected, this rule matches every request and prevents later rules from being reached.</p>
+    </fieldset>
+    <fieldset><legend>Redirect action</legend>
+      <div class="website-rule-option">
+        <label class="check"><input type="checkbox" name="change_host" value="enabled" {{if .WebsiteRoutingRule.HostSet}}checked{{end}}> Change the host</label>
+        <label class="field"><span class="field-label">Host name</span><input name="redirect_host" value="{{.WebsiteRoutingRule.Host}}" placeholder="example.com"><span class="hint">Used only when changing the host is selected. Leave empty to use the request host in an absolute URL.</span></label>
+      </div>
+      <div class="form-grid">
+        <label class="field"><span class="field-label">Protocol</span><select name="redirect_protocol"><option value="" {{if not .WebsiteRoutingRule.Protocol}}selected{{end}}>Unchanged</option><option value="request" {{if eq .WebsiteRoutingRule.Protocol "request"}}selected{{end}}>Request protocol (default HTTP)</option><option value="http" {{if eq .WebsiteRoutingRule.Protocol "http"}}selected{{end}}>HTTP</option><option value="https" {{if eq .WebsiteRoutingRule.Protocol "https"}}selected{{end}}>HTTPS</option></select></label>
+        <label class="field"><span class="field-label">HTTP redirect status</span><select name="redirect_code"><option value="301" {{if eq .WebsiteRoutingRule.Code "301"}}selected{{end}}>301 — Moved permanently</option><option value="302" {{if eq .WebsiteRoutingRule.Code "302"}}selected{{end}}>302 — Found</option><option value="303" {{if eq .WebsiteRoutingRule.Code "303"}}selected{{end}}>303 — See other</option><option value="307" {{if eq .WebsiteRoutingRule.Code "307"}}selected{{end}}>307 — Temporary redirect</option><option value="308" {{if eq .WebsiteRoutingRule.Code "308"}}selected{{end}}>308 — Permanent redirect</option></select></label>
+      </div>
+      <label class="field"><span class="field-label">Object key</span><select name="replacement"><option value="unchanged" {{if eq .WebsiteRoutingRule.Replacement "unchanged"}}selected{{end}}>Keep the object key</option><option value="prefix" {{if eq .WebsiteRoutingRule.Replacement "prefix"}}selected{{end}}>Replace the matching prefix</option><option value="key" {{if eq .WebsiteRoutingRule.Replacement "key"}}selected{{end}}>Replace the entire key</option></select></label>
+      <label class="field"><span class="field-label">Replacement key or prefix</span><input name="replacement_key" value="{{.WebsiteRoutingRule.Key}}" placeholder="new/"><span class="hint">Used only when replacing a key or prefix. An empty replacement removes the matching prefix or redirects to the root. Prefix replacement keeps the unmatched suffix only when a key-prefix condition is selected.</span></label>
+      <p class="hint">Change at least one of the host, protocol or object key. Setting a host or protocol produces an absolute redirect; otherwise the redirect uses a relative path.</p>
+    </fieldset>
+    <div class="actions-row"><a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=website#website-routing">Cancel</a><button class="primary">Review rule</button></div>
+  </div>
+</div>
+</form>
+{{end}}

@@ -104,25 +104,7 @@ func structuredBucketConfiguration(ctx context.Context, st storage.Storage, name
 		}
 		return mustMarshal(config)
 	case "website":
-		if form.Get("website") != "enabled" {
-			return "", "delete", nil
-		}
-		if form.Get("hosting") == "redirect" {
-			redirect := &storage.WebsiteRedirectAllRequestsTo{HostName: strings.TrimSpace(form.Get("redirect_host"))}
-			if protocol := form.Get("redirect_protocol"); protocol != "" {
-				redirect.Protocol = &protocol
-			}
-			return mustMarshal(storage.WebsiteConfiguration{RedirectAllRequestsTo: redirect})
-		}
-		config := storage.WebsiteConfiguration{IndexDocumentSuffix: strings.TrimSpace(form.Get("index_document"))}
-		if errorDocument := strings.TrimSpace(form.Get("error_document")); errorDocument != "" {
-			config.ErrorDocumentKey = &errorDocument
-		}
-		// Routing rules have no form fields; keep any configured ones.
-		if current, err := st.GetBucketWebsiteConfiguration(ctx, name); err == nil && current != nil {
-			config.RoutingRules = current.RoutingRules
-		}
-		return mustMarshal(config)
+		return websiteFromForm(ctx, st, name, form)
 	case "notifications":
 		return notificationFromForm(ctx, st, name, form)
 	case "cors":

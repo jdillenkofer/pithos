@@ -24,7 +24,10 @@
 {{if .NotificationEditor}}
 {{template "notification_editor" .}}
 {{end}}
-{{if and (eq .Header.Active "properties") (not .NotificationEditor)}}
+{{if .WebsiteRoutingEditor}}
+{{template "website_routing_editor" .}}
+{{end}}
+{{if and (eq .Header.Active "properties") (not .NotificationEditor) (not .WebsiteRoutingEditor)}}
 <div class="container">
   <div class="container-head"><h2>Bucket overview</h2></div>
   <div class="container-body"><div class="kv">
@@ -109,11 +112,11 @@
       <div><div class="label">Hosting type</div><div class="value">Bucket hosting</div></div>
       <div><div class="label">Index document</div><div class="value">{{.Website.Index}}</div></div>
       <div><div class="label">Error document</div><div class="value">{{if .Website.Error}}{{.Website.Error}}{{else}}-{{end}}</div></div>
-      {{if .Website.RoutingRules}}<div><div class="label">Redirection rules</div><div class="value">{{.Website.RoutingRules}}</div></div>{{end}}
+      {{if .Website.RoutingRules}}<div><div class="label">Redirection rules</div><div class="value"><a href="#website-routing">{{.Website.RoutingRules}}</a></div></div>{{end}}
       {{end}}{{end}}
     </div>
     <details><summary>Edit</summary>
-    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="website"><input type="hidden" name="editor" value="form">
+    <form method="post" action="/buckets/configure">{{template "bucket_form_fields" .}}<input type="hidden" name="tab" value="website"><input type="hidden" name="editor" value="form"><input type="hidden" name="website_hash" value="{{.WebsiteHash}}">
       <fieldset><legend>Static website hosting</legend>
         <label class="check"><input type="radio" name="website" value="disabled" {{if not .Website.Enabled}}checked{{end}}> Disable</label>
         <label class="check"><input type="radio" name="website" value="enabled" {{if .Website.Enabled}}checked{{end}}> Enable</label>
@@ -128,12 +131,15 @@
         <label>Redirect host name <input name="redirect_host" value="{{.Website.Host}}" placeholder="example.com"></label>
         <label>Protocol <select name="redirect_protocol"><option value="" {{if not .Website.Protocol}}selected{{end}}>None</option><option {{if eq .Website.Protocol "https"}}selected{{end}}>https</option><option {{if eq .Website.Protocol "http"}}selected{{end}}>http</option></select></label>
       </div>
-      <p class="hint">Index and error documents apply to bucket hosting; host name and protocol apply to redirects. Existing redirection rules are kept.</p>
+      <p class="hint">Index and error documents apply to bucket hosting; host name and protocol apply when redirecting all requests. Redirection rules are kept when bucket hosting is kept.</p>
+      {{if .Website.RoutingRules}}<label class="check"><input type="checkbox" name="discard_routing_rules" value="yes"> Remove existing redirection rules when switching to redirect all requests.</label>{{end}}
       <div class="actions-row"><button class="primary">Save changes</button></div>
     </form>
     </details>
   </div>
 </div>
+
+{{template "website_routing_settings" .}}
 
 {{template "notification_settings" .}}
 

@@ -50,6 +50,11 @@ type bucketDetailPage struct {
 	Tags       []keyValue
 	Website    websiteView
 
+	WebsiteHash          string
+	WebsiteRouting       []websiteRoutingView
+	WebsiteRoutingRule   websiteRoutingFormView
+	WebsiteRoutingEditor bool
+
 	Notifications            []notificationView
 	NotificationRule         notificationFormView
 	NotificationEventGroups  []notificationEventGroup
@@ -289,6 +294,28 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		websiteConfig, _ := website.(*storage.WebsiteConfiguration)
 		page.Website = describeWebsite(websiteConfig)
+		if websiteConfig == nil {
+			websiteConfig = &storage.WebsiteConfiguration{}
+		}
+		page.WebsiteHash = policyHash([]byte(configurationText(websiteConfig)))
+		page.WebsiteRouting = describeWebsiteRouting(websiteConfig)
+		page.WebsiteRoutingRule = websiteRoutingRuleForm(storage.WebsiteRoutingRule{}, "", len(websiteConfig.RoutingRules))
+		if tab == "website" {
+			query := r.URL.Query()
+			page.WebsiteRoutingEditor = query.Get("editor") == "create" || query.Has("rule_index")
+			if page.WebsiteRoutingEditor && (!page.Website.Enabled || page.Website.Redirect) {
+				a.fail(w, r, http.StatusBadRequest, "Enable static website hosting before editing redirection rules")
+				return
+			}
+			if query.Has("rule_index") {
+				index, err := strconv.Atoi(query.Get("rule_index"))
+				if err != nil || index < 0 || index >= len(websiteConfig.RoutingRules) {
+					a.fail(w, r, http.StatusNotFound, "Redirection rule not found")
+					return
+				}
+				page.WebsiteRoutingRule = websiteRoutingRuleForm(websiteConfig.RoutingRules[index], strconv.Itoa(index), len(websiteConfig.RoutingRules))
+			}
+		}
 		notifications, ok := load(func() (any, error) { return a.options.Storage.GetBucketNotificationConfiguration(ctx, name) })
 		if !ok {
 			return
@@ -427,6 +454,11 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 	// Validate before invoking any storage mutation.
 	apply, err := bucketConfigurationMutation(a.options.Storage, name, tab, text, action)
 	if err == nil {
+		if tab == "website" && r.PostForm.Get("editor") == "form" && r.PostForm.Get("website_rule_action") == "save" {
+			if !a.confirmed(w, r, websiteRoutingSaveConfirmation(name.String(), text, r.PostForm)) {
+				return
+			}
+		}
 		if tab == "lifecycle" && r.PostForm.Get("editor") == "form" && r.PostForm.Get("rule_action") != "delete" {
 			if !a.confirmed(w, r, lifecycleSaveConfirmation(name.String(), text, r.PostForm)) {
 				return
@@ -451,6 +483,14 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 // bucketDeletionConfirmation describes configuration removals, including
 // individual rule deletions, which need explicit confirmation.
 func bucketDeletionConfirmation(bucket, tab, action string, form url.Values) (confirmation, bool) {
+	if tab == "website" {
+		switch form.Get("website_rule_action") {
+		case "delete":
+			return confirmation{Title: "Delete website redirection rule?", Message: "The redirection rule is removed from bucket " + bucket + ". Other rules and website hosting settings are kept.", Action: "Delete rule"}, true
+		case "delete_all":
+			return confirmation{Title: "Delete all website redirection rules?", Message: "All redirection rules are removed from bucket " + bucket + ". Website hosting remains enabled and its index and error documents are kept.", Action: "Delete all rules"}, true
+		}
+	}
 	if tab == "notifications" {
 		switch form.Get("notification_action") {
 		case "delete":

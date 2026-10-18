@@ -30,6 +30,7 @@ type bucketTestStorage struct {
 	lifecycle           *storage.BucketLifecycleConfiguration
 	cors                *storage.BucketCORSConfiguration
 	website             *storage.WebsiteConfiguration
+	websiteFailure      error
 	notifications       *storage.BucketNotificationConfiguration
 	notificationFailure error
 	deleted             string
@@ -74,6 +75,9 @@ func (s *bucketTestStorage) GetObjectLockConfiguration(context.Context, storage.
 	return nil, storage.ErrObjectLockConfigurationNotFound
 }
 func (s *bucketTestStorage) GetBucketWebsiteConfiguration(context.Context, storage.BucketName) (*storage.WebsiteConfiguration, error) {
+	if s.websiteFailure != nil {
+		return nil, s.websiteFailure
+	}
 	if s.website != nil {
 		return s.website, nil
 	}
@@ -425,8 +429,8 @@ func TestStructuredBucketEditors(t *testing.T) {
 	website := s.last.(*storage.WebsiteConfiguration)
 	require.Equal(t, "index.html", website.IndexDocumentSuffix)
 	require.Equal(t, "error.html", *website.ErrorDocumentKey)
-	require.Len(t, website.RoutingRules, 1, "routing rules without form fields are kept")
-	w = structuredBucketRequest(a, "website", url.Values{"website": {"enabled"}, "hosting": {"redirect"}, "redirect_host": {"example.com"}, "redirect_protocol": {"https"}})
+	require.Len(t, website.RoutingRules, 1, "hosting settings preserve routing rules")
+	w = structuredBucketRequest(a, "website", url.Values{"website": {"enabled"}, "hosting": {"redirect"}, "redirect_host": {"example.com"}, "redirect_protocol": {"https"}, "discard_routing_rules": {"yes"}})
 	require.Equal(t, http.StatusSeeOther, w.Code, w.Body.String())
 	require.Equal(t, "example.com", s.last.(*storage.WebsiteConfiguration).RedirectAllRequestsTo.HostName)
 	require.Equal(t, http.StatusSeeOther, structuredBucketRequest(a, "website", url.Values{"website": {"disabled"}}).Code)

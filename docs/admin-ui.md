@@ -179,7 +179,21 @@ Each bucket has Objects, Properties, Permissions and Management tabs:
 
 Configuration changes are validated with the same storage/S3 validation
 helpers as the API.
-Website forms keep existing redirection rules.
+
+Website redirection rules are available when static website hosting is enabled,
+not when all requests are redirected to another host. Forms support optional
+object-key prefix and HTTP error-status conditions, host/protocol overrides,
+prefix or whole-key replacement, and redirect statuses 301, 302, 303, 307 and 308.
+Explicit empty prefixes and replacement keys are supported. Both selected
+conditions must match; with neither selected, a rule matches every request.
+Rules are evaluated in order, and the first match wins. Set a rule's position
+in its form or move it up/down in the list. Saving shows a review of the condition,
+action and position, with warnings for rules that match every request or are
+blocked by an earlier catch-all rule. Deleting one rule or all rules requires
+confirmation. Rule edits keep the index and error
+documents; hosting-setting edits keep the rules. Switching to redirect-all
+requires explicit consent to discard existing rules. Stale website forms are
+rejected if the configuration has changed.
 
 The object browser supports prefix navigation with breadcrumbs, bounded
 pages with continuation tokens, and version listings including delete
