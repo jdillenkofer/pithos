@@ -176,6 +176,10 @@ type CompleteMultipartUploadResult struct {
 	ChecksumType      *string
 }
 
+type DeleteBucketResult struct {
+	UnreferencedParts []Part
+}
+
 type AbortMultipartResult struct {
 	UnreferencedParts []Part
 }
@@ -471,7 +475,7 @@ type MaintenanceStore interface {
 
 type BucketStore interface {
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName, options ...CreateBucketOptions) error
-	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
+	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*DeleteBucketResult, error)
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
 	GetBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketVersioningConfiguration, error)
@@ -980,7 +984,8 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		return metadataStore.DeleteBucket(ctx, tx, bucketName)
+		_, err := metadataStore.DeleteBucket(ctx, tx, bucketName)
+		return err
 	})
 	if err != nil {
 		return err
