@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jdillenkofer/pithos/internal/http/middleware"
@@ -52,9 +53,10 @@ type bucketDetailPage struct {
 	Notifications []notificationView
 
 	// Permissions and Management tabs
-	CORS          []corsView
-	Lifecycle     []lifecycleView
-	LifecycleRule lifecycleFormView
+	CORS            []corsView
+	Lifecycle       []lifecycleView
+	LifecycleRule   lifecycleFormView
+	LifecycleEditor bool
 }
 
 // bucketTabGroups places each configuration on the S3 console tab where it lives.
@@ -303,6 +305,23 @@ func (a *App) bucketDetail(w http.ResponseWriter, r *http.Request) {
 		lifecycleConfig, _ := lifecycle.(*storage.BucketLifecycleConfiguration)
 		page.Lifecycle = describeLifecycle(name.String(), lifecycleConfig)
 		page.LifecycleRule = lifecycleRuleForm(lifecycleConfig, r.URL.Query().Get("rule"))
+		page.LifecycleEditor = r.URL.Query().Get("editor") == "create" || r.URL.Query().Has("rule") || r.URL.Query().Has("rule_index")
+		if r.URL.Query().Has("rule_index") {
+			index, err := strconv.Atoi(r.URL.Query().Get("rule_index"))
+			if err != nil || lifecycleConfig == nil || index < 0 || index >= len(lifecycleConfig.Rules) {
+				a.fail(w, r, http.StatusNotFound, "Lifecycle rule not found")
+				return
+			}
+			page.LifecycleRule = lifecycleFormForRule(lifecycleConfig.Rules[index])
+			page.LifecycleRule.OriginalIndex = strconv.Itoa(index)
+		}
+		page.LifecycleRule.Tags = append(page.LifecycleRule.Tags, keyValue{})
+		page.LifecycleRule.Transitions = lifecycleTransitionRows(page.LifecycleRule.Transitions)
+		page.LifecycleRule.NoncurrentTransitions = lifecycleTransitionRows(page.LifecycleRule.NoncurrentTransitions)
+		if r.URL.Query().Has("rule") && page.LifecycleRule.OriginalID == "" {
+			a.fail(w, r, http.StatusNotFound, "Lifecycle rule not found")
+			return
+		}
 		page.Configuration = configurationText(lifecycleConfig)
 	}
 	a.render(w, r, "Bucket: "+name.String(), "buckets_detail", page)
@@ -362,6 +381,11 @@ func (a *App) configureBucket(w http.ResponseWriter, r *http.Request) {
 	// Validate before invoking any storage mutation.
 	apply, err := bucketConfigurationMutation(a.options.Storage, name, tab, text, action)
 	if err == nil {
+		if tab == "lifecycle" && r.PostForm.Get("editor") == "form" && r.PostForm.Get("rule_action") != "delete" {
+			if !a.confirmed(w, r, lifecycleSaveConfirmation(name.String(), text, r.PostForm)) {
+				return
+			}
+		}
 		if c, destructive := bucketDeletionConfirmation(name.String(), tab, action, r.PostForm); destructive && !a.confirmed(w, r, c) {
 			return
 		}

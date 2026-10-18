@@ -1,0 +1,105 @@
+{{define "lifecycle_tag_row"}}
+<div class="lifecycle-repeat-row lifecycle-tag-row" data-repeat-row>
+  <label class="field"><span class="field-label">Tag key</span><input name="filter_tag_key" value="{{.Label}}" maxlength="128"></label>
+  <label class="field"><span class="field-label">Tag value</span><input name="filter_tag_value" value="{{.Value}}" maxlength="256"></label>
+  <button type="button" data-remove-row>Remove tag</button>
+</div>
+{{end}}
+
+{{define "lifecycle_classes"}}
+<option value="">Choose storage class</option>
+<option {{if eq . "STANDARD_IA"}}selected{{end}}>STANDARD_IA</option>
+<option {{if eq . "ONEZONE_IA"}}selected{{end}}>ONEZONE_IA</option>
+<option {{if eq . "INTELLIGENT_TIERING"}}selected{{end}}>INTELLIGENT_TIERING</option>
+<option {{if eq . "GLACIER_IR"}}selected{{end}}>GLACIER_IR</option>
+<option {{if eq . "GLACIER"}}selected{{end}}>GLACIER</option>
+<option {{if eq . "DEEP_ARCHIVE"}}selected{{end}}>DEEP_ARCHIVE</option>
+<option {{if eq . "REDUCED_REDUNDANCY"}}selected{{end}}>REDUCED_REDUNDANCY</option>
+<option {{if eq . "EXPRESS_ONEZONE"}}selected{{end}}>EXPRESS_ONEZONE</option>
+<option {{if eq . "OUTPOSTS"}}selected{{end}}>OUTPOSTS</option>
+{{end}}
+
+{{define "lifecycle_transition_row"}}
+<div class="lifecycle-repeat-row lifecycle-transition-row" data-repeat-row>
+  <label class="field"><span class="field-label">Storage class</span><select name="transition_class">{{template "lifecycle_classes" .Class}}</select></label>
+  <label class="field"><span class="field-label">Days after creation</span><input type="number" name="transition_days" min="0" max="2147483647" value="{{.Days}}" placeholder="e.g. 30"></label>
+  <label class="field"><span class="field-label">Or on date (UTC)</span><input type="date" name="transition_date" value="{{.Date}}"></label>
+  <button type="button" data-remove-row>Remove transition</button>
+</div>
+{{end}}
+
+{{define "lifecycle_noncurrent_transition_row"}}
+<div class="lifecycle-repeat-row lifecycle-transition-row" data-repeat-row>
+  <label class="field"><span class="field-label">Storage class</span><select name="noncurrent_transition_class">{{template "lifecycle_classes" .Class}}</select></label>
+  <label class="field"><span class="field-label">Days after becoming noncurrent</span><input type="number" name="noncurrent_transition_days" min="1" max="2147483647" value="{{.Days}}"></label>
+  <label class="field"><span class="field-label">Newer versions to retain <span class="hint">- optional</span></span><input type="number" name="noncurrent_transition_newer" min="1" max="100" value="{{.Newer}}"></label>
+  <button type="button" data-remove-row>Remove transition</button>
+</div>
+{{end}}
+
+{{define "lifecycle_editor"}}
+<form method="post" action="/buckets/configure">
+{{template "bucket_form_fields" .}}
+<input type="hidden" name="tab" value="lifecycle"><input type="hidden" name="editor" value="form">
+<input type="hidden" name="original_id" value="{{.LifecycleRule.OriginalID}}">
+<input type="hidden" name="original_index" value="{{.LifecycleRule.OriginalIndex}}">
+<div class="container lifecycle-editor" id="lifecycle-rule">
+  <div class="container-head"><div><h2>{{if or .LifecycleRule.OriginalID .LifecycleRule.OriginalIndex}}Edit lifecycle rule{{else}}Create lifecycle rule{{end}}</h2><p>Choose the scope and actions, then review before saving. No JSON required.</p></div></div>
+  <div class="container-body">
+    <div class="form-stack">
+      <label class="field"><span class="field-label">Lifecycle rule name</span><input name="rule_id" value="{{.LifecycleRule.ID}}" maxlength="255" {{if not .LifecycleRule.OriginalIndex}}required{{end}}><span class="hint">Up to 255 characters. Existing unnamed rules may remain unnamed.</span></label>
+      <label class="field"><span class="field-label">Status</span><select name="status"><option {{if eq .LifecycleRule.Status "Enabled"}}selected{{end}}>Enabled</option><option {{if eq .LifecycleRule.Status "Disabled"}}selected{{end}}>Disabled</option></select></label>
+      <fieldset><legend>Rule scope</legend>
+        <p class="hint">All specified conditions must match. Leave every filter empty to apply to the entire bucket.</p>
+        <label class="field"><span class="field-label">Key prefix <span class="hint">- optional</span></span><input name="prefix" value="{{.LifecycleRule.Prefix}}" placeholder="logs/"></label>
+        <div class="lifecycle-repeat-row">
+          <label class="field"><span class="field-label">Object size greater than <span class="hint">- optional</span></span><input type="number" name="size_greater" value="{{.LifecycleRule.SizeGreater}}" min="0" max="9223372036854775807"><span class="hint">Bytes, exclusive. Zero is a valid bound.</span></label>
+          <label class="field"><span class="field-label">Object size less than <span class="hint">- optional</span></span><input type="number" name="size_less" value="{{.LifecycleRule.SizeLess}}" min="1" max="9223372036854775807"><span class="hint">Bytes, exclusive.</span></label>
+        </div>
+        <div data-repeat-editor data-max="1000">
+          <h3>Object tags</h3><p class="hint">Every tag must match exactly. A blank value matches an empty tag value.</p>
+          <div data-repeat-rows>{{range .LifecycleRule.Tags}}{{template "lifecycle_tag_row" .}}{{end}}</div>
+          <template>{{template "lifecycle_tag_row" .LifecycleRule.BlankTag}}</template>
+          <button type="button" data-add-row>Add tag filter</button>
+        </div>
+      </fieldset>
+      <fieldset><legend>Expire current versions</legend>
+        <p class="hint">Choose days or a date, not both. In a versioned bucket, expiration adds a delete marker. Leave both empty to skip.</p>
+        <div class="lifecycle-repeat-row">
+          <label class="field"><span class="field-label">Days after object creation</span><input type="number" min="1" max="2147483647" name="expire_days" value="{{.LifecycleRule.ExpireDays}}"></label>
+          <label class="field"><span class="field-label">Or on date (UTC)</span><input type="date" name="expire_date" value="{{.LifecycleRule.ExpireDate}}"><span class="hint">Takes effect at midnight UTC on this date.</span></label>
+        </div>
+      </fieldset>
+      <fieldset><legend>Transition current versions</legend>
+        <p class="hint">Add one row per destination class. Choose days (zero allowed) or a UTC date per row. Leave unused rows blank. Transitions must precede expiration.</p>
+        <p class="hint">Pithos storage classes stay immediately readable; archive classes do not require restore operations.</p>
+        <div data-repeat-editor data-max="9">
+          <div data-repeat-rows>{{range .LifecycleRule.Transitions}}{{template "lifecycle_transition_row" .}}{{end}}</div>
+          <template>{{template "lifecycle_transition_row" .LifecycleRule.BlankTransition}}</template>
+          <button type="button" data-add-row>Add current-version transition</button>
+        </div>
+      </fieldset>
+      <fieldset><legend>Noncurrent versions</legend>
+        <p class="hint">These actions apply to older versions in versioned buckets.</p>
+        <div class="lifecycle-repeat-row">
+          <label class="field"><span class="field-label">Permanently delete after noncurrent days</span><input type="number" min="1" max="2147483647" name="noncurrent_days" value="{{.LifecycleRule.NoncurrentDays}}"></label>
+          <label class="field"><span class="field-label">Newer noncurrent versions to retain <span class="hint">- optional</span></span><input type="number" min="1" max="100" name="newer_noncurrent" value="{{.LifecycleRule.NewerNoncurrent}}"><span class="hint">Keep between 1 and 100 newer versions from expiration.</span></label>
+        </div>
+        <h3>Transition noncurrent versions</h3>
+        <p class="hint">Add one row per destination class. Transitions must precede noncurrent expiration. Leave unused rows blank.</p>
+        <div data-repeat-editor data-max="9">
+          <div data-repeat-rows>{{range .LifecycleRule.NoncurrentTransitions}}{{template "lifecycle_noncurrent_transition_row" .}}{{end}}</div>
+          <template>{{template "lifecycle_noncurrent_transition_row" .LifecycleRule.BlankTransition}}</template>
+          <button type="button" data-add-row>Add noncurrent-version transition</button>
+        </div>
+      </fieldset>
+      <fieldset><legend>Cleanup</legend>
+        <label class="field"><span class="field-label">Delete incomplete multipart uploads after days</span><input type="number" min="1" max="2147483647" name="abort_days" value="{{.LifecycleRule.Abort}}"><span class="hint">Cannot be combined with tag or size filters. Leave empty to skip.</span></label>
+        <label class="field"><span class="field-label">Delete expired object delete markers</span><select name="expired_delete_markers"><option value="">No action</option><option value="true" {{if eq .LifecycleRule.MarkerMode "true"}}selected{{end}}>Enabled</option><option value="false" {{if eq .LifecycleRule.MarkerMode "false"}}selected{{end}}>Explicitly disabled (API compatibility)</option></select><span class="hint">Cannot be combined with current-version expiration or tag filters.</span></label>
+      </fieldset>
+    </div>
+    <div class="actions-row"><a class="button-link" href="/buckets/detail?bucket={{.Bucket.Name.String}}&amp;tab=lifecycle">Cancel</a><button class="primary">Review rule</button></div>
+  </div>
+</div>
+</form>
+{{end}}

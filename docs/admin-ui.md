@@ -158,10 +158,15 @@ Each bucket has Objects, Properties, Permissions and Management tabs:
   tags, Object Lock and website hosting have forms; notifications are edited
   as JSON.
 - **Permissions:** CORS rules, edited as JSON as in the S3 console.
-- **Management:** lifecycle rules with forms to create, edit and delete
-  prefix-scoped rules (expiration, noncurrent version deletion, expired
-  delete markers, incomplete multipart uploads). Tag or size filters, dated
-  actions and transitions are edited in the lifecycle JSON.
+- **Management:** lifecycle rules are managed entirely through forms, with no
+  JSON editor. Create, edit or delete rules using prefix, tag and exclusive
+  object-size filters; day- or UTC-date-based expiration and current-version
+  transitions; noncurrent-version expiration and transitions with optional
+  newer-version retention; expired delete marker cleanup; and incomplete
+  multipart upload cleanup. Add or remove tag and transition rows as needed.
+  Existing unnamed API-created rules can also be edited or deleted. A separate
+  editor leads to a review of every filter and action before saving, with a
+  warning for bucket-wide rules. Removing all rules requires confirmation.
 
 Forms are converted into the same configuration documents as the JSON
 editors and validated with the same storage/S3 validation helpers as the API.

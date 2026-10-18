@@ -5,9 +5,12 @@ import (
 	"sort"
 )
 
-// confirmation describes a destructive action that needs explicit consent.
+// confirmation describes an action that needs explicit consent or review.
 type confirmation struct {
 	Title, Message, Action string
+	Review                 bool
+	Details                []keyValue
+	Warning                string
 }
 
 type confirmView struct {

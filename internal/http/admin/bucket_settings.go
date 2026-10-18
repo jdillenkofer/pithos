@@ -146,8 +146,12 @@ func lifecycleFromForm(ctx context.Context, st storage.Storage, name storage.Buc
 	}
 	original := form.Get("original_id")
 	kept := rules[:0:0]
-	for _, rule := range rules {
-		if original == "" || rule.ID == nil || *rule.ID != original {
+	for i, rule := range rules {
+		match := original != "" && rule.ID != nil && *rule.ID == original
+		if index := form.Get("original_index"); index != "" {
+			match = index == strconv.Itoa(i)
+		}
+		if !match {
 			kept = append(kept, rule)
 		}
 	}
@@ -160,12 +164,12 @@ func lifecycleFromForm(ctx context.Context, st storage.Storage, name storage.Buc
 		}
 		return mustMarshal(storage.BucketLifecycleConfiguration{Rules: kept})
 	}
-	if original != "" && len(kept) == len(rules) {
+	if (original != "" || form.Get("original_index") != "") && len(kept) == len(rules) {
 		return "", "", errors.New("lifecycle rule not found")
 	}
 
 	id := strings.TrimSpace(form.Get("rule_id"))
-	if id == "" {
+	if id == "" && form.Get("original_index") == "" {
 		return "", "", errors.New("enter a lifecycle rule name")
 	}
 	for _, rule := range kept {
@@ -174,18 +178,27 @@ func lifecycleFromForm(ctx context.Context, st storage.Storage, name storage.Buc
 		}
 	}
 	status := storage.LifecycleRuleStatusEnabled
+	if value := form.Get("status"); value != "" && value != storage.LifecycleRuleStatusEnabled && value != storage.LifecycleRuleStatusDisabled {
+		return "", "", errors.New("choose Enabled or Disabled for the lifecycle rule status")
+	}
 	if form.Get("status") == storage.LifecycleRuleStatusDisabled {
 		status = storage.LifecycleRuleStatusDisabled
 	}
-	prefix := form.Get("prefix")
-	rule := storage.LifecycleRule{ID: &id, Status: status, Filter: &storage.LifecycleFilter{Prefix: &prefix}}
+	rule, err := lifecycleRuleFromFields(form)
+	if err != nil {
+		return "", "", err
+	}
+	rule.ID, rule.Status = &id, status
+	if id == "" {
+		rule.ID = nil
+	}
 	if days, err := positiveInt32(form, "expire_days", "Expire current versions after"); err != nil {
 		return "", "", err
 	} else if days != nil {
 		rule.Expiration = &storage.LifecycleExpiration{Days: days}
 	}
 	if form.Get("expired_delete_markers") == "true" {
-		if rule.Expiration != nil {
+		if rule.Expiration != nil && rule.Expiration.ExpiredObjectDeleteMarker == nil {
 			return "", "", errors.New("expired object delete markers cannot be removed in a rule that also expires current versions")
 		}
 		enabled := true
@@ -206,7 +219,7 @@ func lifecycleFromForm(ctx context.Context, st storage.Storage, name storage.Buc
 	} else if days != nil {
 		rule.AbortIncompleteMultipartUpload = &storage.LifecycleAbortIncompleteMultipartUpload{DaysAfterInitiation: days}
 	}
-	if rule.Expiration == nil && rule.NoncurrentVersionExpiration == nil && rule.AbortIncompleteMultipartUpload == nil {
+	if rule.Expiration == nil && rule.NoncurrentVersionExpiration == nil && rule.AbortIncompleteMultipartUpload == nil && len(rule.Transitions) == 0 && len(rule.NoncurrentVersionTransitions) == 0 {
 		return "", "", errors.New("choose at least one lifecycle rule action")
 	}
 	return mustMarshal(storage.BucketLifecycleConfiguration{Rules: append(kept, rule)})
@@ -236,12 +249,17 @@ type corsView struct {
 type lifecycleView struct {
 	ID, Status, Scope, Current, Noncurrent, Other string
 	EditURL                                       string
+	Index                                         string
 }
 
 type lifecycleFormView struct {
-	OriginalID, ID, Status, Prefix                     string
-	ExpireDays, NoncurrentDays, NewerNoncurrent, Abort string
-	ExpiredDeleteMarkers                               bool
+	OriginalID, OriginalIndex, ID, Status, Prefix                  string
+	ExpireDays, ExpireDate, NoncurrentDays, NewerNoncurrent, Abort string
+	SizeGreater, SizeLess, MarkerMode                              string
+	Tags                                                           []keyValue
+	Transitions, NoncurrentTransitions                             []lifecycleTransitionForm
+	BlankTransition                                                lifecycleTransitionForm
+	BlankTag                                                       keyValue
 }
 
 func int32Text(value *int32) string {
@@ -334,95 +352,64 @@ func describeCORS(config *storage.BucketCORSConfiguration) []corsView {
 	return views
 }
 
-func lifecycleScope(rule storage.LifecycleRule) string {
-	prefix := rule.Prefix
-	if rule.Filter != nil {
-		switch {
-		case rule.Filter.Prefix != nil:
-			prefix = rule.Filter.Prefix
-		case rule.Filter.Tag != nil || rule.Filter.And != nil || rule.Filter.ObjectSizeGreaterThan != nil || rule.Filter.ObjectSizeLessThan != nil:
-			return "Filtered (see JSON)"
-		}
-	}
-	if prefix == nil || *prefix == "" {
-		return "Entire bucket"
-	}
-	return "Prefix " + *prefix
-}
-
 func describeLifecycle(bucket string, config *storage.BucketLifecycleConfiguration) []lifecycleView {
 	if config == nil {
 		return nil
 	}
-	views := make([]lifecycleView, 0, len(config.Rules))
-	for _, rule := range config.Rules {
-		view := lifecycleView{ID: "-", Status: rule.Status, Scope: lifecycleScope(rule), Current: "-", Noncurrent: "-", Other: "-"}
+	var views []lifecycleView
+	for i, rule := range config.Rules {
+		view := lifecycleRuleSummary(rule)
+		query := url.Values{"bucket": {bucket}, "tab": {"lifecycle"}}
 		if rule.ID != nil && *rule.ID != "" {
-			view.ID = *rule.ID
-			view.EditURL = "/buckets/detail?" + url.Values{"bucket": {bucket}, "tab": {"lifecycle"}, "rule": {*rule.ID}}.Encode() + "#lifecycle-rule"
+			query.Set("rule", *rule.ID)
+		} else {
+			query.Set("rule_index", strconv.Itoa(i))
+			view.Index = strconv.Itoa(i)
 		}
-		var current, other []string
-		if expiration := rule.Expiration; expiration != nil {
-			switch {
-			case expiration.Days != nil:
-				current = append(current, fmt.Sprintf("Expire after %d days", *expiration.Days))
-			case expiration.Date != nil:
-				current = append(current, "Expire on "+expiration.Date.UTC().Format("2006-01-02"))
-			case expiration.ExpiredObjectDeleteMarker != nil && *expiration.ExpiredObjectDeleteMarker:
-				other = append(other, "Delete expired delete markers")
-			}
-		}
-		if len(rule.Transitions) > 0 {
-			current = append(current, fmt.Sprintf("%d transition(s)", len(rule.Transitions)))
-		}
-		if noncurrent := rule.NoncurrentVersionExpiration; noncurrent != nil && noncurrent.NoncurrentDays != nil {
-			text := fmt.Sprintf("Delete after %d days", *noncurrent.NoncurrentDays)
-			if noncurrent.NewerNoncurrentVersions != nil {
-				text += fmt.Sprintf(", keep %d newer", *noncurrent.NewerNoncurrentVersions)
-			}
-			view.Noncurrent = text
-		}
-		if abort := rule.AbortIncompleteMultipartUpload; abort != nil && abort.DaysAfterInitiation != nil {
-			other = append(other, fmt.Sprintf("Abort incomplete uploads after %d days", *abort.DaysAfterInitiation))
-		}
-		if len(current) > 0 {
-			view.Current = strings.Join(current, "; ")
-		}
-		if len(other) > 0 {
-			view.Other = strings.Join(other, "; ")
-		}
+		view.EditURL = "/buckets/detail?" + query.Encode()
 		views = append(views, view)
 	}
 	return views
 }
 
-// lifecycleRuleForm prefills the rule editor for the rule named id, or
-// returns an empty form for a new rule.
 func lifecycleRuleForm(config *storage.BucketLifecycleConfiguration, id string) lifecycleFormView {
-	form := lifecycleFormView{Status: storage.LifecycleRuleStatusEnabled}
-	if config == nil || id == "" {
-		return form
-	}
-	for _, rule := range config.Rules {
-		if rule.ID == nil || *rule.ID != id {
-			continue
-		}
-		form.OriginalID, form.ID, form.Status = id, id, rule.Status
-		if rule.Filter != nil && rule.Filter.Prefix != nil {
-			form.Prefix = *rule.Filter.Prefix
-		} else if rule.Prefix != nil {
-			form.Prefix = *rule.Prefix
-		}
-		if expiration := rule.Expiration; expiration != nil {
-			form.ExpireDays = int32Text(expiration.Days)
-			form.ExpiredDeleteMarkers = expiration.ExpiredObjectDeleteMarker != nil && *expiration.ExpiredObjectDeleteMarker
-		}
-		if noncurrent := rule.NoncurrentVersionExpiration; noncurrent != nil {
-			form.NoncurrentDays, form.NewerNoncurrent = int32Text(noncurrent.NoncurrentDays), int32Text(noncurrent.NewerNoncurrentVersions)
-		}
-		if abort := rule.AbortIncompleteMultipartUpload; abort != nil {
-			form.Abort = int32Text(abort.DaysAfterInitiation)
+	if config != nil && id != "" {
+		for _, rule := range config.Rules {
+			if rule.ID != nil && *rule.ID == id {
+				return lifecycleFormForRule(rule)
+			}
 		}
 	}
-	return form
+	return lifecycleFormForRule(storage.LifecycleRule{Status: storage.LifecycleRuleStatusEnabled})
+}
+
+// lifecycleSaveConfirmation summarizes the validated rule before any mutation.
+func lifecycleSaveConfirmation(bucket, text string, form url.Values) confirmation {
+	var config storage.BucketLifecycleConfiguration
+	_ = json.Unmarshal([]byte(text), &config)
+	c := confirmation{Title: "Review lifecycle rule", Action: "Create rule", Review: true}
+	if form.Get("original_id") != "" || form.Get("original_index") != "" {
+		c.Action = "Save rule"
+	}
+	for _, view := range describeLifecycle(bucket, &storage.BucketLifecycleConfiguration{Rules: config.Rules[len(config.Rules)-1:]}) {
+		c.Details = []keyValue{{"Bucket", bucket}, {"Rule", view.ID}, {"Status", view.Status}, {"Scope", view.Scope}}
+		if view.Current != "-" {
+			c.Details = append(c.Details, keyValue{"Current versions", view.Current})
+		}
+		if view.Noncurrent != "-" {
+			c.Details = append(c.Details, keyValue{"Noncurrent versions", view.Noncurrent})
+		}
+		if view.Other != "-" {
+			c.Details = append(c.Details, keyValue{"Other actions", view.Other})
+		}
+		if view.Scope == "Entire bucket" {
+			c.Warning = "This rule applies to the entire bucket, including existing objects. Expiration and deletion actions can permanently remove data when the rule is enabled."
+		}
+		if view.Status == storage.LifecycleRuleStatusDisabled {
+			c.Message = "This rule will not run until enabled."
+		}
+
+		break
+	}
+	return c
 }

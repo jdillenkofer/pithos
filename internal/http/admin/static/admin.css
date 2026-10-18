@@ -367,3 +367,52 @@ dialog.modal p { margin: 0; color: var(--muted); }
 dialog.modal .actions-row { margin-top: 8px; }
 @media (prefers-color-scheme: dark) { dialog.modal { border: 1px solid var(--border); } }
 .checks { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
+
+/* Lifecycle rules remain readable as filters and transition schedules grow. */
+.lifecycle-editor { max-width: 72rem; }
+.lifecycle-editor .form-stack { max-width: none; }
+.header-actions { display: flex; flex: 0 0 auto; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 8px; }
+.header-actions form { display: flex; margin: 0; }
+.lifecycle-editor .lifecycle-repeat-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 36px auto;
+  gap: 4px 12px;
+  margin-bottom: 16px;
+}
+.lifecycle-editor .lifecycle-tag-row { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; }
+.lifecycle-editor .lifecycle-transition-row { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+.lifecycle-repeat-row > .field {
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  min-width: 0;
+  align-items: start;
+}
+.lifecycle-repeat-row > .field > .field-label { align-self: end; }
+.lifecycle-repeat-row > .field > input,
+.lifecycle-repeat-row > .field > select { grid-row: 2; }
+.lifecycle-repeat-row > .field > .hint { grid-row: 3; }
+.lifecycle-repeat-row > button { grid-row: 2; align-self: stretch; height: 36px; }
+.lifecycle-editor .field input,
+.lifecycle-editor .field select { height: 36px; min-height: 36px; max-width: none; font-weight: 400; }
+.lifecycle-editor .field select {
+  appearance: none;
+  padding-right: 32px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%239ba7b6' stroke-width='2'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.lifecycle-editor .form-stack > .field { max-width: 32rem; }
+@media (max-width: 1100px) {
+  .lifecycle-editor .lifecycle-repeat-row { grid-template-columns: 1fr; grid-template-rows: none; gap: 16px; }
+  .lifecycle-repeat-row > .field { grid-row: auto; grid-template-rows: auto 36px auto; gap: 4px; }
+  .lifecycle-repeat-row > button { grid-row: auto; justify-self: start; }
+}
+.lifecycle-editor [data-repeat-rows] { margin-top: 12px; }
+.lifecycle-summary { display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr; gap: 16px 24px; margin: 12px 0 0; }
+.lifecycle-summary dt { color: var(--muted); }
+.lifecycle-summary dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .lifecycle-summary { grid-template-columns: 1fr; gap: 4px; }
+  .lifecycle-summary dd { margin-bottom: 12px; }
+}

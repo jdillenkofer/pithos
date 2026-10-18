@@ -141,7 +141,7 @@ func bucketTestApp(t *testing.T, s *bucketTestStorage) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pages, err = pages.ParseFS(os.DirFS("."), "templates/buckets*.html", "templates/confirm.html")
+	pages, err = pages.ParseFS(os.DirFS("."), "templates/buckets*.html", "templates/lifecycle.html", "templates/confirm.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestBucketsGlobalViewAndCrossAccountDetail(t *testing.T) {
 	}
 	for _, tab := range bucketTabs {
 		w = bucketRequest(a, "GET", "/buckets/detail?bucket=bucket-b&tab="+tab, nil)
-		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") || !strings.Contains(w.Body.String(), `name="configuration"`) {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "account-b") || (tab != "lifecycle" && !strings.Contains(w.Body.String(), `name="configuration"`)) {
 			t.Fatalf("cross-account detail (%s): %d %s", tab, w.Code, w.Body.String())
 		}
 	}
@@ -351,7 +351,7 @@ func TestBucketJSONBoundsAndActions(t *testing.T) {
 	}
 }
 func TestBucketTemplatesEscapeAndCSRF(t *testing.T) {
-	pages, err := template.ParseFS(os.DirFS("."), "templates/buckets*.html")
+	pages, err := template.ParseFS(os.DirFS("."), "templates/buckets*.html", "templates/lifecycle.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,4 +526,50 @@ func TestBucketConfigurationDeletesRequireConfirmation(t *testing.T) {
 	w := bucketRequest(a, "POST", "/buckets/configure", url.Values{"bucket": {"valid-bucket"}, "tab": {"versioning"}, "configuration": {`{"Status":"Enabled"}`}})
 	require.Equal(t, http.StatusSeeOther, w.Code, "non-destructive changes need no confirmation")
 	require.Equal(t, writes+1, s.writes)
+}
+
+func TestLifecycleEditorIsSeparateFromList(t *testing.T) {
+	s := &bucketTestStorage{buckets: []storage.Bucket{{Name: storage.MustNewBucketName("valid-bucket")}}}
+	a := bucketTestApp(t, s)
+	page := bucketRequest(a, "GET", "/buckets/detail?bucket=valid-bucket&tab=lifecycle", nil)
+	require.Equal(t, http.StatusOK, page.Code)
+	require.Contains(t, page.Body.String(), "Lifecycle rules")
+	require.Contains(t, page.Body.String(), "editor=create")
+	require.NotContains(t, page.Body.String(), `name="rule_id"`)
+
+	page = bucketRequest(a, "GET", "/buckets/detail?bucket=valid-bucket&tab=lifecycle&editor=create", nil)
+	require.Equal(t, http.StatusOK, page.Code)
+	require.Contains(t, page.Body.String(), `name="rule_id"`)
+	require.Contains(t, page.Body.String(), ">Cancel</a>")
+	require.Contains(t, page.Body.String(), ">Review rule</button>")
+	require.NotContains(t, page.Body.String(), "No lifecycle rules")
+	require.NotContains(t, page.Body.String(), "Lifecycle configuration (JSON)")
+}
+
+func TestLifecycleSaveRequiresReview(t *testing.T) {
+	for _, prefix := range []string{"logs/", ""} {
+		t.Run(prefix, func(t *testing.T) {
+			s := &bucketTestStorage{}
+			a := bucketTestApp(t, s)
+			form := url.Values{"bucket": {"valid-bucket"}, "tab": {"lifecycle"}, "editor": {"form"}, "rule_id": {"cleanup"}, "status": {"Enabled"}, "prefix": {prefix}, "expire_days": {"30"}, "noncurrent_days": {"7"}}
+			page := bucketRequest(a, "POST", "/buckets/configure", form)
+			require.Equal(t, http.StatusOK, page.Code, page.Body.String())
+			require.Zero(t, s.writes, "review must not mutate storage")
+			require.Contains(t, page.Body.String(), "Rule summary")
+			require.Contains(t, page.Body.String(), "Expire after 30 days")
+			require.Contains(t, page.Body.String(), "Delete after 7 noncurrent days")
+			require.Contains(t, page.Body.String(), ">Create rule</button>")
+			require.NotContains(t, page.Body.String(), "Confirm deletion")
+			if prefix == "" {
+				require.Contains(t, page.Body.String(), "entire bucket")
+			} else {
+				require.Contains(t, page.Body.String(), "logs/")
+				require.NotContains(t, page.Body.String(), "Bucket-wide rule")
+			}
+			form.Set("confirm", "yes")
+			page = bucketRequest(a, "POST", "/buckets/configure", form)
+			require.Equal(t, http.StatusSeeOther, page.Code, page.Body.String())
+			require.Equal(t, 1, s.writes)
+		})
+	}
 }

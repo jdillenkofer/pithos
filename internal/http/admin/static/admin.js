@@ -121,3 +121,22 @@ document.addEventListener("change", function (event) {
   form.querySelector('[data-sim-field="principal"]').value = anonymous ? "" : option.dataset.principal;
   form.querySelector('[data-sim-field="accessKey"]').value = anonymous ? "" : option.value;
 });
+
+// Lifecycle editors use repeatable rows for tags and transition schedules.
+document.addEventListener("click", function (event) {
+  const add = event.target.closest("[data-add-row]");
+  const remove = event.target.closest("[data-remove-row]");
+  const button = add || remove;
+  if (!button) return;
+  const editor = button.closest("[data-repeat-editor]");
+  if (!editor) return;
+  const rows = editor.querySelector("[data-repeat-rows]");
+  if (add) {
+    if (rows.children.length >= Number(editor.dataset.max)) return;
+    rows.appendChild(editor.querySelector("template").content.cloneNode(true));
+    rows.lastElementChild.querySelector("input, select").focus();
+  } else {
+    button.closest("[data-repeat-row]").remove();
+  }
+  editor.querySelector("[data-add-row]").disabled = rows.children.length >= Number(editor.dataset.max);
+});
