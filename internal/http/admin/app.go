@@ -119,7 +119,8 @@ func navSection(title string) string {
 // fail renders an error page inside the layout. Fragment requests and
 // handlers without templates receive the message as plain text.
 func (a *App) fail(w http.ResponseWriter, r *http.Request, status int, message string) {
-	if a.pages == nil || r.Header.Get("HX-Request") == "true" {
+	// Scripted uploads ask for text/plain to show the message in place.
+	if a.pages == nil || r.Header.Get("HX-Request") == "true" || r.Header.Get("Accept") == "text/plain" {
 		http.Error(w, message, status)
 		return
 	}

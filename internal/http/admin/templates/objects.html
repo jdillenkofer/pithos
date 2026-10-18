@@ -37,17 +37,36 @@
 {{define "object-upload"}}
 <div class="crumbs"><a href="/">Pithos</a><span class="sep">›</span><a href="/buckets">Buckets</a><span class="sep">›</span><a href="/objects?bucket={{.Bucket}}">{{.Bucket}}</a>{{range .Crumbs}}<span class="sep">›</span><a href="{{.URL}}">{{.Label}}</a>{{end}}<span class="sep">›</span><span>Upload</span></div>
 <div class="page-head"><div><h1>Upload</h1><p class="subtitle">Add a file to <code>s3://{{.Bucket}}/{{.Prefix}}</code></p></div></div>
-<form method="post" action="/objects/upload" enctype="multipart/form-data" class="form-narrow">
+<form method="post" action="/objects/upload" enctype="multipart/form-data" class="form-narrow" data-upload-form>
 <input type="hidden" name="csrf_token" value="{{.CSRF}}">
 <input type="hidden" name="bucket" value="{{.Bucket}}">
-<div class="container">
+<div class="container" data-upload-fields>
   <div class="container-head"><div><h2>File</h2><p>Uploads stream directly to storage. Resumable multipart uploads are not supported in this console.</p></div></div>
   <div class="container-body">
-    <label>Object key <input name="key" value="{{.Prefix}}" maxlength="1024" required><span class="hint">The full key, including any prefix. For example <code>{{.Prefix}}report.pdf</code>.</span></label>
-    <label>File <input type="file" name="file" required></label>
+    <label>Object key <input name="key" value="{{.Prefix}}" maxlength="1024" required data-upload-key data-prefix="{{.Prefix}}"><span class="hint">The full key, including any prefix. For example <code>{{.Prefix}}report.pdf</code>.</span></label>
+    <label>File <input type="file" name="file" required data-upload-file><span class="hint" data-upload-file-size></span></label>
   </div>
 </div>
-<div class="actions-row"><a class="button-link" href="{{.BackURL}}">Cancel</a><button class="primary">Upload</button></div>
+<div class="actions-row" data-upload-actions><a class="button-link" href="{{.BackURL}}">Cancel</a><button class="primary">Upload</button></div>
+<div class="container upload-status" data-upload-status hidden>
+  <div class="container-head"><div><h2>Upload status</h2><p class="upload-target"><code>s3://{{.Bucket}}/<span data-upload-target></span></code></p></div><span class="status info" data-upload-state>Uploading</span></div>
+  <div class="container-body">
+    <div class="alert bad" role="alert" data-upload-error hidden></div>
+    <div class="progress-bar"><progress max="100" value="0" aria-label="Upload progress" data-upload-progress></progress><span class="progress-percent" data-upload-percent>0%</span></div>
+    <p class="hint" data-upload-note>Keep this page open until the upload finishes.</p>
+    <div class="kv">
+      <div><div class="label">Transferred</div><div class="value" data-upload-bytes>-</div></div>
+      <div><div class="label">Speed</div><div class="value" data-upload-rate>-</div></div>
+      <div><div class="label">Time remaining</div><div class="value" data-upload-remaining>-</div></div>
+      <div><div class="label">Elapsed</div><div class="value" data-upload-elapsed>-</div></div>
+    </div>
+    <div class="actions-row">
+      <a class="button-link" href="{{.BackURL}}" data-upload-back hidden>Back to objects</a>
+      <button type="button" data-upload-retry hidden>Upload another file</button>
+      <button type="button" class="danger-outline" data-upload-cancel>Cancel upload</button>
+    </div>
+  </div>
+</div>
 </form>
 {{end}}
 

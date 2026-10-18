@@ -294,6 +294,7 @@ details[open] summary { margin-bottom: 12px; }
 .preview video { width: 100%; background: #000; }
 .preview audio { width: 100%; }
 .preview pre { margin: 0; max-height: 60vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Tag editor and settings forms */
@@ -431,3 +432,11 @@ dialog.modal .actions-row { margin-top: 8px; }
   .lifecycle-summary { grid-template-columns: 1fr; gap: 4px; }
   .lifecycle-summary dd { margin-bottom: 12px; }
 }
+
+/* Upload status, shown while a scripted upload runs. */
+.upload-status .upload-target { overflow-wrap: anywhere; }
+.upload-status .progress-bar { margin-top: 4px; }
+.upload-status .kv { margin-top: 16px; }
+.upload-status .value { font-variant-numeric: tabular-nums; }
+.upload-status progress.failed::-webkit-progress-value { background: var(--danger); }
+.upload-status progress.failed::-moz-progress-bar { background: var(--danger); }

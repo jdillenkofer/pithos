@@ -140,3 +140,169 @@ document.addEventListener("click", function (event) {
   }
   editor.querySelector("[data-add-row]").disabled = rows.children.length >= Number(editor.dataset.max);
 });
+
+// Uploads are sent with XMLHttpRequest to show progress, speed and time
+// remaining. Without JavaScript the form posts normally.
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  let value = n / 1024;
+  let exponent = 0;
+  while (value >= 1024 && exponent < 5) {
+    value /= 1024;
+    exponent++;
+  }
+  return value.toFixed(1) + " " + "KMGTPE"[exponent] + "iB";
+}
+
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.round(seconds));
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return (h ? h + "h" : "") + (h || m ? m + "m" : "") + s + "s";
+}
+
+// Choosing a file fills in its name while the key is a folder prefix or was
+// filled in from an earlier choice.
+document.addEventListener("change", function (event) {
+  const input = event.target.closest("[data-upload-file]");
+  if (!input) return;
+  const form = input.form;
+  const key = form.querySelector("[data-upload-key]");
+  const file = input.files[0];
+  form.querySelector("[data-upload-file-size]").textContent = file ? formatBytes(file.size) : "";
+  if (!file) return;
+  if (key.value === "" || key.value.endsWith("/") || key.value === key.dataset.filled) {
+    const prefix = key.value === key.dataset.filled ? key.dataset.prefix : key.value;
+    key.value = prefix + file.name;
+    key.dataset.filled = key.value;
+  }
+});
+
+document.addEventListener("submit", function (event) {
+  const form = event.target.closest("form[data-upload-form]");
+  if (!form) return;
+  event.preventDefault();
+  startUpload(form);
+});
+
+function startUpload(form) {
+  const part = function (name) { return form.querySelector("[data-upload-" + name + "]"); };
+  const data = new FormData(form);
+  const file = part("file").files[0];
+  const size = file ? file.size : 0;
+  const progress = part("progress");
+  const xhr = new XMLHttpRequest();
+  const started = performance.now();
+  let samples = [{ time: started, loaded: 0 }];
+  let loaded = 0;
+  let running = true;
+
+  part("fields").hidden = true;
+  part("actions").hidden = true;
+  part("status").hidden = false;
+  part("error").hidden = true;
+  part("back").hidden = true;
+  part("retry").hidden = true;
+  part("cancel").hidden = false;
+  part("target").textContent = data.get("key");
+  progress.value = 0;
+  progress.classList.remove("failed");
+  setState("info", "Uploading", "Keep this page open until the upload finishes.");
+
+  function setState(kind, label, note) {
+    const state = part("state");
+    state.className = "status " + kind;
+    state.textContent = label;
+    part("note").textContent = note;
+  }
+
+  function render() {
+    const now = performance.now();
+    const sent = Math.min(loaded, size);
+    samples.push({ time: now, loaded: sent });
+    // The speed is averaged over the last five seconds to keep it steady.
+    while (samples.length > 2 && now - samples[0].time > 5000) samples.shift();
+    const first = samples[0];
+    const seconds = (now - started) / 1000;
+    // Finished uploads show the average speed.
+    const rate = running ? (now > first.time ? (sent - first.loaded) / ((now - first.time) / 1000) : 0) : seconds > 0 ? sent / seconds : 0;
+    const percent = size ? Math.floor((100 * sent) / size) : 0;
+    progress.value = percent;
+    part("percent").textContent = percent + "%";
+    part("bytes").textContent = formatBytes(sent) + " of " + formatBytes(size);
+    part("rate").textContent = rate > 0 ? formatBytes(rate) + "/s" : "-";
+    part("remaining").textContent = rate > 0 && running && sent < size ? formatDuration((size - sent) / rate) : "-";
+    part("elapsed").textContent = formatDuration(seconds);
+  }
+
+  function finish(kind, label, note, message) {
+    running = false;
+    clearInterval(timer);
+    window.removeEventListener("beforeunload", warn);
+    render();
+    progress.classList.toggle("failed", kind === "bad");
+    setState(kind, label, note);
+    part("cancel").hidden = true;
+    if (message) {
+      part("error").textContent = message;
+      part("error").hidden = false;
+    }
+    if (kind !== "ok") {
+      part("back").hidden = false;
+      part("retry").hidden = false;
+    }
+  }
+
+  function warn(event) {
+    event.preventDefault();
+  }
+
+  xhr.upload.onprogress = function (event) {
+    loaded = event.loaded;
+  };
+  // Storage confirms the object only after the last bytes are written.
+  xhr.upload.onload = function () {
+    loaded = size;
+    render();
+    // Cancelling now could no longer guarantee that nothing was stored.
+    part("cancel").hidden = true;
+    setState("info", "Finishing", "All data was sent. Waiting for storage to confirm the upload…");
+  };
+  xhr.onload = function () {
+    const url = new URL(xhr.responseURL || form.action, window.location.href);
+    if (url.pathname === "/login") {
+      window.location.assign("/login");
+      return;
+    }
+    if (xhr.status === 200 && url.pathname === "/objects/detail") {
+      finish("ok", "Succeeded", "Opening the object…");
+      window.location.assign(url.href);
+      return;
+    }
+    const text = xhr.responseText.trim();
+    const message = text && !text.startsWith("<") ? text : "The server answered with status " + xhr.status + ".";
+    finish("bad", "Failed", "The object was not stored.", message);
+  };
+  xhr.onerror = function () {
+    finish("bad", "Failed", "The upload did not complete.", "The connection to the server was interrupted.");
+  };
+  xhr.onabort = function () {
+    finish("muted", "Cancelled", "The upload was cancelled. The object was not stored.");
+  };
+  part("cancel").onclick = function () {
+    xhr.abort();
+  };
+  part("retry").onclick = function () {
+    part("status").hidden = true;
+    part("fields").hidden = false;
+    part("actions").hidden = false;
+  };
+
+  const timer = setInterval(render, 500);
+  window.addEventListener("beforeunload", warn);
+  xhr.open("POST", form.action);
+  xhr.setRequestHeader("Accept", "text/plain");
+  xhr.send(data);
+  render();
+}

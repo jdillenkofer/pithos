@@ -482,9 +482,10 @@ func (a *App) upload(w http.ResponseWriter, r *http.Request) {
 			a.fail(w, r, 400, "Invalid bucket")
 			return
 		}
+		// An empty key or a folder prefix is completed with the file name.
 		keyName := fields["key"]
-		if keyName == "" {
-			keyName = part.FileName()
+		if keyName == "" || strings.HasSuffix(keyName, "/") {
+			keyName += part.FileName()
 		}
 		key, err := storage.NewObjectKey(keyName)
 		if err != nil {

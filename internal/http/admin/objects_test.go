@@ -167,3 +167,23 @@ func TestObjectToolbarKeepsActionsTogether(t *testing.T) {
 		t.Fatalf("delete must be secondary destructive and upload primary: %s", toolbar[1])
 	}
 }
+func TestUploadPageSupportsProgress(t *testing.T) {
+	pages, err := template.ParseFS(assets, "templates/*.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{pages: pages}
+	response := httptest.NewRecorder()
+	app.uploadPage(response, httptest.NewRequest("GET", "/objects/upload?bucket=test-bucket&prefix=reports/", nil))
+	body := response.Body.String()
+	for _, want := range []string{`data-upload-form`, `data-upload-status hidden`, `data-prefix="reports/"`, `data-upload-cancel`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	// The server stores the file part as soon as it is read, so the key and
+	// all other fields must precede it.
+	if key, file := strings.Index(body, `name="key"`), strings.Index(body, `name="file"`); key < 0 || file < key {
+		t.Fatal("the key field must precede the file field")
+	}
+}

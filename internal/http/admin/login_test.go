@@ -315,23 +315,40 @@ func TestStreamingFormUpload(t *testing.T) {
 	h, _, store := newSessionTestHandler(t)
 	_, cookie := testLogin(t, h, "admin", "secret")
 	csrf := sessionCSRF(t, h, cookie)
-	var body bytes.Buffer
-	form := multipart.NewWriter(&body)
-	_ = form.WriteField("csrf_token", csrf)
-	_ = form.WriteField("bucket", "foreign-bucket")
-	_ = form.WriteField("key", "uploaded")
-	file, err := form.CreateFormFile("file", "test.txt")
-	if err != nil {
-		t.Fatal(err)
+	upload := func(bucket, key, accept string) *httptest.ResponseRecorder {
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		_ = form.WriteField("csrf_token", csrf)
+		_ = form.WriteField("bucket", bucket)
+		_ = form.WriteField("key", key)
+		file, err := form.CreateFormFile("file", "test.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = file.Write([]byte("streamed content"))
+		_ = form.Close()
+		req := httptest.NewRequest("POST", "/objects/upload", &body)
+		req.Header.Set("Content-Type", form.FormDataContentType())
+		req.Header.Set("Accept", accept)
+		req.AddCookie(cookie)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
 	}
-	_, _ = file.Write([]byte("streamed content"))
-	_ = form.Close()
-	req := httptest.NewRequest("POST", "/objects/upload", &body)
-	req.Header.Set("Content-Type", form.FormDataContentType())
-	req.AddCookie(cookie)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
+	w := upload("foreign-bucket", "uploaded", "")
 	if w.Code != 303 || string(store.data) != "streamed content" {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
+	}
+	// A folder prefix or an empty key is completed with the file name.
+	for key, want := range map[string]string{"reports/2026/": "reports/2026/test.txt", "": "test.txt"} {
+		w := upload("foreign-bucket", key, "")
+		if location := w.Header().Get("Location"); w.Code != 303 || location != objectURL("/objects/detail", "foreign-bucket", want, "") {
+			t.Fatalf("key %q: %d %s", key, w.Code, location)
+		}
+	}
+	// Scripted uploads show the error message in place.
+	w = upload("INVALID", "uploaded", "text/plain")
+	if w.Code != 400 || strings.TrimSpace(w.Body.String()) != "Invalid bucket" {
+		t.Fatalf("scripted upload error: %d %q", w.Code, w.Body.String())
 	}
 }
