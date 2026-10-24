@@ -205,8 +205,45 @@ func extractChecksumInput(r *http.Request) (*storage.ChecksumInput, error) {
 	return &checksumInput, nil
 }
 
+var s3ErrorMappings = []struct {
+	err    error
+	status int
+	code   string
+}{
+	{storage.ErrInvalidBucketName, 400, ""},
+	{storage.ErrBadDigest, 400, ""},
+	{authentication.ErrTrailerChecksumMismatch, 400, ""},
+	{authentication.ErrMalformedTrailer, 400, ""},
+	{storage.ErrInvalidRange, 416, ""},
+	{storage.ErrNoSuchBucket, 404, ""},
+	{storage.ErrBucketAlreadyExists, 409, ""},
+	{storage.ErrBucketNotEmpty, 409, ""},
+	{storage.ErrNoSuchKey, 404, ""},
+	{storage.ErrNoSuchWebsiteConfiguration, 404, ""},
+	{ErrInvalidRequest, 400, ""},
+	{ErrInvalidArgument, 400, ""},
+	{storage.ErrInvalidPart, 400, ""},
+	{storage.ErrInvalidPartOrder, 400, ""},
+	{storage.ErrEntityTooLarge, 413, ""},
+	{storage.ErrTooManyParts, 400, ""},
+	{storage.ErrInvalidTag, 400, ""},
+	{storage.ErrMetadataTooLarge, 400, ""},
+	{storage.ErrInvalidWriteOffset, 400, ""},
+	{storage.ErrInvalidObjectLockConfiguration, 400, "InvalidRequest"},
+	{storage.ErrObjectLockChecksumRequired, 400, "InvalidRequest"},
+	{storage.ErrObjectLockConfigurationNotFound, 404, ""},
+	{storage.ErrObjectLockAccessDenied, 403, ""},
+	{storage.ErrObjectLockMethodNotAllowed, 405, ""},
+	{storage.ErrInvalidChecksumConfiguration, 400, "InvalidRequest"},
+	{storage.ErrInvalidStorageClass, 400, ""},
+	{storage.ErrPreconditionFailed, 412, ""},
+	{storage.ErrNotModified, 304, ""},
+	{storage.ErrNotImplemented, http.StatusNotImplemented, "NotImplemented"},
+}
+
 func handleError(err error, w http.ResponseWriter, r *http.Request) {
-	if currentDeleteMarkerErr, ok := err.(*storage.CurrentDeleteMarkerError); ok {
+	var currentDeleteMarkerErr *storage.CurrentDeleteMarkerError
+	if errors.As(err, &currentDeleteMarkerErr) {
 		responseHeaders := w.Header()
 		responseHeaders.Set(deleteMarkerHeader, "true")
 		if currentDeleteMarkerErr.VersionID != "" {
@@ -215,7 +252,8 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if versionDeleteMarkerErr, ok := err.(*storage.VersionDeleteMarkerMethodNotAllowedError); ok {
+	var versionDeleteMarkerErr *storage.VersionDeleteMarkerMethodNotAllowedError
+	if errors.As(err, &versionDeleteMarkerErr) {
 		responseHeaders := w.Header()
 		responseHeaders.Set(deleteMarkerHeader, "true")
 		if versionDeleteMarkerErr.VersionID != "" {
@@ -228,82 +266,31 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 
 	statusCode := 500
 	errResponse := ErrorResponse{}
-	errResponse.Code = err.Error()
-	errResponse.Message = err.Error()
 	errResponse.Resource = r.URL.Path
 	if requestID, ok := httpmiddleware.RequestIDFromContext(r.Context()); ok {
 		errResponse.RequestId = requestID
 	}
-	switch err {
-	case storage.ErrInvalidBucketName:
-		statusCode = 400
-	case storage.ErrBadDigest:
-		statusCode = 400
-	case authentication.ErrTrailerChecksumMismatch:
-		statusCode = 400
-	case authentication.ErrMalformedTrailer:
-		statusCode = 400
-	case storage.ErrInvalidRange:
-		statusCode = 416
-	case storage.ErrNoSuchBucket:
-		statusCode = 404
-	case storage.ErrBucketAlreadyExists:
-		statusCode = 409
-	case storage.ErrBucketNotEmpty:
-		statusCode = 409
-	case storage.ErrNoSuchKey:
-		statusCode = 404
-	case storage.ErrNoSuchWebsiteConfiguration:
-		statusCode = 404
-	case ErrInvalidRequest:
-		statusCode = 400
-	case ErrInvalidArgument:
-		statusCode = 400
-	case storage.ErrInvalidPart:
-		statusCode = 400
-	case storage.ErrInvalidPartOrder:
-		statusCode = 400
-	case storage.ErrEntityTooLarge:
-		statusCode = 413
-	case storage.ErrTooManyParts:
-		statusCode = 400
-	case storage.ErrInvalidTag:
-		statusCode = 400
-	case storage.ErrMetadataTooLarge:
-		statusCode = 400
-	case storage.ErrInvalidWriteOffset:
-		statusCode = 400
-	case storage.ErrInvalidObjectLockConfiguration:
-		statusCode = 400
-		errResponse.Code = "InvalidRequest"
-	case storage.ErrObjectLockChecksumRequired:
-		statusCode = 400
-		errResponse.Code = "InvalidRequest"
-	case storage.ErrObjectLockConfigurationNotFound:
-		statusCode = 404
-	case storage.ErrObjectLockAccessDenied:
-		statusCode = 403
-	case storage.ErrObjectLockMethodNotAllowed:
-		statusCode = 405
-	case storage.ErrInvalidChecksumConfiguration:
-		statusCode = 400
-		errResponse.Code = "InvalidRequest"
-	case storage.ErrInvalidStorageClass:
-		statusCode = 400
-	case storage.ErrPreconditionFailed:
-		statusCode = 412
-	case storage.ErrNotModified:
-		statusCode = 304
-	case storage.ErrNotImplemented:
-		statusCode = http.StatusNotImplemented
-		errResponse.Code = "NotImplemented"
-		errResponse.Message = "NotImplemented"
-	default:
-		slog.ErrorContext(r.Context(), fmt.Sprintf("Unhandled internal error: %v", err))
-		statusCode = 500
-		errResponse.Code = "InternalError"
-		errResponse.Message = "InternalError"
+	for _, mapping := range s3ErrorMappings {
+		if !errors.Is(err, mapping.err) {
+			continue
+		}
+		statusCode = mapping.status
+		// Use the canonical error rather than a wrapper or joined error's
+		// text, which can contain internal details or multiple messages.
+		errResponse.Code = mapping.err.Error()
+		errResponse.Message = mapping.err.Error()
+		if mapping.code != "" {
+			errResponse.Code = mapping.code
+		}
+		if mapping.err == storage.ErrNotImplemented {
+			errResponse.Message = "NotImplemented"
+		}
+		writeXMLResponse(w, r, statusCode, errResponse)
+		return
 	}
+	slog.ErrorContext(r.Context(), fmt.Sprintf("Unhandled internal error: %v", err))
+	errResponse.Code = "InternalError"
+	errResponse.Message = "InternalError"
 	writeXMLResponse(w, r, statusCode, errResponse)
 }
 
