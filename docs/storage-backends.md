@@ -69,7 +69,7 @@ small writes.
 | SQLite metadata, SQL parts and outbox data | WAL mode with `synchronous=FULL` on every connection. Commits synchronize the WAL, unlike the previous `NORMAL` setting that could lose acknowledged transactions after power loss. `fullfsync` and `checkpoint_fullfsync` are enabled for the macOS VFS. |
 | PostgreSQL metadata, SQL parts and outbox data | Uses the PostgreSQL connection and server configuration without overriding commit settings. Durable commits require `synchronous_commit=on`, `fsync=on`, appropriate server-side WAL settings and durable storage. PostgreSQL enables synchronous commits and fsync by default; maintaining these guarantees is the administrator's responsibility. |
 | Filesystem parts | File contents are synced before publication/commit. Directory entries are synced where supported, including newly created storage directories. Replay and repair writes use a synced temporary file instead of truncating the previous copy. On macOS, `F_FULLFSYNC` is additionally requested where supported. |
-| SFTP parts | Files are synced before close when the server advertises `fsync@openssh.com`. Without this extension, only completed writes and close are available. Replacing existing parts during retries or repairs requires `posix-rename@openssh.com`; without it, replacement fails without deleting the existing copy. There is no portable directory-sync operation here, so even servers with file sync do not provide the same namespace durability as a supported local filesystem. |
+| SFTP parts | Files are synced before close when the server advertises `fsync@openssh.com`. Without this extension, only completed writes and close are available. Replacements use `posix-rename@openssh.com` when advertised. Otherwise, the completed upload replaces the destination by deleting it and then renaming the temporary file. This fallback is not atomic: readers may see a missing part, and a crash or rename failure after deletion can leave it missing until a successful retry or repair. There is no portable directory-sync operation here, so even servers with file sync do not provide the same namespace durability as a supported local filesystem. |
 | Google Drive, OneDrive and Dropbox parts | Success requires completion of the upload API, not merely an intermediate upload-session acknowledgment. Persistence beyond that acknowledgment is the provider's responsibility; there is no additional client-side remote fsync. |
 | S3ClientStorage | Persistence depends on the upstream S3 service's completed-operation semantics and guarantees. Pithos cannot strengthen an upstream service's storage durability. |
 | Cache, compression and encryption wrappers | Caches are not the authoritative durable copy. Wrappers depend on the underlying store's persistence and propagate its write failures. Encryption keys and credentials needed for recovery must also be preserved. |
@@ -104,20 +104,30 @@ copies allocate fresh IDs; outbox retries and erasure-code repairs can write the
 same logical part again. Its physical representation may change, for example
 when encryption generates a new nonce.
 
-New transactional parts can be written directly and are removed on rollback.
-Retries and repairs use a synced temporary file and atomic replacement rather
-than truncating the existing copy. A replacement of an existing part is not
-undone or deleted on metadata rollback: it still represents the same logical
-content. No transaction backups or backup-recovery protocol are needed for this
-model. SFTP servers without atomic replacement support reject such replacements;
-they remain usable for new parts.
+New transactional parts are written directly and removed on rollback. Retries
+and repairs replace the existing copy with a synced temporary file, atomically
+where supported;
+metadata rollback preserves that replacement because its logical content is
+unchanged. Without atomic rename support, SFTP falls back to delete-then-rename,
+which can leave the part missing if interrupted.
 
-A crash can leave temporary files or unreferenced new parts. Temporary files are
-not promoted automatically and are excluded from part listings. Their presence
-does not prove an object was committed. Filesystem namespace durability remains
-subject to the platform limitations above; SFTP has no portable directory-sync
-guarantee. Backup files left by older Pithos versions are not automatically
-restored or deleted: preserve and inspect them before manual cleanup.
+Filesystem and SFTP stores remove recognized temporary upload files at startup.
+**Each directory requires exclusive ownership by one running Pithos process**;
+otherwise startup cleanup can delete active uploads. Cleanup skips symlinks,
+directories and unrelated files, and errors fail startup. Temporary parts are
+never promoted or listed. Final-named orphan parts are handled by GC after its
+grace window. Namespace durability remains subject to the platform limitations
+above; SFTP has no portable directory sync.
+
+### Persisted token and key cleanup
+
+File-backed string providers require exclusive ownership. Atomic writes preserve
+the current file until rename. Loading reads that file, then removes recognized
+temporary writes. If it is missing or unreadable, loading fails and preserves the
+temporary files; they are never promoted. Token/key validity is checked by the
+consumer, not the string provider.
+
+SQLite manages its own WAL/SHM files; cleanup never removes them.
 
 ## Configuration Examples
 

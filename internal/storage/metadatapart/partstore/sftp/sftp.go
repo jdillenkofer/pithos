@@ -21,7 +21,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
-	"github.com/oklog/ulid/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -334,7 +333,29 @@ func (s *sftpPartStore) Start(ctx context.Context) error {
 		_ = s.Stop(ctx)
 		return err
 	}
+	if err := s.cleanupTemporaryParts(); err != nil {
+		_ = s.Stop(ctx)
+		return err
+	}
 	return nil
+}
+
+func (s *sftpPartStore) cleanupTemporaryParts() error {
+	return s.withClient(func(client *sftp.Client) error {
+		entries, err := client.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if !entry.Mode().IsRegular() || !partstore.IsTemporaryPartFilename(entry.Name()) {
+				continue
+			}
+			if err := client.Remove(filepath.Join(s.root, entry.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *sftpPartStore) Stop(ctx context.Context) error {
@@ -359,7 +380,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		// yet. Nothing can reference it before commit, so write it in place
 		// and remove it on rollback. SFTPv3 servers report an existing file
 		// as a generic failure, so status errors fall back to a temporary file.
-		// Replacing an existing part requires the atomic rename extension.
+		// Existing parts are replaced after the temporary upload completes.
 		f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
 			return client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 		}, isStatusError)
@@ -390,7 +411,7 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	// The ID represents immutable logical content. A retry or repair can safely
 	// publish before commit, but must not remove a pre-existing part on rollback
 	// or truncate the previous copy in place.
-	tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
+	tempName := filepath.Join(s.root, partstore.NewTemporaryPartFilename(partId))
 	f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
 		// This name is private to this invocation, and uploading starts only
 		// after open succeeds. Truncation makes a lost open response retryable.
@@ -405,14 +426,24 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	if err := writeAndClose(client, f, reader); err != nil {
 		return err
 	}
+	return publishTemporaryPart(client, tempName, filename)
+}
+
+type partPublisher interface {
+	HasExtension(string) (string, bool)
+	PosixRename(string, string) error
+	Rename(string, string) error
+	Remove(string) error
+}
+
+func publishTemporaryPart(client partPublisher, tempName, filename string) error {
 	if _, ok := client.HasExtension("posix-rename@openssh.com"); ok {
 		return client.PosixRename(tempName, filename)
 	}
-	// Standard SFTPv3 rename cannot safely replace an existing destination.
-	// Refuse replacement rather than deleting the last copy to make room.
-	if _, err := client.Stat(filename); err == nil {
-		return fmt.Errorf("cannot atomically replace part %s: SFTP server does not advertise posix-rename@openssh.com", filename)
-	} else if !isNotFoundError(err) {
+	// Standard SFTPv3 rename cannot overwrite a destination. Remove it only
+	// after the upload completes. This fallback is not atomic: a crash or
+	// rename failure after removal can leave the final part missing.
+	if err := client.Remove(filename); err != nil && !isNotFoundError(err) {
 		return err
 	}
 	return client.Rename(tempName, filename)

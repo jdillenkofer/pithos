@@ -79,7 +79,31 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	if err := bs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	return bs.ensureRootDir()
+	if err := bs.ensureRootDir(); err != nil {
+		_ = bs.ValidatedLifecycle.Stop(ctx)
+		return err
+	}
+	if err := bs.cleanupTemporaryParts(); err != nil {
+		_ = bs.ValidatedLifecycle.Stop(ctx)
+		return err
+	}
+	return nil
+}
+
+func (bs *filesystemPartStore) cleanupTemporaryParts() error {
+	entries, err := os.ReadDir(bs.root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !partstore.IsTemporaryPartFilename(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(bs.root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(bs.root)
 }
 
 func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
@@ -123,11 +147,11 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 	// can replace its physical representation, even if the surrounding metadata
 	// transaction rolls back. Never delete a pre-existing part on rollback or
 	// truncate it in place: publish only a completely written, synced file.
-	tempFile, err := os.CreateTemp(bs.root, "."+filepath.Base(filename)+".*.tmp")
+	tempName := filepath.Join(bs.root, partstore.NewTemporaryPartFilename(partId))
+	tempFile, err := os.OpenFile(tempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	tempName := tempFile.Name()
 	defer os.Remove(tempName)
 	_, err = ioutils.Copy(tempFile, reader)
 	if err == nil {

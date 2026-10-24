@@ -184,7 +184,7 @@ func (s *StringProvider) UnmarshalJSON(b []byte) error {
 		if err = json.Unmarshal(b, &fp); err != nil {
 			return err
 		}
-		data, err := os.ReadFile(fp.Path)
+		data, err := readPersistentValue(fp.Path)
 		if err != nil {
 			return err
 		}
