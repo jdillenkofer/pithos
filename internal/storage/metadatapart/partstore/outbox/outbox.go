@@ -328,8 +328,9 @@ func (obs *outboxPartStore) maybeProcessOutboxEntries(ctx context.Context) {
 			return
 		}
 
-		// The external mutation has completed, so remove the durable entry in a
-		// separate, short write transaction. A lost lease leaves the entry for its
+		// PutPart must have completed the target's supported persistence steps
+		// (or committed them in replayPutPart's transactional fallback). Only
+		// now may the durable retry copy be removed in a short transaction. A lost lease leaves the entry for its
 		// new owner to replay; tx-free-capable stores make those replays idempotent.
 		deleted, err := obs.finalizePartOutboxEntry(ctx, entry)
 		if err != nil {

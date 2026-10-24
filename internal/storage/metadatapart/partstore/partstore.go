@@ -16,6 +16,14 @@ var ErrPartNotFound error = errors.New("part not found")
 
 // Core part operations
 type PartManager interface {
+	// A part ID represents immutable logical content. Reusing an ID is only
+	// valid for a retry or repair of that same content, not a new object value.
+	// Physical representations may differ (for example, after re-encryption).
+	// Rollback must not remove a pre-existing part that was retried or repaired.
+	// PutPart completes the backend's supported persistence steps before
+	// returning success, or registers them before commit when tx is non-nil.
+	// SQL-backed writes become durable at commit. Unsupported persistence
+	// mechanisms are backend limitations; actual flush failures are errors.
 	PutPart(ctx context.Context, tx database.Tx, partId PartId, reader io.Reader) error
 	// GetPart returns a ReadCloser for the part with the given partId.
 	// If the part does not exist, ErrPartNotFound is returned.

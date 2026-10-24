@@ -258,10 +258,7 @@ func (s *store) putEmptyPart(ctx context.Context, id partstore.PartId) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return graphError(resp)
-	}
-	return nil
+	return validateUploadResponse(resp, 0, 0)
 }
 
 func unauthenticatedClient(client *http.Client) *http.Client {

@@ -21,7 +21,6 @@ import (
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
-	"github.com/oklog/ulid/v2"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -330,7 +329,33 @@ func (s *sftpPartStore) Start(ctx context.Context) error {
 		_ = s.Stop(ctx)
 		return err
 	}
-	return s.ensureRootDir()
+	if err := s.ensureRootDir(); err != nil {
+		_ = s.Stop(ctx)
+		return err
+	}
+	if err := s.cleanupTemporaryParts(); err != nil {
+		_ = s.Stop(ctx)
+		return err
+	}
+	return nil
+}
+
+func (s *sftpPartStore) cleanupTemporaryParts() error {
+	return s.withClient(func(client *sftp.Client) error {
+		entries, err := client.ReadDir(s.root)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if !entry.Mode().IsRegular() || !partstore.IsTemporaryPartFilename(entry.Name()) {
+				continue
+			}
+			if err := client.Remove(filepath.Join(s.root, entry.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *sftpPartStore) Stop(ctx context.Context) error {
@@ -353,15 +378,14 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	if tx != nil {
 		// Part ids are fresh random ids, so the part usually does not exist
 		// yet. Nothing can reference it before commit, so write it in place
-		// and remove it on rollback, saving the temp file and both renames
-		// at commit. SFTPv3 servers report an existing file as a generic
-		// failure, so any status error falls back to the temp file below,
-		// which replaces an existing part atomically.
+		// and remove it on rollback. SFTPv3 servers report an existing file
+		// as a generic failure, so status errors fall back to a temporary file.
+		// Existing parts are replaced after the temporary upload completes.
 		f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
 			return client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 		}, isStatusError)
 		if err == nil {
-			err := writeAndClose(f, reader)
+			err := writeAndClose(lease.conn.client, f, reader)
 			if err != nil {
 				_ = lease.conn.client.Remove(filename)
 			}
@@ -382,94 +406,60 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 		if !isStatusError(err) {
 			return err
 		}
-
-		tempName := filepath.Join(s.root, "."+filepath.Base(filename)+".tmp."+ulid.Make().String())
-		f, lease, err = doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
-			return client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
-		}, nil)
-		if err != nil {
-			return err
-		}
-		err = writeAndClose(f, reader)
-		if err != nil {
-			_ = lease.conn.client.Remove(tempName)
-		}
-		lease.release()
-		if err != nil {
-			return err
-		}
-
-		backupName := filename + ".txbackup." + ulid.Make().String()
-		backupCreated := false
-		published := false
-		tx.OnPreCommit(func(context.Context) error {
-			return s.withClient(func(client *sftp.Client) error {
-				if err := client.Rename(filename, backupName); err == nil {
-					backupCreated = true
-				} else if !isNotFoundError(err) {
-					return err
-				}
-				if err := client.Rename(tempName, filename); err != nil {
-					if backupCreated {
-						_ = client.Rename(backupName, filename)
-						backupCreated = false
-					}
-					return err
-				}
-				published = true
-				return nil
-			})
-		})
-		tx.OnAfterCommit(func(context.Context) error {
-			if backupCreated {
-				return s.withClient(func(client *sftp.Client) error {
-					return client.Remove(backupName)
-				})
-			}
-			return nil
-		})
-		tx.OnRollback(func(context.Context) error {
-			return s.withClient(func(client *sftp.Client) error {
-				if published {
-					_ = client.Remove(filename)
-					if backupCreated {
-						return client.Rename(backupName, filename)
-					}
-				}
-				if !published {
-					_ = client.Remove(tempName)
-				}
-				return nil
-			})
-		})
-		return nil
 	}
 
+	// The ID represents immutable logical content. A retry or repair can safely
+	// publish before commit, but must not remove a pre-existing part on rollback
+	// or truncate the previous copy in place.
+	tempName := filepath.Join(s.root, partstore.NewTemporaryPartFilename(partId))
 	f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
-		return client.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
+		// This name is private to this invocation, and uploading starts only
+		// after open succeeds. Truncation makes a lost open response retryable.
+		return client.OpenFile(tempName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY)
 	}, nil)
 	if err != nil {
 		return err
 	}
 	defer lease.release()
-	if err := writeAndClose(f, reader); err != nil {
-		_ = lease.conn.client.Remove(filename)
+	client := lease.conn.client
+	defer client.Remove(tempName)
+	if err := writeAndClose(client, f, reader); err != nil {
 		return err
 	}
-	return nil
+	return publishTemporaryPart(client, tempName, filename)
 }
 
-// writeAndClose copies reader into f and closes it. File.ReadFrom only
+type partPublisher interface {
+	HasExtension(string) (string, bool)
+	PosixRename(string, string) error
+	Rename(string, string) error
+	Remove(string) error
+}
+
+func publishTemporaryPart(client partPublisher, tempName, filename string) error {
+	if _, ok := client.HasExtension("posix-rename@openssh.com"); ok {
+		return client.PosixRename(tempName, filename)
+	}
+	// Standard SFTPv3 rename cannot overwrite a destination. Remove it only
+	// after the upload completes. This fallback is not atomic: a crash or
+	// rename failure after removal can leave the final part missing.
+	if err := client.Remove(filename); err != nil && !isNotFoundError(err) {
+		return err
+	}
+	return client.Rename(tempName, filename)
+}
+
+// writeAndClose copies reader into f, syncs it when advertised, and closes it. File.ReadFrom only
 // pipelines writes for readers with a known size and otherwise waits a full
 // round trip per 32KB packet, so request the concurrent upload explicitly.
 // A failed concurrent upload can leave holes, so callers must remove the
 // file on error.
-func writeAndClose(f *sftp.File, reader io.Reader) error {
+func writeAndClose(client *sftp.Client, f *sftp.File, reader io.Reader) error {
 	_, err := f.ReadFromWithConcurrency(reader, 0)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
+	if _, supported := client.HasExtension("fsync@openssh.com"); err == nil && supported {
+		err = f.Sync()
 	}
-	return err
+	return errors.Join(err, f.Close())
 }
 
 func (s *sftpPartStore) Capabilities() partstore.Capabilities {
@@ -572,35 +562,10 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 
 	filename := s.getFilename(partId)
 	if tx != nil {
-		backupName := filename + ".txbackup." + ulid.Make().String()
-		backupCreated := false
-		tx.OnPreCommit(func(context.Context) error {
-			return s.withClient(func(client *sftp.Client) error {
-				if err := client.Rename(filename, backupName); err == nil {
-					backupCreated = true
-					return nil
-				} else if isNotFoundError(err) {
-					return nil
-				} else {
-					return err
-				}
-			})
-		})
-		tx.OnAfterCommit(func(context.Context) error {
-			if backupCreated {
-				return s.withClient(func(client *sftp.Client) error {
-					return client.Remove(backupName)
-				})
-			}
-			return nil
-		})
-		tx.OnRollback(func(context.Context) error {
-			if backupCreated {
-				return s.withClient(func(client *sftp.Client) error {
-					return client.Rename(backupName, filename)
-				})
-			}
-			return nil
+		// Do not destroy data that the database may still reference after a
+		// rollback or crash. Physical cleanup follows the logical commit.
+		tx.OnAfterCommit(func(opCtx context.Context) error {
+			return s.DeletePart(opCtx, nil, partId)
 		})
 		return nil
 	}

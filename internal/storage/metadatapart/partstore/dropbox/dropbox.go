@@ -232,6 +232,10 @@ func checkUploadResponse(resp *http.Response) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return dropboxResponseError(resp)
 	}
+	// These endpoints acknowledge completion with 200, not asynchronous 202.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Dropbox returned HTTP %d for an upload; expected 200", resp.StatusCode)
+	}
 	_, err := io.Copy(io.Discard, resp.Body)
 	return err
 }

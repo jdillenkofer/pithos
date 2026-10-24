@@ -8,9 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 
-	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
@@ -32,9 +30,12 @@ var _ partstore.StatsProvider = (*filesystemPartStore)(nil)
 
 func (bs *filesystemPartStore) SupportsStats() bool { return true }
 
+func syncDirectory(path string) error {
+	return ioutils.SyncDirectory(path)
+}
+
 func (bs *filesystemPartStore) ensureRootDir() error {
-	err := os.MkdirAll(bs.root, os.ModePerm)
-	return err
+	return ioutils.EnsureDurableDirectory(bs.root, os.ModePerm)
 }
 
 func (bs *filesystemPartStore) getFilename(partId partstore.PartId) string {
@@ -78,7 +79,31 @@ func (bs *filesystemPartStore) Start(ctx context.Context) error {
 	if err := bs.ValidatedLifecycle.Start(ctx); err != nil {
 		return err
 	}
-	return bs.ensureRootDir()
+	if err := bs.ensureRootDir(); err != nil {
+		_ = bs.ValidatedLifecycle.Stop(ctx)
+		return err
+	}
+	if err := bs.cleanupTemporaryParts(); err != nil {
+		_ = bs.ValidatedLifecycle.Stop(ctx)
+		return err
+	}
+	return nil
+}
+
+func (bs *filesystemPartStore) cleanupTemporaryParts() error {
+	entries, err := os.ReadDir(bs.root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !partstore.IsTemporaryPartFilename(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(bs.root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return syncDirectory(bs.root)
 }
 
 func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, partId partstore.PartId, reader io.Reader) error {
@@ -94,8 +119,12 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 		f, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			_, err = ioutils.Copy(f, reader)
-			if closeErr := f.Close(); err == nil {
-				err = closeErr
+			if err == nil {
+				err = ioutils.SyncFile(f)
+			}
+			err = errors.Join(err, f.Close())
+			if err == nil {
+				err = syncDirectory(bs.root)
 			}
 			if err != nil {
 				_ = os.Remove(filename)
@@ -112,73 +141,30 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 		if !errors.Is(err, fs.ErrExist) {
 			return err
 		}
-
-		tempFile, err := os.CreateTemp(bs.root, "."+filepath.Base(filename)+".*.tmp")
-		if err != nil {
-			return err
-		}
-		tempName := tempFile.Name()
-		if _, err = ioutils.Copy(tempFile, reader); err != nil {
-			_ = tempFile.Close()
-			_ = os.Remove(tempName)
-			return err
-		}
-		if err = tempFile.Close(); err != nil {
-			_ = os.Remove(tempName)
-			return err
-		}
-
-		backupName := filename + ".txbackup." + ulid.Make().String()
-		backupCreated := false
-		published := false
-		tx.OnPreCommit(func(context.Context) error {
-			if err := os.Rename(filename, backupName); err == nil {
-				backupCreated = true
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-			if err := os.Rename(tempName, filename); err != nil {
-				if backupCreated {
-					_ = os.Rename(backupName, filename)
-					backupCreated = false
-				}
-				return err
-			}
-			published = true
-			return nil
-		})
-		tx.OnAfterCommit(func(context.Context) error {
-			if backupCreated {
-				return os.Remove(backupName)
-			}
-			return nil
-		})
-		tx.OnRollback(func(context.Context) error {
-			if published {
-				_ = os.Remove(filename)
-				if backupCreated {
-					return os.Rename(backupName, filename)
-				}
-			}
-			if !published {
-				_ = os.Remove(tempName)
-			}
-			return nil
-		})
-		return nil
 	}
 
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// A part ID always represents the same logical content. Replays and repairs
+	// can replace its physical representation, even if the surrounding metadata
+	// transaction rolls back. Never delete a pre-existing part on rollback or
+	// truncate it in place: publish only a completely written, synced file.
+	tempName := filepath.Join(bs.root, partstore.NewTemporaryPartFilename(partId))
+	tempFile, err := os.OpenFile(tempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = ioutils.Copy(f, reader)
+	defer os.Remove(tempName)
+	_, err = ioutils.Copy(tempFile, reader)
+	if err == nil {
+		err = ioutils.SyncFile(tempFile)
+	}
+	err = errors.Join(err, tempFile.Close())
 	if err != nil {
 		return err
 	}
-
-	return nil
+	if err := os.Rename(tempName, filename); err != nil {
+		return err
+	}
+	return syncDirectory(bs.root)
 }
 
 func (bs *filesystemPartStore) Capabilities() partstore.Capabilities {
@@ -252,42 +238,17 @@ func (bs *filesystemPartStore) DeletePart(ctx context.Context, tx database.Tx, p
 	defer span.End()
 
 	filename := bs.getFilename(partId)
-	if tx != nil {
-		backupName := filename + ".txbackup." + ulid.Make().String()
-		backupCreated := false
-		tx.OnPreCommit(func(context.Context) error {
-			if err := os.Rename(filename, backupName); err == nil {
-				backupCreated = true
-				return nil
-			} else if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			} else {
-				return err
-			}
-		})
-		tx.OnAfterCommit(func(context.Context) error {
-			if backupCreated {
-				return os.Remove(backupName)
-			}
-			return nil
-		})
-		tx.OnRollback(func(context.Context) error {
-			if backupCreated {
-				return os.Rename(backupName, filename)
-			}
-			return nil
-		})
-		return nil
-	}
-
-	err := os.Remove(filename)
-	if err != nil {
-		e, ok := err.(*os.PathError)
-		if ok && e.Err == syscall.ENOENT {
-			// The file didn't exist
-		} else {
+	remove := func(context.Context) error {
+		if err := os.Remove(filename); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+		return syncDirectory(bs.root)
 	}
-	return nil
+	if tx != nil {
+		// Metadata controls visibility. Keep the data until that deletion has
+		// committed, so a crash or rollback cannot destroy a referenced part.
+		tx.OnAfterCommit(remove)
+		return nil
+	}
+	return remove(ctx)
 }

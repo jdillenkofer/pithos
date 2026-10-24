@@ -12,7 +12,9 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	gosqlite3 "github.com/mattn/go-sqlite3"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
@@ -23,6 +25,19 @@ var migrationsFilesystem embed.FS
 // SQLite open/setup is serialized to avoid intermittent cgo crashes when
 // multiple test goroutines initialize sqlite connections concurrently.
 var openDatabaseMu sync.Mutex
+
+const durableDriverName = "pithos-sqlite3"
+
+func init() {
+	sql.Register(durableDriverName, &gosqlite3.SQLiteDriver{
+		ConnectHook: func(conn *gosqlite3.SQLiteConn) error {
+			// On macOS, request device-cache flushes as well as OS-cache
+			// flushes. These pragmas are harmless on other platforms.
+			_, err := conn.Exec("PRAGMA fullfsync = ON; PRAGMA checkpoint_fullfsync = ON;", nil)
+			return err
+		},
+	})
+}
 
 // In auto-vacuum full mode freelist pages are moved to the end of the file
 // end the file is truncated
@@ -41,16 +56,6 @@ func enableWALJournalMode(db *sql.DB) error {
 	enableWalJournalModeStmt := "PRAGMA journal_mode = WAL;"
 
 	_, err := db.Exec(enableWalJournalModeStmt)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func enableNormalSynchronous(db *sql.DB) error {
-	enableNormalSynchronousStmt := "PRAGMA synchronous = NORMAL;"
-
-	_, err := db.Exec(enableNormalSynchronousStmt)
 	if err != nil {
 		return err
 	}
@@ -156,23 +161,26 @@ func OpenDatabase(dbPath string) (*sqliteDatabase, error) {
 	defer openDatabaseMu.Unlock()
 
 	storagePath := filepath.Dir(dbPath)
-	err := os.MkdirAll(storagePath, os.ModePerm)
+	err := ioutils.EnsureDurableDirectory(storagePath, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
-	writeableDb, err := database.OpenSQL("sqlite3", dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate&_stmt_cache_size="+stmtCacheSize,
+	writeableDb, err := database.OpenSQL(durableDriverName, dbPath+"?mode=rwc&_busy_timeout=5000&_txlock=immediate&_sync=FULL&_foreign_keys=on&_stmt_cache_size="+stmtCacheSize,
 		semconv.DBSystemSqlite,
 	)
 	if err != nil {
 		return nil, err
 	}
 	err = setupWriteableDatabase(writeableDb)
+	if err == nil {
+		err = ioutils.SyncDirectory(storagePath)
+	}
 	if err != nil {
 		writeableDb.Close()
 		return nil, err
 	}
 
-	readOnlyDb, err := database.OpenSQL("sqlite3", dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred&_stmt_cache_size="+stmtCacheSize,
+	readOnlyDb, err := database.OpenSQL(durableDriverName, dbPath+"?mode=ro&_busy_timeout=5000&_txlock=deferred&_sync=FULL&_foreign_keys=on&_stmt_cache_size="+stmtCacheSize,
 		semconv.DBSystemSqlite,
 	)
 	if err != nil {
@@ -196,12 +204,11 @@ func setupWriteableDatabase(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	err = enableNormalSynchronous(db)
-	if err != nil {
+	// Migrations need foreign keys disabled on the sole writer connection.
+	// The DSN enables them again for any replacement connection.
+	if _, err := db.Exec("PRAGMA foreign_keys = OFF;"); err != nil {
 		return err
 	}
-	// We run the migrations before activating foreignKey constraints,
-	// because otherwise some migrations would fail
 	err = applyDatabaseMigrations(db)
 	if err != nil {
 		return err

@@ -82,7 +82,7 @@ func TestStatsCountsOnlyPartFilesWithoutReadingThem(t *testing.T) {
 	assert.Equal(t, partstore.Stats{Parts: 1, Bytes: 7}, stats)
 }
 
-func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
+func TestFilesystemPartStoreRollbackPreservesExistingPart(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
@@ -115,8 +115,9 @@ func TestFilesystemPartStoreRollbackDoesNotPublishStagedChanges(t *testing.T) {
 	}
 
 	errRollback := fmt.Errorf("rollback")
+	// A retry uses the same logical content and must survive rollback.
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		if err := ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("staged"))); err != nil {
+		if err := ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("new"))); err != nil {
 			return err
 		}
 		return errRollback
