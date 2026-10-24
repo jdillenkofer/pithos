@@ -8,12 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/jdillenkofer/pithos/internal/dependencyinjection"
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"golang.org/x/term"
 )
@@ -133,7 +133,7 @@ func writeFileAtomically(targetPath, value string, mode os.FileMode) (err error)
 	if written != len(value) {
 		return io.ErrShortWrite
 	}
-	if err = tempFile.Sync(); err != nil {
+	if err = ioutils.SyncFile(tempFile); err != nil {
 		return err
 	}
 	if err = tempFile.Close(); err != nil {
@@ -145,23 +145,8 @@ func writeFileAtomically(targetPath, value string, mode os.FileMode) (err error)
 		return err
 	}
 
-	// Syncing the parent makes the rename durable across a power loss on
-	// platforms that support fsync on directory handles.
-	if runtime.GOOS != "windows" {
-		parent, openErr := os.Open(parentDir)
-		if openErr != nil {
-			return openErr
-		}
-		syncErr := parent.Sync()
-		closeErr := parent.Close()
-		if syncErr != nil {
-			return syncErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
+	// Persist the name of token/key files as well as their contents.
+	return ioutils.SyncDirectory(parentDir)
 }
 
 func (s *StringProvider) UnmarshalJSON(b []byte) error {

@@ -257,7 +257,7 @@ func TestSftpPartStore(t *testing.T) {
 	}
 }
 
-func TestSftpPartStoreTxPutPart(t *testing.T) {
+func TestSftpPartStoreTxPutPartPreservesImmutableContent(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	testutils.SkipOnWindowsInGitHubActions(t)
 	testutils.SkipOnMacOSInGitHubActions(t)
@@ -333,15 +333,16 @@ func TestSftpPartStoreTxPutPart(t *testing.T) {
 	assert.NoError(t, putPartInTx("first", nil))
 	assert.Equal(t, "first", readPart())
 
-	// An existing part goes through the temp file and is restored on
-	// rollback.
-	err = putPartInTx("discarded", errRollback)
+	// A retry of an existing immutable part uses a temporary file, and
+	// rollback must not delete the published replacement.
+	err = putPartInTx("first", errRollback)
 	assert.ErrorIs(t, err, errRollback)
 	assert.Equal(t, "first", readPart())
 	assertNoLeftoverFiles()
 
-	assert.NoError(t, putPartInTx("second", nil))
-	assert.Equal(t, "second", readPart())
+	// A committed retry also preserves the same logical content.
+	assert.NoError(t, putPartInTx("first", nil))
+	assert.Equal(t, "first", readPart())
 	assertNoLeftoverFiles()
 }
 

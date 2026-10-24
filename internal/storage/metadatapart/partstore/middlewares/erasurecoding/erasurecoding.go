@@ -654,6 +654,17 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 		healPipeWriters := make([]*io.PipeWriter, e.totalShards)
 		healErrCh := make(chan error, e.totalShards)
 		healingShardCount := 0
+		closeHealingWriters := func(closeErr error) error {
+			for _, writer := range healPipeWriters {
+				if writer != nil {
+					_ = writer.CloseWithError(closeErr)
+				}
+			}
+			for i := 0; i < healingShardCount; i++ {
+				closeErr = errors.Join(closeErr, <-healErrCh)
+			}
+			return closeErr
+		}
 		if healMissing {
 			for i := 0; i < e.totalShards; i++ {
 				if !healShards[i] {
@@ -664,34 +675,19 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				healingShardCount++
 				erasureMetrics.healWrites.Inc()
 				go func(idx int, reader *io.PipeReader) {
-					healErrCh <- e.partStores[idx].PutPart(ctx, tx, partId, reader)
+					err := e.partStores[idx].PutPart(ctx, tx, partId, reader)
+					_ = reader.CloseWithError(io.ErrClosedPipe)
+					healErrCh <- err
 				}(i, prHeal)
 				if _, err := pwHeal.Write(e.shardHeader(i)); err != nil {
-					_ = pwHeal.CloseWithError(err)
-					_ = pw.CloseWithError(err)
+					_ = pw.CloseWithError(closeHealingWriters(err))
 					return
 				}
 			}
 		}
 
-		closeHealingWriters := func(closeErr error) {
-			for i := 0; i < e.totalShards; i++ {
-				if healPipeWriters[i] == nil {
-					continue
-				}
-				if closeErr != nil {
-					_ = healPipeWriters[i].CloseWithError(closeErr)
-					continue
-				}
-				_ = healPipeWriters[i].Close()
-			}
-			for i := 0; i < healingShardCount; i++ {
-				_ = <-healErrCh
-			}
-		}
 		fail := func(err error) {
-			closeHealingWriters(err)
-			_ = pw.CloseWithError(err)
+			_ = pw.CloseWithError(closeHealingWriters(err))
 		}
 
 		// Reconstruction must produce the data shards and any shard being healed.
@@ -829,8 +825,7 @@ func (e *erasureCodingPartStore) newPartReader(ctx context.Context, tx database.
 				}
 			}
 			if !seen {
-				closeHealingWriters(nil)
-				_ = pw.Close()
+				_ = pw.CloseWithError(closeHealingWriters(nil))
 				return
 			}
 			if available < e.dataShards {

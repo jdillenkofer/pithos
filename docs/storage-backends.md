@@ -50,6 +50,75 @@ Pithos supports multiple storage backends that can be configured in the storage 
   - Supports streaming reads/writes for large parts
   - Can distribute shards across multiple independent part stores
 
+## Persistence and crash recovery
+
+Pithos automatically uses the persistence mechanisms available to each backend.
+There is no performance opt-out and no startup warning for a backend with weaker
+persistence guarantees. **Durability is backend-dependent**, not a blanket
+power-loss guarantee for every configuration. Flushes must be implemented
+correctly by the operating system, filesystem, storage controller and device;
+a successful flush does not protect against losing the device itself.
+
+These changes protect future successfully acknowledged mutations. Upgrading
+neither validates existing data nor repairs missing or corrupt parts.
+Additional commit and file flushes can significantly increase the latency of
+small writes.
+
+| Component | Persistence behavior and limitations |
+| --- | --- |
+| SQLite metadata, SQL parts and outbox data | WAL mode with `synchronous=FULL` on every connection. Commits synchronize the WAL, unlike the previous `NORMAL` setting that could lose acknowledged transactions after power loss. `fullfsync` and `checkpoint_fullfsync` are enabled for the macOS VFS. |
+| PostgreSQL metadata, SQL parts and outbox data | Uses the PostgreSQL connection and server configuration without overriding commit settings. Durable commits require `synchronous_commit=on`, `fsync=on`, appropriate server-side WAL settings and durable storage. PostgreSQL enables synchronous commits and fsync by default; maintaining these guarantees is the administrator's responsibility. |
+| Filesystem parts | File contents are synced before publication/commit. Directory entries are synced where supported, including newly created storage directories. Replay and repair writes use a synced temporary file instead of truncating the previous copy. On macOS, `F_FULLFSYNC` is additionally requested where supported. |
+| SFTP parts | Files are synced before close when the server advertises `fsync@openssh.com`. Without this extension, only completed writes and close are available. Replacing existing parts during retries or repairs requires `posix-rename@openssh.com`; without it, replacement fails without deleting the existing copy. There is no portable directory-sync operation here, so even servers with file sync do not provide the same namespace durability as a supported local filesystem. |
+| Google Drive, OneDrive and Dropbox parts | Success requires completion of the upload API, not merely an intermediate upload-session acknowledgment. Persistence beyond that acknowledgment is the provider's responsibility; there is no additional client-side remote fsync. |
+| S3ClientStorage | Persistence depends on the upstream S3 service's completed-operation semantics and guarantees. Pithos cannot strengthen an upstream service's storage durability. |
+| Cache, compression and encryption wrappers | Caches are not the authoritative durable copy. Wrappers depend on the underlying store's persistence and propagate its write failures. Encryption keys and credentials needed for recovery must also be preserved. |
+| Erasure coding | Successful writes wait for all configured shard stores to complete their writes. Durability depends on those stores and their failure domains; redundancy does not replace flushes. Repair-write errors are propagated rather than silently discarded. |
+| Outbox layers | Accepted content is first stored in SQL. Retry entries are finalized only after the target completes its supported persistence steps. A target write/sync error retains the SQL retry copy. Once finalized, the target's limitations apply. |
+
+On Windows, Go's directory handles do not provide the directory synchronization
+used here. File contents are flushed, but file creation/rename namespace
+durability is not guaranteed by this implementation. Filesystems that explicitly
+reject directory synchronization with an unsupported-operation result also have
+this limitation. On macOS, filesystems that reject `F_FULLFSYNC` fall back to
+ordinary file sync. These limitations are documented rather than warned about at
+startup. Other sync errors, including I/O errors, fail the operation.
+
+A failed request is **not** proof that no change occurred: a commit, rename or
+provider upload may have completed before its response or a subsequent cleanup
+failed. Clients must account for ambiguous outcomes when retrying operations.
+
+### Logical deletion and physical cleanup
+
+A successful S3 delete makes the appropriate metadata change durable (subject to
+the configured backend's guarantees and versioning semantics). It is not a
+secure-erasure guarantee. Filesystem and SFTP part deletion in a transaction is
+deferred until after the metadata commit, so a rollback or crash before commit
+cannot destroy still-referenced data. A crash before cleanup can leave unused
+parts for later maintenance. Versioned or shared parts may remain intentionally.
+
+### Immutable parts and interrupted writes
+
+Each part ID represents immutable logical content. Normal object writes and
+copies allocate fresh IDs; outbox retries and erasure-code repairs can write the
+same logical part again. Its physical representation may change, for example
+when encryption generates a new nonce.
+
+New transactional parts can be written directly and are removed on rollback.
+Retries and repairs use a synced temporary file and atomic replacement rather
+than truncating the existing copy. A replacement of an existing part is not
+undone or deleted on metadata rollback: it still represents the same logical
+content. No transaction backups or backup-recovery protocol are needed for this
+model. SFTP servers without atomic replacement support reject such replacements;
+they remain usable for new parts.
+
+A crash can leave temporary files or unreferenced new parts. Temporary files are
+not promoted automatically and are excluded from part listings. Their presence
+does not prove an object was committed. Filesystem namespace durability remains
+subject to the platform limitations above; SFTP has no portable directory-sync
+guarantee. Backup files left by older Pithos versions are not automatically
+restored or deleted: preserve and inspect them before manual cleanup.
+
 ## Configuration Examples
 
 ### SQLite (Default)

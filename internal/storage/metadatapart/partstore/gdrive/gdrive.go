@@ -303,12 +303,16 @@ func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io
 	// with a fresh reader; the name lookup above then updates an upload whose
 	// successful Create response may have been lost.
 	if fileId != "" {
-		if _, err = s.svc.Files.Update(fileId, &drive.File{}).
+		file, updateErr := s.svc.Files.Update(fileId, &drive.File{}).
 			Media(reader, googleapi.ChunkSize(0)).
 			Fields("id").
 			Context(ctx).
-			Do(); err != nil {
-			return "", err
+			Do()
+		if updateErr != nil {
+			return "", updateErr
+		}
+		if file == nil || file.Id != fileId {
+			return "", fmt.Errorf("Google Drive did not acknowledge the updated file %s", fileId)
 		}
 	} else {
 		file, createErr := s.svc.Files.Create(&drive.File{Name: name, Parents: []string{s.folderId}}).
@@ -318,6 +322,9 @@ func (s *gdrivePartStore) uploadFile(ctx context.Context, name string, reader io
 			Do()
 		if createErr != nil {
 			return "", createErr
+		}
+		if file == nil || file.Id == "" {
+			return "", errors.New("Google Drive returned no file ID after upload")
 		}
 		fileId = file.Id
 	}
