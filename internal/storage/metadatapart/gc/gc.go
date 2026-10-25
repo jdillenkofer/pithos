@@ -227,11 +227,6 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 					if err != nil {
 						return err
 					}
-				} else if o.ActualCount == 0 {
-					_, err := partGC.partRegistryRepository.DeleteByPartId(ctx, tx.SqlTx(), o.PartId, *o.Version)
-					if err != nil {
-						return err
-					}
 				} else if o.RefCount == nil || *o.RefCount != o.ActualCount {
 					_, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
 					if err != nil {
@@ -290,7 +285,7 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 			var external []partstore.PartId
 			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 				for _, id := range candidates[start:end] {
-					condemned, err := partGC.partRegistryRepository.Condemn(ctx, tx.SqlTx(), id)
+					condemned, err := partGC.partRegistryRepository.Condemn(ctx, tx.SqlTx(), id, cutoff)
 					if err != nil {
 						return err
 					}

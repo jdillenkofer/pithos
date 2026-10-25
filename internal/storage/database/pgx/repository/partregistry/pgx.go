@@ -16,14 +16,14 @@ type postgresRepository struct {
 
 const (
 	insertPartRegistryStmt          = "INSERT INTO part_registry (part_id, ref_count, version, created_at, updated_at) VALUES ($1, $2, 1, $3, $4)"
-	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND ref_count > 0"
-	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND ref_count >= $1 RETURNING ref_count, version"
-	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version FROM part_registry"
+	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND ref_count >= 0"
+	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2, unreferenced_at = CASE WHEN ref_count = $1 THEN $2 ELSE unreferenced_at END WHERE part_id = $3 AND ref_count >= $1 RETURNING ref_count, version"
+	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version, unreferenced_at FROM part_registry"
 	reconciliationStmt              = "SELECT p.part_id, COUNT(*) AS actual_count, r.ref_count, r.version FROM parts p LEFT JOIN part_registry r ON r.part_id = p.part_id GROUP BY p.part_id, r.ref_count, r.version UNION ALL SELECT r.part_id, 0, r.ref_count, r.version FROM part_registry r WHERE NOT EXISTS (SELECT 1 FROM parts p WHERE p.part_id = r.part_id)"
-	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND version = $4"
+	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, version = version + 1, updated_at = $2, unreferenced_at = CASE WHEN $1 = 0 THEN COALESCE(unreferenced_at, $2) ELSE NULL END WHERE part_id = $3 AND version = $4"
 	deleteByPartIdStmt              = "DELETE FROM part_registry WHERE part_id = $1 AND version = $2"
 	restoreMissingStmt              = "INSERT INTO part_registry (part_id,ref_count,version,created_at,updated_at) VALUES ($1,$2,1,$3,$3) ON CONFLICT(part_id) DO NOTHING"
-	findRegistryForCondemnStmt      = "SELECT ref_count,version FROM part_registry WHERE part_id=$1 FOR UPDATE"
+	findRegistryForCondemnStmt      = "SELECT ref_count,version,unreferenced_at FROM part_registry WHERE part_id=$1 FOR UPDATE"
 	countPartsByPartIdStmt          = "SELECT COUNT(*) FROM parts WHERE part_id=$1"
 )
 
@@ -75,13 +75,7 @@ func (pr *postgresRepository) RemoveReferences(ctx context.Context, tx *sql.Tx, 
 		if err != nil {
 			return nil, err
 		}
-		if refCount == 0 {
-			_, err = tx.ExecContext(ctx, deleteByPartIdStmt, ref.PartId.String(), version)
-			if err != nil {
-				return nil, err
-			}
-			unreferenced = append(unreferenced, ref.PartId)
-		}
+		// Retain zero-reference rows; only GC may condemn and delete parts.
 	}
 	return unreferenced, nil
 }
@@ -96,7 +90,7 @@ func (pr *postgresRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) (
 	for rows.Next() {
 		var entity partregistry.Entity
 		var partIdStr string
-		err := rows.Scan(&partIdStr, &entity.RefCount, &entity.CreatedAt, &entity.UpdatedAt, &entity.Version)
+		err := rows.Scan(&partIdStr, &entity.RefCount, &entity.CreatedAt, &entity.UpdatedAt, &entity.Version, &entity.UnreferencedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -157,9 +151,10 @@ func (pr *postgresRepository) RestoreMissing(ctx context.Context, tx *sql.Tx, re
 	n, err := r.RowsAffected()
 	return n == 1, err
 }
-func (pr *postgresRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstore.PartId) (bool, error) {
+func (pr *postgresRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstore.PartId, cutoff time.Time) (bool, error) {
 	var ref, version int64
-	err := tx.QueryRowContext(ctx, findRegistryForCondemnStmt, id.String()).Scan(&ref, &version)
+	var unreferenced sql.NullTime
+	err := tx.QueryRowContext(ctx, findRegistryForCondemnStmt, id.String()).Scan(&ref, &version, &unreferenced)
 	if err == sql.ErrNoRows {
 		var live int
 		err = tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live)
@@ -168,7 +163,7 @@ func (pr *postgresRepository) Condemn(ctx context.Context, tx *sql.Tx, id partst
 	if err != nil {
 		return false, err
 	}
-	if ref != 0 {
+	if ref != 0 || !unreferenced.Valid || !unreferenced.Time.Before(cutoff) {
 		return false, nil
 	}
 	var live int

@@ -346,7 +346,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 		for _, entity := range entities {
 			counts[entity.PartId] = entity.RefCount
 		}
-		assert.Equal(t, map[partstore.PartId]int64{liveIDs[0]: 1, liveIDs[1]: 1}, counts)
+		assert.Equal(t, map[partstore.PartId]int64{liveIDs[0]: 1, liveIDs[1]: 1, *orphanID: 0}, counts)
 		ids, err := env.physicalStore.GetPartIds(ctx, tx)
 		if err != nil {
 			return err

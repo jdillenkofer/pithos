@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -198,6 +199,13 @@ func (m *objectCacheStorageMiddleware) GetObject(ctx context.Context, bucketName
 		return nil, nil, err
 	}
 	if len(readers) != 1 {
+		m.finishInflightGet(objKey, inflight, nil)
+		inflight = nil
+		return obj, readers, nil
+	}
+	// A cache pipe can block independently of the backend context. Do not put
+	// a bounded external stream behind that unbounded synchronous write.
+	if bounded, ok := readers[0].(interface{ Deadline() time.Time }); ok && !bounded.Deadline().IsZero() {
 		m.finishInflightGet(objKey, inflight, nil)
 		inflight = nil
 		return obj, readers, nil

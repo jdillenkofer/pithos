@@ -19,6 +19,8 @@ type statusResponseWriter struct {
 	statusCode int
 }
 
+func (w *statusResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)

@@ -6,7 +6,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/jdillenkofer/pithos/internal/ioutils"
 
 	"github.com/jdillenkofer/pithos/internal/sliceutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
@@ -303,6 +307,16 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// content itself.
 	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
 
+	var cancel context.CancelFunc
+	if txFreeStreaming {
+		// An ambient snapshot may predate the lifetime bound, and its context
+		// would also leak a finalized transaction into external store opens.
+		if _, ok := database.TxControllerFromContext(ctx); ok {
+			return nil, nil, fmt.Errorf("bounded external GET cannot use an ambient transaction")
+		}
+		ctx, cancel = context.WithTimeout(ctx, mbs.readerLifetime)
+	}
+
 	// The context handed to WithTx carries the (short-lived) transaction;
 	// BeginTx reuses a transaction found in the context, so tx-free readers
 	// must capture the pre-transaction context instead or a later internal
@@ -439,8 +453,35 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	} else {
 		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, getObjectInTx)
 	}
+	if err == nil && cancel != nil {
+		err = ctx.Err()
+	}
 	if err != nil {
+		for _, r := range readers {
+			_ = r.Close()
+		}
+		if cancel != nil {
+			cancel()
+		}
 		return nil, nil, err
+	}
+	if cancel != nil {
+		remaining := atomic.Int64{}
+		remaining.Store(int64(len(readers)))
+		for i, r := range readers {
+			b := &boundedReader{ctx: ctx, inner: r}
+			b.stop = context.AfterFunc(ctx, func() { b.closeInner() })
+			deadline, _ := ctx.Deadline()
+			var closeOnce sync.Once
+			readers[i] = &lifetimeReader{deadline: deadline, ReadCloser: ioutils.NewReadCloserWithCloseHook(b, func() error {
+				closeOnce.Do(func() {
+					if remaining.Add(-1) == 0 {
+						cancel()
+					}
+				})
+				return nil
+			})}
+		}
 	}
 
 	return &storageObject, readers, nil

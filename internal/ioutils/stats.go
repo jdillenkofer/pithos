@@ -2,6 +2,7 @@ package ioutils
 
 import (
 	"io"
+	"time"
 )
 
 type statsReadCloser struct {
@@ -22,6 +23,15 @@ func (s *statsReadCloser) Read(p []byte) (int, error) {
 		s.readCallback(n)
 	}
 	return n, err
+}
+
+// Deadline preserves a bounded stream's absolute deadline through metrics.
+// A zero value means the inner reader has no lifetime bound.
+func (s *statsReadCloser) Deadline() time.Time {
+	if r, ok := s.innerReadCloser.(interface{ Deadline() time.Time }); ok {
+		return r.Deadline()
+	}
+	return time.Time{}
 }
 
 func (s *statsReadCloser) Close() error {

@@ -1,0 +1,59 @@
+package partregistry
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+	"time"
+
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDereferenceRetentionAndRereference(t *testing.T) {
+	db, repo, cleanup := setupRepository(t)
+	defer cleanup()
+	id := mustNewPartId(t)
+	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
+		require.NoError(t, repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}}))
+		_, err := tx.ExecContext(ctx, "UPDATE part_registry SET created_at = $1 WHERE part_id = $2", time.Now().Add(-365*24*time.Hour), id.String())
+		require.NoError(t, err)
+		removed, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}})
+		require.NoError(t, err)
+		require.Empty(t, removed)
+		rows, err := repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		require.NotNil(t, rows[0].UnreferencedAt)
+		dereferenced := *rows[0].UnreferencedAt
+		// Old creation time cannot make a newly dereferenced part collectible.
+		ok, err := repo.Condemn(ctx, tx, id, dereferenced.Add(-time.Nanosecond))
+		require.NoError(t, err)
+		require.False(t, ok)
+		// Reconciliation of an already-zero count must not restart retention.
+		ok, err = repo.UpdateRefCount(ctx, tx, id, 0, rows[0].Version)
+		require.NoError(t, err)
+		require.True(t, ok)
+		rows, err = repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
+		require.True(t, dereferenced.Equal(*rows[0].UnreferencedAt))
+		ok, err = repo.TryAddReferences(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}})
+		require.NoError(t, err)
+		require.True(t, ok)
+		rows, err = repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
+		require.Nil(t, rows[0].UnreferencedAt)
+		ok, err = repo.Condemn(ctx, tx, id, dereferenced.Add(time.Hour))
+		require.NoError(t, err)
+		require.False(t, ok)
+		_, err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}})
+		require.NoError(t, err)
+		ok, err = repo.Condemn(ctx, tx, id, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = repo.TryAddReferences(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}})
+		require.NoError(t, err)
+		require.False(t, ok)
+		return nil
+	})
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -35,6 +36,7 @@ type lazyPartSequenceReadCloser struct {
 	tx    database.Tx
 	parts []partRange
 
+	mu        sync.Mutex
 	partIndex int
 	current   io.ReadCloser
 	closed    bool
@@ -42,10 +44,27 @@ type lazyPartSequenceReadCloser struct {
 
 func (l *lazyPartSequenceReadCloser) openNextPart() error {
 	for l.partIndex < len(l.parts) {
+		if err := l.ctx.Err(); err != nil {
+			return err
+		}
 		part := l.parts[l.partIndex]
 		l.partIndex++
 
-		rc, err := part.store.GetPart(l.ctx, l.tx, part.id)
+		l.mu.Lock()
+		closed := l.closed
+		l.mu.Unlock()
+		if closed {
+			return io.EOF
+		}
+		var rc io.ReadCloser
+		var err error
+		if l.tx != nil {
+			rc, err = part.store.GetPart(l.ctx, l.tx, part.id)
+		} else {
+			rc, err = openBoundedPart(l.ctx, func() (io.ReadCloser, error) {
+				return part.store.GetPart(l.ctx, nil, part.id)
+			})
+		}
 		if err != nil {
 			return err
 		}
@@ -61,7 +80,14 @@ func (l *lazyPartSequenceReadCloser) openNextPart() error {
 			rc = ioutils.NewLimitedEndReadCloser(rc, *part.limit)
 		}
 
+		l.mu.Lock()
+		if l.closed || l.ctx.Err() != nil {
+			l.mu.Unlock()
+			rc.Close()
+			return context.DeadlineExceeded
+		}
 		l.current = rc
+		l.mu.Unlock()
 		return nil
 	}
 
@@ -69,12 +95,17 @@ func (l *lazyPartSequenceReadCloser) openNextPart() error {
 }
 
 func (l *lazyPartSequenceReadCloser) Read(p []byte) (int, error) {
-	if l.closed {
-		return 0, io.EOF
-	}
-
 	for {
-		if l.current == nil {
+		if err := l.ctx.Err(); err != nil {
+			return 0, err
+		}
+		l.mu.Lock()
+		closed, current := l.closed, l.current
+		l.mu.Unlock()
+		if closed {
+			return 0, io.EOF
+		}
+		if current == nil {
 			if err := l.openNextPart(); err != nil {
 				if err == io.EOF {
 					return 0, io.EOF
@@ -83,10 +114,18 @@ func (l *lazyPartSequenceReadCloser) Read(p []byte) (int, error) {
 			}
 		}
 
-		n, err := l.current.Read(p)
+		l.mu.Lock()
+		current = l.current
+		l.mu.Unlock()
+		if current == nil {
+			continue
+		}
+		n, err := current.Read(p)
 		if err == io.EOF {
-			_ = l.current.Close()
+			_ = current.Close()
+			l.mu.Lock()
 			l.current = nil
+			l.mu.Unlock()
 			if n > 0 {
 				return n, nil
 			}
@@ -97,6 +136,8 @@ func (l *lazyPartSequenceReadCloser) Read(p []byte) (int, error) {
 }
 
 func (l *lazyPartSequenceReadCloser) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.closed = true
 	if l.current != nil {
 		err := l.current.Close()
@@ -108,12 +149,13 @@ func (l *lazyPartSequenceReadCloser) Close() error {
 
 type metadataPartStorage struct {
 	*lifecycle.ValidatedLifecycle
-	db            database.Database
-	metadataStore metadatastore.MetadataStore
-	partStores    *partstore.NamedPartStores
-	partGC        gc.PartGarbageCollector
-	gcTaskHandle  *task.TaskHandle
-	tracer        trace.Tracer
+	db             database.Database
+	metadataStore  metadatastore.MetadataStore
+	partStores     *partstore.NamedPartStores
+	partGC         gc.PartGarbageCollector
+	gcTaskHandle   *task.TaskHandle
+	tracer         trace.Tracer
+	readerLifetime time.Duration
 }
 
 const defaultGCGraceWindow = 30 * time.Minute
@@ -126,7 +168,8 @@ type storageOptions struct {
 	gcInterval    time.Duration
 }
 
-// WithGCGraceWindow excludes parts this young from garbage collection.
+// WithGCGraceWindow retains dereferenced parts and separately protects young orphans.
+// Prototype: every instance sharing storage must use the same value.
 func WithGCGraceWindow(window time.Duration) StorageOption {
 	return func(options *storageOptions) error {
 		if window <= 0 {
@@ -227,6 +270,7 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 		partGC:             partGC,
 		gcTaskHandle:       nil,
 		tracer:             otel.Tracer("internal/storage/metadatapart"),
+		readerLifetime:     min(5*time.Minute, options.gcGraceWindow/2),
 	}, nil
 }
 
