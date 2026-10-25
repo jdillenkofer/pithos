@@ -59,14 +59,15 @@ func TestReaderLeaseBlocksCondemnUntilExpiry(t *testing.T) {
 	})
 }
 
-func TestReaderLeaseRejectsOrphanMarker(t *testing.T) {
+func TestReaderLeaseRejectsOrphanedPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	db, repo, cleanup := setupRepository(t)
 	defer cleanup()
 	id := mustNewPartId(t)
 	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
-		ok, err := repo.RestoreMissing(ctx, tx, partregistry.Ref{PartId: id, Delta: -1})
+		ok, err := repo.Condemn(ctx, tx, id, time.Now().Add(time.Hour))
 		require.NoError(t, err)
-		require.True(t, ok)
+		require.False(t, ok)
 		ok, err = repo.AcquireReaderLease(ctx, tx, "lease", []partstore.PartId{id}, time.Now().Add(time.Hour))
 		require.NoError(t, err)
 		require.False(t, ok)
