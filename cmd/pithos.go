@@ -295,9 +295,10 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		MaxHeaderBytes:    maxHeaderBytes,
 	}
 
+	readiness := &server.Readiness{}
 	var httpMonitoringServer *http.Server
 	if settings.MonitoringPortEnabled() {
-		monitoringHandler := server.SetupMonitoringServer(dbs)
+		monitoringHandler := server.SetupMonitoringServer(dbs, readiness)
 		monitoringAddr := fmt.Sprintf("%v:%v", settings.BindAddress(), settings.MonitoringPort())
 		httpMonitoringServer = &http.Server{
 			BaseContext:       func(net.Listener) context.Context { return ctx },
@@ -311,25 +312,38 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		}
 	}
 
-	serverErrors := make(chan error, 2)
-	startServer := func(name string, httpServer *http.Server) {
-		go func() {
-			slog.Info("Listening", "server", name, "address", "http://"+httpServer.Addr)
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverErrors <- fmt.Errorf("%s server: %w", name, err)
-			}
-		}()
-	}
-
-	startServer("s3 api", httpServer)
-	servers := []*http.Server{httpServer}
-	if httpMonitoringServer != nil {
-		startServer("monitoring api", httpMonitoringServer)
-		servers = append(servers, httpMonitoringServer)
-	}
-
 	signalCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+
+	servers := []*http.Server{httpServer}
+	if httpMonitoringServer != nil {
+		servers = append(servers, httpMonitoringServer)
+	}
+	// Bind all listeners before announcing readiness. A failed bind must not
+	// leave a monitoring endpoint reporting a healthy but unavailable S3 API.
+	listeners := make([]net.Listener, 0, len(servers))
+	for _, srv := range servers {
+		listener, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			for _, opened := range listeners {
+				_ = opened.Close()
+			}
+			return fmt.Errorf("listen on %s: %w", srv.Addr, err)
+		}
+		listeners = append(listeners, listener)
+	}
+
+	serverErrors := make(chan error, len(servers))
+	readiness.SetReady(true)
+	for i, srv := range servers {
+		go func(srv *http.Server, listener net.Listener) {
+			slog.Info("Listening", "address", "http://"+listener.Addr().String())
+			if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				readiness.SetReady(false)
+				serverErrors <- fmt.Errorf("server %s: %w", srv.Addr, err)
+			}
+		}(srv, listeners[i])
+	}
 
 	var serveErr error
 	select {
@@ -339,6 +353,9 @@ func serve(ctx context.Context, logLevelVar *slog.LevelVar) error {
 		slog.Error("HTTP server failed", "err", serveErr)
 	}
 
+	// Routing drain delays belong to the deployment platform. Keep monitoring
+	// available, but not ready, while the S3 server finishes active requests.
+	readiness.SetReady(false)
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 	defer cancelShutdown()
 	var shutdownErrors []error
