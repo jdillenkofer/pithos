@@ -8,8 +8,11 @@ import (
 )
 
 type ValidationResult struct {
-	BucketName     string
-	ObjectKey      string
+	BucketName string
+	ObjectKey  string
+	VersionID  *string
+	// Corrupted is true only for verified size or checksum mismatches, not I/O errors.
+	Corrupted      bool
 	Success        bool
 	ErrorType      string
 	PartFailures   []PartFailure
@@ -63,6 +66,9 @@ func OutputHumanReadable(report *ValidationReport, w io.Writer) error {
 		for _, result := range report.Results {
 			if !result.Success {
 				fmt.Fprintf(w, "  Bucket: %s, Key: %s\n", result.BucketName, result.ObjectKey)
+				if result.VersionID != nil {
+					fmt.Fprintf(w, "    Version: %s\n", *result.VersionID)
+				}
 				fmt.Fprintf(w, "    Error: %s\n", result.ErrorType)
 				if len(result.PartFailures) > 0 {
 					fmt.Fprintf(w, "    Part Failures:\n")
