@@ -333,7 +333,8 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 	op.Payload = string(encoded)
 	var result *operationResult
 	if rs.localPrimary {
-		err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		// finalizePrimary may stream lazy SQL content inside this transaction.
+		err = database.WithTx(ctx, rs.db, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, tx database.Tx) error {
 			if err := rs.journal.RegisterTopology(ctx, tx.SqlTx(), rs.options.ReplicationID, rs.options.SecondaryIDs); err != nil {
 				return err
 			}
@@ -367,7 +368,7 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 			}
 			return nil, rs.finishIndeterminatePrimary(ctx, op, err)
 		}
-		err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+		err = database.WithTx(ctx, rs.db, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, tx database.Tx) error {
 			return rs.finalizePrimary(ctx, tx, op, &p, result, cached)
 		})
 		if err != nil {

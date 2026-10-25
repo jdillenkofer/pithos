@@ -302,6 +302,10 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// parts may live in any store), preserving snapshot semantics for the part
 	// content itself.
 	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
+	databaseContent := mbs.partStores.Capabilities().Has(partstore.CapabilityDatabaseSnapshotGetPart)
+	// BeginTx reuses an ambient transaction and ignores readOptions, so only a
+	// reused transaction needs its actual isolation verified.
+	_, ambient := database.TxControllerFromContext(ctx)
 
 	// The context handed to WithTx carries the (short-lived) transaction;
 	// BeginTx reuses a transaction found in the context, so tx-free readers
@@ -311,6 +315,11 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 
 	var storageObject storage.Object
 	getObjectInTx := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+		if databaseContent && ambient {
+			if err := mbs.requireStableSnapshot(ctx, tx); err != nil {
+				return nil, err
+			}
+		}
 		var object *metadatastore.Object
 		var err error
 		if opts != nil && opts.VersionID != nil {
@@ -429,19 +438,48 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 		return readers, nil
 	}
 
+	// All metadata statements and lazy SQL content reads must share one
+	// snapshot; READ COMMITTED could mix an old object row with newer part
+	// rows. SQLite read transactions already pin a snapshot on first read.
+	readOptions := &sql.TxOptions{ReadOnly: true}
+	if mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
+		readOptions.Isolation = sql.LevelRepeatableRead
+	}
 	var readers []io.ReadCloser
 	var err error
 	if txFreeStreaming {
-		err = database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		err = database.WithTx(ctx, mbs.db, readOptions, func(ctx context.Context, tx database.Tx) error {
 			readers, err = getObjectInTx(ctx, tx)
 			return err
 		})
 	} else {
-		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, getObjectInTx)
+		readers, err = database.WithTxReadClosers(ctx, mbs.db, readOptions, getObjectInTx)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return &storageObject, readers, nil
+}
+
+// requireStableSnapshot rejects a reused transaction whose isolation cannot
+// keep lazily read SQL content consistent with the object's metadata.
+func (mbs *metadataPartStorage) requireStableSnapshot(ctx context.Context, tx database.Tx) error {
+	switch mbs.db.GetDatabaseType() {
+	case database.DB_TYPE_POSTGRES:
+		var isolation string
+		if err := tx.SqlTx().QueryRowContext(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+			return err
+		}
+		if isolation != "repeatable read" && isolation != "serializable" {
+			return fmt.Errorf("SQL GET requires a stable snapshot; transaction isolation is %s", isolation)
+		}
+		return nil
+	case database.DB_TYPE_SQLITE:
+		// SQLite read transactions pin a database snapshot on first read,
+		// including when a controller is reused (WAL and rollback journal).
+		return nil
+	default:
+		return fmt.Errorf("SQL GET snapshot protection is not proven for this database")
+	}
 }

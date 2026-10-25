@@ -7,6 +7,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -177,7 +178,16 @@ func TestReplicationMapsUnversionedNullVersion(t *testing.T) {
 }
 
 func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
-	primary, done := newTestStorage(t)
+	testReplicationMultipartSnapshotResumesDurableParts(t, newTestStorage)
+}
+
+func TestPostgresReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	testReplicationMultipartSnapshotResumesDurableParts(t, newPostgresTestStorage)
+}
+
+func testReplicationMultipartSnapshotResumesDurableParts(t *testing.T, newPrimary func(*testing.T) (*metadataPartStorage, func())) {
+	primary, done := newPrimary(t)
 	defer done()
 	secondary, doneSecondary := newTestStorage(t)
 	defer doneSecondary()
