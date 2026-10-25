@@ -16,7 +16,8 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN if [ "$SKIP_TESTS" = "false" ]; then go test ./... -v; fi
+# Match the CI registry prefix for implicit Testcontainers images (Ryuk).
+RUN if [ "$SKIP_TESTS" = "false" ]; then TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX=ghcr.io go test ./... -v; fi
 
 # Create non-root user (UID 10001)
 RUN adduser -D -u 10001 appuser
