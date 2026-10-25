@@ -43,6 +43,16 @@ type Repository interface {
 	// Missing rows become non-referencable negative-count orphan markers so
 	// failed deletion retries cannot resurrect a previously condemned id.
 	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId, cutoff time.Time) (bool, error)
+	// AcquireReaderLease protects partIds from condemnation until expiresAt.
+	// It returns false, writing nothing, if any part is already condemned. It
+	// must run in its own short write transaction; it serializes with Condemn
+	// on the registry rows, so a committed lease is always seen by Condemn.
+	AcquireReaderLease(ctx context.Context, tx *sql.Tx, leaseId string, partIds []partstore.PartId, expiresAt time.Time) (bool, error)
+	// RenewReaderLease extends a lease that has not expired by now. It returns
+	// false once the lease expired, since Condemn may have ignored it since.
+	RenewReaderLease(ctx context.Context, tx *sql.Tx, leaseId string, now, expiresAt time.Time) (bool, error)
+	ReleaseReaderLease(ctx context.Context, tx *sql.Tx, leaseId string) error
+	DeleteExpiredReaderLeases(ctx context.Context, tx *sql.Tx, now time.Time) (int64, error)
 }
 
 // Ref is a reference-count change for one part id.

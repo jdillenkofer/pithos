@@ -16,6 +16,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
+	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/gc"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
@@ -108,12 +109,17 @@ func (l *lazyPartSequenceReadCloser) Close() error {
 
 type metadataPartStorage struct {
 	*lifecycle.ValidatedLifecycle
-	db            database.Database
-	metadataStore metadatastore.MetadataStore
-	partStores    *partstore.NamedPartStores
-	partGC        gc.PartGarbageCollector
-	gcTaskHandle  *task.TaskHandle
-	tracer        trace.Tracer
+	db                     database.Database
+	metadataStore          metadatastore.MetadataStore
+	partStores             *partstore.NamedPartStores
+	partRegistryRepository partregistry.Repository
+	partGC                 gc.PartGarbageCollector
+	gcTaskHandle           *task.TaskHandle
+	tracer                 trace.Tracer
+	// leaseFreeWindow is how long external readers rely on GC retention
+	// alone; it must stay well below the grace window.
+	leaseFreeWindow time.Duration
+	readerLeaseTTL  time.Duration
 }
 
 const defaultGCGraceWindow = 30 * time.Minute
@@ -220,14 +226,18 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 		return nil, err
 	}
 	db = gc.NewProtectedDatabase(db, partGC)
+	leaseFreeWindow := min(5*time.Minute, options.gcGraceWindow/2)
 	return &metadataPartStorage{
-		ValidatedLifecycle: lifecycle,
-		db:                 db,
-		metadataStore:      metadataStore,
-		partStores:         partStores,
-		partGC:             partGC,
-		gcTaskHandle:       nil,
-		tracer:             otel.Tracer("internal/storage/metadatapart"),
+		ValidatedLifecycle:     lifecycle,
+		db:                     db,
+		metadataStore:          metadataStore,
+		partStores:             partStores,
+		partRegistryRepository: partRegistryRepository,
+		partGC:                 partGC,
+		gcTaskHandle:           nil,
+		tracer:                 otel.Tracer("internal/storage/metadatapart"),
+		leaseFreeWindow:        leaseFreeWindow,
+		readerLeaseTTL:         leaseFreeWindow,
 	}, nil
 }
 

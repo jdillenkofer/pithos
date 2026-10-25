@@ -209,6 +209,12 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runGC")
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+		_, err := partGC.partRegistryRepository.DeleteExpiredReaderLeases(ctx, tx.SqlTx(), time.Now().UTC())
+		return err
+	}); err != nil {
+		return err
+	}
 	var observations []partregistry.Reconciliation
 	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		var err error

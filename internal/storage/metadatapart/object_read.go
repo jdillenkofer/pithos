@@ -306,6 +306,11 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	// BeginTx reuses an ambient transaction and ignores readOptions, so only a
 	// reused transaction needs its actual isolation verified.
 	_, ambient := database.TxControllerFromContext(ctx)
+	// External content is protected by retention and reader leases, both
+	// measured from the metadata snapshot. A reused snapshot may be older, so
+	// readers inside an ambient transaction (e.g. replication journaling) are
+	// not leased; such callers consume them before their transaction ends.
+	leasedStreaming := !databaseContent && !ambient
 
 	// The context handed to WithTx carries the (short-lived) transaction;
 	// BeginTx reuses a transaction found in the context, so tx-free readers
@@ -314,6 +319,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	streamCtx := ctx
 
 	var storageObject storage.Object
+	var leaseParts []partstore.PartId
 	getObjectInTx := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
 		if databaseContent && ambient {
 			if err := mbs.requireStableSnapshot(ctx, tx); err != nil {
@@ -435,6 +441,10 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 
 		storageObject = convertObject(*object)
 		storageObject.Size = objectSize
+		leaseParts = leaseParts[:0]
+		for _, part := range object.Parts {
+			leaseParts = append(leaseParts, part.Id)
+		}
 		return readers, nil
 	}
 
@@ -445,6 +455,7 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	if mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
 		readOptions.Isolation = sql.LevelRepeatableRead
 	}
+	snapshotAt := time.Now()
 	var readers []io.ReadCloser
 	var err error
 	if txFreeStreaming {
@@ -457,6 +468,9 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if leasedStreaming && len(leaseParts) > 0 {
+		mbs.guardReaders(streamCtx, snapshotAt, leaseParts, readers)
 	}
 
 	return &storageObject, readers, nil

@@ -25,6 +25,13 @@ const (
 	restoreMissingStmt              = "INSERT INTO part_registry (part_id, ref_count, version, created_at, updated_at) VALUES ($1,$2,1,$3,$3) ON CONFLICT(part_id) DO NOTHING"
 	findRegistryForCondemnStmt      = "SELECT ref_count, version, unreferenced_at FROM part_registry WHERE part_id=$1"
 	countPartsByPartIdStmt          = "SELECT COUNT(*) FROM parts WHERE part_id=$1"
+	findRegistryForLeaseStmt        = "SELECT ref_count FROM part_registry WHERE part_id=$1"
+	insertReaderLeaseStmt           = "INSERT INTO part_reader_lease (id, expires_at) VALUES ($1, $2)"
+	insertReaderLeasePartStmt       = "INSERT INTO part_reader_lease_part (lease_id, part_id) VALUES ($1, $2)"
+	renewReaderLeaseStmt            = "UPDATE part_reader_lease SET expires_at = $1 WHERE id = $2 AND expires_at > $3"
+	deleteReaderLeaseStmt           = "DELETE FROM part_reader_lease WHERE id = $1"
+	deleteExpiredReaderLeasesStmt   = "DELETE FROM part_reader_lease WHERE expires_at <= $1"
+	countActiveReaderLeasesStmt     = "SELECT COUNT(*) FROM part_reader_lease_part lp JOIN part_reader_lease l ON l.id = lp.lease_id WHERE lp.part_id = $1 AND l.expires_at > $2"
 )
 
 func NewRepository() (partregistry.Repository, error) {
@@ -179,9 +186,59 @@ func (pr *sqliteRepository) Condemn(ctx context.Context, tx *sql.Tx, id partstor
 	if ref > 0 || !unreferenced.Valid || !unreferenced.Time.Before(cutoff) {
 		return false, nil
 	}
+	var leased int
+	if err = tx.QueryRowContext(ctx, countActiveReaderLeasesStmt, id.String(), time.Now().UTC()).Scan(&leased); err != nil || leased != 0 {
+		return false, err
+	}
 	var live int
 	if err = tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live); err != nil || live != 0 {
 		return false, err
 	}
 	return pr.DeleteByPartId(ctx, tx, id, version)
+}
+
+func (pr *sqliteRepository) AcquireReaderLease(ctx context.Context, tx *sql.Tx, leaseId string, partIds []partstore.PartId, expiresAt time.Time) (bool, error) {
+	refs := partregistry.SortRefs(partregistry.RefsFromPartIds(partIds))
+	for _, r := range refs {
+		// Deleted rows and negative orphan markers are condemned.
+		var ref int64
+		err := tx.QueryRowContext(ctx, findRegistryForLeaseStmt, r.PartId.String()).Scan(&ref)
+		if err == sql.ErrNoRows || (err == nil && ref < 0) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, insertReaderLeaseStmt, leaseId, expiresAt.UTC()); err != nil {
+		return false, err
+	}
+	for _, r := range refs {
+		if _, err := tx.ExecContext(ctx, insertReaderLeasePartStmt, leaseId, r.PartId.String()); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func (pr *sqliteRepository) RenewReaderLease(ctx context.Context, tx *sql.Tx, leaseId string, now, expiresAt time.Time) (bool, error) {
+	r, err := tx.ExecContext(ctx, renewReaderLeaseStmt, expiresAt.UTC(), leaseId, now.UTC())
+	if err != nil {
+		return false, err
+	}
+	n, err := r.RowsAffected()
+	return n == 1, err
+}
+
+func (pr *sqliteRepository) ReleaseReaderLease(ctx context.Context, tx *sql.Tx, leaseId string) error {
+	_, err := tx.ExecContext(ctx, deleteReaderLeaseStmt, leaseId)
+	return err
+}
+
+func (pr *sqliteRepository) DeleteExpiredReaderLeases(ctx context.Context, tx *sql.Tx, now time.Time) (int64, error) {
+	r, err := tx.ExecContext(ctx, deleteExpiredReaderLeasesStmt, now.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return r.RowsAffected()
 }

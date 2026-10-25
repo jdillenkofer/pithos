@@ -120,6 +120,22 @@ never promoted or listed. Final-named orphan parts are handled by GC after its
 grace window. Namespace durability remains subject to the platform limitations
 above; SFTP has no portable directory sync.
 
+### Deleted content and running downloads
+
+Deleting or overwriting an object removes its metadata immediately; only GC
+deletes part content. GC first records when it observes a part without
+references and deletes it no earlier than one grace window later, so a
+download that started before the delete keeps reading consistent content.
+
+Downloads from external stores (everything except `SqlPartStore`) have no
+duration limit. Short downloads rely on retention alone and never write to the
+database. A download still running after a few minutes (at most half the grace
+window) takes a reader lease on its parts and renews it until it is closed;
+GC never deletes leased parts. If the lease cannot be taken or renewed, the
+download fails rather than read content that may be gone. Every instance
+sharing a database must use the same grace window, and their clocks must
+agree to within a few minutes.
+
 ### Persisted token and key cleanup
 
 File-backed string providers require exclusive ownership. Atomic writes preserve
