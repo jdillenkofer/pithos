@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jdillenkofer/pithos/internal/config"
 	storageconfig "github.com/jdillenkofer/pithos/internal/storage/config"
 	"github.com/jdillenkofer/pithos/internal/storage/integrity"
 	partconfig "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/config"
@@ -353,12 +352,8 @@ func (a *App) registerStorage(mux *http.ServeMux) {
 			if snapshot, err := gatherMetrics(); err == nil && snapshot.hasParts {
 				job.setEstimate(0, int64(snapshot.logicalBytes))
 			}
-			dbs := config.NewDbContainer()
-			for _, db := range a.options.Databases {
-				dbs.AddDb(db)
-			}
 			// These constants are intentionally not controlled by any request parameter.
-			return integrity.NewValidator(a.options.Storage, dbs, false, false).
+			return integrity.NewValidator(a.options.Storage, false, false).
 				WithProgress(progress).
 				WithByteProgress(func(n int64) { job.bytes.Add(n) }).
 				WithResultLimits(adminValidationLimits).

@@ -31,14 +31,14 @@ type PartFailure struct {
 
 type ValidationReport struct {
 	NoncurrentVersions int
-	StartTime         time.Time
-	EndTime           time.Time
-	TotalBuckets      int
-	TotalObjects      int
-	SuccessfulObjects int
-	FailedObjects     int
-	DeletedObjects    int
-	Results           []ValidationResult
+	StartTime          time.Time
+	EndTime            time.Time
+	TotalBuckets       int
+	TotalObjects       int
+	SuccessfulObjects  int
+	FailedObjects      int
+	DeletedObjects     int
+	Results            []ValidationResult
 	// OmittedResults counts results dropped by ResultLimits.MaxResults; the
 	// aggregate counts above still include them.
 	OmittedResults int
