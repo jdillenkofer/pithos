@@ -125,7 +125,7 @@ func TestDeleteBucketAbortsInProgressMultipartUploads(t *testing.T) {
 	require.NotEmpty(t, physicalPartIDs(t, st))
 
 	require.NoError(t, st.DeleteBucket(ctx, bucket))
-	require.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 	_, err := st.HeadBucket(ctx, bucket)
 	require.ErrorIs(t, err, storage.ErrNoSuchBucket)
 

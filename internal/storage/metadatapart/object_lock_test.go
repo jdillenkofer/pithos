@@ -79,7 +79,7 @@ func TestObjectLockStorage(t *testing.T) {
 			require.True(t, multi.Entries[1].Deleted)
 			_, err = st.DeleteObject(ctx, bucket, key, bypassDelete)
 			require.NoError(t, err)
-			require.Empty(t, physicalPartIDs(t, st))
+			assertRetainedUnreferencedParts(t, st)
 			// Explicit compliance retention overrides the bucket's governance default.
 			compliance := &storage.ObjectRetention{Mode: storage.RetentionModeCompliance, RetainUntilDate: time.Now().UTC().Add(2 * time.Hour)}
 			put, err = st.PutObject(ctx, bucket, key, nil, bytes.NewBufferString("compliance"), nil, &storage.PutObjectOptions{ObjectLock: storage.ObjectLock{Retention: compliance}})

@@ -301,6 +301,9 @@ func newTestStorageWithColdStore(t *testing.T) (*metadataPartStorage, func()) {
 
 func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	t.Helper()
+	// Windows runners' Docker has no bridge network for Linux containers;
+	// the provider health check does not detect this.
+	testutils.SkipOnWindowsInGitHubActions(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 	ctx := t.Context()
 	container, err := postgres.Run(ctx, testutils.PostgresImage,
@@ -535,7 +538,7 @@ func TestCopyObjectSharesPartsInSameStore(t *testing.T) {
 	require.Len(t, physicalPartIDs(t, st), 1)
 	_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
 	require.NoError(t, err)
-	assert.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
@@ -561,7 +564,7 @@ func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
 	require.Len(t, physicalPartIDs(t, st), 1)
 	_, err = st.DeleteObject(ctx, bucket, secondKey, nil)
 	require.NoError(t, err)
-	assert.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestCopyObjectAcrossStoresDeduplicatesContent(t *testing.T) {
@@ -596,7 +599,7 @@ func TestCopyObjectAcrossStoresDeduplicatesContent(t *testing.T) {
 	require.Len(t, partIDsInStore(t, st, &coldName), 1)
 	_, err = st.DeleteObject(ctx, bucket, dstKey2, nil)
 	require.NoError(t, err)
-	assert.Empty(t, partIDsInStore(t, st, &coldName))
+	assert.Len(t, partIDsInStore(t, st, &coldName), 1) // Deferred GC retains the dereferenced part.
 }
 
 func TestTransitionWithinSameStoreKeepsContent(t *testing.T) {
@@ -619,7 +622,7 @@ func TestTransitionWithinSameStoreKeepsContent(t *testing.T) {
 	require.Len(t, physicalPartIDs(t, st), 1)
 	_, err = st.DeleteObject(ctx, bucket, key, nil)
 	require.NoError(t, err)
-	assert.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestTransitionWithinSameStoreKeepsSharedPartLive(t *testing.T) {
@@ -649,7 +652,7 @@ func TestTransitionWithinSameStoreKeepsSharedPartLive(t *testing.T) {
 	require.Len(t, physicalPartIDs(t, st), 1)
 	_, err = st.DeleteObject(ctx, bucket, dstKey, nil)
 	require.NoError(t, err)
-	assert.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestDedupIndexChecksumMismatchDoesNotShare(t *testing.T) {
@@ -731,7 +734,7 @@ func TestPostgresConcurrentDeleteAndCopyNeverDeletesLiveDestination(t *testing.T
 			assert.ErrorIs(t, copyErr, storage.ErrNoSuchKey)
 		}
 	}
-	assert.Empty(t, physicalPartIDs(t, st))
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestPostgresConcurrentIdenticalUploadsRemainReadable(t *testing.T) {
@@ -858,10 +861,10 @@ func TestUploadPartReplacesExistingPartNumber(t *testing.T) {
 		partIds, err = st.partStores.Default().GetPartIds(ctx, tx)
 		return err
 	}))
-	require.Len(t, partIds, 1)
+	require.Len(t, partIds, 2) // Replaced content remains until GC retention expires.
 	var refCount int64
 	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(_ context.Context, tx database.Tx) error {
-		return tx.SqlTx().QueryRowContext(ctx, "SELECT ref_count FROM part_registry WHERE part_id = $1", partIds[0].String()).Scan(&refCount)
+		return tx.SqlTx().QueryRowContext(ctx, "SELECT SUM(ref_count) FROM part_registry").Scan(&refCount)
 	}))
 	assert.Equal(t, int64(1), refCount)
 
@@ -1121,7 +1124,8 @@ func TestDeleteObjectSuspendedRemovesNullVersionParts(t *testing.T) {
 		partIds, err = st.partStores.Default().GetPartIds(ctx, tx)
 		return err
 	}))
-	assert.Empty(t, partIds)
+	assert.Len(t, partIds, 1)
+	assertRetainedUnreferencedParts(t, st)
 }
 
 func TestListObjectVersions_CommonPrefixWithMultipleKeysNotRepeatedAcrossPages(t *testing.T) {

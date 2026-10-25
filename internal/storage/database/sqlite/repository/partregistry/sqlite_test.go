@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
@@ -66,14 +67,16 @@ func TestRegisterAddRemoveLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, unreferenced)
 
-		// Removing the last reference reports the part as unreferenced.
+		// Removing the last reference retains the part until GC.
 		unreferenced, err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 1}})
 		require.NoError(t, err)
-		assert.Equal(t, []partstore.PartId{partId}, unreferenced)
+		assert.Empty(t, unreferenced)
 
 		entities, err := repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
-		assert.Empty(t, entities)
+		require.Len(t, entities, 1)
+		assert.Zero(t, entities[0].RefCount)
+		assert.Nil(t, entities[0].UnreferencedAt) // Only a collector observation starts retention.
 		return nil
 	})
 }
@@ -95,7 +98,13 @@ func TestTryAddReferencesFailsForCondemnedPart(t *testing.T) {
 
 		unreferenced, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: condemnedPartId, Delta: 1}})
 		require.NoError(t, err)
-		assert.Equal(t, []partstore.PartId{condemnedPartId}, unreferenced)
+		assert.Empty(t, unreferenced)
+		condemned, err := repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(time.Hour))
+		require.NoError(t, err)
+		require.False(t, condemned) // First observe, then collect after retention.
+		condemned, err = repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(time.Hour))
+		require.NoError(t, err)
+		require.True(t, condemned)
 
 		// Adding a reference to a part whose registry row is gone must fail,
 		// even when other refs in the same batch are addable.
@@ -128,7 +137,7 @@ func TestRemoveReferencesSkipsMissingRows(t *testing.T) {
 			{PartId: registeredPartId, Delta: 1},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, []partstore.PartId{registeredPartId}, unreferenced)
+		assert.Empty(t, unreferenced)
 		return nil
 	})
 }
