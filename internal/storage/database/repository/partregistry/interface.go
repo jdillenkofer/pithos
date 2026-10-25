@@ -14,14 +14,17 @@ import (
 // adding and removing references both update the same row, so row locking
 // serializes the last-reference race on Postgres (SQLite writes are already
 // fully serialized). The invariant at every commit point is
-// ref_count == COUNT(*) FROM parts WHERE part_id = X for registered content.
-// A negative count is a non-referencable orphan retry marker with no metadata.
+// ref_count == COUNT(*) FROM parts WHERE part_id = X.
+// An orphaned row has no metadata references and must never gain any: it
+// records a physical part without registry row (an interrupted write or a
+// failed post-condemn deletion) until GC may delete it after retention.
 type Repository interface {
 	// RegisterParts inserts registry rows for freshly created part ids.
 	// Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	// TryAddReferences increments ref_count and clears unreferenced_at.
-	// A condemned (deleted registry row) part is never resurrected. It returns
+	// A condemned (deleted registry row) or orphaned part is never
+	// resurrected. It returns
 	// false as soon as a guard fails; earlier increments are rolled back with
 	// the surrounding transaction by the caller. Refs are processed in
 	// ascending part-id order.
@@ -40,8 +43,8 @@ type Repository interface {
 	// Condemn must run in a fresh GC write transaction (not a metadata mutation
 	// transaction or an ambient reader snapshot). The first committed-zero
 	// observation starts retention; only later observations may condemn.
-	// Missing rows become non-referencable negative-count orphan markers so
-	// failed deletion retries cannot resurrect a previously condemned id.
+	// Missing rows become orphaned rows so failed deletion retries cannot
+	// resurrect a previously condemned id.
 	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId, cutoff time.Time) (bool, error)
 }
 
@@ -58,6 +61,7 @@ type Entity struct {
 	UpdatedAt      time.Time
 	Version        int64
 	UnreferencedAt *time.Time
+	Orphaned       bool
 }
 
 type Reconciliation struct {

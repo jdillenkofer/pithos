@@ -329,7 +329,7 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 			return err
 		}
 		for _, row := range rows {
-			if _, present := physicalIDs[row.PartId]; !present && row.RefCount <= 0 && row.PartId.CreatedAt().Before(cutoff) {
+			if _, present := physicalIDs[row.PartId]; !present && row.RefCount == 0 && row.PartId.CreatedAt().Before(cutoff) {
 				registryOnly = append(registryOnly, row.PartId)
 			}
 		}

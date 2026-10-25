@@ -1,1 +1,2 @@
 ALTER TABLE part_registry ADD COLUMN unreferenced_at DATETIME;
+ALTER TABLE part_registry ADD COLUMN orphaned BOOLEAN NOT NULL DEFAULT FALSE;
