@@ -79,7 +79,7 @@ func prepareSshServerWithShaping(t testing.TB, usePassword bool, shapeable bool)
 
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
-		Image:        "lscr.io/linuxserver/openssh-server:version-10.2_p1-r0@sha256:835c1f321ff16b10e1e3d82ec3808a5253f02f73a98d7dca5b0786184f44e69a",
+		Image:        testutils.OpenSSHServerImage,
 		ExposedPorts: []string{"2222/tcp"},
 		Env: map[string]string{
 			"PUID":            "1000",
