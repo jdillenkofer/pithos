@@ -78,10 +78,12 @@ const (
 	// CapabilityTxFreeDeletePart allows DeletePart to be called with a nil
 	// transaction.
 	CapabilityTxFreeDeletePart
-	// CapabilitySnapshotProtectedGetPart means all content is protected from
-	// concurrent deletion by the metadata transaction's database snapshot.
+	// CapabilityDatabaseSnapshotGetPart means all content queries use the
+	// supplied metadata database transaction. This is NOT a deletion-protection
+	// guarantee: the caller must establish or validate stable snapshot isolation
+	// before relying on it. READ COMMITTED is insufficient for lazy reads.
 	// Composite stores may advertise this only when every child supports it.
-	CapabilitySnapshotProtectedGetPart
+	CapabilityDatabaseSnapshotGetPart
 )
 
 // Capabilities is a set of part-store capabilities.

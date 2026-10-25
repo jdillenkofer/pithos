@@ -30,7 +30,9 @@ var _ partstore.StatsProvider = (*sqlPartStore)(nil)
 func (bs *sqlPartStore) SupportsStats() bool { return true }
 
 func (s *sqlPartStore) Capabilities() partstore.Capabilities {
-	return partstore.NewCapabilities(partstore.CapabilitySnapshotProtectedGetPart)
+	// All lazy queries use the supplied transaction. The caller must validate
+	// its isolation; this does not claim protection under READ COMMITTED.
+	return partstore.NewCapabilities(partstore.CapabilityDatabaseSnapshotGetPart)
 }
 
 type Option func(*sqlPartStore)

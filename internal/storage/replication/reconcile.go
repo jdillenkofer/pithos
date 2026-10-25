@@ -159,7 +159,9 @@ func (rs *replicationStorage) reconcileBucket(ctx context.Context, bucket storag
 			restore[id] = sourceConfig
 		}
 	}
-	err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
+	// Reconciliation streams lazy SQL readers into the journal; all metadata
+	// and content statements must share one stable snapshot.
+	err = database.WithTx(ctx, rs.db, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, tx database.Tx) error {
 		if err := rs.journal.RegisterTopology(ctx, tx.SqlTx(), rs.options.ReplicationID, rs.options.SecondaryIDs); err != nil {
 			return err
 		}

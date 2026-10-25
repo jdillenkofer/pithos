@@ -264,6 +264,11 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 		return err
 	}
 	numDeletedParts := 0
+	// The registry uses logical IDs across all stores, whereas physical IDs
+	// are scoped to a store. Remember every enumerated ID (including young
+	// ones) so registry-only cleanup cannot remove retention evidence for a
+	// representation in another store or for a failed post-commit deletion.
+	physicalIDs := make(map[partstore.PartId]struct{})
 	for _, store := range partGC.partStores.All() {
 		var candidates []partstore.PartId
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
@@ -272,6 +277,7 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 				return err
 			}
 			for _, id := range ids {
+				physicalIDs[id] = struct{}{}
 				if id.CreatedAt().Before(cutoff) {
 					candidates = append(candidates, id)
 				}
@@ -311,6 +317,44 @@ func (partGC *partGC) runGCWithContext(ctx context.Context) (resultErr error) {
 					slog.Warn("post-commit part deletion failed; leaving orphan for next GC", "part_id", id.String(), "error", err)
 				}
 			}
+		}
+	}
+	// Some stores have no physical representation for an empty part. Such
+	// registry rows must enter the same post-commit observation/retention path
+	// even though no store enumerates them. No physical delete is routed here.
+	var registryOnly []partstore.PartId
+	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		rows, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if _, present := physicalIDs[row.PartId]; !present && row.RefCount <= 0 && row.PartId.CreatedAt().Before(cutoff) {
+				registryOnly = append(registryOnly, row.PartId)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	for start := 0; start < len(registryOnly); start += 256 {
+		end := min(start+256, len(registryOnly))
+		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{}, func(ctx context.Context, tx database.Tx) error {
+			for _, id := range registryOnly[start:end] {
+				// Condemn rechecks actual references and serializes with re-reference.
+				condemned, err := partGC.partRegistryRepository.Condemn(ctx, tx.SqlTx(), id, cutoff)
+				if err != nil {
+					return err
+				}
+				if condemned {
+					if err := partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{id}); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))

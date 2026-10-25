@@ -177,7 +177,15 @@ func TestReplicationMapsUnversionedNullVersion(t *testing.T) {
 }
 
 func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
-	primary, done := newTestStorage(t)
+	testReplicationMultipartSnapshotResumesDurableParts(t, newTestStorage)
+}
+
+func TestPostgresReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
+	testReplicationMultipartSnapshotResumesDurableParts(t, newPostgresTestStorage)
+}
+
+func testReplicationMultipartSnapshotResumesDurableParts(t *testing.T, newPrimary func(*testing.T) (*metadataPartStorage, func())) {
+	primary, done := newPrimary(t)
 	defer done()
 	secondary, doneSecondary := newTestStorage(t)
 	defer doneSecondary()

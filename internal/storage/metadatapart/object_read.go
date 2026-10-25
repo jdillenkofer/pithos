@@ -297,19 +297,18 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
-	// Mixed stores retain SQL snapshot semantics, but must still bound every
-	// external access. Bound the whole request whenever any store is external.
 	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
-	// Only a positively identified SQL-only composition may omit the bound.
-	// Lack of tx-free support does not imply snapshot-safe external content.
-	boundedStreaming := !mbs.partStores.Capabilities().Has(partstore.CapabilitySnapshotProtectedGetPart)
+	// Database-backed content is safe only after validating the actual read
+	// transaction below. Other compositions retain the conservative bound.
+	databaseContent := mbs.partStores.Capabilities().Has(partstore.CapabilityDatabaseSnapshotGetPart)
+	boundedStreaming := !databaseContent
 
 	var cancel context.CancelFunc
 	if boundedStreaming {
 		// An ambient snapshot may predate the lifetime bound, and its context
 		// would also leak a finalized transaction into external store opens.
 		if _, ok := database.TxControllerFromContext(ctx); ok {
-			return nil, nil, fmt.Errorf("bounded external GET cannot use an ambient transaction")
+			return nil, nil, fmt.Errorf("bounded GET cannot use an ambient transaction")
 		}
 		ctx, cancel = context.WithTimeout(ctx, mbs.readerLifetime)
 	}
@@ -322,6 +321,25 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 
 	var storageObject storage.Object
 	getObjectInTx := func(ctx context.Context, tx database.Tx) ([]io.ReadCloser, error) {
+		if databaseContent {
+			// BeginTx may reuse an ambient transaction and ignore readOptions.
+			// Verify its actual isolation before metadata or lazy content access.
+			switch mbs.db.GetDatabaseType() {
+			case database.DB_TYPE_POSTGRES:
+				var isolation string
+				if err := tx.SqlTx().QueryRowContext(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+					return nil, err
+				}
+				if isolation != "repeatable read" && isolation != "serializable" {
+					return nil, fmt.Errorf("SQL GET requires a stable snapshot; transaction isolation is %s", isolation)
+				}
+			case database.DB_TYPE_SQLITE:
+				// SQLite read transactions pin a database snapshot on first read,
+				// including when a controller is reused (WAL and rollback journal).
+			default:
+				return nil, fmt.Errorf("SQL GET snapshot protection is not proven for this database")
+			}
+		}
 		var object *metadatastore.Object
 		var err error
 		if opts != nil && opts.VersionID != nil {
@@ -440,15 +458,23 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 		return readers, nil
 	}
 
+	// The entire metadata phase must use one fresh snapshot. A deadline alone
+	// cannot stop READ COMMITTED from mixing an old object row with newer part
+	// rows during a still-valid GET. PostgreSQL needs explicit REPEATABLE READ;
+	// SQLite's ordinary read transaction already pins its snapshot on first read.
+	readOptions := &sql.TxOptions{ReadOnly: true}
+	if mbs.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
+		readOptions.Isolation = sql.LevelRepeatableRead
+	}
 	var readers []io.ReadCloser
 	var err error
 	if txFreeStreaming {
-		err = database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		err = database.WithTx(ctx, mbs.db, readOptions, func(ctx context.Context, tx database.Tx) error {
 			readers, err = getObjectInTx(ctx, tx)
 			return err
 		})
 	} else {
-		readers, err = database.WithTxReadClosers(ctx, mbs.db, &sql.TxOptions{ReadOnly: true}, getObjectInTx)
+		readers, err = database.WithTxReadClosers(ctx, mbs.db, readOptions, getObjectInTx)
 	}
 	if err == nil && cancel != nil {
 		err = ctx.Err()
