@@ -7,6 +7,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -181,6 +182,7 @@ func TestReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
 }
 
 func TestPostgresReplicationMultipartSnapshotResumesDurableParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	testReplicationMultipartSnapshotResumesDurableParts(t, newPostgresTestStorage)
 }
 

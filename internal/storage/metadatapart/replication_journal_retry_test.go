@@ -12,6 +12,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +43,7 @@ func installJournalConflict(t *testing.T, st *metadataPartStorage) func() {
 }
 
 func TestReplicationPostgresLazySnapshotJournalRetries(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newPostgresTestStorage(t)
 	defer done()
 	coordinator, stop := retryCoordinator(t, st)
@@ -109,6 +111,7 @@ func (s *snapshotCountingPrimary) GetObject(ctx context.Context, bucket storage.
 }
 
 func TestReplicationPostgresRemoteFinalizationRetry(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	primary, donePrimary := newTestStorage(t)
 	defer donePrimary()
 	journal, doneJournal := newPostgresTestStorage(t)
@@ -134,6 +137,7 @@ func TestReplicationPostgresRemoteFinalizationRetry(t *testing.T) {
 }
 
 func TestReplicationPostgresReconcileSnapshotRetry(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	primary, done := newPostgresTestStorage(t)
 	defer done()
 	secondary, doneSecondary := newTestStorage(t)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jdillenkofer/pithos/internal/ioutils"
 	"github.com/jdillenkofer/pithos/internal/storage"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +29,7 @@ func (s boundedStorage) GetObject(context.Context, storage.BucketName, storage.O
 	return &storage.Object{Size: 5}, []io.ReadCloser{s.reader}, nil
 }
 func TestBoundedStreamBypassesCachePipeAndPreservesDeadline(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	deadline := time.Now().Add(time.Minute)
 	reader := ioutils.NewStatsReadCloser(&deadlineReader{io.NopCloser(strings.NewReader("hello")), deadline}, nil)
 	cache := newMemoryCache()

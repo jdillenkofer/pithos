@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +40,7 @@ func (r *blockedReader) Read(p []byte) (int, error) {
 func (r *blockedReader) Close() error { r.once.Do(func() { close(r.closed) }); return nil }
 
 func TestBoundedReaderDeadlineInterruptsReadAndCleansUp(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	base, cancel := context.WithCancel(context.Background())
 	ctx := manualDeadline{base}
 	raw := &blockedReader{started: make(chan struct{}), closed: make(chan struct{}), release: make(chan struct{})}
@@ -65,6 +67,7 @@ func TestBoundedReaderDeadlineInterruptsReadAndCleansUp(t *testing.T) {
 }
 
 func TestBoundedReaderNoOpenAfterDeadlineAndLateOpenCleanup(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	base, cancel := context.WithCancel(context.Background())
 	ctx := manualDeadline{base}
 	cancel()
@@ -99,6 +102,7 @@ func (r *closeBlockingReader) Close() error {
 }
 
 func TestBoundedReaderFailedOpenDoesNotWaitForBlockingCleanup(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	raw := &closeBlockingReader{started: make(chan struct{}), release: make(chan struct{})}
@@ -119,6 +123,7 @@ func TestBoundedReaderFailedOpenDoesNotWaitForBlockingCleanup(t *testing.T) {
 }
 
 func TestSharedDeadlineClosesIdleRanges(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	base, cancel := context.WithCancel(context.Background())
 	ctx := manualDeadline{base}
 	raws := []*blockedReader{{closed: make(chan struct{})}, {closed: make(chan struct{})}}

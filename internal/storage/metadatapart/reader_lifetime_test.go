@@ -4,10 +4,12 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReaderLifetimeRetentionMargin(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, cleanup := newTestStorage(t)
 	defer cleanup()
 	for _, retention := range []time.Duration{time.Nanosecond, 2 * time.Nanosecond, time.Second, 10 * time.Minute, time.Hour} {

@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/compression"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/middlewares/encryption/tink"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +55,7 @@ func (r *gatedCompositionReader) Close() error {
 }
 
 func TestBoundedReaderRealCompressionEncryptionCleanup(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, algorithm := range []compression.Algorithm{compression.AlgorithmGzip, compression.AlgorithmZstd} {
 		t.Run(string(algorithm), func(t *testing.T) {
 			ctx := context.Background()

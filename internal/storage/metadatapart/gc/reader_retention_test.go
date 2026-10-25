@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +35,7 @@ func (s *retryDeletionStore) DeletePart(ctx context.Context, tx database.Tx, id 
 }
 
 func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			ctx := context.Background()

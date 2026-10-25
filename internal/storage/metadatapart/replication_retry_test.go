@@ -17,6 +17,7 @@ import (
 	sqlpartstore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -72,6 +73,7 @@ func journalCount(t *testing.T, st *metadataPartStorage, operation string) int {
 }
 
 func TestReplicationRetriesConsumedInputAfterRollback(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var st *metadataPartStorage
@@ -123,6 +125,7 @@ func TestReplicationRetriesConsumedInputAfterRollback(t *testing.T) {
 }
 
 func TestReplicationPostgresConcurrentBucketWriter(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newPostgresTestStorage(t)
 	defer done()
 	coordinator, stop := retryCoordinator(t, st)
@@ -184,6 +187,7 @@ func (s *transitionRetryMetadataStore) TransitionObject(ctx context.Context, tx 
 }
 
 func TestReplicationTransitionRetrySafety(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		for _, external := range []bool{false, true} {
 			name := backend + "/sql"
@@ -270,6 +274,7 @@ func (s *captureRetryMetadataStore) PutObject(ctx context.Context, tx *sql.Tx, b
 }
 
 func TestReplicationDoesNotReplayExternalPartWrites(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newPostgresTestStorage(t)
 	defer done()
 	fs, err := filesystem.New(t.TempDir())
@@ -304,6 +309,7 @@ func TestReplicationDoesNotReplayExternalPartWrites(t *testing.T) {
 }
 
 func TestReplicationDoesNotInferMiddlewareReplaySafety(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newTestStorage(t)
 	defer done()
 	p := &replicaFaultStorage{DelegatingStorage: delegator.Wrap(st)}
@@ -325,6 +331,7 @@ func TestReplicationDoesNotInferMiddlewareReplaySafety(t *testing.T) {
 }
 
 func TestReplicationPreservesFinalDenialObservation(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newTestStorage(t)
 	defer done()
 	coordinator, stop := retryCoordinator(t, st)
@@ -343,6 +350,7 @@ func TestReplicationPreservesFinalDenialObservation(t *testing.T) {
 }
 
 func TestReplicationRejectsAmbientWriteSnapshots(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newTestStorage(t)
 	defer done()
 	coordinator, stop := retryCoordinator(t, st)

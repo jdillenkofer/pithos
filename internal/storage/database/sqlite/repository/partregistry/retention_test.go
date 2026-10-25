@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partregistry"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDereferenceRetentionAndRereference(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	db, repo, cleanup := setupRepository(t)
 	defer cleanup()
 	id := mustNewPartId(t)

@@ -15,6 +15,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +36,7 @@ func (s *snapshotPhaseMetadataStore) HeadObject(ctx context.Context, tx *sql.Tx,
 }
 
 func TestSQLGetStableMetadataAndLazyChunksAcrossGC(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var st *metadataPartStorage
@@ -122,6 +124,7 @@ func TestSQLGetStableMetadataAndLazyChunksAcrossGC(t *testing.T) {
 }
 
 func TestExternalGetStableMetadataPhase(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var st *metadataPartStorage
@@ -164,6 +167,7 @@ func TestExternalGetStableMetadataPhase(t *testing.T) {
 }
 
 func TestSQLGetAmbientSnapshotValidation(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var st *metadataPartStorage

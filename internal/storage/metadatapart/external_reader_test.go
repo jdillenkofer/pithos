@@ -18,6 +18,7 @@ import (
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +38,7 @@ func assertRetainedUnreferencedParts(t *testing.T, st *metadataPartStorage) {
 }
 
 func TestExternalGetShortTransactionLazyDeleteAndSharedDeadline(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, mode := range []string{"external", "mixed", "capabilityless"} {
 		t.Run(mode, func(t *testing.T) { testExternalGet(t, mode) })
 	}

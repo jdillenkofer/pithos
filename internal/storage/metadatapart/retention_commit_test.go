@@ -13,6 +13,7 @@ import (
 	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,7 @@ import (
 // timestamp has aged past retention. Only a subsequent committed-zero
 // observation can establish a safe retention clock (MVCC and WAL alike).
 func TestExternalGetDuringDelayedMutationCommit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
 		t.Run(backend, func(t *testing.T) {
 			var st *metadataPartStorage

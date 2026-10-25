@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/database/repository/partcontent"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	sqlpartstore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,6 +58,7 @@ func (r *transitionSnapshotReader) Read(p []byte) (int, error) {
 }
 
 func TestReplicationPostgresTransitionStableLazySnapshot(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	st, done := newPostgresTestStorage(t)
 	defer done()
 	repo, err := repositoryfactory.NewPartContentRepository(st.db)

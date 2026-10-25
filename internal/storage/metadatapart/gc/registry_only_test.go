@@ -12,11 +12,13 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRegistryOnlyCleanupPreservesNamedStoreRetention(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
 	env := newSqliteGCTestEnv(t)
 	fs, err := filesystem.New(t.TempDir())
@@ -74,6 +76,7 @@ func TestRegistryOnlyCleanupPreservesNamedStoreRetention(t *testing.T) {
 }
 
 func TestRegistryOnlyCleanupPreservesReReferences(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	ctx := context.Background()
 	env := newSqliteGCTestEnv(t)
 	id := *partstore.MustNewPartIdFromString(ulid.MustNew(ulid.Timestamp(time.Now().Add(-24*time.Hour)), rand.Reader).String())

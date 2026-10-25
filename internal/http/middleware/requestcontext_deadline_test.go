@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRequestContextAllowsHardResponseWriteDeadline(t *testing.T) {
+	testutils.SkipIfIntegration(t)
 	result := make(chan error, 1)
 	server := httptest.NewServer(MakeRequestContextMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		controller := http.NewResponseController(w)
