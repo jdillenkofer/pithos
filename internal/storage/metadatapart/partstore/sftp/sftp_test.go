@@ -323,11 +323,13 @@ func TestSftpPartStoreTxPutPartPreservesImmutableContent(t *testing.T) {
 
 	errRollback := errors.New("rollback")
 
-	// A fresh part is written in place and removed on rollback.
-	err = putPartInTx("staged", errRollback)
+	// Rollback leaves a complete, unreferenced part for GC.
+	err = putPartInTx("first", errRollback)
 	assert.ErrorIs(t, err, errRollback)
-	_, err = ps.GetPart(ctx, nil, *partId)
-	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	assert.Equal(t, "first", readPart())
+	ids, err := ps.GetPartIds(ctx, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, []partstore.PartId{*partId}, ids)
 	assertNoLeftoverFiles()
 
 	assert.NoError(t, putPartInTx("first", nil))

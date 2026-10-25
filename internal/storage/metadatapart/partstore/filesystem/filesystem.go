@@ -111,42 +111,9 @@ func (bs *filesystemPartStore) PutPart(ctx context.Context, tx database.Tx, part
 	defer span.End()
 
 	filename := bs.getFilename(partId)
-	if tx != nil {
-		// Part ids are fresh random ids, so the part usually does not exist
-		// yet. Nothing can reference it before commit, so write it in place
-		// and remove it on rollback, saving the temp file and both renames.
-		// An existing part is replaced atomically via the temp file below.
-		f, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, err = ioutils.Copy(f, reader)
-			if err == nil {
-				err = ioutils.SyncFile(f)
-			}
-			err = errors.Join(err, f.Close())
-			if err == nil {
-				err = syncDirectory(bs.root)
-			}
-			if err != nil {
-				_ = os.Remove(filename)
-				return err
-			}
-			tx.OnRollback(func(context.Context) error {
-				if err := os.Remove(filename); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return err
-				}
-				return nil
-			})
-			return nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return err
-		}
-	}
-
-	// A part ID always represents the same logical content. Replays and repairs
-	// can replace its physical representation, even if the surrounding metadata
-	// transaction rolls back. Never delete a pre-existing part on rollback or
-	// truncate it in place: publish only a completely written, synced file.
+	// Publish only complete, synced parts, independently of the metadata
+	// transaction. Rollback leaves unreferenced parts for GC; retries and
+	// repairs preserve the same logical content under the existing ID.
 	tempName := filepath.Join(bs.root, partstore.NewTemporaryPartFilename(partId))
 	tempFile, err := os.OpenFile(tempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {

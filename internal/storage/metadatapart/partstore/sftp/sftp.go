@@ -375,42 +375,9 @@ func (s *sftpPartStore) PutPart(ctx context.Context, tx database.Tx, partId part
 	defer span.End()
 
 	filename := s.getFilename(partId)
-	if tx != nil {
-		// Part ids are fresh random ids, so the part usually does not exist
-		// yet. Nothing can reference it before commit, so write it in place
-		// and remove it on rollback. SFTPv3 servers report an existing file
-		// as a generic failure, so status errors fall back to a temporary file.
-		// Existing parts are replaced after the temporary upload completes.
-		f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
-			return client.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
-		}, isStatusError)
-		if err == nil {
-			err := writeAndClose(lease.conn.client, f, reader)
-			if err != nil {
-				_ = lease.conn.client.Remove(filename)
-			}
-			lease.release()
-			if err != nil {
-				return err
-			}
-			tx.OnRollback(func(context.Context) error {
-				return s.withClient(func(client *sftp.Client) error {
-					if err := client.Remove(filename); err != nil && !isNotFoundError(err) {
-						return err
-					}
-					return nil
-				})
-			})
-			return nil
-		}
-		if !isStatusError(err) {
-			return err
-		}
-	}
-
-	// The ID represents immutable logical content. A retry or repair can safely
-	// publish before commit, but must not remove a pre-existing part on rollback
-	// or truncate the previous copy in place.
+	// Publication is independent of the metadata transaction. Rollback leaves
+	// unreferenced parts for GC; retries and repairs upload complete replacements
+	// of the same logical content before touching the existing copy.
 	tempName := filepath.Join(s.root, partstore.NewTemporaryPartFilename(partId))
 	f, lease, err := doRetriableWithClient(ctx, s, func(client *sftp.Client) (*sftp.File, error) {
 		// This name is private to this invocation, and uploading starts only
@@ -589,12 +556,4 @@ func (s *sftpPartStore) DeletePart(ctx context.Context, tx database.Tx, partId p
 
 func isNotFoundError(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, fs.ErrNotExist)
-}
-
-// isStatusError reports whether err is a status the server answered with,
-// as opposed to a connection failure worth retrying. pkg/sftp maps some
-// statuses to os errors.
-func isStatusError(err error) bool {
-	var statusErr *sftp.StatusError
-	return errors.As(err, &statusErr) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission)
 }

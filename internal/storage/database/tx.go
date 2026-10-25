@@ -21,21 +21,15 @@ var ErrWriteInReadOnlyTransaction = errors.New("cannot begin writable transactio
 type Tx interface {
 	SqlTx() *sql.Tx
 	DBHandle() any
-	OnPreCommit(fn func(context.Context) error)
 	OnAfterCommit(fn func(context.Context) error)
-	OnRollback(fn func(context.Context) error)
 }
 
 type TxController struct {
-	tx               *sql.Tx
-	// hooksMu guards the hook slices on the root controller; a single tx can be
-	// shared across fan-out goroutines (e.g. erasure-coding PutPart writes each
-	// shard concurrently), so OnPreCommit/OnAfterCommit/OnRollback may register
-	// hooks in parallel.
+	tx *sql.Tx
+	// hooksMu guards after-commit hooks on the root controller. Fan-out writes
+	// (for example, erasure-coding shards) may register hooks concurrently.
 	hooksMu          sync.Mutex
-	onPreCommit      []func(context.Context) error
 	onAfterCommit    []func(context.Context) error
-	onRollback       []func(context.Context) error
 	finalized        bool
 	ownsFinalization bool
 	readOnly         bool
@@ -78,25 +72,11 @@ func (t *TxController) DBHandle() any {
 	return t.rootTx().dbHandle
 }
 
-func (t *TxController) OnPreCommit(fn func(context.Context) error) {
-	root := t.rootTx()
-	root.hooksMu.Lock()
-	defer root.hooksMu.Unlock()
-	root.onPreCommit = append(root.onPreCommit, fn)
-}
-
 func (t *TxController) OnAfterCommit(fn func(context.Context) error) {
 	root := t.rootTx()
 	root.hooksMu.Lock()
 	defer root.hooksMu.Unlock()
 	root.onAfterCommit = append(root.onAfterCommit, fn)
-}
-
-func (t *TxController) OnRollback(fn func(context.Context) error) {
-	root := t.rootTx()
-	root.hooksMu.Lock()
-	defer root.hooksMu.Unlock()
-	root.onRollback = append(root.onRollback, fn)
 }
 
 func (t *TxController) Commit(ctx context.Context) error {
@@ -105,12 +85,6 @@ func (t *TxController) Commit(ctx context.Context) error {
 	}
 	if t.finalized {
 		return nil
-	}
-	for _, fn := range t.onPreCommit {
-		if hookErr := fn(ctx); hookErr != nil {
-			_ = t.Rollback(ctx)
-			return hookErr
-		}
 	}
 	err := t.tx.Commit()
 	if err != nil {
@@ -130,17 +104,8 @@ func (t *TxController) Rollback(ctx context.Context) error {
 	if !t.ownsFinalization {
 		return nil
 	}
-	err := t.tx.Rollback()
-	if t.finalized {
-		return err
-	}
 	t.finalized = true
-	for _, fn := range t.onRollback {
-		if hookErr := fn(ctx); hookErr != nil && err == nil {
-			err = hookErr
-		}
-	}
-	return err
+	return t.tx.Rollback()
 }
 
 type txContextKey struct{}
