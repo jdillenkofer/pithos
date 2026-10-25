@@ -160,7 +160,7 @@ func TestFilesystemPartStoreRollbackPreservesExistingPart(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestFilesystemPartStoreRollbackRemovesFreshPart(t *testing.T) {
+func TestFilesystemPartStoreRollbackLeavesFreshPartForGC(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
@@ -194,14 +194,15 @@ func TestFilesystemPartStoreRollbackRemovesFreshPart(t *testing.T) {
 		return errRollback
 	})
 	assert.ErrorIs(t, err, errRollback)
-	_, err = ps.GetPart(ctx, nil, *partId)
-	assert.ErrorIs(t, err, partstore.ErrPartNotFound)
+	ids, err := ps.GetPartIds(ctx, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, []partstore.PartId{*partId}, ids)
 	entries, err := os.ReadDir(partsPath)
 	assert.NoError(t, err)
-	assert.Empty(t, entries, "rollback must not leave files behind")
+	assert.Len(t, entries, 1, "only the complete part should remain for GC")
 
 	err = database.WithTx(ctx, db, nil, func(ctx context.Context, tx database.Tx) error {
-		return ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("committed")))
+		return ps.PutPart(ctx, tx, *partId, bytes.NewReader([]byte("staged")))
 	})
 	assert.NoError(t, err)
 	rc, err := ps.GetPart(ctx, nil, *partId)
@@ -211,5 +212,5 @@ func TestFilesystemPartStoreRollbackRemovesFreshPart(t *testing.T) {
 	defer rc.Close()
 	content, err := io.ReadAll(rc)
 	assert.NoError(t, err)
-	assert.Equal(t, []byte("committed"), content)
+	assert.Equal(t, []byte("staged"), content)
 }

@@ -52,7 +52,7 @@ func countRows(t *testing.T, ctx context.Context, db database.Database, table st
 	return count
 }
 
-func TestWithTxRunsPreCommitBeforeCommitAndAfterCommitAfterCommit(t *testing.T) {
+func TestWithTxRunsAfterCommitHooksAfterCommit(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
@@ -61,11 +61,10 @@ func TestWithTxRunsPreCommitBeforeCommitAndAfterCommitAfterCommit(t *testing.T) 
 
 	var order []string
 	if err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		tx.OnPreCommit(func(context.Context) error {
-			order = append(order, "pre")
-			return nil
-		})
 		tx.OnAfterCommit(func(context.Context) error {
+			if got := countRows(t, context.Background(), db, "tx_lifecycle"); got != 1 {
+				t.Fatalf("after-commit hook ran before commit: got %d rows", got)
+			}
 			order = append(order, "after")
 			return nil
 		})
@@ -76,7 +75,7 @@ func TestWithTxRunsPreCommitBeforeCommitAndAfterCommitAfterCommit(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(order, []string{"body", "pre", "after"}) {
+	if !reflect.DeepEqual(order, []string{"body", "after"}) {
 		t.Fatalf("unexpected hook order: %v", order)
 	}
 	if got := countRows(t, ctx, db, "tx_lifecycle"); got != 1 {
@@ -84,37 +83,28 @@ func TestWithTxRunsPreCommitBeforeCommitAndAfterCommitAfterCommit(t *testing.T) 
 	}
 }
 
-func TestWithTxPreCommitErrorRollsBackAndRunsRollbackHooks(t *testing.T) {
+func TestWithTxBodyErrorRollsBackWithoutRunningAfterCommitHooks(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	ctx := context.Background()
 	db := openTestDB(t)
-	execTx(t, ctx, db, "CREATE TABLE tx_precommit_rollback (id INTEGER PRIMARY KEY)")
+	execTx(t, ctx, db, "CREATE TABLE tx_rollback (id INTEGER PRIMARY KEY)")
 
-	preCommitErr := errors.New("precommit failed")
-	rollbackRan := false
+	bodyErr := errors.New("write failed")
 	err := database.WithTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
-		tx.OnPreCommit(func(context.Context) error {
-			return preCommitErr
-		})
 		tx.OnAfterCommit(func(context.Context) error {
-			t.Fatal("after-commit hook ran after pre-commit failure")
+			t.Fatal("after-commit hook ran after rollback")
 			return nil
 		})
-		tx.OnRollback(func(context.Context) error {
-			rollbackRan = true
-			return nil
-		})
-		_, err := tx.SqlTx().ExecContext(ctx, "INSERT INTO tx_precommit_rollback (id) VALUES (1)")
-		return err
+		if _, err := tx.SqlTx().ExecContext(ctx, "INSERT INTO tx_rollback (id) VALUES (1)"); err != nil {
+			return err
+		}
+		return bodyErr
 	})
-	if !errors.Is(err, preCommitErr) {
-		t.Fatalf("expected precommit error, got %v", err)
+	if !errors.Is(err, bodyErr) {
+		t.Fatalf("expected body error, got %v", err)
 	}
-	if !rollbackRan {
-		t.Fatal("expected rollback hook to run")
-	}
-	if got := countRows(t, ctx, db, "tx_precommit_rollback"); got != 0 {
+	if got := countRows(t, ctx, db, "tx_rollback"); got != 0 {
 		t.Fatalf("expected rollback to remove row, got %d rows", got)
 	}
 }
