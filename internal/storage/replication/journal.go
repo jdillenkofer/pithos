@@ -333,11 +333,33 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 	op.Payload = string(encoded)
 	var result *operationResult
 	if rs.localPrimary {
-		// finalizePrimary may stream lazy SQL content inside this transaction.
-		err = database.WithTx(ctx, rs.db, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, tx database.Tx) error {
+		// Database exposure does not promise replay-safe middleware or external
+		// stores. Retry those only before invoking the primary; SQL-only primaries
+		// explicitly opt into whole-transaction replay after confirmed rollback.
+		provider, ok := rs.Next.(interface{ RetrySafeTransactions() bool })
+		primaryRetrySafe := ok && provider.RetrySafeTransactions()
+		retrySafe := true
+		initialOperation := *op
+		var observations []storage.ObjectLockObservation
+		err = retryTransaction(ctx, rs.db, primaryTransactionOptions(name), func() bool { return retrySafe }, func(ctx context.Context, tx database.Tx) error {
+			retrySafe = true
+			*op = initialOperation
+			result = nil
+			observations = nil
+			p = operationPayload{}
+			if err := json.Unmarshal(encoded, &p); err != nil {
+				return err
+			}
+			if _, err := cached.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
 			if err := rs.journal.RegisterTopology(ctx, tx.SqlTx(), rs.options.ReplicationID, rs.options.SecondaryIDs); err != nil {
 				return err
 			}
+			retrySafe = primaryRetrySafe
+			ctx = storage.WithObjectLockObserver(ctx, func(observation storage.ObjectLockObservation) {
+				observations = append(observations, observation)
+			})
 			var err error
 			result, err = rs.apply(ctx, rs.Next, name, &p, cached)
 			if err != nil {
@@ -348,6 +370,11 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 			}
 			return nil
 		})
+		// Publish only the final attempt, including a final authorization denial.
+		// Observers may have non-transactional effects and must not be replayed.
+		for _, observation := range observations {
+			storage.ObserveObjectLock(ctx, observation)
+		}
 	} else {
 		err = database.WithTx(ctx, rs.db, nil, func(ctx context.Context, tx database.Tx) error {
 			if err := rs.journal.SaveOperation(ctx, tx.SqlTx(), op); err != nil {
@@ -368,7 +395,15 @@ func (rs *replicationStorage) execute(ctx context.Context, name string, p operat
 			}
 			return nil, rs.finishIndeterminatePrimary(ctx, op, err)
 		}
-		err = database.WithTx(ctx, rs.db, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, tx database.Tx) error {
+		// Only journal writes and fresh snapshot reads are repeated here, never
+		// the already successful remote mutation. Reset finalized payload state.
+		initialOperation := *op
+		err = retryTransaction(ctx, rs.db, primaryTransactionOptions(name), func() bool { return true }, func(ctx context.Context, tx database.Tx) error {
+			*op = initialOperation
+			p = operationPayload{}
+			if err := json.Unmarshal(encoded, &p); err != nil {
+				return err
+			}
 			return rs.finalizePrimary(ctx, tx, op, &p, result, cached)
 		})
 		if err != nil {

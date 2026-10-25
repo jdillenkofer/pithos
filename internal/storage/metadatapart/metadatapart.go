@@ -280,6 +280,15 @@ func (mbs *metadataPartStorage) WithTransaction(ctx context.Context, opts *sql.T
 	})
 }
 
+// RetrySafeTransactions explicitly opts into replication's whole-transaction
+// replay after rollback. Middleware must opt in separately; Database alone is
+// not evidence that its effects are transactional. Object-lock observations
+// must be buffered until the final attempt's outcome by the retry owner.
+func (mbs *metadataPartStorage) RetrySafeTransactions() bool {
+	metadata, ok := mbs.metadataStore.(interface{ RetrySafeTransactions() bool })
+	return ok && metadata.RetrySafeTransactions() && mbs.partStores.Capabilities().Has(partstore.CapabilityTransactionalWrites)
+}
+
 func (mbs *metadataPartStorage) Database() database.Database {
 	return mbs.db
 }

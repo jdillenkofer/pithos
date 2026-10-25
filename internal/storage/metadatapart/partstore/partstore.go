@@ -84,6 +84,10 @@ const (
 	// before relying on it. READ COMMITTED is insufficient for lazy reads.
 	// Composite stores may advertise this only when every child supports it.
 	CapabilityDatabaseSnapshotGetPart
+	// CapabilityTransactionalWrites means PutPart and DeletePart have no effects
+	// outside the supplied transaction before commit. Unlike snapshot reads,
+	// this permits replay after a confirmed rollback. Unknown stores fail closed.
+	CapabilityTransactionalWrites
 )
 
 // Capabilities is a set of part-store capabilities.
