@@ -126,7 +126,8 @@ type storageOptions struct {
 	gcInterval    time.Duration
 }
 
-// WithGCGraceWindow excludes parts this young from garbage collection.
+// WithGCGraceWindow retains dereferenced parts and separately protects young orphans.
+// Every instance sharing storage must use the same value.
 func WithGCGraceWindow(window time.Duration) StorageOption {
 	return func(options *storageOptions) error {
 		if window <= 0 {

@@ -415,18 +415,19 @@ func TestStorageClassLifecycleTransitionEndToEnd(t *testing.T) {
 		},
 	}))
 
-	// The reconciler transitions the object: class flips to GLACIER, the part is
-	// relocated to the cold store, and the source part is deleted inline as part
-	// of the same transaction (no dependency on the background GC).
+	// The reconciler transitions the object: class flips to GLACIER and the part
+	// is copied to the cold store. The dereferenced source part stays in the
+	// default store until GC collects it after the grace window, so readers that
+	// started before the transition keep their content.
 	require.Eventually(t, func() bool {
 		obj, err := store.HeadObject(ctx, bucket, storage.MustNewObjectKey("cold/a.bin"), nil)
 		if err != nil {
 			return false
 		}
 		return storage.EffectiveStorageClass(obj.StorageClass) == "GLACIER" &&
-			countPartFiles(t, coldRoot) == 1 &&
-			countPartFiles(t, defaultRoot) == 0
+			countPartFiles(t, coldRoot) == 1
 	}, 15*time.Second, 100*time.Millisecond, "object should transition to GLACIER and relocate its part")
+	assert.Equal(t, 1, countPartFiles(t, defaultRoot), "the source part is retained for GC")
 
 	// The object is still readable byte-identically after the transition.
 	_, readers, err := store.GetObject(ctx, bucket, storage.MustNewObjectKey("cold/a.bin"), nil, nil)

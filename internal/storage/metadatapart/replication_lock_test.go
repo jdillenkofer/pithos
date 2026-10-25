@@ -147,7 +147,7 @@ func TestReplicationObjectLockRecoveryAndStableIDs(t *testing.T) {
 	_, err = coordinator.DeleteObject(ctx, bucket, key, &storage.DeleteObjectOptions{VersionID: &originalVersionID, BypassGovernanceRetention: true})
 	require.NoError(t, err)
 	for _, store := range []*metadataPartStorage{primary, first, second} {
-		require.Empty(t, physicalPartIDs(t, store))
+		assertRetainedUnreferencedParts(t, store)
 	}
 }
 
