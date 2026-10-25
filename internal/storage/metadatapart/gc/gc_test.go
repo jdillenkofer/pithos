@@ -3,7 +3,10 @@ package gc
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"errors"
+	"io"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -19,8 +22,10 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	metadatastoresql "github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
+	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
 	partstoresql "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -192,6 +197,92 @@ func TestRunGCLoopRunsAtIntervalWithoutWrites(t *testing.T) {
 		t.Fatal("garbage collection loop did not stop")
 	}
 	assert.GreaterOrEqual(t, db.begins.Load(), int64(2))
+}
+
+func TestRunGCCollectsRolledBackPartsWithoutDeletingCommittedParts(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	for _, backend := range []string{"sql", "filesystem"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			env := newSqliteGCTestEnv(t)
+			if backend == "filesystem" {
+				store, err := filesystem.New(t.TempDir())
+				require.NoError(t, err)
+				require.NoError(t, store.Start(ctx))
+				t.Cleanup(func() { require.NoError(t, store.Stop(ctx)) })
+				env.physicalStore = store
+				env.collector.partStores, err = partstore.NewNamedPartStores(store, nil, nil)
+				require.NoError(t, err)
+			}
+
+			// Use old IDs so both sides of the grace window can be tested without sleeping.
+			newID := func() partstore.PartId {
+				id := ulid.MustNew(ulid.Timestamp(time.Now().Add(-time.Hour)), rand.Reader)
+				return *partstore.MustNewPartIdFromString(id.String())
+			}
+			liveID, orphanID := newID(), newID()
+			bucket := metadatastore.MustNewBucketName("bucket")
+			writeObject := func(ctx context.Context, tx database.Tx, key string, id partstore.PartId) error {
+				if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewBufferString("abc")); err != nil {
+					return err
+				}
+				_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+					Key: metadatastore.MustNewObjectKey(key), ETag: "etag", Size: 3,
+					Parts: []metadatastore.Part{{Id: id, ETag: "etag", Size: 3}},
+				}, nil)
+				return err
+			}
+			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+				if err := env.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucket); err != nil {
+					return err
+				}
+				return writeObject(ctx, tx, "live", liveID)
+			}))
+			rollbackErr := errors.New("abort metadata write")
+			err := database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+				if err := writeObject(ctx, tx, "aborted", orphanID); err != nil {
+					return err
+				}
+				return rollbackErr
+			})
+			require.ErrorIs(t, err, rollbackErr)
+
+			assertParts := func(expected []partstore.PartId) {
+				t.Helper()
+				require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+					ids, err := env.physicalStore.GetPartIds(ctx, tx)
+					if err != nil {
+						return err
+					}
+					assert.ElementsMatch(t, expected, ids)
+					_, err = env.metadataStore.HeadObject(ctx, tx.SqlTx(), bucket, metadatastore.MustNewObjectKey("aborted"))
+					assert.ErrorIs(t, err, metadatastore.ErrNoSuchKey)
+					reader, err := env.physicalStore.GetPart(ctx, tx, liveID)
+					if err != nil {
+						return err
+					}
+					defer reader.Close()
+					content, err := io.ReadAll(reader)
+					assert.Equal(t, "abc", string(content))
+					return err
+				}))
+			}
+			env.collector.graceWindow = 2 * time.Hour
+			require.NoError(t, env.collector.runGC())
+			if backend == "filesystem" {
+				assertParts([]partstore.PartId{liveID, orphanID})
+			} else {
+				// SQL part content rolls back with the metadata; no physical orphan remains.
+				assertParts([]partstore.PartId{liveID})
+			}
+			env.collector.graceWindow = 30 * time.Minute
+			for range 2 {
+				require.NoError(t, env.collector.runGC())
+				assertParts([]partstore.PartId{liveID})
+			}
+		})
+	}
 }
 
 func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
