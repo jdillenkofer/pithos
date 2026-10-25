@@ -61,6 +61,10 @@ type sqlMetadataStore struct {
 // Compile-time check to ensure sqlMetadataStore implements metadatastore.MetadataStore
 var _ metadatastore.MetadataStore = (*sqlMetadataStore)(nil)
 
+// RetrySafeTransactions reports that mutations have no pre-commit external
+// effects other than object-lock observations, which the retry owner buffers.
+func (sms *sqlMetadataStore) RetrySafeTransactions() bool { return true }
+
 func New(db database.Database, bucketRepository bucket.Repository, objectRepository object.Repository, partRepository part.Repository, tagRepository tag.Repository, userMetadataRepository usermetadata.Repository) (metadatastore.MetadataStore, error) {
 	lifecycle, err := lifecycle.NewValidatedLifecycle("SqlMetadataStore")
 	if err != nil {
