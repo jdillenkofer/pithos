@@ -135,23 +135,7 @@ func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-func makeHealthCheckHandler(dbs []database.Database) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		for _, db := range dbs {
-			err := db.PingContext(ctx)
-			if err != nil {
-				w.WriteHeader(503)
-				w.Write([]byte("Unhealthy"))
-				return
-			}
-		}
-		w.WriteHeader(200)
-		w.Write([]byte("Healthy"))
-	}
-}
-
-func SetupMonitoringServer(dbs []database.Database) http.Handler {
+func SetupMonitoringServer(dbs []database.Database, readiness *Readiness) http.Handler {
 	for i, db := range dbs {
 		for {
 			if provider, ok := db.(interface{ SQLDBs() []*sql.DB }); ok {
@@ -169,7 +153,8 @@ func SetupMonitoringServer(dbs []database.Database) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.HandleFunc("GET /health", makeHealthCheckHandler(dbs))
+	mux.HandleFunc("GET /health/livez", serveLiveness)
+	mux.HandleFunc("GET /health/readyz", readiness.handler(dbs, readinessTimeout))
 	var rootHandler http.Handler = mux
 	return rootHandler
 }

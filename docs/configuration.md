@@ -162,6 +162,61 @@ by an interrupted process may need to be cleaned up separately.
 | `PITHOS_MONITORING_PORT_ENABLED` | Enable/disable the monitoring port | `true` |
 | `PITHOS_METRICS_GAUGES_INTERVAL_SECONDS` | Interval in seconds for periodically sampled storage gauges | `30` |
 
+#### Health probes
+
+The monitoring listener exposes unauthenticated operational endpoints outside
+S3 authentication and hostname routing:
+
+| Path | Purpose |
+|------|---------|
+| `/metrics` | Prometheus metrics |
+| `/health/livez` | Returns `200` when the HTTP handler is reachable; never checks dependencies |
+| `/health/readyz` | Returns `200` when initialization and listener binding have completed and all registered database pings succeed; otherwise `503` |
+
+The former `/health` endpoint has been removed and returns `404`. Update existing
+probes to use the explicit liveness or readiness endpoint. Disabling the
+monitoring port also disables these endpoints.
+
+Readiness checks share a one-second deadline and respect request cancellation.
+They do not perform writes or check object-storage backends, asynchronous
+notification destinations, or replication targets. Database pings are only an
+availability signal: for SQLite they currently check the read-only pool, not
+write capability. With no registered databases, readiness checks only the
+application lifecycle. Use external synthetic S3 checks for end-to-end monitoring.
+
+Example Kubernetes probes (the container must expose a port named `monitoring`):
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/livez
+    port: monitoring
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /health/readyz
+    port: monitoring
+  periodSeconds: 5
+  timeoutSeconds: 2
+  failureThreshold: 3
+```
+
+On `SIGTERM` or `SIGINT`, Pithos becomes not ready, stops accepting new S3
+connections, and gives active requests up to 30 seconds to finish. The monitoring
+listener stays available during S3 shutdown, then closes before storage cleanup.
+There is no built-in routing drain delay. Arrange traffic removal and any
+propagation delay before sending the signal, for example with a Kubernetes
+`preStop` hook or ECS load-balancer target deregistration. Docker Compose requires
+explicit coordination with the proxy; a container healthcheck alone does not
+remove traffic.
+
+Allow enough platform termination time for hooks, request shutdown, and storage
+cleanup. Long uploads may exceed the current 30-second request-shutdown budget.
+The runtime image uses `scratch` and contains no shell, `curl`, or `sleep`; hooks
+and container-local healthchecks cannot assume those utilities exist.
+
 ### Logging
 
 | Variable | Description | Default |
