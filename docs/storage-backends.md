@@ -104,10 +104,11 @@ copies allocate fresh IDs; outbox retries and erasure-code repairs can write the
 same logical part again. Its physical representation may change, for example
 when encryption generates a new nonce.
 
-New transactional parts are written directly and removed on rollback. Retries
-and repairs replace the existing copy with a synced temporary file, atomically
-where supported;
-metadata rollback preserves that replacement because its logical content is
+Filesystem and SFTP writes use a synced temporary file, then publish the complete
+part, atomically where supported. Publication is independent of the metadata
+transaction: rollback leaves unreferenced parts for GC after its grace window,
+just as a crash before metadata commit can. Retries and repairs use the same
+write path; rollback preserves their replacement because its logical content is
 unchanged. Without atomic rename support, SFTP falls back to delete-then-rename,
 which can leave the part missing if interrupted.
 
