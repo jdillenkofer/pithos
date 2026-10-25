@@ -11,9 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jdillenkofer/pithos/internal/storage"
 	"github.com/jdillenkofer/pithos/internal/storage/database"
+	repositoryfactory "github.com/jdillenkofer/pithos/internal/storage/database/repository"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore"
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/filesystem"
+	sqlpartstore "github.com/jdillenkofer/pithos/internal/storage/metadatapart/partstore/sql"
 	"github.com/jdillenkofer/pithos/internal/storage/middlewares/delegator"
 	"github.com/jdillenkofer/pithos/internal/storage/replication"
 	"github.com/prometheus/client_golang/prometheus"
@@ -165,6 +167,97 @@ func TestReplicationPostgresConcurrentBucketWriter(t *testing.T) {
 	versions, err := st.ListObjectVersions(t.Context(), bucket, storage.ListObjectVersionsOptions{MaxKeys: 100})
 	require.NoError(t, err)
 	require.Len(t, versions.Versions, 2, "source and exactly one destination version")
+}
+
+type transitionRetryMetadataStore struct {
+	metadatastore.MetadataStore
+	calls int
+}
+
+func (*transitionRetryMetadataStore) RetrySafeTransactions() bool { return true }
+func (s *transitionRetryMetadataStore) TransitionObject(ctx context.Context, tx *sql.Tx, bucket metadatastore.BucketName, key metadatastore.ObjectKey, version *string, etag, class string, parts []metadatastore.Part) (*metadatastore.PartMutationResult, error) {
+	s.calls++
+	result, err := s.MetadataStore.TransitionObject(ctx, tx, bucket, key, version, etag, class, parts)
+	if err == nil && s.calls == 1 {
+		// Fail after consuming the lazy source and updating metadata. Retrying is
+		// permitted only if all configured stores roll back their writes.
+		err = &pgconn.PgError{Code: "40001"}
+	}
+	return result, err
+}
+
+func TestReplicationTransitionRetrySafety(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	for _, backend := range []string{"sqlite", "postgres"} {
+		for _, external := range []bool{false, true} {
+			name := backend + "/sql"
+			if external {
+				name = backend + "/external"
+			}
+			t.Run(name, func(t *testing.T) {
+				var st *metadataPartStorage
+				var done func()
+				if backend == "postgres" {
+					st, done = newPostgresTestStorage(t)
+				} else {
+					st, done = newTestStorage(t)
+				}
+				defer done()
+				stores := st.partStores
+				var target partstore.PartStore
+				if external {
+					fs, err := filesystem.New(t.TempDir())
+					require.NoError(t, err)
+					require.NoError(t, fs.Start(t.Context()))
+					defer fs.Stop(context.Background())
+					target = fs
+				} else {
+					repo, err := repositoryfactory.NewPartContentRepository(st.db)
+					require.NoError(t, err)
+					target, err = sqlpartstore.New(st.db, repo, sqlpartstore.WithPartStoreId("cold"))
+					require.NoError(t, err)
+					require.NoError(t, target.Start(t.Context()))
+					defer target.Stop(context.Background())
+				}
+				var err error
+				st.partStores, err = partstore.NewNamedPartStores(stores.Default(), map[string]partstore.PartStore{"cold": target}, map[string]string{"GLACIER": "cold"})
+				require.NoError(t, err)
+				defer func() { st.partStores = stores }()
+				coordinator, stop := retryCoordinator(t, st)
+				defer stop()
+				bucket, key := storage.MustNewBucketName("transition-retry"), storage.MustNewObjectKey("key")
+				require.NoError(t, coordinator.CreateBucket(t.Context(), bucket))
+				_, err = coordinator.PutObject(t.Context(), bucket, key, nil, strings.NewReader("complete transition body"), nil, nil)
+				require.NoError(t, err)
+				metadata := &transitionRetryMetadataStore{MetadataStore: st.metadataStore}
+				st.metadataStore = metadata
+				err = coordinator.TransitionObjectStorageClass(t.Context(), bucket, key, "GLACIER", nil)
+				if external {
+					var pgErr *pgconn.PgError
+					require.ErrorAs(t, err, &pgErr)
+					require.Equal(t, "40001", pgErr.Code)
+					require.Equal(t, 1, metadata.calls, "never replay external transition writes")
+					require.Equal(t, 0, journalCount(t, st, "TransitionObjectStorageClass"))
+					_, cold := st.partStores.StoreForClass("GLACIER")
+					ids, err := cold.GetPartIds(t.Context(), nil)
+					require.NoError(t, err)
+					require.Len(t, ids, 1, "exactly one external effect, not one per retry")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, 2, metadata.calls)
+					require.Equal(t, 1, journalCount(t, st, "TransitionObjectStorageClass"))
+				}
+				require.Equal(t, "complete transition body", readObjectContent(t, st, bucket, key, nil))
+				obj, err := st.HeadObject(t.Context(), bucket, key, nil)
+				require.NoError(t, err)
+				if external {
+					require.Nil(t, obj.StorageClass, "failed external transition must roll back metadata")
+				} else {
+					require.Equal(t, "GLACIER", *obj.StorageClass)
+				}
+			})
+		}
+	}
 }
 
 type captureRetryMetadataStore struct {

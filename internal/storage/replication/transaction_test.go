@@ -114,10 +114,10 @@ func TestRetryTransactionStops(t *testing.T) {
 
 func TestPrimaryTransactionOptions(t *testing.T) {
 	testutils.SkipIfIntegration(t)
-	for _, name := range []string{"PutObject", "AppendObject", "CreateBucket", "PutObjectRetention", "DeleteObject", "UploadPart", "TransitionObjectStorageClass"} {
+	for _, name := range []string{"PutObject", "AppendObject", "CreateBucket", "PutObjectRetention", "DeleteObject", "UploadPart"} {
 		require.Nil(t, primaryTransactionOptions(name), name)
 	}
-	for _, name := range []string{"CopyObject", "CompleteMultipartUpload", "UploadPartCopy"} {
+	for _, name := range []string{"CopyObject", "CompleteMultipartUpload", "UploadPartCopy", "TransitionObjectStorageClass"} {
 		require.Equal(t, sql.LevelRepeatableRead, primaryTransactionOptions(name).Isolation)
 	}
 }

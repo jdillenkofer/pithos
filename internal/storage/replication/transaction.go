@@ -50,12 +50,13 @@ func retryTransaction(ctx context.Context, db database.Database, opts *sql.TxOpt
 	}
 }
 
-// Only these operations call GetObject while finalizing the primary. Ordinary
-// writes retain READ COMMITTED, avoiding snapshot conflicts on bucket locks and
-// registry upserts that do not need a stable read snapshot.
+// These operations consume lazy source parts or GetObject snapshots while
+// applying/finalizing the primary. Ordinary writes retain READ COMMITTED,
+// avoiding snapshot conflicts on bucket locks and registry upserts that do not
+// need a stable read snapshot.
 func primaryTransactionOptions(name string) *sql.TxOptions {
 	switch name {
-	case "CopyObject", "CompleteMultipartUpload", "UploadPartCopy":
+	case "CopyObject", "CompleteMultipartUpload", "UploadPartCopy", "TransitionObjectStorageClass":
 		return &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
 	default:
 		return nil
