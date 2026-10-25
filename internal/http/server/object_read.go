@@ -477,18 +477,16 @@ func (s *Server) getObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	object, readers, err := s.storage.GetObject(ctx, bucketName, key, storageRanges, getOpts)
-	if err == nil && len(readers) > 0 {
-		if bounded, ok := readers[0].(interface{ Deadline() time.Time }); ok && !bounded.Deadline().IsZero() {
-			controller := http.NewResponseController(w)
-			if deadlineErr := controller.SetWriteDeadline(bounded.Deadline()); deadlineErr != nil {
-				for _, reader := range readers {
-					_ = reader.Close()
-				}
-				http.Error(w, "bounded streaming requires write deadline support", http.StatusInternalServerError)
-				return
+	if err == nil {
+		reset, deadlineErr := boundObjectResponse(w, readers)
+		if deadlineErr != nil {
+			for _, reader := range readers {
+				_ = reader.Close()
 			}
-			defer controller.SetWriteDeadline(time.Time{})
+			http.Error(w, "bounded streaming requires write deadline support", http.StatusInternalServerError)
+			return
 		}
+		defer reset()
 	}
 	multipartObject := false
 	if err == nil && partNumber > 0 {

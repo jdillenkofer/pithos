@@ -29,6 +29,10 @@ var _ partstore.StatsProvider = (*sqlPartStore)(nil)
 
 func (bs *sqlPartStore) SupportsStats() bool { return true }
 
+func (s *sqlPartStore) Capabilities() partstore.Capabilities {
+	return partstore.NewCapabilities(partstore.CapabilitySnapshotProtectedGetPart)
+}
+
 type Option func(*sqlPartStore)
 
 func WithPartStoreId(partStoreId string) Option {

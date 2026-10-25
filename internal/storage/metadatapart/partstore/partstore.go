@@ -78,6 +78,10 @@ const (
 	// CapabilityTxFreeDeletePart allows DeletePart to be called with a nil
 	// transaction.
 	CapabilityTxFreeDeletePart
+	// CapabilitySnapshotProtectedGetPart means all content is protected from
+	// concurrent deletion by the metadata transaction's database snapshot.
+	// Composite stores may advertise this only when every child supports it.
+	CapabilitySnapshotProtectedGetPart
 )
 
 // Capabilities is a set of part-store capabilities.

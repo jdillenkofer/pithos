@@ -297,18 +297,15 @@ func (mbs *metadataPartStorage) GetObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.GetObject")
 	defer span.End()
 
-	// When every part store can read without an ambient transaction
-	// (filesystem, sftp — everything except DB-backed part content), the
-	// metadata lookup runs in a short transaction that ends before streaming
-	// starts. Slow clients then no longer pin a pooled database connection for
-	// the lifetime of their download. A single DB-backed part store in the set
-	// keeps the transaction open until every reader is closed (an object's
-	// parts may live in any store), preserving snapshot semantics for the part
-	// content itself.
+	// Mixed stores retain SQL snapshot semantics, but must still bound every
+	// external access. Bound the whole request whenever any store is external.
 	txFreeStreaming := mbs.partStores.Capabilities().Has(partstore.CapabilityTxFreeGetPart)
+	// Only a positively identified SQL-only composition may omit the bound.
+	// Lack of tx-free support does not imply snapshot-safe external content.
+	boundedStreaming := !mbs.partStores.Capabilities().Has(partstore.CapabilitySnapshotProtectedGetPart)
 
 	var cancel context.CancelFunc
-	if txFreeStreaming {
+	if boundedStreaming {
 		// An ambient snapshot may predate the lifetime bound, and its context
 		// would also leak a finalized transaction into external store opens.
 		if _, ok := database.TxControllerFromContext(ctx); ok {

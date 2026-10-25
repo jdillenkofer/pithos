@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,6 +16,22 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/require"
 )
+
+type retryDeletionStore struct {
+	partstore.PartStore
+	fail bool
+}
+
+func (s *retryDeletionStore) Capabilities() partstore.Capabilities {
+	return partstore.CapabilitiesOf(s.PartStore)
+}
+func (s *retryDeletionStore) DeletePart(ctx context.Context, tx database.Tx, id partstore.PartId) error {
+	if s.fail {
+		s.fail = false
+		return errors.New("injected deletion failure")
+	}
+	return s.PartStore.DeletePart(ctx, tx, id)
+}
 
 func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
 	for _, backend := range []string{"sqlite", "postgres"} {
@@ -30,7 +47,8 @@ func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, store.Start(ctx))
 			t.Cleanup(func() { require.NoError(t, store.Stop(ctx)) })
-			env.collector.partStores, err = partstore.NewNamedPartStores(store, nil, nil)
+			retryStore := &retryDeletionStore{PartStore: store}
+			env.collector.partStores, err = partstore.NewNamedPartStores(retryStore, nil, nil)
 			require.NoError(t, err)
 			old := ulid.MustNew(ulid.Timestamp(time.Now().Add(-24*time.Hour)), rand.Reader)
 			id := *partstore.MustNewPartIdFromString(old.String())
@@ -59,6 +77,23 @@ func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
 			// Advance persisted dereference time, not part creation time; no sleeps.
 			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
 				_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at = $1 WHERE part_id = $2", time.Now().UTC().Add(-time.Hour), id.String())
+				return err
+			}))
+			retryStore.fail = true
+			require.NoError(t, env.collector.runGC())
+			assertPresent(true) // Condemnation committed, external delete failed.
+			for range 2 {
+				require.NoError(t, env.collector.runGC())
+				assertPresent(true)
+				require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+					ok, err := env.registryRepo.TryAddReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
+					require.NoError(t, err)
+					require.False(t, ok, "orphan retry marker must not resurrect condemned ids")
+					return nil
+				}))
+			}
+			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+				_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at=$1 WHERE part_id=$2", time.Now().UTC().Add(-time.Hour), id.String())
 				return err
 			}))
 			require.NoError(t, env.collector.runGC())

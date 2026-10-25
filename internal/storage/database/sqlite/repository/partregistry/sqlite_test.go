@@ -76,7 +76,7 @@ func TestRegisterAddRemoveLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, entities, 1)
 		assert.Zero(t, entities[0].RefCount)
-		assert.NotNil(t, entities[0].UnreferencedAt)
+		assert.Nil(t, entities[0].UnreferencedAt) // Only a collector observation starts retention.
 		return nil
 	})
 }
@@ -100,6 +100,9 @@ func TestTryAddReferencesFailsForCondemnedPart(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, unreferenced)
 		condemned, err := repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(time.Hour))
+		require.NoError(t, err)
+		require.False(t, condemned) // First observe, then collect after retention.
+		condemned, err = repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(time.Hour))
 		require.NoError(t, err)
 		require.True(t, condemned)
 

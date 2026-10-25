@@ -475,6 +475,13 @@ func (s *Server) serveWebsiteGetObject(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	reset, deadlineErr := boundObjectResponse(w, readers)
+	if deadlineErr != nil {
+		writePlainError(w, http.StatusInternalServerError)
+		return
+	}
+	defer reset()
+
 	// Objects with x-amz-website-redirect-location are served as a 301 redirect
 	// on the website endpoint, matching S3 static website hosting.
 	if object.Metadata.WebsiteRedirectLocation != nil {
@@ -620,6 +627,13 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 			reader.Close()
 		}
 	}()
+
+	reset, deadlineErr := boundObjectResponse(w, readers)
+	if deadlineErr != nil {
+		writePlainError(w, http.StatusInternalServerError)
+		return
+	}
+	defer reset()
 
 	contentType := "text/html"
 	if object.ContentType != nil {

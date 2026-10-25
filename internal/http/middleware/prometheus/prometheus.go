@@ -28,6 +28,9 @@ type statusWriter struct {
 	status int
 }
 
+// Unwrap preserves ResponseController capabilities through instrumentation.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) WriteHeader(status int) {
 	if w.status == 0 {
 		w.status = status

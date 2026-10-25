@@ -24,10 +24,16 @@ func TestDereferenceRetentionAndRereference(t *testing.T) {
 		rows, err := repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
+		require.Nil(t, rows[0].UnreferencedAt)
+		ok, err := repo.Condemn(ctx, tx, id, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		require.False(t, ok) // First observation never condemns, even with a future cutoff.
+		rows, err = repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
 		require.NotNil(t, rows[0].UnreferencedAt)
 		dereferenced := *rows[0].UnreferencedAt
 		// Old creation time cannot make a newly dereferenced part collectible.
-		ok, err := repo.Condemn(ctx, tx, id, dereferenced.Add(-time.Nanosecond))
+		ok, err = repo.Condemn(ctx, tx, id, dereferenced.Add(-time.Nanosecond))
 		require.NoError(t, err)
 		require.False(t, ok)
 		// Reconciliation of an already-zero count must not restart retention.
@@ -48,6 +54,9 @@ func TestDereferenceRetentionAndRereference(t *testing.T) {
 		require.False(t, ok)
 		_, err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: id, Delta: 1}})
 		require.NoError(t, err)
+		ok, err = repo.Condemn(ctx, tx, id, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		require.False(t, ok) // Re-reference reset the observation.
 		ok, err = repo.Condemn(ctx, tx, id, time.Now().Add(time.Hour))
 		require.NoError(t, err)
 		require.True(t, ok)

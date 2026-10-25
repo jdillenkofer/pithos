@@ -50,12 +50,17 @@ func TestBoundedReaderDeadlineInterruptsReadAndCleansUp(t *testing.T) {
 	<-raw.started
 	cancel()
 	require.ErrorIs(t, <-result, context.DeadlineExceeded)
-	<-raw.closed
+	select {
+	case <-raw.closed:
+		t.Fatal("closed stateful reader during Read")
+	default:
+	}
 	require.Equal(t, byte('a'), buf[0])
 	_, err = r.Read(buf)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.EqualValues(t, 1, raw.reads.Load())
 	close(raw.release)
+	<-raw.closed
 	require.NoError(t, r.Close())
 }
 
@@ -80,6 +85,37 @@ func TestBoundedReaderNoOpenAfterDeadlineAndLateOpenCleanup(t *testing.T) {
 	require.ErrorIs(t, <-result, context.DeadlineExceeded)
 	close(release)
 	<-raw.closed
+}
+
+type closeBlockingReader struct {
+	started, release chan struct{}
+}
+
+func (r *closeBlockingReader) Read([]byte) (int, error) { return 0, io.EOF }
+func (r *closeBlockingReader) Close() error {
+	close(r.started)
+	<-r.release
+	return nil
+}
+
+func TestBoundedReaderFailedOpenDoesNotWaitForBlockingCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	raw := &closeBlockingReader{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(raw.release)
+	done := make(chan error, 1)
+	go func() {
+		_, err := openBoundedPart(ctx, func() (io.ReadCloser, error) { return raw, io.ErrUnexpectedEOF })
+		done <- err
+	}()
+	<-raw.started
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	case <-time.After(time.Second):
+		t.Fatal("failed open waited for uncooperative Close")
+	}
 }
 
 func TestSharedDeadlineClosesIdleRanges(t *testing.T) {

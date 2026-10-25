@@ -2,9 +2,9 @@ package metadatapart
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -36,13 +36,13 @@ func openBoundedPart(ctx context.Context, open func() (io.ReadCloser, error)) (i
 	case r := <-done:
 		if err := ctx.Err(); err != nil {
 			if r.rc != nil {
-				r.rc.Close()
+				go r.rc.Close()
 			}
 			return nil, err
 		}
 		if r.err != nil {
 			if r.rc != nil {
-				r.rc.Close()
+				go r.rc.Close()
 			}
 			return nil, r.err
 		}
@@ -64,21 +64,45 @@ func (r *lifetimeReader) Deadline() time.Time { return r.deadline }
 type boundedReader struct {
 	ctx    context.Context
 	inner  io.ReadCloser
-	once   sync.Once
-	closed atomic.Bool
+	mu     sync.Mutex
+	busy   bool
+	closed bool
 	stop   func() bool
 }
 
-func (b *boundedReader) closeInner()  { b.once.Do(func() { b.closed.Store(true); _ = b.inner.Close() }) }
+// Mark closed immediately, but never release decoder/buffer state during Read.
+// The outstanding operation owns cleanup if it cannot be interrupted safely.
+func (b *boundedReader) closeInner() {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	closeNow := !b.busy
+	b.mu.Unlock()
+	if closeNow {
+		_ = b.inner.Close()
+	}
+}
 func (b *boundedReader) Close() error { b.stop(); b.closeInner(); return nil }
 
 func (b *boundedReader) Read(p []byte) (int, error) {
-	if b.closed.Load() && b.ctx.Err() == nil {
-		return 0, io.EOF
-	}
+	b.mu.Lock()
 	if err := b.ctx.Err(); err != nil {
+		b.mu.Unlock()
 		return 0, err
 	}
+	if b.closed {
+		b.mu.Unlock()
+		return 0, io.EOF
+	}
+	if b.busy {
+		b.mu.Unlock()
+		return 0, fmt.Errorf("concurrent bounded reader Read")
+	}
+	b.busy = true
+	b.mu.Unlock()
 	// Never let a late backend read mutate the caller's buffer after returning.
 	buf := make([]byte, len(p))
 	type result struct {
@@ -87,12 +111,20 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
+		var r result
 		if err := b.ctx.Err(); err != nil {
-			done <- result{0, err}
-			return
+			r.err = err
+		} else {
+			r.n, r.err = b.inner.Read(buf)
 		}
-		n, err := b.inner.Read(buf)
-		done <- result{n, err}
+		b.mu.Lock()
+		b.busy = false
+		closeNow := b.closed
+		b.mu.Unlock()
+		if closeNow {
+			_ = b.inner.Close()
+		}
+		done <- r
 	}()
 	select {
 	case r := <-done:

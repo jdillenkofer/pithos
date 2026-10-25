@@ -277,6 +277,18 @@ func TestRunGCCollectsRolledBackPartsWithoutDeletingCommittedParts(t *testing.T)
 				assertParts([]partstore.PartId{liveID})
 			}
 			env.collector.graceWindow = 30 * time.Minute
+			if backend == "filesystem" {
+				// Missing-row orphans also need a committed-zero observation;
+				// old creation time alone cannot bypass retention.
+				for range 2 {
+					require.NoError(t, env.collector.runGC())
+					assertParts([]partstore.PartId{liveID, orphanID})
+				}
+				require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+					_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at=$1 WHERE part_id=$2", time.Now().UTC().Add(-time.Hour), orphanID.String())
+					return err
+				}))
+			}
 			for range 2 {
 				require.NoError(t, env.collector.runGC())
 				assertParts([]partstore.PartId{liveID})
