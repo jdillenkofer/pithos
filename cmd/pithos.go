@@ -663,7 +663,7 @@ func validateStorage(ctx context.Context) {
 
 	slog.Info("Storage integrity validation started!")
 
-	validator := integrity.NewValidator(storage, dbContainer, *deleteCorrupted, *force)
+	validator := integrity.NewValidator(storage, *deleteCorrupted, *force)
 	report, err := validator.ValidateAll(ctx)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Validation failed: %v", err))

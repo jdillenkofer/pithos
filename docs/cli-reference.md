@@ -53,17 +53,40 @@ This command performs upload and download benchmarks with various object sizes a
 
 ## `validate-storage`
 
-Checks the integrity of all objects in the storage.
+Checks the integrity of completed object versions in a `MetadataPartStorage`,
+including historical and `null` versions. Delete markers are skipped. Storage
+middleware is unwrapped through its explicit backend interface; unsupported
+backends (such as standalone `S3ClientStorage`) fail with an error rather than
+reporting a successful check.
+
+Each version is inspected using its backend's metadata transaction and the part
+store recorded for each part, including named stores. The check bypasses
+object-level caches and verifies decoded part sizes and checksums as well as
+object sizes and checksums. It checks the primary storage, not every replica,
+and does not scan unreferenced parts or incomplete multipart uploads.
 
 ```sh
 pithos validate-storage <config.json> [options]
 ```
 
 **Options:**
-- `-delete-corrupted`: Delete objects that fail integrity checks
+- `-delete-corrupted`: Offer to delete versions with verified size or checksum mismatches
 - `-force`: Force deletion without confirmation
 - `-json`: Output results in JSON format
 - `-output <path>`: Write the validation report to a file
+
+Reports identify each checked version. Summary object counts count versions, not
+unique keys. A failed integrity check or a listing failure produces a nonzero
+exit status; a listing failure aborts the run instead of silently skipping a
+bucket.
+
+Deletion targets the checked version explicitly and uses an ETag precondition;
+it does not create a delete marker or bypass Object Lock protection. Read,
+backend, and transaction errors are reported as failures but do not by
+themselves authorize deletion. Deletion is irreversible: run without
+`-delete-corrupted` first and keep an independent backup. Avoid concurrent
+writes and lifecycle changes while validating; the run is not a global snapshot
+across all versions and buckets.
 
 ## `validate-policy`
 
