@@ -146,7 +146,11 @@ type errorResponse struct {
 	MaxAllowedSkewMilliseconds int64  `xml:"MaxAllowedSkewMilliseconds,omitempty"`
 }
 
-func writeRequestError(w http.ResponseWriter, r *http.Request, requestErr *RequestError) {
+// ErrorWriter renders an authentication failure for the client.
+type ErrorWriter func(w http.ResponseWriter, r *http.Request, requestErr *RequestError)
+
+// WriteRequestError renders an authentication failure as an S3 XML error.
+func WriteRequestError(w http.ResponseWriter, r *http.Request, requestErr *RequestError) {
 	requestID, _ := r.Context().Value(RequestIDContextKey{}).(string)
 	response := errorResponse{
 		Code:      requestErr.Code,

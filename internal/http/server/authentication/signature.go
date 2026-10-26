@@ -951,10 +951,10 @@ func verifyDeclaredPayloadHash(r *http.Request) *RequestError {
 // MakeUnauthenticatedPayloadMiddleware decodes and verifies request payloads
 // when authentication is disabled, so aws-chunked bodies are never stored
 // with their framing. MakeSignatureMiddleware does this itself.
-func MakeUnauthenticatedPayloadMiddleware(next http.Handler) http.Handler {
+func MakeUnauthenticatedPayloadMiddleware(writeError ErrorWriter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if authErr := prepareUnsignedPayload(r, true); authErr != nil {
-			writeRequestError(w, r, authErr)
+			writeError(w, r, authErr)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1373,14 +1373,14 @@ func isAnonymousRequest(r *http.Request) bool {
 	return true
 }
 
-func MakeSignatureMiddleware(credentialProvider CredentialProvider, region string, next http.Handler) http.Handler {
+func MakeSignatureMiddleware(credentialProvider CredentialProvider, region string, writeError ErrorWriter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// If the request has no authentication credentials at all,
 		// let it through as an anonymous request. The server handlers
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
 			if authErr := prepareUnsignedPayload(r, false); authErr != nil {
-				writeRequestError(w, r, authErr)
+				writeError(w, r, authErr)
 				return
 			}
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
@@ -1394,7 +1394,7 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 		identity, authErr, err := checkAuthentication(credentialProvider, region, r)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
-			writeRequestError(w, r, errInternalError)
+			writeError(w, r, errInternalError)
 			return
 		}
 		if authErr == nil {
@@ -1407,7 +1407,7 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
-			writeRequestError(w, r, authErr)
+			writeError(w, r, authErr)
 		}
 	})
 }

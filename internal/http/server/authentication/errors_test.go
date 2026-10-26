@@ -98,7 +98,7 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, testCase.request())
+			MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, testCase.request())
 			require.Equal(t, testCase.statusCode, recorder.Code)
 			assert.Equal(t, "application/xml", recorder.Header().Get("Content-Type"))
 			assert.Contains(t, recorder.Body.String(), "<Code>"+testCase.code+"</Code>")
@@ -135,7 +135,7 @@ func TestCheckAuthenticationRejectsHeaderTimestampOutsideSkewWindow(t *testing.T
 			r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 
 			recorder := httptest.NewRecorder()
-			MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, r)
+			MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, r)
 			assert.Equal(t, http.StatusForbidden, recorder.Code)
 			assert.Contains(t, recorder.Body.String(), "<Code>"+testCase.code+"</Code>")
 			if testCase.code == "RequestTimeTooSkewed" {
@@ -246,7 +246,7 @@ func TestCheckAuthenticationReportsS3MessagesForMalformedAuthentication(t *testi
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, testCase.request())
+			MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, testCase.request())
 			var response errorResponse
 			require.NoError(t, xml.Unmarshal(recorder.Body.Bytes(), &response))
 			assert.Equal(t, testCase.code, response.Code)

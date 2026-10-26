@@ -87,18 +87,10 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	websiteMux.HandleFunc("HEAD /{bucket}/{key...}", server.serveWebsiteHeadObject)
 	websiteMux.HandleFunc("GET /{bucket}", server.serveWebsiteGetObject)
 	websiteMux.HandleFunc("HEAD /{bucket}", server.serveWebsiteHeadObject)
-	websiteHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		websiteMux.ServeHTTP(w, r.WithContext(withWebsiteRequest(r.Context())))
-	})
+	var websiteHandler http.Handler = websiteMux
 
 	fallbackHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		// Strip port if present
-		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
-			if bracketIdx := strings.LastIndex(host, "]"); bracketIdx < colonIdx {
-				host = host[:colonIdx]
-			}
-		}
+		host := httpmiddleware.HostWithoutPort(r.Host)
 		r.URL.Path = "/" + host + r.URL.Path
 		slog.DebugContext(r.Context(), "Custom domain website request", "host", r.Host, "bucket", host, "path", r.URL.Path)
 		websiteHandler.ServeHTTP(w, r)
@@ -110,12 +102,13 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 
 	if credentialProvider != nil {
 		slog.Info("Authentication is enabled")
-		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, rootHandler)
+		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, writeAuthenticationError, rootHandler)
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
-		rootHandler = authentication.MakeUnauthenticatedPayloadMiddleware(rootHandler)
+		rootHandler = authentication.MakeUnauthenticatedPayloadMiddleware(writeAuthenticationError, rootHandler)
 	}
 	rootHandler = makeRequestSizeLimitMiddleware(rootHandler)
+	rootHandler = makeWebsiteRequestMiddleware(apiEndpoint, rootHandler)
 	rootHandler = makeQueryValidationMiddleware(rootHandler)
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
@@ -133,6 +126,27 @@ func withWebsiteRequest(ctx context.Context) context.Context {
 func isWebsiteRequest(ctx context.Context) bool {
 	isWebsite, _ := ctx.Value(websiteRequestContextKey{}).(bool)
 	return isWebsite
+}
+
+// makeWebsiteRequestMiddleware marks requests for the website endpoint before
+// authentication and the size limit run, so their errors are HTML pages too.
+func makeWebsiteRequestMiddleware(apiEndpoint string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !httpmiddleware.IsAPIHost(r.Host, apiEndpoint) {
+			r = r.WithContext(withWebsiteRequest(r.Context()))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeAuthenticationError renders an authentication failure as an HTML page
+// on the website endpoint and as an S3 XML error on the API endpoint.
+func writeAuthenticationError(w http.ResponseWriter, r *http.Request, requestErr *authentication.RequestError) {
+	if isWebsiteRequest(r.Context()) {
+		writeHTMLError(w, requestErr.StatusCode, requestErr.Code, requestErr.Message)
+		return
+	}
+	authentication.WriteRequestError(w, r, requestErr)
 }
 
 func isTrailingSlashBucketRoot(path string) bool {

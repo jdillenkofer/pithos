@@ -578,14 +578,14 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 	statusCode int, code string, message string) {
 
 	if config.ErrorDocumentKey == nil {
-		s.writeHTMLError(w, statusCode, code, message)
+		writeHTMLError(w, statusCode, code, message)
 		return
 	}
 
 	ctx := r.Context()
 	errorKey, err := storage.NewObjectKey(*config.ErrorDocumentKey)
 	if err != nil {
-		s.writeHTMLError(w, statusCode, code, message)
+		writeHTMLError(w, statusCode, code, message)
 		return
 	}
 
@@ -611,7 +611,7 @@ func (s *Server) serveErrorDocument(w http.ResponseWriter, r *http.Request,
 	object, readers, err := s.storage.GetObject(ctx, bucketName, errorKey, nil, nil)
 	if err != nil {
 		// Error document not found — fall back to default HTML error
-		s.writeHTMLError(w, statusCode, code, message)
+		writeHTMLError(w, statusCode, code, message)
 		return
 	}
 
@@ -654,7 +654,7 @@ func writePlainError(w http.ResponseWriter, statusCode int) {
 
 // writeHTMLError writes a simple HTML error response, similar to how AWS S3
 // website hosting returns errors.
-func (s *Server) writeHTMLError(w http.ResponseWriter, statusCode int, code string, message string) {
+func writeHTMLError(w http.ResponseWriter, statusCode int, code string, message string) {
 	w.Header().Set(contentTypeHeader, "text/html; charset=utf-8")
 	w.WriteHeader(statusCode)
 	body := fmt.Sprintf(`<html>

@@ -30,7 +30,7 @@ func TestSignatureMiddlewareVerifiedAlgorithm(t *testing.T) {
 					require.Equal(t, sigV4aTestAccessKey, auth.Identity.AccessKeyID)
 					w.WriteHeader(http.StatusNoContent)
 				})
-				handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", next)
+				handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", WriteRequestError, next)
 				w := httptest.NewRecorder()
 				handler.ServeHTTP(w, r)
 				require.True(t, called)
@@ -50,7 +50,7 @@ func TestSignatureMiddlewareVerifiedAlgorithm(t *testing.T) {
 	}
 	t.Run("anonymous algorithm hint is not trusted", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/?X-Amz-Algorithm=AWS4-HMAC-SHA256", nil)
-		handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", WriteRequestError, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := RequestAuthenticationFromContext(r.Context())
 			require.False(t, auth.Authenticated)
 			require.Empty(t, auth.SignatureVersion)

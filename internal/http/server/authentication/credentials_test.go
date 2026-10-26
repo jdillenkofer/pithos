@@ -327,7 +327,7 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 			assert.Equal(t, AuthTypeAnonymous, auth.Type)
 			w.WriteHeader(http.StatusNoContent)
 		})
-		MakeSignatureMiddleware(provider, "eu-central-1", next).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+		MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, next).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 		assert.Equal(t, http.StatusNoContent, recorder.Code)
 		assert.Zero(t, provider.calls)
 	})
@@ -336,7 +336,7 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 		provider := &recordingCredentialProvider{}
 		recorder := httptest.NewRecorder()
 		request := signedLookingRequest()
-		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, request)
+		MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, request)
 		assert.Equal(t, http.StatusForbidden, recorder.Code)
 		assert.Contains(t, recorder.Body.String(), "<Code>InvalidAccessKeyId</Code>")
 		assert.Equal(t, 1, provider.calls)
@@ -347,7 +347,7 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := signedLookingRequest()
 		request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+strings.Repeat("a", MaxAccessKeyIDLength+1)+"/20260912/eu-central-1/s3/aws4_request,SignedHeaders=host,Signature=invalid")
-		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, request)
+		MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, request)
 		assert.Equal(t, http.StatusForbidden, recorder.Code)
 		assert.Contains(t, recorder.Body.String(), "<Code>InvalidAccessKeyId</Code>")
 		assert.Zero(t, provider.calls)
@@ -356,7 +356,7 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 	t.Run("provider error is internal server error", func(t *testing.T) {
 		provider := &recordingCredentialProvider{err: errors.New("backend unavailable")}
 		recorder := httptest.NewRecorder()
-		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, signedLookingRequest())
+		MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, signedLookingRequest())
 		assert.Equal(t, http.StatusInternalServerError, recorder.Code)
 		assert.Contains(t, recorder.Body.String(), "<Code>InternalError</Code>")
 		assert.Equal(t, 1, provider.calls)

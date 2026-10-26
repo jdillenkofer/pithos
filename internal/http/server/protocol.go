@@ -451,7 +451,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 // on the API endpoint and as an HTML page on the website endpoint.
 func (s *Server) writeAccessDenied(w http.ResponseWriter, r *http.Request) {
 	if isWebsiteRequest(r.Context()) {
-		s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+		writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
 		return
 	}
 	writeS3ErrorResponse(w, r, http.StatusForbidden, "AccessDenied", "Access Denied", r.URL.Path)

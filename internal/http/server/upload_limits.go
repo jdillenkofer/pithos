@@ -30,6 +30,10 @@ func declaredPayloadLength(r *http.Request) (int64, bool) {
 func makeRequestSizeLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if payloadLength, ok := declaredPayloadLength(r); ok && payloadLength > storage.MaxEntitySize {
+			if isWebsiteRequest(r.Context()) {
+				writeHTMLError(w, http.StatusBadRequest, storage.ErrEntityTooLarge.Error(), "Your proposed upload exceeds the maximum allowed object size.")
+				return
+			}
 			handleError(storage.ErrEntityTooLarge, w, r)
 			return
 		}

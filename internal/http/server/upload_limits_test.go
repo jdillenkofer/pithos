@@ -1,12 +1,15 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
@@ -108,4 +111,57 @@ func TestUploadsRequireDeclaredContentLength(t *testing.T) {
 	handler.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "<Code>InvalidArgument</Code>")
+}
+
+type emptyCredentialProvider struct{}
+
+func (emptyCredentialProvider) Lookup(context.Context, string) (authentication.Credential, bool, error) {
+	return authentication.Credential{}, false, nil
+}
+
+// Errors raised before routing are HTML pages on the website endpoint and
+// S3 XML errors on the API endpoint.
+func TestPreRoutingErrorsMatchEndpoint(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(r) return true end`)
+	require.NoError(t, err)
+	handler := SetupServer(emptyCredentialProvider{}, "us-east-1", "s3.test", "website.test", authorizer, &queryTestStorage{})
+
+	oversized := func(target string) *http.Request {
+		r := httptest.NewRequest(http.MethodPut, target, http.NoBody)
+		r.ContentLength = storage.MaxEntitySize + 1
+		return r
+	}
+	unknownAccessKey := func(target string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		date := time.Now().UTC()
+		r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=unknown/"+date.Format("20060102")+"/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
+		r.Header.Set("X-Amz-Date", date.Format("20060102T150405Z"))
+		r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+		return r
+	}
+
+	testCases := []struct {
+		name        string
+		request     *http.Request
+		statusCode  int
+		contentType string
+		code        string
+	}{
+		{"oversized upload on api endpoint", oversized("http://s3.test/bucket/key"), http.StatusBadRequest, "application/xml", "<Code>EntityTooLarge</Code>"},
+		{"oversized upload on website endpoint", oversized("http://bucket.website.test/key"), http.StatusBadRequest, "text/html", "Code: EntityTooLarge"},
+		{"oversized upload on custom domain", oversized("http://www.example.com/key"), http.StatusBadRequest, "text/html", "Code: EntityTooLarge"},
+		{"authentication failure on api endpoint", unknownAccessKey("http://s3.test/bucket/key"), http.StatusForbidden, "application/xml", "<Code>InvalidAccessKeyId</Code>"},
+		{"authentication failure on website endpoint", unknownAccessKey("http://bucket.website.test/key"), http.StatusForbidden, "text/html", "Code: InvalidAccessKeyId"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, testCase.request)
+			assert.Equal(t, testCase.statusCode, w.Code)
+			assert.Contains(t, w.Header().Get("Content-Type"), testCase.contentType)
+			assert.Contains(t, w.Body.String(), testCase.code)
+		})
+	}
 }

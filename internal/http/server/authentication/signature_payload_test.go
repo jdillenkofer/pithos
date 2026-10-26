@@ -332,7 +332,7 @@ func TestSignatureMiddlewareDecodesAnonymousUnsignedAwsChunkedBody(t *testing.T)
 	testutils.SkipIfIntegration(t)
 
 	wrap := func(next http.Handler) http.Handler {
-		return MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, next)
+		return MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, WriteRequestError, next)
 	}
 	status, received, header := serveAndCaptureBody(t, wrap, newUnsignedChunkedPutRequest(contentSHA256StreamingUnsignedPayloadTrailing))
 	assert.Equal(t, http.StatusOK, status)
@@ -345,7 +345,7 @@ func TestSignatureMiddlewareRejectsAnonymousSignedAwsChunkedBody(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	wrap := func(next http.Handler) http.Handler {
-		return MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, next)
+		return MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, WriteRequestError, next)
 	}
 	for _, contentSHA256 := range []string{contentSHA256StreamingPayload, contentSHA256StreamingECDSAPayloadTrailing, contentSHA256UnsignedPayload, ""} {
 		t.Run(contentSHA256, func(t *testing.T) {
@@ -360,7 +360,7 @@ func TestSignatureMiddlewareVerifiesAnonymousDeclaredPayloadHash(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	var readErr error
-	handler := MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := MakeSignatureMiddleware(payloadTestCredentials(), payloadTestRegion, WriteRequestError, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, readErr = io.ReadAll(r.Body)
 	}))
 	r, _ := http.NewRequest(http.MethodPut, "http://localhost/bucket/key", strings.NewReader("tampered"))
@@ -379,7 +379,9 @@ func TestUnauthenticatedPayloadMiddlewareDecodesAwsChunkedBody(t *testing.T) {
 				// Signatures are not checked when authentication is disabled.
 				r.Body = io.NopCloser(strings.NewReader("b;chunk-signature=00\r\nhello world\r\n0;chunk-signature=00\r\nx-amz-checksum-crc32:DUoRhQ==\r\nx-amz-trailer-signature:00\r\n\r\n"))
 			}
-			status, received, header := serveAndCaptureBody(t, MakeUnauthenticatedPayloadMiddleware, r)
+			status, received, header := serveAndCaptureBody(t, func(next http.Handler) http.Handler {
+				return MakeUnauthenticatedPayloadMiddleware(WriteRequestError, next)
+			}, r)
 			assert.Equal(t, http.StatusOK, status)
 			assert.Equal(t, []byte("hello world"), received)
 			assert.Empty(t, header.Get("Content-Encoding"))
