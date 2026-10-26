@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // RequestError is an authentication failure reported to the client as an S3
@@ -12,6 +13,13 @@ type RequestError struct {
 	StatusCode int
 	Code       string
 	Message    string
+	// clockSkew carries the details S3 adds to RequestTimeTooSkewed.
+	clockSkew *clockSkewDetails
+}
+
+type clockSkewDetails struct {
+	requestTime string
+	serverTime  time.Time
 }
 
 func (e *RequestError) Error() string {
@@ -30,10 +38,19 @@ var errInvalidAccessKeyID = &RequestError{
 	Message:    "The AWS Access Key Id you provided does not exist in our records.",
 }
 
-var errRequestTimeTooSkewed = &RequestError{
-	StatusCode: http.StatusForbidden,
-	Code:       "RequestTimeTooSkewed",
-	Message:    "The difference between the request time and the current time is too large.",
+// maxClockSkew is how far x-amz-date of a header-signed request may be from
+// the server time in either direction.
+const maxClockSkew = 15 * time.Minute
+
+// newRequestTimeTooSkewedError reports a header-signed request outside the
+// allowed clock skew, with the request and server time S3 includes.
+func newRequestTimeTooSkewedError(requestTime string, serverTime time.Time) *RequestError {
+	return &RequestError{
+		StatusCode: http.StatusForbidden,
+		Code:       "RequestTimeTooSkewed",
+		Message:    "The difference between the request time and the current time is too large.",
+		clockSkew:  &clockSkewDetails{requestTime: requestTime, serverTime: serverTime},
+	}
 }
 
 var errMissingContentSHA256 = &RequestError{
@@ -97,16 +114,26 @@ type errorResponse struct {
 	Message   string   `xml:"Message"`
 	Resource  string   `xml:"Resource"`
 	RequestId string   `xml:"RequestId"`
+
+	RequestTime                string `xml:"RequestTime,omitempty"`
+	ServerTime                 string `xml:"ServerTime,omitempty"`
+	MaxAllowedSkewMilliseconds int64  `xml:"MaxAllowedSkewMilliseconds,omitempty"`
 }
 
 func writeRequestError(w http.ResponseWriter, r *http.Request, requestErr *RequestError) {
 	requestID, _ := r.Context().Value(RequestIDContextKey{}).(string)
-	body, err := xml.MarshalIndent(errorResponse{
+	response := errorResponse{
 		Code:      requestErr.Code,
 		Message:   requestErr.Message,
 		Resource:  r.URL.Path,
 		RequestId: requestID,
-	}, "", "  ")
+	}
+	if skew := requestErr.clockSkew; skew != nil {
+		response.RequestTime = skew.requestTime
+		response.ServerTime = skew.serverTime.Format(time.RFC3339)
+		response.MaxAllowedSkewMilliseconds = maxClockSkew.Milliseconds()
+	}
+	body, err := xml.MarshalIndent(response, "", "  ")
 	if err != nil {
 		slog.ErrorContext(r.Context(), "Failed to marshal XML response", "error", err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

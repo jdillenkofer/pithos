@@ -107,3 +107,41 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 		})
 	}
 }
+
+// S3 accepts a header-signed request within 15 minutes of x-amz-date in
+// either direction and answers RequestTimeTooSkewed outside of that window.
+func TestCheckAuthenticationRejectsHeaderTimestampOutsideSkewWindow(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	provider := staticCredentialProvider{
+		"key": {AccessKeyID: "key", SecretAccessKey: "secret", AccountID: "account", PrincipalID: "client"},
+	}
+	testCases := []struct {
+		offset time.Duration
+		code   string
+	}{
+		{offset: -16 * time.Minute, code: "RequestTimeTooSkewed"},
+		{offset: 16 * time.Minute, code: "RequestTimeTooSkewed"},
+		{offset: -14 * time.Minute, code: "SignatureDoesNotMatch"},
+		{offset: 14 * time.Minute, code: "SignatureDoesNotMatch"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.offset.String(), func(t *testing.T) {
+			signingTime := time.Now().UTC().Add(testCase.offset)
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+signingTime.Format("20060102")+"/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
+			r.Header.Set("X-Amz-Date", signingTime.Format("20060102T150405Z"))
+			r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+
+			recorder := httptest.NewRecorder()
+			MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, r)
+			assert.Equal(t, http.StatusForbidden, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "<Code>"+testCase.code+"</Code>")
+			if testCase.code == "RequestTimeTooSkewed" {
+				assert.Contains(t, recorder.Body.String(), "<RequestTime>"+r.Header.Get("X-Amz-Date")+"</RequestTime>")
+				assert.Contains(t, recorder.Body.String(), "<ServerTime>")
+				assert.Contains(t, recorder.Body.String(), "<MaxAllowedSkewMilliseconds>900000</MaxAllowedSkewMilliseconds>")
+			}
+		})
+	}
+}

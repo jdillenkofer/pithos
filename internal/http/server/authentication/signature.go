@@ -702,7 +702,7 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 		algorithm:          signatureAlgorithm,
 		credential:         credential,
 		timestamp:          timestamp,
-		expirationDuration: 15 * time.Minute,
+		expirationDuration: maxClockSkew,
 		signedHeaders:      signedHeaders,
 		signature:          signature,
 	}, nil
@@ -779,12 +779,12 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the date in the credential does not match the signing date"), nil
 	}
 
-	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
+	beforeTimestamp := parsedTimestamp.Add(-maxClockSkew)
 	expiredTimestamp := parsedTimestamp.Add(parameters.expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
 		if !parameters.isPresigned {
-			return nil, errRequestTimeTooSkewed, nil
+			return nil, newRequestTimeTooSkewedError(parameters.timestamp, now), nil
 		}
 		if now.After(expiredTimestamp) {
 			return nil, newAccessDeniedError("Request has expired"), nil
