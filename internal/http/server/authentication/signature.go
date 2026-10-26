@@ -716,7 +716,6 @@ type signatureAuthentication struct {
 
 func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, providerErr error) {
 	now := time.Now().UTC()
-	contentEncodingHeader := r.Header.Get("Content-Encoding")
 	isAwsChunked := IsAwsChunkedRequest(r.Header)
 
 	parameters, err := parseSignatureParameters(r)
@@ -839,31 +838,9 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
 			return nil, errSignatureDoesNotMatch, nil
 		}
-		// The raw body length includes the chunk framing, so S3 requires the
-		// payload length to be declared separately.
-		decodedContentLengthValue := r.Header.Get(DecodedContentLengthHeader)
-		if decodedContentLengthValue == "" {
-			return nil, errMissingDecodedContentLength, nil
+		if authErr := decodeAwsChunkedBody(r, parameters.timestamp, scope.value, parameters.signature, verifier, true); authErr != nil {
+			return nil, authErr, nil
 		}
-		decodedContentLength, err := strconv.ParseInt(decodedContentLengthValue, 10, 64)
-		if err != nil || decodedContentLength < 0 {
-			return nil, errInvalidDecodedContentLength, nil
-		}
-		// aws-chunked is a transport encoding, not object metadata: strip it
-		// whether it is the only encoding or the first of several.
-		contentEncodingHeader = stripAwsChunkedContentEncoding(contentEncodingHeader)
-		if contentEncodingHeader != "" {
-			r.Header.Set("Content-Encoding", contentEncodingHeader)
-		} else {
-			r.Header.Del("Content-Encoding")
-		}
-		r.Header.Set("Content-Length", decodedContentLengthValue)
-		r.Header.Del(DecodedContentLengthHeader)
-		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
-		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
-		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
-		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName, decodedContentLength)
 	} else if !parameters.isPresigned {
 		if declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header)); ok {
 			r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
@@ -874,6 +851,75 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		AuthenticatedIdentity: &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID},
 		SignatureVersion:      string(parameters.algorithm),
 	}, nil, nil
+}
+
+// decodeAwsChunkedBody replaces the body of an aws-chunked request with its
+// decoded payload and rewrites the headers to describe that payload. Chunk and
+// trailer signatures are only checked when verifySignatures is set; unsigned
+// streaming modes are never signature-checked.
+func decodeAwsChunkedBody(r *http.Request, timestamp string, scope string, seedSignature string, verifier signatureVerifier, verifySignatures bool) *RequestError {
+	contentSHA256 := r.Header.Get(contentSHA256Header)
+	// The raw body length includes the chunk framing, so S3 requires the
+	// payload length to be declared separately.
+	decodedContentLengthValue := r.Header.Get(DecodedContentLengthHeader)
+	if decodedContentLengthValue == "" {
+		return errMissingDecodedContentLength
+	}
+	decodedContentLength, err := strconv.ParseInt(decodedContentLengthValue, 10, 64)
+	if err != nil || decodedContentLength < 0 {
+		return errInvalidDecodedContentLength
+	}
+	// aws-chunked is a transport encoding, not object metadata: strip it
+	// whether it is the only encoding or the first of several.
+	contentEncodingHeader := stripAwsChunkedContentEncoding(r.Header.Get("Content-Encoding"))
+	if contentEncodingHeader != "" {
+		r.Header.Set("Content-Encoding", contentEncodingHeader)
+	} else {
+		r.Header.Del("Content-Encoding")
+	}
+	r.Header.Set("Content-Length", decodedContentLengthValue)
+	r.Header.Del(DecodedContentLengthHeader)
+	trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
+	skipChunkValidation := !verifySignatures || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
+	hasTrailingHeaderWithSignature := !skipChunkValidation && (contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing)
+	trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
+	r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, seedSignature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName, decodedContentLength)
+	return nil
+}
+
+// prepareUnsignedPayload applies the payload handling of checkAuthentication
+// to a request whose signature is not verified: an anonymous request, or any
+// request when authentication is disabled. An aws-chunked body is decoded
+// without checking chunk signatures, and a declared x-amz-content-sha256 is
+// verified while the body streams. Signed streaming modes are only accepted
+// when allowSignedStreaming is set, since an anonymous request has no seed
+// signature to chain the chunk signatures to.
+func prepareUnsignedPayload(r *http.Request, allowSignedStreaming bool) *RequestError {
+	contentSHA256 := r.Header.Get(contentSHA256Header)
+	if IsAwsChunkedRequest(r.Header) {
+		isUnsignedStreaming := contentSHA256 == contentSHA256StreamingUnsignedPayload || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing
+		if !isUnsignedStreaming && !(allowSignedStreaming && isStreamingContentSHA256(contentSHA256)) {
+			return errUnsignedStreamingPayloadRequired
+		}
+		return decodeAwsChunkedBody(r, "", "", "", signatureVerifier{}, false)
+	}
+	if declaredHash, ok := parseDeclaredPayloadHash(contentSHA256); ok {
+		r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
+	}
+	return nil
+}
+
+// MakeUnauthenticatedPayloadMiddleware decodes and verifies request payloads
+// when authentication is disabled, so aws-chunked bodies are never stored
+// with their framing. MakeSignatureMiddleware does this itself.
+func MakeUnauthenticatedPayloadMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authErr := prepareUnsignedPayload(r, true); authErr != nil {
+			writeRequestError(w, r, authErr)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type awsChunkReadCloser struct {
@@ -1294,6 +1340,10 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 		// let it through as an anonymous request. The server handlers
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
+			if authErr := prepareUnsignedPayload(r, false); authErr != nil {
+				writeRequestError(w, r, authErr)
+				return
+			}
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
 				Type: AuthTypeAnonymous,
 			})

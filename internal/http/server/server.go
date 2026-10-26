@@ -113,6 +113,7 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, rootHandler)
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
+		rootHandler = authentication.MakeUnauthenticatedPayloadMiddleware(rootHandler)
 	}
 	rootHandler = makeRequestSizeLimitMiddleware(rootHandler)
 	rootHandler = makeQueryValidationMiddleware(rootHandler)

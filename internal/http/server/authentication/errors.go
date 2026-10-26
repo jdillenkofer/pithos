@@ -60,6 +60,12 @@ var errInvalidDecodedContentLength = &RequestError{
 	Message:    "x-amz-decoded-content-length must be a non-negative integer.",
 }
 
+var errUnsignedStreamingPayloadRequired = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidRequest",
+	Message:    "An aws-chunked payload of an unsigned request must use STREAMING-UNSIGNED-PAYLOAD or STREAMING-UNSIGNED-PAYLOAD-TRAILER as x-amz-content-sha256.",
+}
+
 var errInternalError = &RequestError{
 	StatusCode: http.StatusInternalServerError,
 	Code:       "InternalError",
