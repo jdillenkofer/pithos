@@ -169,3 +169,16 @@ func TestCheckAuthenticationRequiresDecodedContentLengthForAwsChunked(t *testing
 	require.NoError(t, providerErr)
 	assert.Equal(t, errMissingDecodedContentLength, authErr)
 }
+
+func TestCheckAuthenticationDecodesStreamingPayloadWithoutAwsChunkedEncoding(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	for _, contentSHA256 := range []string{contentSHA256StreamingPayload, contentSHA256StreamingPayloadTrailing, contentSHA256StreamingUnsignedPayloadTrailing} {
+		t.Run(contentSHA256, func(t *testing.T) {
+			r := newSignedPutRequest(t, contentSHA256, contentSHA256, failingReader{t: t}, 64)
+			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
+			require.NoError(t, providerErr)
+			assert.Equal(t, errMissingDecodedContentLength, authErr)
+		})
+	}
+}

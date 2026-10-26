@@ -43,6 +43,15 @@ func TestRequestSizeLimitMiddleware(t *testing.T) {
 			},
 			expectRejected: true,
 		},
+		{
+			name:          "streaming payload without aws-chunked encoding",
+			contentLength: 1024,
+			headers: map[string]string{
+				"X-Amz-Content-Sha256":         "STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+				"X-Amz-Decoded-Content-Length": strconv.FormatInt(storage.MaxEntitySize+1, 10),
+			},
+			expectRejected: true,
+		},
 	}
 
 	for _, testCase := range testCases {

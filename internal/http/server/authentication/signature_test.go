@@ -239,7 +239,7 @@ func TestAwsChunkedContentEncodingHelpers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.wantIsAwsChunked, HasAwsChunkedContentEncoding(tt.contentEncoding))
+			assert.Equal(t, tt.wantIsAwsChunked, hasAwsChunkedContentEncoding(tt.contentEncoding))
 			assert.Equal(t, tt.wantStripped, stripAwsChunkedContentEncoding(tt.contentEncoding))
 		})
 	}

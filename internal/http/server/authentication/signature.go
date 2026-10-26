@@ -577,11 +577,34 @@ func generateStringToSignForTrailerChunk(algorithm signatureAlgorithm, timestamp
 	return string(algorithm) + "-TRAILER" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + hexHash
 }
 
-// HasAwsChunkedContentEncoding reports whether the body uses the aws-chunked
+// hasAwsChunkedContentEncoding reports whether the body uses the aws-chunked
 // transfer encoding, which S3 requires as the first content encoding.
-func HasAwsChunkedContentEncoding(contentEncodingHeader string) bool {
+func hasAwsChunkedContentEncoding(contentEncodingHeader string) bool {
 	firstEncoding, _, _ := strings.Cut(contentEncodingHeader, ",")
 	return strings.EqualFold(strings.TrimSpace(firstEncoding), contentEncodingAwsChunked)
+}
+
+// isStreamingContentSHA256 reports whether x-amz-content-sha256 announces an
+// aws-chunked body.
+func isStreamingContentSHA256(contentSHA256 string) bool {
+	switch contentSHA256 {
+	case contentSHA256StreamingUnsignedPayload,
+		contentSHA256StreamingUnsignedPayloadTrailing,
+		contentSHA256StreamingPayload,
+		contentSHA256StreamingPayloadTrailing,
+		contentSHA256StreamingECDSAPayload,
+		contentSHA256StreamingECDSAPayloadTrailing:
+		return true
+	}
+	return false
+}
+
+// IsAwsChunkedRequest reports whether the request body is aws-chunked. A
+// streaming x-amz-content-sha256 counts even without Content-Encoding:
+// aws-chunked, because the signature then only covers the chunk signatures,
+// so the body must never be accepted undecoded.
+func IsAwsChunkedRequest(header http.Header) bool {
+	return hasAwsChunkedContentEncoding(header.Get("Content-Encoding")) || isStreamingContentSHA256(header.Get(contentSHA256Header))
 }
 
 func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
@@ -691,7 +714,7 @@ type signatureAuthentication struct {
 func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, providerErr error) {
 	now := time.Now().UTC()
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
-	isAwsChunked := HasAwsChunkedContentEncoding(contentEncodingHeader)
+	isAwsChunked := IsAwsChunkedRequest(r.Header)
 
 	parameters, err := parseSignatureParameters(r)
 	if err != nil {
