@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -634,6 +636,100 @@ func TestPutObjectWithTrailingChecksum(t *testing.T) {
 			responseBody, err := io.ReadAll(response.Body)
 			require.NoError(t, err)
 			assert.Contains(t, string(responseBody), "MalformedTrailerError")
+		})
+	})
+}
+
+func TestPutObjectVerifiesDeclaredPayloadHash(t *testing.T) {
+	testutils.SkipIfNotIntegration(t)
+
+	t.Parallel()
+
+	runIntegrationTest(t, func(t *testing.T, testSuffix string, dbType database.DatabaseType, usePathStyle bool, useReplication bool, useFilesystemPartStore bool, encryptionType storageFactory.EncryptionType, wrapPartStoreWithOutbox bool, usePartStoreCompression bool) {
+		signedPayload := []byte("Hello, signed payload!")
+		signedPayloadHash := sha256.Sum256(signedPayload)
+		signedPayloadHashHex := hex.EncodeToString(signedPayloadHash[:])
+
+		putWithPayloadHash := func(t *testing.T, listenerAddr string, declaredHash string, body []byte) *http.Response {
+			addr, err := net.ResolveTCPAddr("tcp", listenerAddr)
+			require.NoError(t, err)
+			url := fmt.Sprintf("http://%s:%d/%s/%s", testAPIEndpoint, addr.Port, *bucketName, *key)
+			request, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+			require.NoError(t, err)
+			if declaredHash != "" {
+				request.Header.Set("x-amz-content-sha256", declaredHash)
+			}
+
+			signer := v4.NewSigner()
+			err = signer.SignHTTP(context.Background(), aws.Credentials{AccessKeyID: accessKeyId, SecretAccessKey: secretAccessKey}, request, signedPayloadHashHex, "s3", region, time.Now().UTC())
+			require.NoError(t, err)
+
+			response, err := buildHttpClient().Do(request)
+			require.NoError(t, err)
+			return response
+		}
+
+		assertObjectMissing := func(t *testing.T, s3Client *s3.Client) {
+			_, err := s3Client.HeadObject(context.Background(), &s3.HeadObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			var notFoundError *types.NotFound
+			assert.ErrorAs(t, err, &notFoundError)
+		}
+
+		t.Run("it should store a payload matching the declared x-amz-content-sha256"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			response := putWithPayloadHash(t, listenerAddr, signedPayloadHashHex, signedPayload)
+			assert.Equal(t, 200, response.StatusCode)
+
+			getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			require.NoError(t, err)
+			data, err := io.ReadAll(getObjectResult.Body)
+			require.NoError(t, err)
+			assert.Equal(t, signedPayload, data)
+		})
+
+		t.Run("it should reject a payload not matching the declared x-amz-content-sha256 without storing it"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			tamperedPayload := bytes.ToUpper(signedPayload)
+			response := putWithPayloadHash(t, listenerAddr, signedPayloadHashHex, tamperedPayload)
+			assert.Equal(t, 400, response.StatusCode)
+			responseBody, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(responseBody), "<Code>XAmzContentSHA256Mismatch</Code>")
+			assertObjectMissing(t, s3Client)
+		})
+
+		t.Run("it should reject a header-signed upload without x-amz-content-sha256"+testSuffix, func(t *testing.T) {
+			s3Client, listenerAddr, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			response := putWithPayloadHash(t, listenerAddr, "", signedPayload)
+			assert.Equal(t, 400, response.StatusCode)
+			responseBody, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(responseBody), "<Code>InvalidRequest</Code>")
+			assertObjectMissing(t, s3Client)
 		})
 	})
 }

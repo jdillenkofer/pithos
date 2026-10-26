@@ -367,5 +367,6 @@ func signedLookingRequest() *http.Request {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/20260912/eu-central-1/s3/aws4_request,SignedHeaders=host,Signature=invalid")
 	request.Header.Set("X-Amz-Date", "20260912T120000Z")
+	request.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 	return request
 }

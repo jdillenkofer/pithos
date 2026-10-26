@@ -36,6 +36,18 @@ var errRequestTimeTooSkewed = &RequestError{
 	Message:    "The difference between the request time and the current time is too large.",
 }
 
+var errMissingContentSHA256 = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidRequest",
+	Message:    "Missing required header for this request: x-amz-content-sha256",
+}
+
+var errInvalidContentSHA256 = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidArgument",
+	Message:    "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, STREAMING-UNSIGNED-PAYLOAD-TRAILER, STREAMING-AWS4-HMAC-SHA256-PAYLOAD, STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER, STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD, STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER or a valid sha256 value.",
+}
+
 var errInternalError = &RequestError{
 	StatusCode: http.StatusInternalServerError,
 	Code:       "InternalError",

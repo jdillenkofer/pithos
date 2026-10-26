@@ -217,6 +217,7 @@ var s3ErrorMappings = []struct {
 	{authentication.ErrMalformedChunk, 400, "InvalidArgument"},
 	{authentication.ErrIncompleteBody, 400, ""},
 	{authentication.ErrChunkSignatureMismatch, 403, "SignatureDoesNotMatch"},
+	{authentication.ErrContentSHA256Mismatch, 400, ""},
 	{storage.ErrInvalidRange, 416, ""},
 	{storage.ErrNoSuchBucket, 404, ""},
 	{storage.ErrBucketAlreadyExists, 409, ""},

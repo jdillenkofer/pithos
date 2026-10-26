@@ -41,8 +41,9 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 			name: "wrong region",
 			request: func() *http.Request {
 				r := httptest.NewRequest(http.MethodGet, "/", nil)
-				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/us-east-1/s3/aws4_request,SignedHeaders=host,Signature=invalid")
+				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
 				r.Header.Set("X-Amz-Date", currentTimestamp)
+				r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 				return r
 			},
 			statusCode: http.StatusBadRequest,
@@ -52,8 +53,9 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 			name: "unsigned x-amz header",
 			request: func() *http.Request {
 				r := httptest.NewRequest(http.MethodGet, "/", nil)
-				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-date,Signature=invalid")
+				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
 				r.Header.Set("X-Amz-Date", currentTimestamp)
+				r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 				r.Header.Set("X-Amz-Meta-Unsigned", "value")
 				return r
 			},
@@ -65,8 +67,9 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 			name: "invalid signature",
 			request: func() *http.Request {
 				r := httptest.NewRequest(http.MethodGet, "/", nil)
-				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-date,Signature=invalid")
+				r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+currentDate+"/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
 				r.Header.Set("X-Amz-Date", currentTimestamp)
+				r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
 				return r
 			},
 			statusCode: http.StatusForbidden,

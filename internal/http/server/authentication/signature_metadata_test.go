@@ -84,8 +84,9 @@ func signedMetadataRequest(t *testing.T, algorithm signatureAlgorithm, presigned
 		}
 		r.URL.RawQuery = query.Encode()
 	} else {
+		r.Header.Set(contentSHA256Header, sha256Hex(nil))
 		r.Header.Set("x-amz-date", timestamp)
-		headers = append(headers, "x-amz-date")
+		headers = append(headers, "x-amz-content-sha256", "x-amz-date")
 		if algorithm == signatureAlgorithmV4a {
 			r.Header.Set("x-amz-region-set", "eu-central-1")
 			headers = append(headers, "x-amz-region-set")

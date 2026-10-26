@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
 const contentSHA256Header = "x-amz-content-sha256"
@@ -50,16 +49,17 @@ const contentEncodingAwsChunked = "aws-chunked"
 const trailerHeader = "x-amz-trailer"
 const checksumTrailerPrefix = "x-amz-checksum-"
 
-// maxMemoryCacheSize is the maximum size of a payload that will be cached in memory
-// before switching to a disk-based cache.
-const maxMemoryCacheSize = 10 * 1000 * 1000
-
 var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 
 // ErrTrailerChecksumMismatch is returned when the checksum declared in the
 // trailer of an aws-chunked upload does not match the received payload.
 // Its text is the S3 error code reported to the client.
 var ErrTrailerChecksumMismatch = errors.New("BadDigest")
+
+// ErrContentSHA256Mismatch is returned when the payload does not match the
+// SHA-256 declared in x-amz-content-sha256. Its text is the S3 error code
+// reported to the client.
+var ErrContentSHA256Mismatch = errors.New("XAmzContentSHA256Mismatch")
 
 // ErrMalformedTrailer is returned when the trailer of an aws-chunked upload
 // is missing, unsupported, or does not match the declared x-amz-trailer header.
@@ -490,26 +490,40 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 	return signedHeaders.String()
 }
 
-func generateHashedPayload(r *http.Request) (*string, error) {
-	// Use smart cache (memory up to maxMemoryCacheSize, then disk)
-	reader, err := ioutils.NewSmartCachedReadSeekCloser(r.Body, maxMemoryCacheSize)
-	if err != nil {
-		return nil, err
+// validateContentSHA256Header checks x-amz-content-sha256 of a header-signed
+// request. S3 requires it, so the body never has to be read before the
+// signature is verified.
+func validateContentSHA256Header(contentSHA256 string) *RequestError {
+	switch contentSHA256 {
+	case "":
+		return errMissingContentSHA256
+	case contentSHA256UnsignedPayload,
+		contentSHA256StreamingUnsignedPayload,
+		contentSHA256StreamingUnsignedPayloadTrailing,
+		contentSHA256StreamingPayload,
+		contentSHA256StreamingPayloadTrailing,
+		contentSHA256StreamingECDSAPayload,
+		contentSHA256StreamingECDSAPayloadTrailing:
+		return nil
 	}
-	sha256Hash := sha256.New()
-	_, err = ioutils.Copy(sha256Hash, reader)
-	if err != nil {
-		return nil, err
+	if _, ok := parseDeclaredPayloadHash(contentSHA256); !ok {
+		return errInvalidContentSHA256
 	}
-	dataSha256 := sha256Hash.Sum(nil)
-	hexSha256 := hex.EncodeToString(dataSha256)
+	return nil
+}
 
-	_, err = reader.Seek(0, io.SeekStart)
-	if err != nil {
-		return nil, err
+// parseDeclaredPayloadHash decodes a hex SHA-256 declared in
+// x-amz-content-sha256. It reports false for the streaming and unsigned
+// sentinels and for malformed values.
+func parseDeclaredPayloadHash(contentSHA256 string) ([]byte, bool) {
+	if len(contentSHA256) != 2*sha256.Size {
+		return nil, false
 	}
-	r.Body = reader
-	return &hexSha256, nil
+	declaredHash, err := hex.DecodeString(contentSHA256)
+	if err != nil {
+		return nil, false
+	}
+	return declaredHash, true
 }
 
 func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPresigned bool) (*string, error) {
@@ -519,26 +533,13 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	canonicalRequest += generateCanonicalHeaders(r, headersToInclude) + "\n"
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
 
-	contentSHA256 := r.Header.Get(contentSHA256Header)
 	if isPresigned {
 		canonicalRequest += contentSHA256UnsignedPayload
 	} else {
-		switch contentSHA256 {
-		case contentSHA256UnsignedPayload,
-			contentSHA256StreamingUnsignedPayload,
-			contentSHA256StreamingUnsignedPayloadTrailing,
-			contentSHA256StreamingPayload,
-			contentSHA256StreamingPayloadTrailing,
-			contentSHA256StreamingECDSAPayload,
-			contentSHA256StreamingECDSAPayloadTrailing:
-			canonicalRequest += contentSHA256
-		default:
-			hashedPayload, err := generateHashedPayload(r)
-			if err != nil {
-				return nil, err
-			}
-			canonicalRequest += *hashedPayload
-		}
+		// validateContentSHA256Header has accepted the value. A declared hash
+		// is signed as-is, so the signature is checked before the body is
+		// read; the body is verified against it while it streams.
+		canonicalRequest += r.Header.Get(contentSHA256Header)
 	}
 	return &canonicalRequest, nil
 }
@@ -694,6 +695,12 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		return nil, newMalformedAuthorizationError(r.Header.Get("Authorization") == "", err.Error()), nil
 	}
 
+	if !parameters.isPresigned {
+		if authErr := validateContentSHA256Header(r.Header.Get(contentSHA256Header)); authErr != nil {
+			return nil, authErr, nil
+		}
+	}
+
 	accessKeyIdAndScope := strings.Split(parameters.credential, "/")
 	regionSet := r.Header.Get("x-amz-region-set")
 	if parameters.isPresigned {
@@ -817,6 +824,10 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
 		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
 		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
+	} else if !parameters.isPresigned {
+		if declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header)); ok {
+			r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
+		}
 	}
 
 	return &signatureAuthentication{
@@ -1120,6 +1131,61 @@ func (r *awsChunkReadCloser) Close() error {
 		return err
 	}
 	return nil
+}
+
+// payloadHashVerifyingReadCloser hashes the body while it is read and fails
+// the read that completes the body if it does not match the declared hash, so
+// consumers abort before committing the payload.
+type payloadHashVerifyingReadCloser struct {
+	ctx          context.Context
+	inner        io.ReadCloser
+	hasher       hash.Hash
+	declaredHash []byte
+	remaining    int64 // -1 if the body length is unknown
+	err          error
+}
+
+func newPayloadHashVerifyingReadCloser(ctx context.Context, inner io.ReadCloser, declaredHash []byte, contentLength int64) *payloadHashVerifyingReadCloser {
+	remaining := contentLength
+	if remaining < 0 {
+		remaining = -1
+	}
+	return &payloadHashVerifyingReadCloser{
+		ctx:          ctx,
+		inner:        inner,
+		hasher:       sha256.New(),
+		declaredHash: declaredHash,
+		remaining:    remaining,
+	}
+}
+
+func (r *payloadHashVerifyingReadCloser) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.inner.Read(p)
+	r.hasher.Write(p[:n])
+	if r.remaining >= 0 {
+		r.remaining -= int64(n)
+	}
+	// Verify on the read that delivers the last byte of a sized body, since
+	// consumers reading exactly Content-Length bytes may never observe EOF.
+	if err == io.EOF || r.remaining == 0 {
+		if !hmac.Equal(r.hasher.Sum(nil), r.declaredHash) {
+			slog.DebugContext(r.ctx, "Payload does not match declared x-amz-content-sha256")
+			r.err = ErrContentSHA256Mismatch
+			return n, r.err
+		}
+		r.err = err
+		if r.err == nil {
+			r.err = io.EOF
+		}
+	}
+	return n, err
+}
+
+func (r *payloadHashVerifyingReadCloser) Close() error {
+	return r.inner.Close()
 }
 
 func authTypeForRequest(r *http.Request) AuthType {
