@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -164,4 +165,38 @@ func TestPreRoutingErrorsMatchEndpoint(t *testing.T) {
 			assert.Contains(t, w.Body.String(), testCase.code)
 		})
 	}
+}
+
+type singleCredentialProvider struct{}
+
+func (singleCredentialProvider) Lookup(_ context.Context, accessKeyID string) (authentication.Credential, bool, error) {
+	if accessKeyID != "key" {
+		return authentication.Credential{}, false, nil
+	}
+	return authentication.Credential{AccessKeyID: "key", SecretAccessKey: "secret", AccountID: "account", PrincipalID: "client"}, true, nil
+}
+
+func TestRequestTimeTooSkewedIncludesS3Details(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(r) return true end`)
+	require.NoError(t, err)
+	handler := SetupServer(singleCredentialProvider{}, "us-east-1", "s3.test", "website.test", authorizer, &queryTestStorage{})
+
+	signingTime := time.Now().UTC().Add(-time.Hour)
+	r := httptest.NewRequest(http.MethodGet, "http://s3.test/bucket/key", nil)
+	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=key/"+signingTime.Format("20060102")+"/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid")
+	r.Header.Set("X-Amz-Date", signingTime.Format("20060102T150405Z"))
+	r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	var response ErrorResponse
+	require.NoError(t, xml.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "RequestTimeTooSkewed", response.Code)
+	assert.Equal(t, signingTime.Format("20060102T150405Z"), response.RequestTime)
+	assert.NotEmpty(t, response.ServerTime)
+	assert.Equal(t, int64(900000), response.MaxAllowedSkewMilliseconds)
+	assert.Equal(t, w.Header().Get("x-amz-request-id"), response.RequestId)
 }

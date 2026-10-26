@@ -1,8 +1,6 @@
 package authentication
 
 import (
-	"encoding/xml"
-	"log/slog"
 	"net/http"
 	"time"
 )
@@ -13,13 +11,15 @@ type RequestError struct {
 	StatusCode int
 	Code       string
 	Message    string
-	// clockSkew carries the details S3 adds to RequestTimeTooSkewed.
-	clockSkew *clockSkewDetails
+	// ClockSkew carries the details S3 adds to RequestTimeTooSkewed.
+	ClockSkew *ClockSkewDetails
 }
 
-type clockSkewDetails struct {
-	requestTime string
-	serverTime  time.Time
+// ClockSkewDetails describes a request rejected as RequestTimeTooSkewed.
+type ClockSkewDetails struct {
+	RequestTime    string
+	ServerTime     time.Time
+	MaxAllowedSkew time.Duration
 }
 
 func (e *RequestError) Error() string {
@@ -49,7 +49,7 @@ func newRequestTimeTooSkewedError(requestTime string, serverTime time.Time) *Req
 		StatusCode: http.StatusForbidden,
 		Code:       "RequestTimeTooSkewed",
 		Message:    "The difference between the request time and the current time is too large.",
-		clockSkew:  &clockSkewDetails{requestTime: requestTime, serverTime: serverTime},
+		ClockSkew:  &ClockSkewDetails{RequestTime: requestTime, ServerTime: serverTime, MaxAllowedSkew: maxClockSkew},
 	}
 }
 
@@ -134,44 +134,5 @@ func newMalformedAuthorizationError(isPresigned bool, message string) *RequestEr
 	return &RequestError{StatusCode: http.StatusBadRequest, Code: "AuthorizationHeaderMalformed", Message: "The authorization header is malformed; " + message}
 }
 
-type errorResponse struct {
-	XMLName   xml.Name `xml:"Error"`
-	Code      string   `xml:"Code"`
-	Message   string   `xml:"Message"`
-	Resource  string   `xml:"Resource"`
-	RequestId string   `xml:"RequestId"`
-
-	RequestTime                string `xml:"RequestTime,omitempty"`
-	ServerTime                 string `xml:"ServerTime,omitempty"`
-	MaxAllowedSkewMilliseconds int64  `xml:"MaxAllowedSkewMilliseconds,omitempty"`
-}
-
 // ErrorWriter renders an authentication failure for the client.
 type ErrorWriter func(w http.ResponseWriter, r *http.Request, requestErr *RequestError)
-
-// WriteRequestError renders an authentication failure as an S3 XML error.
-func WriteRequestError(w http.ResponseWriter, r *http.Request, requestErr *RequestError) {
-	requestID, _ := r.Context().Value(RequestIDContextKey{}).(string)
-	response := errorResponse{
-		Code:      requestErr.Code,
-		Message:   requestErr.Message,
-		Resource:  r.URL.Path,
-		RequestId: requestID,
-	}
-	if skew := requestErr.clockSkew; skew != nil {
-		response.RequestTime = skew.requestTime
-		response.ServerTime = skew.serverTime.Format(time.RFC3339)
-		response.MaxAllowedSkewMilliseconds = maxClockSkew.Milliseconds()
-	}
-	body, err := xml.MarshalIndent(response, "", "  ")
-	if err != nil {
-		slog.ErrorContext(r.Context(), "Failed to marshal XML response", "error", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(requestErr.StatusCode)
-	if _, err := w.Write(append([]byte(xml.Header), body...)); err != nil {
-		slog.DebugContext(r.Context(), "Failed to write XML response", "error", err)
-	}
-}

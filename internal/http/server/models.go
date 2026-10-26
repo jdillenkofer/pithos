@@ -408,4 +408,9 @@ type ErrorResponse struct {
 	Message   string   `xml:"Message"`
 	Resource  string   `xml:"Resource"`
 	RequestId string   `xml:"RequestId"`
+
+	// RequestTimeTooSkewed details.
+	RequestTime                string `xml:"RequestTime,omitempty"`
+	ServerTime                 string `xml:"ServerTime,omitempty"`
+	MaxAllowedSkewMilliseconds int64  `xml:"MaxAllowedSkewMilliseconds,omitempty"`
 }

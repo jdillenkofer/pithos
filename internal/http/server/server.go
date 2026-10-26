@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	prometheusmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware/prometheus"
@@ -146,7 +147,13 @@ func writeAuthenticationError(w http.ResponseWriter, r *http.Request, requestErr
 		writeHTMLError(w, requestErr.StatusCode, requestErr.Code, requestErr.Message)
 		return
 	}
-	authentication.WriteRequestError(w, r, requestErr)
+	response := newErrorResponse(r, requestErr.Code, requestErr.Message, r.URL.Path)
+	if skew := requestErr.ClockSkew; skew != nil {
+		response.RequestTime = skew.RequestTime
+		response.ServerTime = skew.ServerTime.Format(time.RFC3339)
+		response.MaxAllowedSkewMilliseconds = skew.MaxAllowedSkew.Milliseconds()
+	}
+	writeXMLResponse(w, r, requestErr.StatusCode, response)
 }
 
 func isTrailingSlashBucketRoot(path string) bool {

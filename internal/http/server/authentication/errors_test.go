@@ -111,6 +111,7 @@ func TestCheckAuthenticationReportsS3ErrorCodes(t *testing.T) {
 
 // S3 accepts a header-signed request within 15 minutes of x-amz-date in
 // either direction and answers RequestTimeTooSkewed outside of that window.
+// The skew details in the response are covered by the server's error writer.
 func TestCheckAuthenticationRejectsHeaderTimestampOutsideSkewWindow(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
@@ -138,11 +139,6 @@ func TestCheckAuthenticationRejectsHeaderTimestampOutsideSkewWindow(t *testing.T
 			MakeSignatureMiddleware(provider, "eu-central-1", WriteRequestError, http.NotFoundHandler()).ServeHTTP(recorder, r)
 			assert.Equal(t, http.StatusForbidden, recorder.Code)
 			assert.Contains(t, recorder.Body.String(), "<Code>"+testCase.code+"</Code>")
-			if testCase.code == "RequestTimeTooSkewed" {
-				assert.Contains(t, recorder.Body.String(), "<RequestTime>"+r.Header.Get("X-Amz-Date")+"</RequestTime>")
-				assert.Contains(t, recorder.Body.String(), "<ServerTime>")
-				assert.Contains(t, recorder.Body.String(), "<MaxAllowedSkewMilliseconds>900000</MaxAllowedSkewMilliseconds>")
-			}
 		})
 	}
 }
@@ -253,4 +249,15 @@ func TestCheckAuthenticationReportsS3MessagesForMalformedAuthentication(t *testi
 			assert.Equal(t, testCase.message, response.Message)
 		})
 	}
+}
+
+func TestRequestTimeTooSkewedCarriesClockSkewDetails(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	serverTime := time.Now().UTC()
+	requestErr := newRequestTimeTooSkewedError("20200101T000000Z", serverTime)
+	require.NotNil(t, requestErr.ClockSkew)
+	assert.Equal(t, "20200101T000000Z", requestErr.ClockSkew.RequestTime)
+	assert.Equal(t, serverTime, requestErr.ClockSkew.ServerTime)
+	assert.Equal(t, 15*time.Minute, requestErr.ClockSkew.MaxAllowedSkew)
 }

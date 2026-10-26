@@ -33,14 +33,18 @@ func writeXMLResponse(w http.ResponseWriter, r *http.Request, statusCode int, re
 }
 
 func writeS3ErrorResponse(w http.ResponseWriter, r *http.Request, statusCode int, code string, message string, resource string) {
+	writeXMLResponse(w, r, statusCode, newErrorResponse(r, code, message, resource))
+}
+
+func newErrorResponse(r *http.Request, code string, message string, resource string) ErrorResponse {
 	requestID, ok := httpmiddleware.RequestIDFromContext(r.Context())
 	if !ok {
 		requestID = ulid.Make().String()
 	}
-	writeXMLResponse(w, r, statusCode, ErrorResponse{
+	return ErrorResponse{
 		Code:      code,
 		Message:   message,
 		Resource:  resource,
 		RequestId: requestID,
-	})
+	}
 }
