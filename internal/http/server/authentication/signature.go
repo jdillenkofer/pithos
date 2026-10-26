@@ -842,8 +842,8 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 			return nil, authErr, nil
 		}
 	} else if !parameters.isPresigned {
-		if declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header)); ok {
-			r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
+		if authErr := verifyDeclaredPayloadHash(r); authErr != nil {
+			return nil, authErr, nil
 		}
 	}
 
@@ -903,9 +903,27 @@ func prepareUnsignedPayload(r *http.Request, allowSignedStreaming bool) *Request
 		}
 		return decodeAwsChunkedBody(r, "", "", "", signatureVerifier{}, false)
 	}
-	if declaredHash, ok := parseDeclaredPayloadHash(contentSHA256); ok {
-		r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
+	return verifyDeclaredPayloadHash(r)
+}
+
+// verifyDeclaredPayloadHash binds the body to a hex x-amz-content-sha256. A
+// known empty body is checked right away, so a request whose handler never
+// reads its body still fails on a mismatching hash. Any other body is checked
+// while it streams, which relies on every handler that acts on the body
+// reading it to the end.
+func verifyDeclaredPayloadHash(r *http.Request) *RequestError {
+	declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header))
+	if !ok {
+		return nil
 	}
+	if r.ContentLength == 0 {
+		if emptyHash := sha256.Sum256(nil); !hmac.Equal(emptyHash[:], declaredHash) {
+			slog.DebugContext(r.Context(), "Empty payload does not match declared x-amz-content-sha256")
+			return errContentSHA256Mismatch
+		}
+		return nil
+	}
+	r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
 	return nil
 }
 

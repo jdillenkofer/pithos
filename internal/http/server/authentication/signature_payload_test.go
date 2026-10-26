@@ -386,3 +386,19 @@ func TestUnauthenticatedPayloadMiddlewareDecodesAwsChunkedBody(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckAuthenticationVerifiesDeclaredHashOfEmptyBodyBeforeHandler(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	emptyHash := sha256Hex(nil)
+	r := newSignedPutRequest(t, emptyHash, emptyHash, http.NoBody, 0)
+	_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
+	require.NoError(t, providerErr)
+	assert.Nil(t, authErr)
+
+	otherHash := sha256Hex([]byte("hello payload"))
+	r = newSignedPutRequest(t, otherHash, otherHash, failingReader{t: t}, 0)
+	_, authErr, providerErr = checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
+	require.NoError(t, providerErr)
+	assert.Equal(t, errContentSHA256Mismatch, authErr)
+}
