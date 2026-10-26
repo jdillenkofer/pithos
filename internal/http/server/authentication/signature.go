@@ -66,6 +66,17 @@ var ErrTrailerChecksumMismatch = errors.New("BadDigest")
 // Its text is the S3 error code reported to the client.
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
+// ErrMalformedChunk is returned when the framing of an aws-chunked upload is
+// invalid: an oversized or unparsable chunk header or a missing CRLF. S3 does
+// not document a dedicated error code for this, so it is reported as
+// InvalidArgument.
+var ErrMalformedChunk = errors.New("malformed aws-chunked encoding")
+
+// ErrIncompleteBody is returned when an aws-chunked upload ends inside a chunk
+// or before the zero-length chunk.
+// Its text is the S3 error code reported to the client.
+var ErrIncompleteBody = errors.New("IncompleteBody")
+
 type RequestIDContextKey struct{}
 type ClientIPContextKey struct{}
 
@@ -822,6 +833,7 @@ type awsChunkReadCloser struct {
 	skipChunkValidation            bool
 	trailerChecksumName            string
 	trailerHasher                  hash.Hash
+	err                            error
 }
 
 func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
@@ -866,18 +878,86 @@ func (r *awsChunkReadCloser) validateSignature() error {
 // trailer, optionally followed by an x-amz-trailer-signature line.
 const maxTrailerLines = 8
 
+// Line length limits for the aws-chunked framing, including the terminating
+// \r\n. They must not exceed the bufio.Reader buffer size, because lines are
+// read with ReadSlice to avoid buffering arbitrarily long input.
+const (
+	// maxChunkHeaderLength fits a 16 digit hex length and a 144 character
+	// SigV4a (hex-encoded DER ECDSA) chunk signature.
+	maxChunkHeaderLength    = 256
+	maxTrailerLineLength    = 1024
+	maxTrailerSectionLength = 4096
+)
+
+var crlf = []byte("\r\n")
+
+// readLine reads a single \r\n-terminated line of at most maxLength bytes
+// (including the terminator) and returns it without the terminator. The
+// returned slice is only valid until the next read. It returns io.EOF if the
+// input ends before the first byte, ErrIncompleteBody if the line is cut short
+// by EOF, and malformedErr if the line is too long or not terminated by \r\n.
+func (r *awsChunkReadCloser) readLine(maxLength int, malformedErr error) ([]byte, error) {
+	line, err := r.innerBuf.ReadSlice('\n')
+	if len(line) > maxLength || errors.Is(err, bufio.ErrBufferFull) {
+		slog.DebugContext(r.ctx, "aws-chunked line exceeds length limit", "limit", maxLength)
+		return nil, malformedErr
+	}
+	if err == io.EOF {
+		if len(line) == 0 {
+			return nil, io.EOF
+		}
+		return nil, ErrIncompleteBody
+	}
+	if err != nil {
+		return nil, err
+	}
+	content, found := bytes.CutSuffix(line, crlf)
+	if !found {
+		return nil, malformedErr
+	}
+	return content, nil
+}
+
+// readCRLF consumes the \r\n that terminates chunk data and the final
+// zero-length chunk.
+func (r *awsChunkReadCloser) readCRLF() error {
+	var terminator [2]byte
+	_, err := io.ReadFull(r.innerBuf, terminator[:])
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		return ErrIncompleteBody
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(terminator[:], crlf) {
+		return ErrMalformedChunk
+	}
+	return nil
+}
+
 // readTrailerSection reads the trailer lines following the zero-length chunk
 // and returns the checksum trailer line and the trailer signature (without its
 // header name). The section is terminated by a blank line or EOF. A single
 // blank line directly after the zero-length chunk is tolerated, because some
 // clients terminate the zero-length chunk with its own \r\n before the
 // trailers, mirroring the framing of the data chunks.
-func (r *awsChunkReadCloser) readTrailerSection() (checksumHeader string, trailerSignature string) {
-	for i := range maxTrailerLines {
-		line, lineErr := r.innerBuf.ReadString('\n')
-		line = strings.TrimSpace(line)
+func (r *awsChunkReadCloser) readTrailerSection() (checksumHeader string, trailerSignature string, err error) {
+	sectionLength := 0
+	for i := 0; ; i++ {
+		if i > maxTrailerLines {
+			return "", "", ErrMalformedTrailer
+		}
+		rawLine, err := r.readLine(min(maxTrailerLineLength, maxTrailerSectionLength-sectionLength), ErrMalformedTrailer)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", "", err
+		}
+		sectionLength += len(rawLine) + len(crlf)
+		line := strings.TrimSpace(string(rawLine))
 		if line == "" {
-			if i == 0 && lineErr == nil {
+			if i == 0 {
 				continue
 			}
 			break
@@ -887,11 +967,8 @@ func (r *awsChunkReadCloser) readTrailerSection() (checksumHeader string, traile
 		} else if checksumHeader == "" {
 			checksumHeader = line
 		}
-		if lineErr != nil {
-			break
-		}
 	}
-	return checksumHeader, trailerSignature
+	return checksumHeader, trailerSignature, nil
 }
 
 // validateTrailerChecksum checks the x-amz-checksum-* trailer line against the
@@ -920,26 +997,42 @@ func (r *awsChunkReadCloser) validateTrailerChecksum(checksumHeader string) erro
 	return nil
 }
 
-func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
+// Read decodes the aws-chunked body. Errors are sticky: once the body is
+// exhausted or found malformed, every further call returns the same error
+// instead of parsing the remaining input as a new chunk.
+func (r *awsChunkReadCloser) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.read(p)
+	if err != nil {
+		r.err = err
+	}
+	return n, err
+}
+
+func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 	if r.chunkBytesRemaining <= 0 {
-		chunkMetadata, err := r.innerBuf.ReadBytes('\n')
+		chunkMetadata, err := r.readLine(maxChunkHeaderLength, ErrMalformedChunk)
+		if err == io.EOF {
+			// The body ended before the zero-length chunk.
+			return 0, ErrIncompleteBody
+		}
 		if err != nil {
 			return 0, err
 		}
-		split := bytes.SplitN(bytes.Trim(chunkMetadata, "\r\n"), []byte(";chunk-signature="), 2)
-		hexLen := string(split[0])
-		if len(split) != 2 {
-			if !r.skipChunkValidation {
-				return 0, ErrChunkSignatureMismatch
-			}
-		} else {
-			signature := string(split[1])
-			r.chunkSignature = signature
+		hexLen, signature, hasSignature := bytes.Cut(chunkMetadata, []byte(";chunk-signature="))
+		if hasSignature {
+			r.chunkSignature = string(signature)
+		} else if !r.skipChunkValidation {
+			return 0, ErrChunkSignatureMismatch
 		}
 
-		length, err := strconv.ParseUint(hexLen, 16, 64)
+		// A bit size of 63 guarantees the length fits into an int64.
+		length, err := strconv.ParseUint(string(hexLen), 16, 63)
 		if err != nil {
-			return 0, err
+			slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
+			return 0, ErrMalformedChunk
 		}
 		r.chunkBytesRemaining = int64(length)
 		if length == 0 {
@@ -950,7 +1043,10 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 				}
 			}
 			if r.hasTrailingHeader {
-				checksumHeader, trailerSignature := r.readTrailerSection()
+				checksumHeader, trailerSignature, err := r.readTrailerSection()
+				if err != nil {
+					return 0, err
+				}
 				slog.DebugContext(r.ctx, "Validating trailing headers")
 
 				if r.hasTrailingHeaderWithSignature {
@@ -968,7 +1064,7 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 					return 0, err
 				}
 			} else {
-				_, err := r.innerBuf.Discard(2) // Discard the final \r\n
+				err := r.readCRLF() // The final \r\n
 				if err != nil {
 					return 0, err
 				}
@@ -977,7 +1073,7 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		}
 	}
 
-	if len(p) > int(r.chunkBytesRemaining) {
+	if int64(len(p)) > r.chunkBytesRemaining {
 		p = p[:r.chunkBytesRemaining] // Limit the read to the remaining bytes in the chunk
 	}
 	n, err = io.ReadFull(r.innerBuf, p)
@@ -988,8 +1084,15 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 		r.trailerHasher.Write(p[:n])
 	}
 	r.chunkBytesRemaining -= int64(n)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		// The body ended inside a chunk.
+		return n, ErrIncompleteBody
+	}
+	if err != nil {
+		return n, err
+	}
 	if r.chunkBytesRemaining == 0 {
-		_, err := r.innerBuf.Discard(2) // Discard the trailing \r\n
+		err := r.readCRLF() // The \r\n terminating the chunk data
 		if err != nil {
 			return 0, err
 		}
@@ -1000,7 +1103,7 @@ func (r *awsChunkReadCloser) Read(p []byte) (n int, err error) {
 			}
 		}
 	}
-	return n, err
+	return n, nil
 }
 
 func (r *awsChunkReadCloser) Close() error {

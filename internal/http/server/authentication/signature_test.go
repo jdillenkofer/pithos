@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -727,4 +728,103 @@ func (p staticCredentialProvider) Lookup(_ context.Context, accessKeyID string) 
 
 func sigV4aTestCredentials() staticCredentialProvider {
 	return staticCredentialProvider{sigV4aTestAccessKey: {AccessKeyID: sigV4aTestAccessKey, SecretAccessKey: sigV4aTestSecretKey, AccountID: "account", PrincipalID: "principal"}}
+}
+
+func TestAwsChunkReaderRejectsMalformedFraming(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	tests := []struct {
+		name    string
+		content string
+		wantErr error
+	}{
+		{name: "oversized chunk header", content: strings.Repeat("0", maxChunkHeaderLength) + "b\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk header longer than read buffer", content: strings.Repeat("0", 64*1024) + "b\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk length overflows int64", content: "8000000000000000\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk length overflows uint64", content: "10000000000000000\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "empty chunk length", content: "\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "negative chunk length", content: "-b\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk header without CR", content: "b\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk data without CRLF", content: "b\r\nhello worldXX0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "chunk data longer than declared", content: "a\r\nhello world\r\n0\r\n\r\n", wantErr: ErrMalformedChunk},
+		{name: "truncated chunk data", content: "b\r\nhello", wantErr: ErrIncompleteBody},
+		{name: "truncated before chunk data", content: "b\r\n", wantErr: ErrIncompleteBody},
+		{name: "truncated chunk header", content: "b", wantErr: ErrIncompleteBody},
+		{name: "truncated final CRLF", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n\r", wantErr: ErrIncompleteBody},
+		{name: "missing zero-length chunk", content: "b\r\nhello world\r\n", wantErr: ErrIncompleteBody},
+		{name: "oversized trailer line", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:" + strings.Repeat("A", maxTrailerLineLength) + "\r\n\r\n", wantErr: ErrMalformedTrailer},
+		{name: "oversized trailer section", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n" + strings.Repeat("x-amz-foo:"+strings.Repeat("A", 900)+"\r\n", 5) + "\r\n", wantErr: ErrMalformedTrailer},
+		{name: "too many trailer lines", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n" + strings.Repeat("x-amz-foo:bar\r\n", maxTrailerLines) + "\r\n", wantErr: ErrMalformedTrailer},
+		{name: "trailer line without CR", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\n\r\n", wantErr: ErrMalformedTrailer},
+		{name: "unterminated trailer line", content: "b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==", wantErr: ErrIncompleteBody},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := newUnsignedTrailerChunkReader(tt.content, "x-amz-checksum-crc32")
+			_, err := io.ReadAll(body)
+			assert.ErrorIs(t, err, tt.wantErr)
+			// Errors are sticky: the remaining input is not parsed as a new chunk.
+			_, err = body.Read(make([]byte, 16))
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestAwsChunkReaderRejectsMissingFinalCRLF(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\nXX")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrMalformedChunk)
+}
+
+func TestAwsChunkReaderReturnsEOFAfterCompletion(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader(
+		"b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n\r\nb\r\nhello world\r\n",
+		"x-amz-checksum-crc32")
+	data, err := io.ReadAll(body)
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("hello world"), data)
+	n, err := body.Read(make([]byte, 16))
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
+func FuzzAwsChunkReader(f *testing.F) {
+	f.Add([]byte("b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n\r\n"))
+	f.Add([]byte("b\r\nhello world\r\n0\r\n\r\nx-amz-checksum-crc32:DUoRhQ==\r\n"))
+	f.Add([]byte("5\r\nhello\r\n6\r\n world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n"))
+	f.Add([]byte("8000000000000000\r\nhello\r\n"))
+	f.Add([]byte("b\r\nhello"))
+	f.Add([]byte("b\nhello world\n0\n\n"))
+
+	f.Fuzz(func(t *testing.T, content []byte) {
+		body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, "x-amz-checksum-crc32")
+		data, err := io.ReadAll(body)
+		// The decoded payload can never be larger than the encoded body.
+		if len(data) > len(content) {
+			t.Fatalf("decoded %d bytes from %d input bytes", len(data), len(content))
+		}
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, ErrMalformedChunk) && !errors.Is(err, ErrIncompleteBody) && !errors.Is(err, ErrMalformedTrailer) && !errors.Is(err, ErrTrailerChecksumMismatch) {
+			t.Fatalf("unexpected error type: %v", err)
+		}
+		_, stickyErr := body.Read(make([]byte, 16))
+		if stickyErr != err {
+			t.Fatalf("error is not sticky: got %v, want %v", stickyErr, err)
+		}
+	})
+}
+
+func TestAwsChunkReaderRejectsTruncatedFinalCRLF(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\n\r")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	_, err := io.ReadAll(body)
+	assert.ErrorIs(t, err, ErrIncompleteBody)
 }
