@@ -341,6 +341,16 @@ func TestSignatureMiddlewareDecodesAnonymousUnsignedAwsChunkedBody(t *testing.T)
 	assert.Equal(t, "11", header.Get("Content-Length"))
 }
 
+func TestDecodeAwsChunkedBodySetsDecodedContentLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	r := newUnsignedChunkedPutRequest(contentSHA256StreamingUnsignedPayloadTrailing)
+	require.Greater(t, r.ContentLength, int64(11))
+	require.Nil(t, prepareUnsignedPayload(r, false))
+	assert.Equal(t, int64(11), r.ContentLength)
+	assert.Equal(t, "11", r.Header.Get("Content-Length"))
+}
+
 func TestSignatureMiddlewareRejectsAnonymousSignedAwsChunkedBody(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 

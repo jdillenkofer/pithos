@@ -902,6 +902,7 @@ func decodeAwsChunkedBody(r *http.Request, timestamp string, scope string, seedS
 		r.Header.Del("Content-Encoding")
 	}
 	r.Header.Set("Content-Length", decodedContentLengthValue)
+	r.ContentLength = decodedContentLength
 	r.Header.Del(DecodedContentLengthHeader)
 	trailingHeader := strings.HasSuffix(contentSHA256, streamingTrailerSuffix)
 	skipChunkValidation := !verifySignatures || isUnsignedStreamingContentSHA256(contentSHA256)
