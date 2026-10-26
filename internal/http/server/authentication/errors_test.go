@@ -1,6 +1,7 @@
 package authentication
 
 import (
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -142,6 +143,114 @@ func TestCheckAuthenticationRejectsHeaderTimestampOutsideSkewWindow(t *testing.T
 				assert.Contains(t, recorder.Body.String(), "<ServerTime>")
 				assert.Contains(t, recorder.Body.String(), "<MaxAllowedSkewMilliseconds>900000</MaxAllowedSkewMilliseconds>")
 			}
+		})
+	}
+}
+
+// Malformed authentication is reported with the fixed messages S3 uses, never
+// with the underlying parse error.
+func TestCheckAuthenticationReportsS3MessagesForMalformedAuthentication(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	provider := staticCredentialProvider{
+		"key": {AccessKeyID: "key", SecretAccessKey: "secret", AccountID: "account", PrincipalID: "client"},
+	}
+	now := time.Now().UTC()
+	currentDate := now.Format("20060102")
+	currentTimestamp := now.Format("20060102T150405Z")
+	presignedQuery := func(expires string) string {
+		return "/?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F" + currentDate + "%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=" + currentTimestamp + "&X-Amz-Expires=" + expires + "&X-Amz-SignedHeaders=host&X-Amz-Signature=invalid"
+	}
+	headerRequest := func(authorization string) func() *http.Request {
+		return func() *http.Request {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.Header.Set("Authorization", authorization)
+			r.Header.Set("X-Amz-Date", currentTimestamp)
+			r.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+			return r
+		}
+	}
+
+	testCases := []struct {
+		name    string
+		request func() *http.Request
+		code    string
+		message string
+	}{
+		{
+			name:    "non-numeric X-Amz-Expires",
+			request: func() *http.Request { return httptest.NewRequest(http.MethodGet, presignedQuery("abc"), nil) },
+			code:    "AuthorizationQueryParametersError",
+			message: "X-Amz-Expires should be a number",
+		},
+		{
+			name:    "X-Amz-Expires above a week",
+			request: func() *http.Request { return httptest.NewRequest(http.MethodGet, presignedQuery("604801"), nil) },
+			code:    "AuthorizationQueryParametersError",
+			message: "X-Amz-Expires must be less than a week (in seconds) that is; 604800",
+		},
+		{
+			name: "missing presigned query parameter",
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F"+currentDate+"%2Feu-central-1%2Fs3%2Faws4_request", nil)
+			},
+			code:    "AuthorizationQueryParametersError",
+			message: "Query-string authentication version 4 requires the X-Amz-Algorithm, X-Amz-Credential, X-Amz-Signature, X-Amz-Date, X-Amz-SignedHeaders, and X-Amz-Expires parameters.",
+		},
+		{
+			name: "presigned credential with wrong region",
+			request: func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key%2F"+currentDate+"%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date="+currentTimestamp+"&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=invalid", nil)
+			},
+			code:    "AuthorizationQueryParametersError",
+			message: "Error parsing the X-Amz-Credential parameter; the region 'us-east-1' is wrong; expecting 'eu-central-1'",
+		},
+		{
+			name:    "signature version 2",
+			request: headerRequest("AWS key:signature"),
+			code:    "InvalidRequest",
+			message: "The authorization mechanism you have provided is not supported. Please use AWS4-HMAC-SHA256.",
+		},
+		{
+			name:    "unknown authorization scheme",
+			request: headerRequest("Basic a2V5OnNlY3JldA=="),
+			code:    "InvalidArgument",
+			message: "Unsupported Authorization Type",
+		},
+		{
+			name:    "missing authorization component",
+			request: headerRequest("AWS4-HMAC-SHA256 Credential=key/" + currentDate + "/eu-central-1/s3/aws4_request,Signature=invalid"),
+			code:    "AuthorizationHeaderMalformed",
+			message: "The authorization header is malformed; the authorization header requires three components: Credential, SignedHeaders, and Signature.",
+		},
+		{
+			name:    "malformed credential",
+			request: headerRequest("AWS4-HMAC-SHA256 Credential=key/" + currentDate + "/eu-central-1/s3,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid"),
+			code:    "AuthorizationHeaderMalformed",
+			message: `The authorization header is malformed; the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request".`,
+		},
+		{
+			name:    "wrong service",
+			request: headerRequest("AWS4-HMAC-SHA256 Credential=key/" + currentDate + "/eu-central-1/iam/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid"),
+			code:    "AuthorizationHeaderMalformed",
+			message: `The authorization header is malformed; incorrect service "iam". This endpoint belongs to "s3".`,
+		},
+		{
+			name:    "credential date not matching x-amz-date",
+			request: headerRequest("AWS4-HMAC-SHA256 Credential=key/20200101/eu-central-1/s3/aws4_request,SignedHeaders=host;x-amz-content-sha256;x-amz-date,Signature=invalid"),
+			code:    "AuthorizationHeaderMalformed",
+			message: `The authorization header is malformed; Invalid credential date "20200101". This date is not the same as X-Amz-Date: "` + currentDate + `".`,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, testCase.request())
+			var response errorResponse
+			require.NoError(t, xml.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.Equal(t, testCase.code, response.Code)
+			assert.Equal(t, testCase.message, response.Message)
 		})
 	}
 }

@@ -38,6 +38,7 @@ const contentSHA256StreamingPayloadTrailing = "STREAMING-AWS4-HMAC-SHA256-PAYLOA
 const contentSHA256StreamingECDSAPayload = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD"
 const contentSHA256StreamingECDSAPayloadTrailing = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER"
 
+const signatureAlgorithmV2 = "AWS"
 const signatureAlgorithmV4 = "AWS4-HMAC-SHA256"
 const signatureAlgorithmV4a = "AWS4-ECDSA-P256-SHA256"
 const sigV4aSecretKeyPrefix = "AWS4A"
@@ -109,24 +110,29 @@ func (a signatureAlgorithm) parseCredentialScope(parts []string, expectedRegion 
 	switch a {
 	case signatureAlgorithmV4:
 		if len(parts) != 5 {
-			return credentialScope{}, fmt.Errorf("SigV4 credential field must contain exactly 5 parts")
+			return credentialScope{}, errMalformedCredential
 		}
 		if parts[2] != expectedRegion {
-			return credentialScope{}, fmt.Errorf("region in credential does not match expected region")
+			return credentialScope{}, fmt.Errorf("the region '%s' is wrong; expecting '%s'", parts[2], expectedRegion)
 		}
 		return credentialScope{date: parts[1], region: parts[2], service: parts[3], request: parts[4], value: strings.Join(parts[1:], "/")}, nil
 	case signatureAlgorithmV4a:
 		if len(parts) != 4 {
-			return credentialScope{}, fmt.Errorf("SigV4a credential field must contain exactly 4 parts")
+			return credentialScope{}, errMalformedSigV4aCredential
 		}
 		if !regionSetIncludes(regionSet, expectedRegion) {
-			return credentialScope{}, fmt.Errorf("expected region is not included in X-Amz-Region-Set")
+			return credentialScope{}, fmt.Errorf("the region set does not include '%s'", expectedRegion)
 		}
 		return credentialScope{date: parts[1], service: parts[2], request: parts[3], value: strings.Join(parts[1:], "/")}, nil
 	default:
-		return credentialScope{}, fmt.Errorf("unsupported signature algorithm")
+		return credentialScope{}, errMalformedCredential
 	}
 }
+
+// errMalformedCredential and errMalformedSigV4aCredential are the S3 details
+// for a credential that does not split into the expected scope parts.
+var errMalformedCredential = errors.New(`the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request".`)
+var errMalformedSigV4aCredential = errors.New(`the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/SERVICE/aws4_request".`)
 
 func (a signatureAlgorithm) newVerifier(accessKeyID string, secretAccessKey string, scope credentialScope) (signatureVerifier, error) {
 	if a == signatureAlgorithmV4 {
@@ -626,6 +632,9 @@ func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
 	return strings.Join(remainingEncodings, ", ")
 }
 
+// presignedQueryParameters must all be present in a presigned URL.
+var presignedQueryParameters = []string{"X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Signature", "X-Amz-Date", "X-Amz-SignedHeaders", "X-Amz-Expires"}
+
 type signatureParameters struct {
 	algorithm          signatureAlgorithm
 	credential         string
@@ -636,22 +645,34 @@ type signatureParameters struct {
 	isPresigned        bool
 }
 
-func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
+// parseSignatureParameters extracts the SigV4 parameters from the
+// Authorization header or the presigned query. Its errors carry the fixed
+// messages S3 reports, never the underlying parse error.
+func parseSignatureParameters(r *http.Request) (signatureParameters, *RequestError) {
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
 		slog.DebugContext(r.Context(), "Authorization header is missing checking for query parameters")
 		query := r.URL.Query()
+		for _, parameter := range presignedQueryParameters {
+			if query.Get(parameter) == "" {
+				return signatureParameters{}, errMissingPresignedQueryParameters
+			}
+		}
 		algorithm, found := parseSignatureAlgorithm(query.Get("X-Amz-Algorithm"))
 		if !found {
-			return signatureParameters{}, fmt.Errorf("X-Amz-Algorithm is not supported")
+			return signatureParameters{}, newMalformedAuthorizationError(true, `X-Amz-Algorithm only supports "AWS4-HMAC-SHA256 and AWS4-ECDSA-P256-SHA256"`)
 		}
 
 		expires, err := strconv.ParseInt(query.Get("X-Amz-Expires"), 10, 32)
 		if err != nil {
-			return signatureParameters{}, fmt.Errorf("failed to parse X-Amz-Expires: %w", err)
+			slog.DebugContext(r.Context(), "Failed to parse X-Amz-Expires", "err", err)
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires should be a number")
 		}
-		if expires < 1 || expires > 604800 {
-			return signatureParameters{}, fmt.Errorf("X-Amz-Expires must be between 1 and 604800 seconds")
+		if expires < 1 {
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires must be non-negative")
+		}
+		if expires > 604800 {
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires must be less than a week (in seconds) that is; 604800")
 		}
 
 		slog.DebugContext(r.Context(), "Using presigned auth query parameters")
@@ -667,30 +688,30 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	}
 
 	slog.DebugContext(r.Context(), "Authorization header is present")
-	algorithm, fields, found := strings.Cut(authorizationHeader, " ")
-	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain signature fields")
-	}
+	algorithm, fields, _ := strings.Cut(authorizationHeader, " ")
 	signatureAlgorithm, found := parseSignatureAlgorithm(algorithm)
+	if algorithm == signatureAlgorithmV2 {
+		return signatureParameters{}, errUnsupportedSignatureV2
+	}
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header uses an unsupported signature algorithm")
+		return signatureParameters{}, errUnsupportedAuthorizationType
 	}
 
 	authFields := strings.Split(fields, ",")
 	if len(authFields) != 3 {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain exactly 3 fields")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	credential, found := strings.CutPrefix(strings.TrimSpace(authFields[0]), "Credential=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Credential field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	signedHeaders, found := strings.CutPrefix(strings.TrimSpace(authFields[1]), "SignedHeaders=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain SignedHeaders field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	signature, found := strings.CutPrefix(strings.TrimSpace(authFields[2]), "Signature=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Signature field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 
 	timestamp := r.Header.Get("x-amz-date")
@@ -718,10 +739,10 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	now := time.Now().UTC()
 	isAwsChunked := IsAwsChunkedRequest(r.Header)
 
-	parameters, err := parseSignatureParameters(r)
-	if err != nil {
-		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+err.Error())
-		return nil, newMalformedAuthorizationError(r.Header.Get("Authorization") == "", err.Error()), nil
+	parameters, authErr := parseSignatureParameters(r)
+	if authErr != nil {
+		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+authErr.Message)
+		return nil, authErr, nil
 	}
 
 	if !parameters.isPresigned {
@@ -738,7 +759,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	scope, err := parameters.algorithm.parseCredentialScope(accessKeyIdAndScope, expectedRegion, regionSet)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Invalid credential scope: "+err.Error())
-		return nil, newMalformedAuthorizationError(parameters.isPresigned, err.Error()), nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, err.Error()), nil
 	}
 
 	accessKeyID := accessKeyIdAndScope[0]
@@ -759,11 +780,11 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
-		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the service in the credential must be '"+expectedService+"'"), nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `incorrect service "`+scope.service+`". This endpoint belongs to "`+expectedService+`".`), nil
 	}
 	if scope.request != expectedRequest {
 		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
-		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the credential must be terminated with '"+expectedRequest+"'"), nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `incorrect terminal "`+scope.request+`". This endpoint uses "`+expectedRequest+`".`), nil
 	}
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", parameters.timestamp)
@@ -776,7 +797,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 	if scope.date != parsedTimestamp.Format("20060102") {
 		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
-		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the date in the credential does not match the signing date"), nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `Invalid credential date "`+scope.date+`". This date is not the same as X-Amz-Date: "`+parsedTimestamp.Format("20060102")+`".`), nil
 	}
 
 	beforeTimestamp := parsedTimestamp.Add(-maxClockSkew)

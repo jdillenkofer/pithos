@@ -99,6 +99,32 @@ func newAccessDeniedError(message string) *RequestError {
 	return &RequestError{StatusCode: http.StatusForbidden, Code: "AccessDenied", Message: message}
 }
 
+var errUnsupportedAuthorizationType = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidArgument",
+	Message:    "Unsupported Authorization Type",
+}
+
+var errUnsupportedSignatureV2 = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidRequest",
+	Message:    "The authorization mechanism you have provided is not supported. Please use AWS4-HMAC-SHA256.",
+}
+
+var errMissingPresignedQueryParameters = newMalformedAuthorizationError(true, "Query-string authentication version 4 requires the X-Amz-Algorithm, X-Amz-Credential, X-Amz-Signature, X-Amz-Date, X-Amz-SignedHeaders, and X-Amz-Expires parameters.")
+
+var errMalformedAuthorizationComponents = newMalformedAuthorizationError(false, "the authorization header requires three components: Credential, SignedHeaders, and Signature.")
+
+// newMalformedCredentialError reports an unusable credential scope, with the
+// prefix S3 uses for the Authorization header or the X-Amz-Credential query
+// parameter.
+func newMalformedCredentialError(isPresigned bool, detail string) *RequestError {
+	if isPresigned {
+		return newMalformedAuthorizationError(true, "Error parsing the X-Amz-Credential parameter; "+detail)
+	}
+	return newMalformedAuthorizationError(false, detail)
+}
+
 // newMalformedAuthorizationError reports an unusable Authorization header or
 // presigned query, using the code S3 returns for the respective form.
 func newMalformedAuthorizationError(isPresigned bool, message string) *RequestError {
