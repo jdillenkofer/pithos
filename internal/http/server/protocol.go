@@ -228,7 +228,7 @@ var s3ErrorMappings = []struct {
 	{ErrInvalidArgument, 400, ""},
 	{storage.ErrInvalidPart, 400, ""},
 	{storage.ErrInvalidPartOrder, 400, ""},
-	{storage.ErrEntityTooLarge, 413, ""},
+	{storage.ErrEntityTooLarge, 400, ""},
 	{storage.ErrTooManyParts, 400, ""},
 	{storage.ErrInvalidTag, 400, ""},
 	{storage.ErrMetadataTooLarge, 400, ""},

@@ -112,6 +112,7 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
 	}
+	rootHandler = makeRequestSizeLimitMiddleware(rootHandler)
 	rootHandler = makeQueryValidationMiddleware(rootHandler)
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
