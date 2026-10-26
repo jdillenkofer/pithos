@@ -446,8 +446,6 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 	return s.runAuthorizerAuthorization(ctx, request, isAuthenticated, w, r)
 }
 
-// checkExpectedBucketOwner enforces the caller's owner guard independently of
-// authentication and programmable authorization. True means the request failed.
 // writeAccessDenied answers a denied request the way S3 does: 403
 // AccessDenied for authenticated and anonymous callers alike, as an XML error
 // on the API endpoint and as an HTML page on the website endpoint.
@@ -459,6 +457,8 @@ func (s *Server) writeAccessDenied(w http.ResponseWriter, r *http.Request) {
 	writeS3ErrorResponse(w, r, http.StatusForbidden, "AccessDenied", "Access Denied", r.URL.Path)
 }
 
+// checkExpectedBucketOwner enforces the caller's owner guard independently of
+// authentication and programmable authorization. True means the request failed.
 func (s *Server) checkExpectedBucketOwner(ctx context.Context, bucket string, w http.ResponseWriter, r *http.Request) bool {
 	values := r.Header.Values("x-amz-expected-bucket-owner")
 	if len(values) == 0 {
