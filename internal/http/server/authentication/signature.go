@@ -505,16 +505,10 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 // request. S3 requires it, so the body never has to be read before the
 // signature is verified.
 func validateContentSHA256Header(contentSHA256 string) *RequestError {
-	switch contentSHA256 {
-	case "":
+	if contentSHA256 == "" {
 		return errMissingContentSHA256
-	case contentSHA256UnsignedPayload,
-		contentSHA256StreamingUnsignedPayload,
-		contentSHA256StreamingUnsignedPayloadTrailing,
-		contentSHA256StreamingPayload,
-		contentSHA256StreamingPayloadTrailing,
-		contentSHA256StreamingECDSAPayload,
-		contentSHA256StreamingECDSAPayloadTrailing:
+	}
+	if contentSHA256 == contentSHA256UnsignedPayload || isStreamingContentSHA256(contentSHA256) {
 		return nil
 	}
 	if _, ok := parseDeclaredPayloadHash(contentSHA256); !ok {
@@ -606,6 +600,15 @@ func isStreamingContentSHA256(contentSHA256 string) bool {
 		return true
 	}
 	return false
+}
+
+// streamingTrailerSuffix marks the streaming modes that end with a trailer.
+const streamingTrailerSuffix = "-TRAILER"
+
+// isUnsignedStreamingContentSHA256 reports whether x-amz-content-sha256
+// announces an aws-chunked body without chunk signatures.
+func isUnsignedStreamingContentSHA256(contentSHA256 string) bool {
+	return contentSHA256 == contentSHA256StreamingUnsignedPayload || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing
 }
 
 // IsAwsChunkedRequest reports whether the request body is aws-chunked. A
@@ -900,9 +903,9 @@ func decodeAwsChunkedBody(r *http.Request, timestamp string, scope string, seedS
 	}
 	r.Header.Set("Content-Length", decodedContentLengthValue)
 	r.Header.Del(DecodedContentLengthHeader)
-	trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
-	skipChunkValidation := !verifySignatures || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-	hasTrailingHeaderWithSignature := !skipChunkValidation && (contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing)
+	trailingHeader := strings.HasSuffix(contentSHA256, streamingTrailerSuffix)
+	skipChunkValidation := !verifySignatures || isUnsignedStreamingContentSHA256(contentSHA256)
+	hasTrailingHeaderWithSignature := !skipChunkValidation && trailingHeader
 	trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
 	r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, seedSignature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName, decodedContentLength)
 	return nil
@@ -918,8 +921,7 @@ func decodeAwsChunkedBody(r *http.Request, timestamp string, scope string, seedS
 func prepareUnsignedPayload(r *http.Request, allowSignedStreaming bool) *RequestError {
 	contentSHA256 := r.Header.Get(contentSHA256Header)
 	if IsAwsChunkedRequest(r.Header) {
-		isUnsignedStreaming := contentSHA256 == contentSHA256StreamingUnsignedPayload || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing
-		if !isUnsignedStreaming && !(allowSignedStreaming && isStreamingContentSHA256(contentSHA256)) {
+		if !isUnsignedStreamingContentSHA256(contentSHA256) && !(allowSignedStreaming && isStreamingContentSHA256(contentSHA256)) {
 			return errUnsignedStreamingPayloadRequired
 		}
 		return decodeAwsChunkedBody(r, "", "", "", signatureVerifier{}, false)
