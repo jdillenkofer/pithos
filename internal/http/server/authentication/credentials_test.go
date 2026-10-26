@@ -332,22 +332,24 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 		assert.Zero(t, provider.calls)
 	})
 
-	t.Run("unknown access key is unauthorized", func(t *testing.T) {
+	t.Run("unknown access key is rejected as InvalidAccessKeyId", func(t *testing.T) {
 		provider := &recordingCredentialProvider{}
 		recorder := httptest.NewRecorder()
 		request := signedLookingRequest()
 		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, request)
-		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "<Code>InvalidAccessKeyId</Code>")
 		assert.Equal(t, 1, provider.calls)
 	})
 
-	t.Run("overlong access key is unauthorized without provider lookup", func(t *testing.T) {
+	t.Run("overlong access key is rejected without provider lookup", func(t *testing.T) {
 		provider := &recordingCredentialProvider{}
 		recorder := httptest.NewRecorder()
 		request := signedLookingRequest()
 		request.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+strings.Repeat("a", MaxAccessKeyIDLength+1)+"/20260912/eu-central-1/s3/aws4_request,SignedHeaders=host,Signature=invalid")
 		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, request)
-		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "<Code>InvalidAccessKeyId</Code>")
 		assert.Zero(t, provider.calls)
 	})
 
@@ -356,6 +358,7 @@ func TestSignatureMiddlewareCredentialProviderBehavior(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		MakeSignatureMiddleware(provider, "eu-central-1", http.NotFoundHandler()).ServeHTTP(recorder, signedLookingRequest())
 		assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+		assert.Contains(t, recorder.Body.String(), "<Code>InternalError</Code>")
 		assert.Equal(t, 1, provider.calls)
 	})
 }

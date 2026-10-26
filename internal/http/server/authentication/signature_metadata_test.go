@@ -43,7 +43,8 @@ func TestSignatureMiddlewareVerifiedAlgorithm(t *testing.T) {
 				w = httptest.NewRecorder()
 				handler.ServeHTTP(w, r)
 				require.False(t, called)
-				require.Equal(t, http.StatusUnauthorized, w.Code)
+				require.Equal(t, http.StatusForbidden, w.Code)
+				require.Contains(t, w.Body.String(), "<Code>SignatureDoesNotMatch</Code>")
 			})
 		}
 	}

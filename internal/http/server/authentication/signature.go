@@ -671,7 +671,7 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 		algorithm:          signatureAlgorithm,
 		credential:         credential,
 		timestamp:          timestamp,
-		expirationDuration: 5 * time.Minute,
+		expirationDuration: 15 * time.Minute,
 		signedHeaders:      signedHeaders,
 		signature:          signature,
 	}, nil
@@ -683,7 +683,7 @@ type signatureAuthentication struct {
 	SignatureVersion string
 }
 
-func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authenticated bool, providerErr error) {
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, providerErr error) {
 	now := time.Now().UTC()
 	contentEncodingHeader := r.Header.Get("Content-Encoding")
 	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
@@ -691,7 +691,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	parameters, err := parseSignatureParameters(r)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+err.Error())
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(r.Header.Get("Authorization") == "", err.Error()), nil
 	}
 
 	accessKeyIdAndScope := strings.Split(parameters.credential, "/")
@@ -702,49 +702,58 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	scope, err := parameters.algorithm.parseCredentialScope(accessKeyIdAndScope, expectedRegion, regionSet)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Invalid credential scope: "+err.Error())
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, err.Error()), nil
 	}
 
 	accessKeyID := accessKeyIdAndScope[0]
 	if len(accessKeyID) == 0 || len(accessKeyID) > MaxAccessKeyIDLength {
 		slog.DebugContext(r.Context(), "Access key ID has an invalid length")
-		return nil, false, nil
+		return nil, errInvalidAccessKeyID, nil
 	}
 	expectedCredential, found, err := credentialProvider.Lookup(r.Context(), accessKeyID)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	if !found {
 		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
-		return nil, false, nil
+		return nil, errInvalidAccessKeyID, nil
 	}
 	if err := validateCredential(expectedCredential); err != nil {
-		return nil, false, fmt.Errorf("credential provider returned an invalid credential: %w", err)
+		return nil, nil, fmt.Errorf("credential provider returned an invalid credential: %w", err)
 	}
 	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the service in the credential must be '"+expectedService+"'"), nil
 	}
 	if scope.request != expectedRequest {
 		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the credential must be terminated with '"+expectedRequest+"'"), nil
 	}
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", parameters.timestamp)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
-		return nil, false, nil
+		if parameters.isPresigned {
+			return nil, newMalformedAuthorizationError(true, "X-Amz-Date must be in the ISO8601 Long Format \"yyyyMMdd'T'HHmmss'Z'\""), nil
+		}
+		return nil, newAccessDeniedError("AWS authentication requires a valid Date or x-amz-date header"), nil
 	}
 	if scope.date != parsedTimestamp.Format("20060102") {
 		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the date in the credential does not match the signing date"), nil
 	}
 
 	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
 	expiredTimestamp := parsedTimestamp.Add(parameters.expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
-		return nil, false, nil
+		if !parameters.isPresigned {
+			return nil, errRequestTimeTooSkewed, nil
+		}
+		if now.After(expiredTimestamp) {
+			return nil, newAccessDeniedError("Request has expired"), nil
+		}
+		return nil, newAccessDeniedError("Request is not valid yet"), nil
 	}
 
 	rawSignedHeadersArray := strings.Split(parameters.signedHeaders, ";")
@@ -757,34 +766,33 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 	if !slices.Contains(signedHeadersArray, "host") {
 		slog.DebugContext(r.Context(), "Signed headers do not include host")
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the host header must be signed"), nil
 	}
 	if err := parameters.algorithm.validateSignedHeaders(signedHeadersArray, parameters.isPresigned); err != nil {
 		slog.DebugContext(r.Context(), "Invalid signed headers: "+err.Error())
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, err.Error()), nil
 	}
 	for headerKey := range r.Header {
 		headerKey = strings.ToLower(headerKey)
 		if mustBeSignedHeader(headerKey) && !slices.Contains(signedHeadersArray, headerKey) {
 			slog.DebugContext(r.Context(), "Request contains unsigned security-sensitive header", "header", headerKey)
-			return nil, false, nil
+			return nil, newAccessDeniedError("There were headers present in the request which were not signed"), nil
 		}
 	}
 
 	stringToSign, err := generateStringToSign(r, parameters.timestamp, scope.value, signedHeadersArray, parameters.isPresigned, parameters.algorithm)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
-		return nil, false, nil
+		return nil, errSignatureDoesNotMatch, nil
 	}
 	verifier, err := parameters.algorithm.newVerifier(accessKeyID, expectedCredential.SecretAccessKey, scope)
 	if err != nil {
-		slog.DebugContext(r.Context(), "Failed to create signature verifier: "+err.Error())
-		return nil, false, nil
+		return nil, nil, fmt.Errorf("failed to create signature verifier: %w", err)
 	}
 	isSignatureValid := verifier.verify(*stringToSign, parameters.signature)
 	if !isSignatureValid {
 		slog.DebugContext(r.Context(), "Signature does not match calculated signature")
-		return nil, false, nil
+		return nil, errSignatureDoesNotMatch, nil
 	}
 
 	if isAwsChunked {
@@ -792,7 +800,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		contentSHA256 := r.Header.Get(contentSHA256Header)
 		if !verifier.acceptsStreamingPayload(contentSHA256) {
 			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
-			return nil, false, nil
+			return nil, errSignatureDoesNotMatch, nil
 		}
 		// aws-chunked is a transport encoding, not object metadata: strip it
 		// whether it is the only encoding or the first of several.
@@ -814,7 +822,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	return &signatureAuthentication{
 		AuthenticatedIdentity: &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID},
 		SignatureVersion:      string(parameters.algorithm),
-	}, isSignatureValid, nil
+	}, nil, nil
 }
 
 type awsChunkReadCloser struct {
@@ -1154,13 +1162,13 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			return
 		}
 
-		identity, isAuthenticated, err := checkAuthentication(credentialProvider, region, r)
+		identity, authErr, err := checkAuthentication(credentialProvider, region, r)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			writeRequestError(w, r, errInternalError)
 			return
 		}
-		if isAuthenticated {
+		if authErr == nil {
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
 				Authenticated:    true,
 				Identity:         identity.AuthenticatedIdentity,
@@ -1170,7 +1178,7 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
-			w.WriteHeader(401)
+			writeRequestError(w, r, authErr)
 		}
 	})
 }

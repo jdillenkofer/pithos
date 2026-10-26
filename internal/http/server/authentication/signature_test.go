@@ -365,11 +365,11 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	query.Set("X-Amz-Signature", createSignature(signingKey, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	identity, authenticated, providerErr := checkAuthentication(staticCredentialProvider{
+	identity, authErr, providerErr := checkAuthentication(staticCredentialProvider{
 		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, AccountID: "account", PrincipalID: "client"},
 	}, region, r)
 	assert.NoError(t, providerErr)
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: "account", PrincipalID: "client"}, *identity.AuthenticatedIdentity)
 		assert.Equal(t, signatureAlgorithmV4, identity.SignatureVersion)
@@ -580,10 +580,10 @@ func TestCheckAuthenticationAcceptsSigV4aHeader(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	r := newSignedSigV4aHeaderRequest(t, "eu-central-1,us-west-*")
-	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
 
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
@@ -594,9 +594,9 @@ func TestCheckAuthenticationRejectsSigV4aHeaderOutsideRegionSet(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	r := newSignedSigV4aHeaderRequest(t, "us-east-1,us-west-*")
-	_, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	_, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	assert.False(t, authenticated)
+	assert.Equal(t, "AuthorizationHeaderMalformed", authErr.Code)
 }
 
 func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
@@ -622,9 +622,9 @@ func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
 	query.Set("X-Amz-Signature", signSigV4aString(t, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
@@ -675,9 +675,9 @@ func TestCheckAuthenticationValidatesSigV4aStreamingPayloadAndTrailer(t *testing
 		"x-amz-trailer-signature:" + trailerSignature + "\r\n\r\n"
 	r.Body = io.NopCloser(strings.NewReader(encodedBody))
 
-	_, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	_, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	require.True(t, authenticated)
+	require.Nil(t, authErr)
 	decodedPayload, err := io.ReadAll(r.Body)
 	require.NoError(t, err)
 	assert.Equal(t, payload, decodedPayload)
