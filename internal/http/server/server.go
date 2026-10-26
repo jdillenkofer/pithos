@@ -164,9 +164,17 @@ func isTrailingSlashBucketRoot(path string) bool {
 	return withoutTrailingSlash != "" && !strings.Contains(withoutTrailingSlash[1:], "/")
 }
 
+// makeAuditRequestContextMiddleware adds the client IP for the audit log. The
+// audit log reuses the request ID of the response, so its entries can be
+// matched to the x-amz-request-id a client reports.
 func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), authentication.RequestIDContextKey{}, ulid.Make().String())
+		ctx := r.Context()
+		if requestID, ok := httpmiddleware.RequestIDFromContext(ctx); ok {
+			ctx = context.WithValue(ctx, authentication.RequestIDContextKey{}, requestID)
+		} else {
+			ctx = context.WithValue(ctx, authentication.RequestIDContextKey{}, ulid.Make().String())
+		}
 		if ip := getRemoteIP(r.RemoteAddr); ip != nil {
 			ctx = context.WithValue(ctx, authentication.ClientIPContextKey{}, *ip)
 		}

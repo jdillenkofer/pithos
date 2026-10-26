@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authentication"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	"github.com/jdillenkofer/pithos/internal/http/server/authorization/policy"
@@ -116,4 +117,30 @@ func TestPolicyMaxKeysMatchesExecutedLimit(t *testing.T) {
 			})
 		}
 	}
+}
+
+type requestIDCapturingStorage struct {
+	queryTestStorage
+	requestID string
+}
+
+func (s *requestIDCapturingStorage) ListObjects(ctx context.Context, bucket storage.BucketName, opts storage.ListObjectsOptions) (*storage.ListBucketResult, error) {
+	s.requestID, _ = ctx.Value(authentication.RequestIDContextKey{}).(string)
+	return s.queryTestStorage.ListObjects(ctx, bucket, opts)
+}
+
+// The audit log reads the request ID from the storage context; it must be the
+// x-amz-request-id the client receives.
+func TestStorageContextCarriesResponseRequestID(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(r) return true end`)
+	require.NoError(t, err)
+	store := &requestIDCapturingStorage{}
+	h := SetupServer(nil, "us-east-1", "s3.test", "website.test", authorizer, store)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "http://s3.test/bucket", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotEmpty(t, store.requestID)
+	require.Equal(t, w.Header().Get("x-amz-request-id"), store.requestID)
 }
