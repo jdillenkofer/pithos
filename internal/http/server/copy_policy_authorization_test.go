@@ -67,7 +67,8 @@ func TestAnonymousCopyPolicyUsesEachResourceAccount(t *testing.T) {
 				stopped := s.authorizeCopyRequest(r.Context(), operation, "source", "key", nil, "destination", "key", response, r)
 				require.Equal(t, tc.denied, stopped)
 				if tc.denied {
-					require.Equal(t, http.StatusUnauthorized, response.Code)
+					require.Equal(t, http.StatusForbidden, response.Code)
+					require.Contains(t, response.Body.String(), "<Code>AccessDenied</Code>")
 				}
 			})
 		}

@@ -376,17 +376,17 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 	// authorizer. The configured backend can further restrict access, but can
 	// never cross it.
 	if request.Operation == authorization.OperationListBuckets && !isAuthenticated {
-		w.WriteHeader(http.StatusUnauthorized)
+		s.writeAccessDenied(w, r)
 		return true
 	}
 	if request.Operation == authorization.OperationCreateBucket && !isAuthenticated {
-		w.WriteHeader(http.StatusUnauthorized)
+		s.writeAccessDenied(w, r)
 		return true
 	}
 	if request.Operation == authorization.OperationCreateBucket && request.Authorization.AccountId != nil && request.Bucket != nil {
 		bucketName, err := storage.NewBucketName(*request.Bucket)
 		if err != nil {
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 		bucket, err := s.storage.HeadBucket(ctx, bucketName)
@@ -394,20 +394,20 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 		case err == nil:
 			request.ResourceAccountId = ptrutils.ToPtr(bucket.OwnerAccountID)
 			if bucket.OwnerAccountID != *request.Authorization.AccountId {
-				w.WriteHeader(http.StatusForbidden)
+				s.writeAccessDenied(w, r)
 				return true
 			}
 		case errors.Is(err, storage.ErrNoSuchBucket):
 			request.ResourceAccountId = request.Authorization.AccountId
 		default:
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 	}
 	if request.Bucket != nil && request.Operation != authorization.OperationCreateBucket {
 		bucketName, err := storage.NewBucketName(*request.Bucket)
 		if err != nil {
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 		bucket, err := s.storage.HeadBucket(ctx, bucketName)
@@ -416,19 +416,19 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 				handleError(storage.ErrNoSuchBucket, w, r)
 				return true
 			}
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 		request.ResourceAccountId = ptrutils.ToPtr(bucket.OwnerAccountID)
 		if isAuthenticated && (request.Authorization.AccountId == nil || *request.Authorization.AccountId != bucket.OwnerAccountID) {
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 	}
 	if request.SourceBucket != nil {
 		sourceBucketName, err := storage.NewBucketName(*request.SourceBucket)
 		if err != nil {
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 		sourceBucket, err := s.storage.HeadBucket(ctx, sourceBucketName)
@@ -437,7 +437,7 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 			return true
 		}
 		if err != nil || (isAuthenticated && (request.Authorization.AccountId == nil || *request.Authorization.AccountId != sourceBucket.OwnerAccountID)) {
-			w.WriteHeader(http.StatusForbidden)
+			s.writeAccessDenied(w, r)
 			return true
 		}
 		request.SourceResourceAccountId = ptrutils.ToPtr(sourceBucket.OwnerAccountID)
@@ -447,6 +447,17 @@ func (s *Server) runAuthorization(ctx context.Context, request *authorization.Re
 
 // checkExpectedBucketOwner enforces the caller's owner guard independently of
 // authentication and programmable authorization. True means the request failed.
+// writeAccessDenied answers a denied request the way S3 does: 403
+// AccessDenied for authenticated and anonymous callers alike, as an XML error
+// on the API endpoint and as an HTML page on the website endpoint.
+func (s *Server) writeAccessDenied(w http.ResponseWriter, r *http.Request) {
+	if isWebsiteRequest(r.Context()) {
+		s.writeHTMLError(w, http.StatusForbidden, "AccessDenied", "Access Denied")
+		return
+	}
+	writeS3ErrorResponse(w, r, http.StatusForbidden, "AccessDenied", "Access Denied", r.URL.Path)
+}
+
 func (s *Server) checkExpectedBucketOwner(ctx context.Context, bucket string, w http.ResponseWriter, r *http.Request) bool {
 	values := r.Header.Values("x-amz-expected-bucket-owner")
 	if len(values) == 0 {
@@ -531,11 +542,7 @@ func (s *Server) runAuthorizerAuthorization(ctx context.Context, request *author
 	if decision.Effect != authorization.Allow {
 		s.recordAuthorizationDenied(ctx, request)
 		slog.DebugContext(ctx, "Unauthorized request", "operation", request.Operation, "action", decision.Action, "resource", decision.Resource, "effect", decision.Effect, "references", decision.References)
-		if !isAuthenticated {
-			w.WriteHeader(401)
-		} else {
-			w.WriteHeader(403)
-		}
+		s.writeAccessDenied(w, r)
 		return true
 	}
 	return false

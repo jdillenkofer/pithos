@@ -76,7 +76,7 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	// resolver sees the rewritten path (with the bucket prefix) for virtual-hosted
 	// requests. This also places CORS inside SigV4 auth: anonymous preflights pass
 	// through and reach this handler, but a credentialed request that fails auth
-	// gets a 401 without Access-Control-* headers (an opaque CORS error in the
+	// gets an S3 auth error without Access-Control-* headers (an opaque CORS error in the
 	// browser). Acceptable, since cross-origin requests are no-credentials by
 	// default and the preflight already gates access.
 	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
@@ -87,7 +87,9 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	websiteMux.HandleFunc("HEAD /{bucket}/{key...}", server.serveWebsiteHeadObject)
 	websiteMux.HandleFunc("GET /{bucket}", server.serveWebsiteGetObject)
 	websiteMux.HandleFunc("HEAD /{bucket}", server.serveWebsiteHeadObject)
-	var websiteHandler http.Handler = websiteMux
+	websiteHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		websiteMux.ServeHTTP(w, r.WithContext(withWebsiteRequest(r.Context())))
+	})
 
 	fallbackHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
@@ -117,6 +119,19 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
 	return prometheusmiddleware.New(rootHandler)
+}
+
+type websiteRequestContextKey struct{}
+
+// withWebsiteRequest marks a request as served by the website endpoint, whose
+// errors are HTML pages rather than XML.
+func withWebsiteRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, websiteRequestContextKey{}, true)
+}
+
+func isWebsiteRequest(ctx context.Context) bool {
+	isWebsite, _ := ctx.Value(websiteRequestContextKey{}).(bool)
+	return isWebsite
 }
 
 func isTrailingSlashBucketRoot(path string) bool {

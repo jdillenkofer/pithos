@@ -172,7 +172,7 @@ func (s *Server) putObjectTaggingHandler(w http.ResponseWriter, r *http.Request)
 	// Parse and validate the tag set before authorizing so the tags being set are
 	// available to the authorizer as request tags (s3:RequestObjectTag), but hold
 	// any validation error back until after authorization: unauthorized callers
-	// must get 401/403 (as AWS does), not validation details.
+	// must get AccessDenied (as AWS does), not validation details.
 	var tags map[string]string
 	var malformedXML bool
 	data, validationErr := readLimitedBody(r, w, maxPutObjectTaggingBodySize)
