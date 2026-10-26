@@ -735,7 +735,7 @@ type signatureAuthentication struct {
 	SignatureVersion string
 }
 
-func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, providerErr error) {
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, internalErr error) {
 	now := time.Now().UTC()
 	isAwsChunked := IsAwsChunkedRequest(r.Header)
 
@@ -769,7 +769,7 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 	expectedCredential, found, err := credentialProvider.Lookup(r.Context(), accessKeyID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("credential provider lookup failed: %w", err)
 	}
 	if !found {
 		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
@@ -1393,7 +1393,7 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 
 		identity, authErr, err := checkAuthentication(credentialProvider, region, r)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
+			slog.ErrorContext(r.Context(), "Authentication failed with an internal error", "err", err)
 			writeError(w, r, errInternalError)
 			return
 		}
