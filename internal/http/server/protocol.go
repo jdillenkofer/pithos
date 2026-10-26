@@ -226,6 +226,7 @@ var s3ErrorMappings = []struct {
 	{storage.ErrNoSuchWebsiteConfiguration, 404, ""},
 	{ErrInvalidRequest, 400, ""},
 	{ErrInvalidArgument, 400, ""},
+	{ErrMissingContentLength, http.StatusLengthRequired, ""},
 	{storage.ErrInvalidPart, 400, ""},
 	{storage.ErrInvalidPartOrder, 400, ""},
 	{storage.ErrEntityTooLarge, 400, ""},

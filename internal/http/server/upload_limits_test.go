@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/jdillenkofer/pithos/internal/http/server/authorization/lua"
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
@@ -68,4 +70,33 @@ func TestRequestSizeLimitMiddleware(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUploadsRequireDeclaredContentLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	authorizer, err := lua.NewLuaAuthorizer(`function authorizeRequest(r) return true end`)
+	require.NoError(t, err)
+	handler := SetupServer(nil, "us-east-1", "s3.test", "website.test", authorizer, &queryTestStorage{})
+
+	for _, target := range []string{
+		"http://s3.test/bucket/key",
+		"http://s3.test/bucket/key?partNumber=1&uploadId=upload",
+	} {
+		t.Run(target, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPut, target, strings.NewReader("payload"))
+			r.ContentLength = -1
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, r)
+			assert.Equal(t, http.StatusLengthRequired, w.Code)
+			assert.Contains(t, w.Body.String(), "<Code>MissingContentLength</Code>")
+		})
+	}
+
+	r := httptest.NewRequest(http.MethodPut, "http://s3.test/bucket/key", strings.NewReader("payload"))
+	r.Header.Set("Content-Length", "invalid")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "<Code>InvalidArgument</Code>")
 }

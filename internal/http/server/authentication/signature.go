@@ -46,6 +46,8 @@ const expectedRequest = "aws4_request"
 
 const contentEncodingAwsChunked = "aws-chunked"
 
+const decodedContentLengthHeader = "x-amz-decoded-content-length"
+
 const trailerHeader = "x-amz-trailer"
 const checksumTrailerPrefix = "x-amz-checksum-"
 
@@ -811,6 +813,11 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
 			return nil, errSignatureDoesNotMatch, nil
 		}
+		// The raw body length includes the chunk framing, so S3 requires the
+		// payload length to be declared separately.
+		if r.Header.Get(decodedContentLengthHeader) == "" {
+			return nil, errMissingDecodedContentLength, nil
+		}
 		// aws-chunked is a transport encoding, not object metadata: strip it
 		// whether it is the only encoding or the first of several.
 		contentEncodingHeader = stripAwsChunkedContentEncoding(contentEncodingHeader)
@@ -819,8 +826,8 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		} else {
 			r.Header.Del("Content-Encoding")
 		}
-		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
-		r.Header.Del("x-amz-decoded-content-length")
+		r.Header.Set("Content-Length", r.Header.Get(decodedContentLengthHeader))
+		r.Header.Del(decodedContentLengthHeader)
 		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
 		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload

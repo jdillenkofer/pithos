@@ -48,6 +48,12 @@ var errInvalidContentSHA256 = &RequestError{
 	Message:    "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, STREAMING-UNSIGNED-PAYLOAD-TRAILER, STREAMING-AWS4-HMAC-SHA256-PAYLOAD, STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER, STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD, STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER or a valid sha256 value.",
 }
 
+var errMissingDecodedContentLength = &RequestError{
+	StatusCode: http.StatusLengthRequired,
+	Code:       "MissingContentLength",
+	Message:    "You must provide the Content-Length HTTP header.",
+}
+
 var errInternalError = &RequestError{
 	StatusCode: http.StatusInternalServerError,
 	Code:       "InternalError",

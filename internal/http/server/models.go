@@ -392,6 +392,7 @@ type CopyPartResult struct {
 
 var ErrInvalidRequest = fmt.Errorf("InvalidRequest")
 var ErrInvalidArgument = fmt.Errorf("InvalidArgument")
+var ErrMissingContentLength = fmt.Errorf("MissingContentLength")
 
 // identityResult maps a storage identity onto its S3 Owner/Initiator wire form.
 func identityResult(identity *storage.ObjectIdentity) *IdentityResult {
