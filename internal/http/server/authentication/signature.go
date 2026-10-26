@@ -1072,70 +1072,12 @@ func (r *awsChunkReadCloser) Read(p []byte) (int, error) {
 
 func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 	if r.chunkBytesRemaining <= 0 {
-		chunkMetadata, err := r.readLine(maxChunkHeaderLength, ErrMalformedChunk)
-		if err == io.EOF {
-			// The body ended before the zero-length chunk.
-			return 0, ErrIncompleteBody
-		}
-		if err != nil {
+		if err := r.readChunkHeader(); err != nil {
 			return 0, err
 		}
-		hexLen, signature, hasSignature := bytes.Cut(chunkMetadata, []byte(";chunk-signature="))
-		if hasSignature {
-			r.chunkSignature = string(signature)
-		} else if !r.skipChunkValidation {
-			return 0, ErrChunkSignatureMismatch
-		}
-
-		// A bit size of 63 guarantees the length fits into an int64.
-		length, err := strconv.ParseUint(string(hexLen), 16, 63)
-		if err != nil {
-			slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
-			return 0, ErrMalformedChunk
-		}
-		if int64(length) > r.decodedBytesRemaining {
-			slog.DebugContext(r.ctx, "aws-chunked chunks exceed x-amz-decoded-content-length")
-			return 0, ErrMalformedChunk
-		}
-		r.decodedBytesRemaining -= int64(length)
-		r.chunkBytesRemaining = int64(length)
-		if length == 0 {
-			if r.decodedBytesRemaining != 0 {
-				slog.DebugContext(r.ctx, "aws-chunked body is shorter than x-amz-decoded-content-length")
-				return 0, ErrIncompleteBody
-			}
-			if !r.skipChunkValidation {
-				err = r.validateSignature()
-				if err != nil {
-					return 0, err
-				}
-			}
-			if r.hasTrailingHeader {
-				checksumHeader, trailerSignature, err := r.readTrailerSection()
-				if err != nil {
-					return 0, err
-				}
-				slog.DebugContext(r.ctx, "Validating trailing headers")
-
-				if r.hasTrailingHeaderWithSignature {
-					stringToSign := generateStringToSignForTrailerChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, checksumHeader)
-					trailerSignature = r.verifier.normalizeStreamingSignature(trailerSignature)
-					isSignatureValid := r.verifier.verify(stringToSign, trailerSignature)
-					if !isSignatureValid {
-						slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
-						return 0, ErrChunkSignatureMismatch
-					}
-				}
-
-				err = r.validateTrailerChecksum(checksumHeader)
-				if err != nil {
-					return 0, err
-				}
-			} else {
-				err := r.readCRLF() // The final \r\n
-				if err != nil {
-					return 0, err
-				}
+		if r.chunkBytesRemaining == 0 {
+			if err := r.readBodyEnd(); err != nil {
+				return 0, err
 			}
 			return 0, io.EOF // End of the chunked transfer
 		}
@@ -1170,8 +1112,87 @@ func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 				return 0, err
 			}
 		}
+		// Once the declared payload is complete, verify the zero-length chunk
+		// and the trailer before handing out the last bytes, so consumers that
+		// stop after x-amz-decoded-content-length bytes still see the error.
+		if r.decodedBytesRemaining == 0 {
+			if err := r.readChunkHeader(); err != nil {
+				return 0, err
+			}
+			if err := r.readBodyEnd(); err != nil {
+				return 0, err
+			}
+			return n, io.EOF
+		}
 	}
 	return n, nil
+}
+
+// readChunkHeader reads the next chunk header and sets chunkBytesRemaining to
+// the announced chunk length.
+func (r *awsChunkReadCloser) readChunkHeader() error {
+	chunkMetadata, err := r.readLine(maxChunkHeaderLength, ErrMalformedChunk)
+	if err == io.EOF {
+		// The body ended before the zero-length chunk.
+		return ErrIncompleteBody
+	}
+	if err != nil {
+		return err
+	}
+	hexLen, signature, hasSignature := bytes.Cut(chunkMetadata, []byte(";chunk-signature="))
+	if hasSignature {
+		r.chunkSignature = string(signature)
+	} else if !r.skipChunkValidation {
+		return ErrChunkSignatureMismatch
+	}
+
+	// A bit size of 63 guarantees the length fits into an int64.
+	length, err := strconv.ParseUint(string(hexLen), 16, 63)
+	if err != nil {
+		slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
+		return ErrMalformedChunk
+	}
+	if int64(length) > r.decodedBytesRemaining {
+		slog.DebugContext(r.ctx, "aws-chunked chunks exceed x-amz-decoded-content-length")
+		return ErrMalformedChunk
+	}
+	if length == 0 && r.decodedBytesRemaining != 0 {
+		slog.DebugContext(r.ctx, "aws-chunked body is shorter than x-amz-decoded-content-length")
+		return ErrIncompleteBody
+	}
+	r.decodedBytesRemaining -= int64(length)
+	r.chunkBytesRemaining = int64(length)
+	return nil
+}
+
+// readBodyEnd validates the zero-length chunk whose header was just read and
+// consumes the trailer or the final \r\n.
+func (r *awsChunkReadCloser) readBodyEnd() error {
+	if !r.skipChunkValidation {
+		if err := r.validateSignature(); err != nil {
+			return err
+		}
+	}
+	if !r.hasTrailingHeader {
+		return r.readCRLF() // The final \r\n
+	}
+	checksumHeader, trailerSignature, err := r.readTrailerSection()
+	if err != nil {
+		return err
+	}
+	slog.DebugContext(r.ctx, "Validating trailing headers")
+
+	if r.hasTrailingHeaderWithSignature {
+		stringToSign := generateStringToSignForTrailerChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, checksumHeader)
+		trailerSignature = r.verifier.normalizeStreamingSignature(trailerSignature)
+		isSignatureValid := r.verifier.verify(stringToSign, trailerSignature)
+		if !isSignatureValid {
+			slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
+			return ErrChunkSignatureMismatch
+		}
+	}
+
+	return r.validateTrailerChecksum(checksumHeader)
 }
 
 func (r *awsChunkReadCloser) Close() error {
@@ -1184,7 +1205,9 @@ func (r *awsChunkReadCloser) Close() error {
 
 // payloadHashVerifyingReadCloser hashes the body while it is read and fails
 // the read that completes the body if it does not match the declared hash, so
-// consumers abort before committing the payload.
+// consumers abort before committing the payload. That read withholds its
+// bytes, so consumers that stop after Content-Length bytes (io.CopyN, an
+// exactly sized io.ReadFull) cannot miss the error.
 type payloadHashVerifyingReadCloser struct {
 	ctx          context.Context
 	inner        io.ReadCloser
@@ -1223,7 +1246,7 @@ func (r *payloadHashVerifyingReadCloser) Read(p []byte) (int, error) {
 		if !hmac.Equal(r.hasher.Sum(nil), r.declaredHash) {
 			slog.DebugContext(r.ctx, "Payload does not match declared x-amz-content-sha256")
 			r.err = ErrContentSHA256Mismatch
-			return n, r.err
+			return 0, r.err
 		}
 		r.err = err
 		if r.err == nil {

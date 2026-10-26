@@ -147,7 +147,7 @@ func TestPayloadHashVerifierFailsReadDeliveringLastByteOfSizedBody(t *testing.T)
 	reader := newPayloadHashVerifyingReadCloser(t.Context(), io.NopCloser(strings.NewReader("abcX")), declared[:], 4)
 	buf := make([]byte, 8)
 	n, err := reader.Read(buf)
-	assert.Equal(t, 4, n)
+	assert.Equal(t, 0, n)
 	assert.ErrorIs(t, err, ErrContentSHA256Mismatch)
 
 	_, err = reader.Read(buf)
@@ -240,4 +240,60 @@ func TestCheckAuthenticationEnforcesDecodedContentLength(t *testing.T) {
 			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
+}
+
+// Consumers that stop after the declared length never read to EOF. io.CopyN
+// and an exactly sized io.ReadFull discard an error returned together with the
+// last bytes, so the readers must withhold them.
+func TestPayloadVerifiersFailConsumersStoppingAtDeclaredLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	declared := sha256.Sum256([]byte("hello world"))
+	tests := []struct {
+		name      string
+		newReader func() io.Reader
+		wantErr   error
+	}{
+		{
+			name: "payload hash mismatch",
+			newReader: func() io.Reader {
+				return newPayloadHashVerifyingReadCloser(t.Context(), io.NopCloser(strings.NewReader("hello WORLD")), declared[:], 11)
+			},
+			wantErr: ErrContentSHA256Mismatch,
+		},
+		{
+			name: "aws-chunked trailer checksum mismatch",
+			newReader: func() io.Reader {
+				return newUnsignedTrailerChunkReader("b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n", "x-amz-checksum-crc32")
+			},
+			wantErr: ErrTrailerChecksumMismatch,
+		},
+		{
+			name: "aws-chunked missing zero-length chunk",
+			newReader: func() io.Reader {
+				return newUnsignedTrailerChunkReader("b\r\nhello world\r\n", "x-amz-checksum-crc32")
+			},
+			wantErr: ErrIncompleteBody,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := io.CopyN(io.Discard, tt.newReader(), 11)
+			assert.ErrorIs(t, err, tt.wantErr)
+
+			_, err = io.ReadFull(tt.newReader(), make([]byte, 11))
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestAwsChunkReaderReturnsEOFWithLastDeclaredBytes(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := newUnsignedTrailerChunkReader("b\r\nhello world\r\n0\r\nx-amz-checksum-crc32:DUoRhQ==\r\n\r\n", "x-amz-checksum-crc32")
+	buf := make([]byte, 64)
+	n, err := body.Read(buf)
+	assert.Equal(t, 11, n)
+	assert.Equal(t, io.EOF, err)
+	assert.Equal(t, "hello world", string(buf[:n]))
 }
