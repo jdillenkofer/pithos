@@ -202,7 +202,7 @@ func TestCheckAuthenticationRejectsInvalidDecodedContentLength(t *testing.T) {
 	for _, decodedContentLength := range []string{"abc", "-1", "1.5"} {
 		t.Run(decodedContentLength, func(t *testing.T) {
 			r := newSignedPutRequestWithHeaders(t, contentSHA256StreamingUnsignedPayloadTrailing, contentSHA256StreamingUnsignedPayloadTrailing, failingReader{t: t}, 64,
-				map[string]string{decodedContentLengthHeader: decodedContentLength})
+				map[string]string{DecodedContentLengthHeader: decodedContentLength})
 			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
 			require.NoError(t, providerErr)
 			assert.Equal(t, errInvalidDecodedContentLength, authErr)
@@ -225,7 +225,7 @@ func TestCheckAuthenticationEnforcesDecodedContentLength(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.decodedContentLength, func(t *testing.T) {
 			r := newSignedPutRequestWithHeaders(t, contentSHA256StreamingUnsignedPayload, contentSHA256StreamingUnsignedPayload, strings.NewReader(body), int64(len(body)),
-				map[string]string{decodedContentLengthHeader: tt.decodedContentLength})
+				map[string]string{DecodedContentLengthHeader: tt.decodedContentLength})
 			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
 			require.NoError(t, providerErr)
 			require.Nil(t, authErr)

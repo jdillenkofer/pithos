@@ -8,13 +8,11 @@ import (
 	storage "github.com/jdillenkofer/pithos/internal/storage"
 )
 
-const decodedContentLengthHeader = "x-amz-decoded-content-length"
-
 // declaredPayloadLength returns the payload size a request announces: the
 // decoded length of an aws-chunked body, otherwise its Content-Length.
 func declaredPayloadLength(r *http.Request) (int64, bool) {
 	if authentication.IsAwsChunkedRequest(r.Header) {
-		decodedContentLength, err := strconv.ParseInt(r.Header.Get(decodedContentLengthHeader), 10, 64)
+		decodedContentLength, err := strconv.ParseInt(r.Header.Get(authentication.DecodedContentLengthHeader), 10, 64)
 		if err != nil {
 			return 0, false
 		}
