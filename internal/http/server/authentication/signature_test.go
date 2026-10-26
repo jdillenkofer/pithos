@@ -118,7 +118,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	hasTrailingHeader := false
 	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "", 66560)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -178,7 +178,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	hasTrailingHeader := true
 	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c", 66560)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -211,7 +211,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeaderWithoutBlankLin
 	signingKey := createSigningKey(secretAccessKey, "20130524", "us-east-1", "s3", "aws4_request")
 	seedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, newSigV4Verifier(signingKey), true, true, false, "x-amz-checksum-crc32c")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, newSigV4Verifier(signingKey), true, true, false, "x-amz-checksum-crc32c", 66560)
 
 	data, err := io.ReadAll(body)
 	assert.NoError(t, err)
@@ -249,7 +249,7 @@ func TestAwsChunkedContentEncodingHelpers(t *testing.T) {
 // STREAMING-UNSIGNED-PAYLOAD-TRAILER format, where chunks carry no signatures
 // and only the trailer checksum is validated.
 func newUnsignedTrailerChunkReader(content string, trailerName string) io.ReadCloser {
-	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, trailerName)
+	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, trailerName, 11)
 }
 
 func TestAwsChunkReaderValidatesUnsignedTrailerChecksum(t *testing.T) {
@@ -774,7 +774,7 @@ func TestAwsChunkReaderRejectsMalformedFraming(t *testing.T) {
 func TestAwsChunkReaderRejectsMissingFinalCRLF(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\nXX")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\nXX")), "", "", "", newSigV4Verifier(nil), false, false, true, "", 11)
 	_, err := io.ReadAll(body)
 	assert.ErrorIs(t, err, ErrMalformedChunk)
 }
@@ -802,7 +802,7 @@ func FuzzAwsChunkReader(f *testing.F) {
 	f.Add([]byte("b\nhello world\n0\n\n"))
 
 	f.Fuzz(func(t *testing.T, content []byte) {
-		body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, "x-amz-checksum-crc32")
+		body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, "x-amz-checksum-crc32", 11)
 		data, err := io.ReadAll(body)
 		// The decoded payload can never be larger than the encoded body.
 		if len(data) > len(content) {
@@ -824,7 +824,7 @@ func FuzzAwsChunkReader(f *testing.F) {
 func TestAwsChunkReaderRejectsTruncatedFinalCRLF(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\n\r")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\n\r")), "", "", "", newSigV4Verifier(nil), false, false, true, "", 11)
 	_, err := io.ReadAll(body)
 	assert.ErrorIs(t, err, ErrIncompleteBody)
 }

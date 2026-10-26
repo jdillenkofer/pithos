@@ -54,6 +54,12 @@ var errMissingDecodedContentLength = &RequestError{
 	Message:    "You must provide the Content-Length HTTP header.",
 }
 
+var errInvalidDecodedContentLength = &RequestError{
+	StatusCode: http.StatusBadRequest,
+	Code:       "InvalidArgument",
+	Message:    "x-amz-decoded-content-length must be a non-negative integer.",
+}
+
 var errInternalError = &RequestError{
 	StatusCode: http.StatusInternalServerError,
 	Code:       "InternalError",

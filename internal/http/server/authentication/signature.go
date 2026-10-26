@@ -69,13 +69,14 @@ var ErrContentSHA256Mismatch = errors.New("XAmzContentSHA256Mismatch")
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
 // ErrMalformedChunk is returned when the framing of an aws-chunked upload is
-// invalid: an oversized or unparsable chunk header or a missing CRLF. S3 does
-// not document a dedicated error code for this, so it is reported as
-// InvalidArgument.
+// invalid: an oversized or unparsable chunk header, a missing CRLF, or chunks
+// announcing more data than x-amz-decoded-content-length. S3 does not document
+// a dedicated error code for this, so it is reported as InvalidArgument.
 var ErrMalformedChunk = errors.New("malformed aws-chunked encoding")
 
 // ErrIncompleteBody is returned when an aws-chunked upload ends inside a chunk
-// or before the zero-length chunk.
+// or before the zero-length chunk, or carries less data than
+// x-amz-decoded-content-length.
 // Its text is the S3 error code reported to the client.
 var ErrIncompleteBody = errors.New("IncompleteBody")
 
@@ -838,8 +839,13 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		}
 		// The raw body length includes the chunk framing, so S3 requires the
 		// payload length to be declared separately.
-		if r.Header.Get(decodedContentLengthHeader) == "" {
+		decodedContentLengthValue := r.Header.Get(decodedContentLengthHeader)
+		if decodedContentLengthValue == "" {
 			return nil, errMissingDecodedContentLength, nil
+		}
+		decodedContentLength, err := strconv.ParseInt(decodedContentLengthValue, 10, 64)
+		if err != nil || decodedContentLength < 0 {
+			return nil, errInvalidDecodedContentLength, nil
 		}
 		// aws-chunked is a transport encoding, not object metadata: strip it
 		// whether it is the only encoding or the first of several.
@@ -849,13 +855,13 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		} else {
 			r.Header.Del("Content-Encoding")
 		}
-		r.Header.Set("Content-Length", r.Header.Get(decodedContentLengthHeader))
+		r.Header.Set("Content-Length", decodedContentLengthValue)
 		r.Header.Del(decodedContentLengthHeader)
 		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
 		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
 		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
 		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
-		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
+		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName, decodedContentLength)
 	} else if !parameters.isPresigned {
 		if declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header)); ok {
 			r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
@@ -884,10 +890,11 @@ type awsChunkReadCloser struct {
 	skipChunkValidation            bool
 	trailerChecksumName            string
 	trailerHasher                  hash.Hash
+	decodedBytesRemaining          int64 // payload bytes the chunk headers may still announce
 	err                            error
 }
 
-func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
+func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string, decodedContentLength int64) *awsChunkReadCloser {
 	var trailerHasher hash.Hash
 	if hasTrailingHeader {
 		trailerHasher, _ = checksumutils.NewChecksumTrailerHash(trailerChecksumName)
@@ -908,6 +915,7 @@ func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp s
 		skipChunkValidation:            skipChunkValidation,
 		trailerChecksumName:            trailerChecksumName,
 		trailerHasher:                  trailerHasher,
+		decodedBytesRemaining:          decodedContentLength,
 	}
 }
 
@@ -1085,8 +1093,17 @@ func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 			slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
 			return 0, ErrMalformedChunk
 		}
+		if int64(length) > r.decodedBytesRemaining {
+			slog.DebugContext(r.ctx, "aws-chunked chunks exceed x-amz-decoded-content-length")
+			return 0, ErrMalformedChunk
+		}
+		r.decodedBytesRemaining -= int64(length)
 		r.chunkBytesRemaining = int64(length)
 		if length == 0 {
+			if r.decodedBytesRemaining != 0 {
+				slog.DebugContext(r.ctx, "aws-chunked body is shorter than x-amz-decoded-content-length")
+				return 0, ErrIncompleteBody
+			}
 			if !r.skipChunkValidation {
 				err = r.validateSignature()
 				if err != nil {

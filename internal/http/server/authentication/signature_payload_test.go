@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,13 @@ func (r failingReader) Read(p []byte) (int, error) {
 // uses signedPayloadHash and then attaches body.
 func newSignedPutRequest(t *testing.T, declaredHash string, signedPayloadHash string, body io.Reader, contentLength int64) *http.Request {
 	t.Helper()
+	return newSignedPutRequestWithHeaders(t, declaredHash, signedPayloadHash, body, contentLength, nil)
+}
+
+// newSignedPutRequestWithHeaders is newSignedPutRequest with additional
+// signed x-amz-* headers.
+func newSignedPutRequestWithHeaders(t *testing.T, declaredHash string, signedPayloadHash string, body io.Reader, contentLength int64, headers map[string]string) *http.Request {
+	t.Helper()
 	signingTime := time.Now().UTC().Truncate(time.Second)
 	date := signingTime.Format("20060102")
 	timestamp := signingTime.Format("20060102T150405Z")
@@ -59,6 +67,11 @@ func newSignedPutRequest(t *testing.T, declaredHash string, signedPayloadHash st
 		r.Header.Set(contentSHA256Header, declaredHash)
 		signedHeaders = []string{"host", "x-amz-content-sha256", "x-amz-date"}
 	}
+	for key, value := range headers {
+		r.Header.Set(key, value)
+		signedHeaders = append(signedHeaders, strings.ToLower(key))
+	}
+	slices.Sort(signedHeaders)
 
 	canonicalRequest := generateCanonicalHttpMethod(r) + "\n" +
 		generateCanonicalURI(r) + "\n" +
@@ -179,6 +192,52 @@ func TestCheckAuthenticationDecodesStreamingPayloadWithoutAwsChunkedEncoding(t *
 			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
 			require.NoError(t, providerErr)
 			assert.Equal(t, errMissingDecodedContentLength, authErr)
+		})
+	}
+}
+
+func TestCheckAuthenticationRejectsInvalidDecodedContentLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	for _, decodedContentLength := range []string{"abc", "-1", "1.5"} {
+		t.Run(decodedContentLength, func(t *testing.T) {
+			r := newSignedPutRequestWithHeaders(t, contentSHA256StreamingUnsignedPayloadTrailing, contentSHA256StreamingUnsignedPayloadTrailing, failingReader{t: t}, 64,
+				map[string]string{decodedContentLengthHeader: decodedContentLength})
+			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
+			require.NoError(t, providerErr)
+			assert.Equal(t, errInvalidDecodedContentLength, authErr)
+		})
+	}
+}
+
+func TestCheckAuthenticationEnforcesDecodedContentLength(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	body := "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+	tests := []struct {
+		decodedContentLength string
+		wantErr              error
+	}{
+		{decodedContentLength: "11"},
+		{decodedContentLength: "12", wantErr: ErrIncompleteBody},
+		{decodedContentLength: "8", wantErr: ErrMalformedChunk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.decodedContentLength, func(t *testing.T) {
+			r := newSignedPutRequestWithHeaders(t, contentSHA256StreamingUnsignedPayload, contentSHA256StreamingUnsignedPayload, strings.NewReader(body), int64(len(body)),
+				map[string]string{decodedContentLengthHeader: tt.decodedContentLength})
+			_, authErr, providerErr := checkAuthentication(payloadTestCredentials(), payloadTestRegion, r)
+			require.NoError(t, providerErr)
+			require.Nil(t, authErr)
+			assert.Equal(t, tt.decodedContentLength, r.Header.Get("Content-Length"))
+
+			data, err := io.ReadAll(r.Body)
+			if tt.wantErr == nil {
+				require.NoError(t, err)
+				assert.Equal(t, "hello world", string(data))
+				return
+			}
+			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }
