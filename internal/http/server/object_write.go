@@ -246,22 +246,30 @@ func (s *Server) createMultipartUploadOrCompleteMultipartUploadHandler(w http.Re
 	w.WriteHeader(404)
 }
 
-// validateMaxEntitySize ensures that the request body does not exceed the maximum allowed entity size.
+// validateMaxEntitySize ensures that the request declares its body length and that it does not exceed the maximum allowed entity size.
 // It returns true if the request is invalid and the handler should return immediately.
 // It also sets r.Body to a MaxBytesReader to enforce the limit during reading.
 func validateMaxEntitySize(r *http.Request, w http.ResponseWriter) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, storage.MaxEntitySize+1)
-	contentLength := getHeaderAsPtr(r.Header, contentLengthHeader)
-	if contentLength != nil {
-		contentLengthI64, err := strconv.ParseInt(*contentLength, 10, 64)
-		if err != nil {
-			handleError(err, w, r)
+	// For aws-chunked bodies the authentication middleware replaces the
+	// Content-Length header with the decoded payload length.
+	contentLength := r.ContentLength
+	if contentLengthHeaderValue := r.Header.Get(contentLengthHeader); contentLengthHeaderValue != "" {
+		contentLengthI64, err := strconv.ParseInt(contentLengthHeaderValue, 10, 64)
+		if err != nil || contentLengthI64 < 0 {
+			handleError(ErrInvalidArgument, w, r)
 			return true
 		}
-		if contentLengthI64 > storage.MaxEntitySize {
-			handleError(storage.ErrEntityTooLarge, w, r)
-			return true
-		}
+		contentLength = contentLengthI64
+	}
+	// S3 requires the payload length up front for uploads.
+	if contentLength < 0 {
+		handleError(ErrMissingContentLength, w, r)
+		return true
+	}
+	if contentLength > storage.MaxEntitySize {
+		handleError(storage.ErrEntityTooLarge, w, r)
+		return true
 	}
 	return false
 }

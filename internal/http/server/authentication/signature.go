@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/jdillenkofer/pithos/internal/checksumutils"
-	"github.com/jdillenkofer/pithos/internal/ioutils"
 )
 
 const contentSHA256Header = "x-amz-content-sha256"
@@ -39,6 +38,7 @@ const contentSHA256StreamingPayloadTrailing = "STREAMING-AWS4-HMAC-SHA256-PAYLOA
 const contentSHA256StreamingECDSAPayload = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD"
 const contentSHA256StreamingECDSAPayloadTrailing = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER"
 
+const signatureAlgorithmV2 = "AWS"
 const signatureAlgorithmV4 = "AWS4-HMAC-SHA256"
 const signatureAlgorithmV4a = "AWS4-ECDSA-P256-SHA256"
 const sigV4aSecretKeyPrefix = "AWS4A"
@@ -47,12 +47,12 @@ const expectedRequest = "aws4_request"
 
 const contentEncodingAwsChunked = "aws-chunked"
 
+// DecodedContentLengthHeader carries the payload length of an aws-chunked
+// body, whose Content-Length includes the chunk framing.
+const DecodedContentLengthHeader = "x-amz-decoded-content-length"
+
 const trailerHeader = "x-amz-trailer"
 const checksumTrailerPrefix = "x-amz-checksum-"
-
-// maxMemoryCacheSize is the maximum size of a payload that will be cached in memory
-// before switching to a disk-based cache.
-const maxMemoryCacheSize = 10 * 1000 * 1000
 
 var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 
@@ -61,19 +61,25 @@ var ErrChunkSignatureMismatch = errors.New("chunk signature mismatch")
 // Its text is the S3 error code reported to the client.
 var ErrTrailerChecksumMismatch = errors.New("BadDigest")
 
+// ErrContentSHA256Mismatch is returned when the payload does not match the
+// SHA-256 declared in x-amz-content-sha256. Its text is the S3 error code
+// reported to the client.
+var ErrContentSHA256Mismatch = errors.New("XAmzContentSHA256Mismatch")
+
 // ErrMalformedTrailer is returned when the trailer of an aws-chunked upload
 // is missing, unsupported, or does not match the declared x-amz-trailer header.
 // Its text is the S3 error code reported to the client.
 var ErrMalformedTrailer = errors.New("MalformedTrailerError")
 
 // ErrMalformedChunk is returned when the framing of an aws-chunked upload is
-// invalid: an oversized or unparsable chunk header or a missing CRLF. S3 does
-// not document a dedicated error code for this, so it is reported as
-// InvalidArgument.
+// invalid: an oversized or unparsable chunk header, a missing CRLF, or chunks
+// announcing more data than x-amz-decoded-content-length. S3 does not document
+// a dedicated error code for this, so it is reported as InvalidArgument.
 var ErrMalformedChunk = errors.New("malformed aws-chunked encoding")
 
 // ErrIncompleteBody is returned when an aws-chunked upload ends inside a chunk
-// or before the zero-length chunk.
+// or before the zero-length chunk, or carries less data than
+// x-amz-decoded-content-length.
 // Its text is the S3 error code reported to the client.
 var ErrIncompleteBody = errors.New("IncompleteBody")
 
@@ -104,24 +110,29 @@ func (a signatureAlgorithm) parseCredentialScope(parts []string, expectedRegion 
 	switch a {
 	case signatureAlgorithmV4:
 		if len(parts) != 5 {
-			return credentialScope{}, fmt.Errorf("SigV4 credential field must contain exactly 5 parts")
+			return credentialScope{}, errMalformedCredential
 		}
 		if parts[2] != expectedRegion {
-			return credentialScope{}, fmt.Errorf("region in credential does not match expected region")
+			return credentialScope{}, fmt.Errorf("the region '%s' is wrong; expecting '%s'", parts[2], expectedRegion)
 		}
 		return credentialScope{date: parts[1], region: parts[2], service: parts[3], request: parts[4], value: strings.Join(parts[1:], "/")}, nil
 	case signatureAlgorithmV4a:
 		if len(parts) != 4 {
-			return credentialScope{}, fmt.Errorf("SigV4a credential field must contain exactly 4 parts")
+			return credentialScope{}, errMalformedSigV4aCredential
 		}
 		if !regionSetIncludes(regionSet, expectedRegion) {
-			return credentialScope{}, fmt.Errorf("expected region is not included in X-Amz-Region-Set")
+			return credentialScope{}, fmt.Errorf("the region set does not include '%s'", expectedRegion)
 		}
 		return credentialScope{date: parts[1], service: parts[2], request: parts[3], value: strings.Join(parts[1:], "/")}, nil
 	default:
-		return credentialScope{}, fmt.Errorf("unsupported signature algorithm")
+		return credentialScope{}, errMalformedCredential
 	}
 }
+
+// errMalformedCredential and errMalformedSigV4aCredential are the S3 details
+// for a credential that does not split into the expected scope parts.
+var errMalformedCredential = errors.New(`the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request".`)
+var errMalformedSigV4aCredential = errors.New(`the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/SERVICE/aws4_request".`)
 
 func (a signatureAlgorithm) newVerifier(accessKeyID string, secretAccessKey string, scope credentialScope) (signatureVerifier, error) {
 	if a == signatureAlgorithmV4 {
@@ -490,26 +501,34 @@ func generateSignedHeaders(r *http.Request, headersToInclude []string) string {
 	return signedHeaders.String()
 }
 
-func generateHashedPayload(r *http.Request) (*string, error) {
-	// Use smart cache (memory up to maxMemoryCacheSize, then disk)
-	reader, err := ioutils.NewSmartCachedReadSeekCloser(r.Body, maxMemoryCacheSize)
-	if err != nil {
-		return nil, err
+// validateContentSHA256Header checks x-amz-content-sha256 of a header-signed
+// request. S3 requires it, so the body never has to be read before the
+// signature is verified.
+func validateContentSHA256Header(contentSHA256 string) *RequestError {
+	if contentSHA256 == "" {
+		return errMissingContentSHA256
 	}
-	sha256Hash := sha256.New()
-	_, err = ioutils.Copy(sha256Hash, reader)
-	if err != nil {
-		return nil, err
+	if contentSHA256 == contentSHA256UnsignedPayload || isStreamingContentSHA256(contentSHA256) {
+		return nil
 	}
-	dataSha256 := sha256Hash.Sum(nil)
-	hexSha256 := hex.EncodeToString(dataSha256)
+	if _, ok := parseDeclaredPayloadHash(contentSHA256); !ok {
+		return errInvalidContentSHA256
+	}
+	return nil
+}
 
-	_, err = reader.Seek(0, io.SeekStart)
-	if err != nil {
-		return nil, err
+// parseDeclaredPayloadHash decodes a hex SHA-256 declared in
+// x-amz-content-sha256. It reports false for the streaming and unsigned
+// sentinels and for malformed values.
+func parseDeclaredPayloadHash(contentSHA256 string) ([]byte, bool) {
+	if len(contentSHA256) != 2*sha256.Size {
+		return nil, false
 	}
-	r.Body = reader
-	return &hexSha256, nil
+	declaredHash, err := hex.DecodeString(contentSHA256)
+	if err != nil {
+		return nil, false
+	}
+	return declaredHash, true
 }
 
 func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPresigned bool) (*string, error) {
@@ -519,26 +538,13 @@ func generateCanonicalRequest(r *http.Request, headersToInclude []string, isPres
 	canonicalRequest += generateCanonicalHeaders(r, headersToInclude) + "\n"
 	canonicalRequest += generateSignedHeaders(r, headersToInclude) + "\n"
 
-	contentSHA256 := r.Header.Get(contentSHA256Header)
 	if isPresigned {
 		canonicalRequest += contentSHA256UnsignedPayload
 	} else {
-		switch contentSHA256 {
-		case contentSHA256UnsignedPayload,
-			contentSHA256StreamingUnsignedPayload,
-			contentSHA256StreamingUnsignedPayloadTrailing,
-			contentSHA256StreamingPayload,
-			contentSHA256StreamingPayloadTrailing,
-			contentSHA256StreamingECDSAPayload,
-			contentSHA256StreamingECDSAPayloadTrailing:
-			canonicalRequest += contentSHA256
-		default:
-			hashedPayload, err := generateHashedPayload(r)
-			if err != nil {
-				return nil, err
-			}
-			canonicalRequest += *hashedPayload
-		}
+		// validateContentSHA256Header has accepted the value. A declared hash
+		// is signed as-is, so the signature is checked before the body is
+		// read; the body is verified against it while it streams.
+		canonicalRequest += r.Header.Get(contentSHA256Header)
 	}
 	return &canonicalRequest, nil
 }
@@ -574,9 +580,43 @@ func generateStringToSignForTrailerChunk(algorithm signatureAlgorithm, timestamp
 	return string(algorithm) + "-TRAILER" + "\n" + timestamp + "\n" + scope + "\n" + previousSignature + "\n" + hexHash
 }
 
+// hasAwsChunkedContentEncoding reports whether the body uses the aws-chunked
+// transfer encoding, which S3 requires as the first content encoding.
 func hasAwsChunkedContentEncoding(contentEncodingHeader string) bool {
 	firstEncoding, _, _ := strings.Cut(contentEncodingHeader, ",")
 	return strings.EqualFold(strings.TrimSpace(firstEncoding), contentEncodingAwsChunked)
+}
+
+// isStreamingContentSHA256 reports whether x-amz-content-sha256 announces an
+// aws-chunked body.
+func isStreamingContentSHA256(contentSHA256 string) bool {
+	switch contentSHA256 {
+	case contentSHA256StreamingUnsignedPayload,
+		contentSHA256StreamingUnsignedPayloadTrailing,
+		contentSHA256StreamingPayload,
+		contentSHA256StreamingPayloadTrailing,
+		contentSHA256StreamingECDSAPayload,
+		contentSHA256StreamingECDSAPayloadTrailing:
+		return true
+	}
+	return false
+}
+
+// streamingTrailerSuffix marks the streaming modes that end with a trailer.
+const streamingTrailerSuffix = "-TRAILER"
+
+// isUnsignedStreamingContentSHA256 reports whether x-amz-content-sha256
+// announces an aws-chunked body without chunk signatures.
+func isUnsignedStreamingContentSHA256(contentSHA256 string) bool {
+	return contentSHA256 == contentSHA256StreamingUnsignedPayload || contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing
+}
+
+// IsAwsChunkedRequest reports whether the request body is aws-chunked. A
+// streaming x-amz-content-sha256 counts even without Content-Encoding:
+// aws-chunked, because the signature then only covers the chunk signatures,
+// so the body must never be accepted undecoded.
+func IsAwsChunkedRequest(header http.Header) bool {
+	return hasAwsChunkedContentEncoding(header.Get("Content-Encoding")) || isStreamingContentSHA256(header.Get(contentSHA256Header))
 }
 
 func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
@@ -595,6 +635,9 @@ func stripAwsChunkedContentEncoding(contentEncodingHeader string) string {
 	return strings.Join(remainingEncodings, ", ")
 }
 
+// presignedQueryParameters must all be present in a presigned URL.
+var presignedQueryParameters = []string{"X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Signature", "X-Amz-Date", "X-Amz-SignedHeaders", "X-Amz-Expires"}
+
 type signatureParameters struct {
 	algorithm          signatureAlgorithm
 	credential         string
@@ -605,22 +648,34 @@ type signatureParameters struct {
 	isPresigned        bool
 }
 
-func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
+// parseSignatureParameters extracts the SigV4 parameters from the
+// Authorization header or the presigned query. Its errors carry the fixed
+// messages S3 reports, never the underlying parse error.
+func parseSignatureParameters(r *http.Request) (signatureParameters, *RequestError) {
 	authorizationHeader := r.Header.Get("Authorization")
 	if authorizationHeader == "" {
 		slog.DebugContext(r.Context(), "Authorization header is missing checking for query parameters")
 		query := r.URL.Query()
+		for _, parameter := range presignedQueryParameters {
+			if query.Get(parameter) == "" {
+				return signatureParameters{}, errMissingPresignedQueryParameters
+			}
+		}
 		algorithm, found := parseSignatureAlgorithm(query.Get("X-Amz-Algorithm"))
 		if !found {
-			return signatureParameters{}, fmt.Errorf("X-Amz-Algorithm is not supported")
+			return signatureParameters{}, newMalformedAuthorizationError(true, `X-Amz-Algorithm only supports "AWS4-HMAC-SHA256 and AWS4-ECDSA-P256-SHA256"`)
 		}
 
 		expires, err := strconv.ParseInt(query.Get("X-Amz-Expires"), 10, 32)
 		if err != nil {
-			return signatureParameters{}, fmt.Errorf("failed to parse X-Amz-Expires: %w", err)
+			slog.DebugContext(r.Context(), "Failed to parse X-Amz-Expires", "err", err)
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires should be a number")
 		}
-		if expires < 1 || expires > 604800 {
-			return signatureParameters{}, fmt.Errorf("X-Amz-Expires must be between 1 and 604800 seconds")
+		if expires < 1 {
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires must be non-negative")
+		}
+		if expires > 604800 {
+			return signatureParameters{}, newMalformedAuthorizationError(true, "X-Amz-Expires must be less than a week (in seconds) that is; 604800")
 		}
 
 		slog.DebugContext(r.Context(), "Using presigned auth query parameters")
@@ -636,30 +691,30 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 	}
 
 	slog.DebugContext(r.Context(), "Authorization header is present")
-	algorithm, fields, found := strings.Cut(authorizationHeader, " ")
-	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain signature fields")
-	}
+	algorithm, fields, _ := strings.Cut(authorizationHeader, " ")
 	signatureAlgorithm, found := parseSignatureAlgorithm(algorithm)
+	if algorithm == signatureAlgorithmV2 {
+		return signatureParameters{}, errUnsupportedSignatureV2
+	}
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header uses an unsupported signature algorithm")
+		return signatureParameters{}, errUnsupportedAuthorizationType
 	}
 
 	authFields := strings.Split(fields, ",")
 	if len(authFields) != 3 {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain exactly 3 fields")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	credential, found := strings.CutPrefix(strings.TrimSpace(authFields[0]), "Credential=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Credential field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	signedHeaders, found := strings.CutPrefix(strings.TrimSpace(authFields[1]), "SignedHeaders=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain SignedHeaders field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 	signature, found := strings.CutPrefix(strings.TrimSpace(authFields[2]), "Signature=")
 	if !found {
-		return signatureParameters{}, fmt.Errorf("Authorization header does not contain Signature field")
+		return signatureParameters{}, errMalformedAuthorizationComponents
 	}
 
 	timestamp := r.Header.Get("x-amz-date")
@@ -671,7 +726,7 @@ func parseSignatureParameters(r *http.Request) (signatureParameters, error) {
 		algorithm:          signatureAlgorithm,
 		credential:         credential,
 		timestamp:          timestamp,
-		expirationDuration: 5 * time.Minute,
+		expirationDuration: maxClockSkew,
 		signedHeaders:      signedHeaders,
 		signature:          signature,
 	}, nil
@@ -683,15 +738,20 @@ type signatureAuthentication struct {
 	SignatureVersion string
 }
 
-func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authenticated bool, providerErr error) {
+func checkAuthentication(credentialProvider CredentialProvider, expectedRegion string, r *http.Request) (identity *signatureAuthentication, authErr *RequestError, internalErr error) {
 	now := time.Now().UTC()
-	contentEncodingHeader := r.Header.Get("Content-Encoding")
-	isAwsChunked := hasAwsChunkedContentEncoding(contentEncodingHeader)
+	isAwsChunked := IsAwsChunkedRequest(r.Header)
 
-	parameters, err := parseSignatureParameters(r)
-	if err != nil {
-		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+err.Error())
-		return nil, false, nil
+	parameters, authErr := parseSignatureParameters(r)
+	if authErr != nil {
+		slog.DebugContext(r.Context(), "Failed to parse signature parameters: "+authErr.Message)
+		return nil, authErr, nil
+	}
+
+	if !parameters.isPresigned {
+		if authErr := validateContentSHA256Header(r.Header.Get(contentSHA256Header)); authErr != nil {
+			return nil, authErr, nil
+		}
 	}
 
 	accessKeyIdAndScope := strings.Split(parameters.credential, "/")
@@ -702,49 +762,58 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	scope, err := parameters.algorithm.parseCredentialScope(accessKeyIdAndScope, expectedRegion, regionSet)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Invalid credential scope: "+err.Error())
-		return nil, false, nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, err.Error()), nil
 	}
 
 	accessKeyID := accessKeyIdAndScope[0]
 	if len(accessKeyID) == 0 || len(accessKeyID) > MaxAccessKeyIDLength {
 		slog.DebugContext(r.Context(), "Access key ID has an invalid length")
-		return nil, false, nil
+		return nil, errInvalidAccessKeyID, nil
 	}
 	expectedCredential, found, err := credentialProvider.Lookup(r.Context(), accessKeyID)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, fmt.Errorf("credential provider lookup failed: %w", err)
 	}
 	if !found {
 		slog.DebugContext(r.Context(), "Access key ID not found in valid credentials")
-		return nil, false, nil
+		return nil, errInvalidAccessKeyID, nil
 	}
 	if err := validateCredential(expectedCredential); err != nil {
-		return nil, false, fmt.Errorf("credential provider returned an invalid credential: %w", err)
+		return nil, nil, fmt.Errorf("credential provider returned an invalid credential: %w", err)
 	}
 	if scope.service != expectedService {
 		slog.DebugContext(r.Context(), "Service in credential does not match expected service")
-		return nil, false, nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `incorrect service "`+scope.service+`". This endpoint belongs to "`+expectedService+`".`), nil
 	}
 	if scope.request != expectedRequest {
 		slog.DebugContext(r.Context(), "Request in credential does not match expected request")
-		return nil, false, nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `incorrect terminal "`+scope.request+`". This endpoint uses "`+expectedRequest+`".`), nil
 	}
 
 	parsedTimestamp, err := time.Parse("20060102T150405Z", parameters.timestamp)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to parse timestamp: "+err.Error())
-		return nil, false, nil
+		if parameters.isPresigned {
+			return nil, newMalformedAuthorizationError(true, "X-Amz-Date must be in the ISO8601 Long Format \"yyyyMMdd'T'HHmmss'Z'\""), nil
+		}
+		return nil, newAccessDeniedError("AWS authentication requires a valid Date or x-amz-date header"), nil
 	}
 	if scope.date != parsedTimestamp.Format("20060102") {
 		slog.DebugContext(r.Context(), "Date in credential does not match signing timestamp")
-		return nil, false, nil
+		return nil, newMalformedCredentialError(parameters.isPresigned, `Invalid credential date "`+scope.date+`". This date is not the same as X-Amz-Date: "`+parsedTimestamp.Format("20060102")+`".`), nil
 	}
 
-	beforeTimestamp := parsedTimestamp.Add(-15 * time.Minute)
+	beforeTimestamp := parsedTimestamp.Add(-maxClockSkew)
 	expiredTimestamp := parsedTimestamp.Add(parameters.expirationDuration)
 	if now.Before(beforeTimestamp) || now.After(expiredTimestamp) {
 		slog.DebugContext(r.Context(), "Timestamp is not within the valid range ("+beforeTimestamp.Format(time.RFC3339)+" - "+expiredTimestamp.Format(time.RFC3339)+")")
-		return nil, false, nil
+		if !parameters.isPresigned {
+			return nil, newRequestTimeTooSkewedError(parameters.timestamp, now), nil
+		}
+		if now.After(expiredTimestamp) {
+			return nil, newAccessDeniedError("Request has expired"), nil
+		}
+		return nil, newAccessDeniedError("Request is not valid yet"), nil
 	}
 
 	rawSignedHeadersArray := strings.Split(parameters.signedHeaders, ";")
@@ -757,34 +826,33 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 	}
 	if !slices.Contains(signedHeadersArray, "host") {
 		slog.DebugContext(r.Context(), "Signed headers do not include host")
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, "the host header must be signed"), nil
 	}
 	if err := parameters.algorithm.validateSignedHeaders(signedHeadersArray, parameters.isPresigned); err != nil {
 		slog.DebugContext(r.Context(), "Invalid signed headers: "+err.Error())
-		return nil, false, nil
+		return nil, newMalformedAuthorizationError(parameters.isPresigned, err.Error()), nil
 	}
 	for headerKey := range r.Header {
 		headerKey = strings.ToLower(headerKey)
 		if mustBeSignedHeader(headerKey) && !slices.Contains(signedHeadersArray, headerKey) {
 			slog.DebugContext(r.Context(), "Request contains unsigned security-sensitive header", "header", headerKey)
-			return nil, false, nil
+			return nil, newAccessDeniedError("There were headers present in the request which were not signed"), nil
 		}
 	}
 
 	stringToSign, err := generateStringToSign(r, parameters.timestamp, scope.value, signedHeadersArray, parameters.isPresigned, parameters.algorithm)
 	if err != nil {
 		slog.DebugContext(r.Context(), "Failed to generate string to sign: "+err.Error())
-		return nil, false, nil
+		return nil, errSignatureDoesNotMatch, nil
 	}
 	verifier, err := parameters.algorithm.newVerifier(accessKeyID, expectedCredential.SecretAccessKey, scope)
 	if err != nil {
-		slog.DebugContext(r.Context(), "Failed to create signature verifier: "+err.Error())
-		return nil, false, nil
+		return nil, nil, fmt.Errorf("failed to create signature verifier: %w", err)
 	}
 	isSignatureValid := verifier.verify(*stringToSign, parameters.signature)
 	if !isSignatureValid {
 		slog.DebugContext(r.Context(), "Signature does not match calculated signature")
-		return nil, false, nil
+		return nil, errSignatureDoesNotMatch, nil
 	}
 
 	if isAwsChunked {
@@ -792,29 +860,108 @@ func checkAuthentication(credentialProvider CredentialProvider, expectedRegion s
 		contentSHA256 := r.Header.Get(contentSHA256Header)
 		if !verifier.acceptsStreamingPayload(contentSHA256) {
 			slog.DebugContext(r.Context(), "Streaming payload algorithm does not match request signature algorithm")
-			return nil, false, nil
+			return nil, errSignatureDoesNotMatch, nil
 		}
-		// aws-chunked is a transport encoding, not object metadata: strip it
-		// whether it is the only encoding or the first of several.
-		contentEncodingHeader = stripAwsChunkedContentEncoding(contentEncodingHeader)
-		if contentEncodingHeader != "" {
-			r.Header.Set("Content-Encoding", contentEncodingHeader)
-		} else {
-			r.Header.Del("Content-Encoding")
+		if authErr := decodeAwsChunkedBody(r, parameters.timestamp, scope.value, parameters.signature, verifier, true); authErr != nil {
+			return nil, authErr, nil
 		}
-		r.Header.Set("Content-Length", r.Header.Get("x-amz-decoded-content-length"))
-		r.Header.Del("x-amz-decoded-content-length")
-		trailingHeader := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
-		hasTrailingHeaderWithSignature := contentSHA256 == contentSHA256StreamingPayloadTrailing || contentSHA256 == contentSHA256StreamingECDSAPayloadTrailing
-		skipChunkValidation := contentSHA256 == contentSHA256StreamingUnsignedPayloadTrailing || contentSHA256 == contentSHA256StreamingUnsignedPayload
-		trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
-		r.Body = newAwsChunkReadCloser(r.Context(), r.Body, parameters.timestamp, scope.value, parameters.signature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName)
+	} else if !parameters.isPresigned {
+		if authErr := verifyDeclaredPayloadHash(r); authErr != nil {
+			return nil, authErr, nil
+		}
 	}
 
 	return &signatureAuthentication{
 		AuthenticatedIdentity: &AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: expectedCredential.AccountID, PrincipalID: expectedCredential.PrincipalID},
 		SignatureVersion:      string(parameters.algorithm),
-	}, isSignatureValid, nil
+	}, nil, nil
+}
+
+// decodeAwsChunkedBody replaces the body of an aws-chunked request with its
+// decoded payload and rewrites the headers to describe that payload. Chunk and
+// trailer signatures are only checked when verifySignatures is set; unsigned
+// streaming modes are never signature-checked.
+func decodeAwsChunkedBody(r *http.Request, timestamp string, scope string, seedSignature string, verifier signatureVerifier, verifySignatures bool) *RequestError {
+	contentSHA256 := r.Header.Get(contentSHA256Header)
+	// The raw body length includes the chunk framing, so S3 requires the
+	// payload length to be declared separately.
+	decodedContentLengthValue := r.Header.Get(DecodedContentLengthHeader)
+	if decodedContentLengthValue == "" {
+		return errMissingDecodedContentLength
+	}
+	decodedContentLength, err := strconv.ParseInt(decodedContentLengthValue, 10, 64)
+	if err != nil || decodedContentLength < 0 {
+		return errInvalidDecodedContentLength
+	}
+	// aws-chunked is a transport encoding, not object metadata: strip it
+	// whether it is the only encoding or the first of several.
+	contentEncodingHeader := stripAwsChunkedContentEncoding(r.Header.Get("Content-Encoding"))
+	if contentEncodingHeader != "" {
+		r.Header.Set("Content-Encoding", contentEncodingHeader)
+	} else {
+		r.Header.Del("Content-Encoding")
+	}
+	r.Header.Set("Content-Length", decodedContentLengthValue)
+	r.ContentLength = decodedContentLength
+	r.Header.Del(DecodedContentLengthHeader)
+	trailingHeader := strings.HasSuffix(contentSHA256, streamingTrailerSuffix)
+	skipChunkValidation := !verifySignatures || isUnsignedStreamingContentSHA256(contentSHA256)
+	hasTrailingHeaderWithSignature := !skipChunkValidation && trailingHeader
+	trailerChecksumName := strings.ToLower(strings.TrimSpace(r.Header.Get(trailerHeader)))
+	r.Body = newAwsChunkReadCloser(r.Context(), r.Body, timestamp, scope, seedSignature, verifier, trailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, trailerChecksumName, decodedContentLength)
+	return nil
+}
+
+// prepareUnsignedPayload applies the payload handling of checkAuthentication
+// to a request whose signature is not verified: an anonymous request, or any
+// request when authentication is disabled. An aws-chunked body is decoded
+// without checking chunk signatures, and a declared x-amz-content-sha256 is
+// verified while the body streams. Signed streaming modes are only accepted
+// when allowSignedStreaming is set, since an anonymous request has no seed
+// signature to chain the chunk signatures to.
+func prepareUnsignedPayload(r *http.Request, allowSignedStreaming bool) *RequestError {
+	contentSHA256 := r.Header.Get(contentSHA256Header)
+	if IsAwsChunkedRequest(r.Header) {
+		if !isUnsignedStreamingContentSHA256(contentSHA256) && !(allowSignedStreaming && isStreamingContentSHA256(contentSHA256)) {
+			return errUnsignedStreamingPayloadRequired
+		}
+		return decodeAwsChunkedBody(r, "", "", "", signatureVerifier{}, false)
+	}
+	return verifyDeclaredPayloadHash(r)
+}
+
+// verifyDeclaredPayloadHash binds the body to a hex x-amz-content-sha256. A
+// known empty body is checked right away, so a request whose handler never
+// reads its body still fails on a mismatching hash. Any other body is checked
+// while it streams, which relies on every handler that acts on the body
+// reading it to the end.
+func verifyDeclaredPayloadHash(r *http.Request) *RequestError {
+	declaredHash, ok := parseDeclaredPayloadHash(r.Header.Get(contentSHA256Header))
+	if !ok {
+		return nil
+	}
+	if r.ContentLength == 0 {
+		if emptyHash := sha256.Sum256(nil); !hmac.Equal(emptyHash[:], declaredHash) {
+			slog.DebugContext(r.Context(), "Empty payload does not match declared x-amz-content-sha256")
+			return errContentSHA256Mismatch
+		}
+		return nil
+	}
+	r.Body = newPayloadHashVerifyingReadCloser(r.Context(), r.Body, declaredHash, r.ContentLength)
+	return nil
+}
+
+// MakeUnauthenticatedPayloadMiddleware decodes and verifies request payloads
+// when authentication is disabled, so aws-chunked bodies are never stored
+// with their framing. MakeSignatureMiddleware does this itself.
+func MakeUnauthenticatedPayloadMiddleware(writeError ErrorWriter, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authErr := prepareUnsignedPayload(r, true); authErr != nil {
+			writeError(w, r, authErr)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type awsChunkReadCloser struct {
@@ -833,10 +980,11 @@ type awsChunkReadCloser struct {
 	skipChunkValidation            bool
 	trailerChecksumName            string
 	trailerHasher                  hash.Hash
+	decodedBytesRemaining          int64 // payload bytes the chunk headers may still announce
 	err                            error
 }
 
-func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string) *awsChunkReadCloser {
+func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp string, scope string, previousSignature string, verifier signatureVerifier, hasTrailingHeader bool, hasTrailingHeaderWithSignature bool, skipChunkValidation bool, trailerChecksumName string, decodedContentLength int64) *awsChunkReadCloser {
 	var trailerHasher hash.Hash
 	if hasTrailingHeader {
 		trailerHasher, _ = checksumutils.NewChecksumTrailerHash(trailerChecksumName)
@@ -857,6 +1005,7 @@ func newAwsChunkReadCloser(ctx context.Context, inner io.ReadCloser, timestamp s
 		skipChunkValidation:            skipChunkValidation,
 		trailerChecksumName:            trailerChecksumName,
 		trailerHasher:                  trailerHasher,
+		decodedBytesRemaining:          decodedContentLength,
 	}
 }
 
@@ -1013,61 +1162,12 @@ func (r *awsChunkReadCloser) Read(p []byte) (int, error) {
 
 func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 	if r.chunkBytesRemaining <= 0 {
-		chunkMetadata, err := r.readLine(maxChunkHeaderLength, ErrMalformedChunk)
-		if err == io.EOF {
-			// The body ended before the zero-length chunk.
-			return 0, ErrIncompleteBody
-		}
-		if err != nil {
+		if err := r.readChunkHeader(); err != nil {
 			return 0, err
 		}
-		hexLen, signature, hasSignature := bytes.Cut(chunkMetadata, []byte(";chunk-signature="))
-		if hasSignature {
-			r.chunkSignature = string(signature)
-		} else if !r.skipChunkValidation {
-			return 0, ErrChunkSignatureMismatch
-		}
-
-		// A bit size of 63 guarantees the length fits into an int64.
-		length, err := strconv.ParseUint(string(hexLen), 16, 63)
-		if err != nil {
-			slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
-			return 0, ErrMalformedChunk
-		}
-		r.chunkBytesRemaining = int64(length)
-		if length == 0 {
-			if !r.skipChunkValidation {
-				err = r.validateSignature()
-				if err != nil {
-					return 0, err
-				}
-			}
-			if r.hasTrailingHeader {
-				checksumHeader, trailerSignature, err := r.readTrailerSection()
-				if err != nil {
-					return 0, err
-				}
-				slog.DebugContext(r.ctx, "Validating trailing headers")
-
-				if r.hasTrailingHeaderWithSignature {
-					stringToSign := generateStringToSignForTrailerChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, checksumHeader)
-					trailerSignature = r.verifier.normalizeStreamingSignature(trailerSignature)
-					isSignatureValid := r.verifier.verify(stringToSign, trailerSignature)
-					if !isSignatureValid {
-						slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
-						return 0, ErrChunkSignatureMismatch
-					}
-				}
-
-				err = r.validateTrailerChecksum(checksumHeader)
-				if err != nil {
-					return 0, err
-				}
-			} else {
-				err := r.readCRLF() // The final \r\n
-				if err != nil {
-					return 0, err
-				}
+		if r.chunkBytesRemaining == 0 {
+			if err := r.readBodyEnd(); err != nil {
+				return 0, err
 			}
 			return 0, io.EOF // End of the chunked transfer
 		}
@@ -1102,8 +1202,87 @@ func (r *awsChunkReadCloser) read(p []byte) (n int, err error) {
 				return 0, err
 			}
 		}
+		// Once the declared payload is complete, verify the zero-length chunk
+		// and the trailer before handing out the last bytes, so consumers that
+		// stop after x-amz-decoded-content-length bytes still see the error.
+		if r.decodedBytesRemaining == 0 {
+			if err := r.readChunkHeader(); err != nil {
+				return 0, err
+			}
+			if err := r.readBodyEnd(); err != nil {
+				return 0, err
+			}
+			return n, io.EOF
+		}
 	}
 	return n, nil
+}
+
+// readChunkHeader reads the next chunk header and sets chunkBytesRemaining to
+// the announced chunk length.
+func (r *awsChunkReadCloser) readChunkHeader() error {
+	chunkMetadata, err := r.readLine(maxChunkHeaderLength, ErrMalformedChunk)
+	if err == io.EOF {
+		// The body ended before the zero-length chunk.
+		return ErrIncompleteBody
+	}
+	if err != nil {
+		return err
+	}
+	hexLen, signature, hasSignature := bytes.Cut(chunkMetadata, []byte(";chunk-signature="))
+	if hasSignature {
+		r.chunkSignature = string(signature)
+	} else if !r.skipChunkValidation {
+		return ErrChunkSignatureMismatch
+	}
+
+	// A bit size of 63 guarantees the length fits into an int64.
+	length, err := strconv.ParseUint(string(hexLen), 16, 63)
+	if err != nil {
+		slog.DebugContext(r.ctx, "Invalid aws-chunked chunk length: "+err.Error())
+		return ErrMalformedChunk
+	}
+	if int64(length) > r.decodedBytesRemaining {
+		slog.DebugContext(r.ctx, "aws-chunked chunks exceed x-amz-decoded-content-length")
+		return ErrMalformedChunk
+	}
+	if length == 0 && r.decodedBytesRemaining != 0 {
+		slog.DebugContext(r.ctx, "aws-chunked body is shorter than x-amz-decoded-content-length")
+		return ErrIncompleteBody
+	}
+	r.decodedBytesRemaining -= int64(length)
+	r.chunkBytesRemaining = int64(length)
+	return nil
+}
+
+// readBodyEnd validates the zero-length chunk whose header was just read and
+// consumes the trailer or the final \r\n.
+func (r *awsChunkReadCloser) readBodyEnd() error {
+	if !r.skipChunkValidation {
+		if err := r.validateSignature(); err != nil {
+			return err
+		}
+	}
+	if !r.hasTrailingHeader {
+		return r.readCRLF() // The final \r\n
+	}
+	checksumHeader, trailerSignature, err := r.readTrailerSection()
+	if err != nil {
+		return err
+	}
+	slog.DebugContext(r.ctx, "Validating trailing headers")
+
+	if r.hasTrailingHeaderWithSignature {
+		stringToSign := generateStringToSignForTrailerChunk(r.verifier.algorithm, r.timestamp, r.scope, r.previousSignature, checksumHeader)
+		trailerSignature = r.verifier.normalizeStreamingSignature(trailerSignature)
+		isSignatureValid := r.verifier.verify(stringToSign, trailerSignature)
+		if !isSignatureValid {
+			slog.DebugContext(r.ctx, "Trailing header signature does not match calculated signature")
+			return ErrChunkSignatureMismatch
+		}
+	}
+
+	return r.validateTrailerChecksum(checksumHeader)
 }
 
 func (r *awsChunkReadCloser) Close() error {
@@ -1112,6 +1291,63 @@ func (r *awsChunkReadCloser) Close() error {
 		return err
 	}
 	return nil
+}
+
+// payloadHashVerifyingReadCloser hashes the body while it is read and fails
+// the read that completes the body if it does not match the declared hash, so
+// consumers abort before committing the payload. That read withholds its
+// bytes, so consumers that stop after Content-Length bytes (io.CopyN, an
+// exactly sized io.ReadFull) cannot miss the error.
+type payloadHashVerifyingReadCloser struct {
+	ctx          context.Context
+	inner        io.ReadCloser
+	hasher       hash.Hash
+	declaredHash []byte
+	remaining    int64 // -1 if the body length is unknown
+	err          error
+}
+
+func newPayloadHashVerifyingReadCloser(ctx context.Context, inner io.ReadCloser, declaredHash []byte, contentLength int64) *payloadHashVerifyingReadCloser {
+	remaining := contentLength
+	if remaining < 0 {
+		remaining = -1
+	}
+	return &payloadHashVerifyingReadCloser{
+		ctx:          ctx,
+		inner:        inner,
+		hasher:       sha256.New(),
+		declaredHash: declaredHash,
+		remaining:    remaining,
+	}
+}
+
+func (r *payloadHashVerifyingReadCloser) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.inner.Read(p)
+	r.hasher.Write(p[:n])
+	if r.remaining >= 0 {
+		r.remaining -= int64(n)
+	}
+	// Verify on the read that delivers the last byte of a sized body, since
+	// consumers reading exactly Content-Length bytes may never observe EOF.
+	if err == io.EOF || r.remaining == 0 {
+		if !hmac.Equal(r.hasher.Sum(nil), r.declaredHash) {
+			slog.DebugContext(r.ctx, "Payload does not match declared x-amz-content-sha256")
+			r.err = ErrContentSHA256Mismatch
+			return 0, r.err
+		}
+		r.err = err
+		if r.err == nil {
+			r.err = io.EOF
+		}
+	}
+	return n, err
+}
+
+func (r *payloadHashVerifyingReadCloser) Close() error {
+	return r.inner.Close()
 }
 
 func authTypeForRequest(r *http.Request) AuthType {
@@ -1140,12 +1376,16 @@ func isAnonymousRequest(r *http.Request) bool {
 	return true
 }
 
-func MakeSignatureMiddleware(credentialProvider CredentialProvider, region string, next http.Handler) http.Handler {
+func MakeSignatureMiddleware(credentialProvider CredentialProvider, region string, writeError ErrorWriter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// If the request has no authentication credentials at all,
 		// let it through as an anonymous request. The server handlers
 		// will check bucket policies to decide whether to allow access.
 		if isAnonymousRequest(r) {
+			if authErr := prepareUnsignedPayload(r, false); authErr != nil {
+				writeError(w, r, authErr)
+				return
+			}
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
 				Type: AuthTypeAnonymous,
 			})
@@ -1154,13 +1394,13 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			return
 		}
 
-		identity, isAuthenticated, err := checkAuthentication(credentialProvider, region, r)
+		identity, authErr, err := checkAuthentication(credentialProvider, region, r)
 		if err != nil {
-			slog.ErrorContext(r.Context(), "Credential provider lookup failed", "err", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			slog.ErrorContext(r.Context(), "Authentication failed with an internal error", "err", err)
+			writeError(w, r, errInternalError)
 			return
 		}
-		if isAuthenticated {
+		if authErr == nil {
 			ctx := WithRequestAuthentication(r.Context(), RequestAuthentication{
 				Authenticated:    true,
 				Identity:         identity.AuthenticatedIdentity,
@@ -1170,7 +1410,7 @@ func MakeSignatureMiddleware(credentialProvider CredentialProvider, region strin
 			r = r.Clone(ctx)
 			next.ServeHTTP(w, r)
 		} else {
-			w.WriteHeader(401)
+			writeError(w, r, authErr)
 		}
 	})
 }

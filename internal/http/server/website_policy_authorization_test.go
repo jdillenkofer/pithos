@@ -45,13 +45,15 @@ func TestWebsiteErrorDocumentRequiresAuthorization(t *testing.T) {
 	store := &websitePolicyStorage{accountStorage: accountStorage{owners: map[string]string{"bucket": "owner"}}}
 	s := &Server{storage: store, requestAuthorizer: snapshot}
 	r := httptest.NewRequest(http.MethodGet, "/bucket/missing", nil)
+	r = r.WithContext(withWebsiteRequest(r.Context()))
 	w := httptest.NewRecorder()
 	bucket := storage.MustNewBucketName("bucket")
 	config := &storage.WebsiteConfiguration{ErrorDocumentKey: stringPtr("private/error.html")}
 
 	s.serveErrorDocument(w, r, bucket, config, http.StatusNotFound, "NoSuchKey", "missing")
 
-	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Contains(t, w.Body.String(), "AccessDenied")
 	require.NotContains(t, w.Body.String(), "secret")
 	require.Zero(t, store.getObjectCalls)
 }

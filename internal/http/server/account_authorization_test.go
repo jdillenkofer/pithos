@@ -93,7 +93,8 @@ func TestAnonymousOperationsRequireAuthorizerApproval(t *testing.T) {
 			require.True(t, authorizer.called)
 			require.Equal(t, "account-a", *authorizer.request.ResourceAccountId)
 			if !allowed {
-				require.Equal(t, 401, response.Code)
+				require.Equal(t, 403, response.Code)
+				require.Contains(t, response.Body.String(), "<Code>AccessDenied</Code>")
 			}
 		}
 	}

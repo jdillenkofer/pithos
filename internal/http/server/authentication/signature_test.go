@@ -118,7 +118,7 @@ func TestCreateSeedSignatureFromAwsChunkRequest(t *testing.T) {
 	hasTrailingHeader := false
 	hasTrailingHeaderWithSignature := false
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "", 66560)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -178,7 +178,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeader(t *testing.T) 
 	hasTrailingHeader := true
 	hasTrailingHeaderWithSignature := true
 	skipChunkValidation := false
-	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c")
+	r.Body = newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), timestamp, scope, expectedSignature, newSigV4Verifier(signingKey), hasTrailingHeader, hasTrailingHeaderWithSignature, skipChunkValidation, "x-amz-checksum-crc32c", 66560)
 
 	seedSignature := createSignature(signingKey, *stringToSign)
 	assert.Equal(t, expectedSignature, seedSignature)
@@ -211,7 +211,7 @@ func TestCreateSeedSignatureFromAwsChunkRequestWithTrailingHeaderWithoutBlankLin
 	signingKey := createSigningKey(secretAccessKey, "20130524", "us-east-1", "s3", "aws4_request")
 	seedSignature := "106e2a8a18243abcf37539882f36619c00e2dfc72633413f02d3b74544bfeb8e"
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, newSigV4Verifier(signingKey), true, true, false, "x-amz-checksum-crc32c")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "20130524T000000Z", scope, seedSignature, newSigV4Verifier(signingKey), true, true, false, "x-amz-checksum-crc32c", 66560)
 
 	data, err := io.ReadAll(body)
 	assert.NoError(t, err)
@@ -249,7 +249,7 @@ func TestAwsChunkedContentEncodingHelpers(t *testing.T) {
 // STREAMING-UNSIGNED-PAYLOAD-TRAILER format, where chunks carry no signatures
 // and only the trailer checksum is validated.
 func newUnsignedTrailerChunkReader(content string, trailerName string) io.ReadCloser {
-	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, trailerName)
+	return newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, trailerName, 11)
 }
 
 func TestAwsChunkReaderValidatesUnsignedTrailerChecksum(t *testing.T) {
@@ -365,11 +365,11 @@ func TestCheckAuthenticationAcceptsPresignedRequestFromPreviousUTCDate(t *testin
 	query.Set("X-Amz-Signature", createSignature(signingKey, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	identity, authenticated, providerErr := checkAuthentication(staticCredentialProvider{
+	identity, authErr, providerErr := checkAuthentication(staticCredentialProvider{
 		accessKeyID: {AccessKeyID: accessKeyID, SecretAccessKey: secretAccessKey, AccountID: "account", PrincipalID: "client"},
 	}, region, r)
 	assert.NoError(t, providerErr)
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, AuthenticatedIdentity{AccessKeyID: accessKeyID, AccountID: "account", PrincipalID: "client"}, *identity.AuthenticatedIdentity)
 		assert.Equal(t, signatureAlgorithmV4, identity.SignatureVersion)
@@ -580,10 +580,10 @@ func TestCheckAuthenticationAcceptsSigV4aHeader(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	r := newSignedSigV4aHeaderRequest(t, "eu-central-1,us-west-*")
-	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
 
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
@@ -594,9 +594,9 @@ func TestCheckAuthenticationRejectsSigV4aHeaderOutsideRegionSet(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	r := newSignedSigV4aHeaderRequest(t, "us-east-1,us-west-*")
-	_, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	_, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	assert.False(t, authenticated)
+	assert.Equal(t, "AuthorizationHeaderMalformed", authErr.Code)
 }
 
 func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
@@ -622,9 +622,9 @@ func TestCheckAuthenticationAcceptsPresignedSigV4aRequest(t *testing.T) {
 	query.Set("X-Amz-Signature", signSigV4aString(t, *stringToSign))
 	r.URL.RawQuery = query.Encode()
 
-	identity, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	identity, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	assert.True(t, authenticated)
+	assert.Nil(t, authErr)
 	if assert.NotNil(t, identity) {
 		assert.Equal(t, sigV4aTestAccessKey, identity.AccessKeyID)
 		assert.Equal(t, signatureAlgorithmV4a, identity.SignatureVersion)
@@ -675,9 +675,9 @@ func TestCheckAuthenticationValidatesSigV4aStreamingPayloadAndTrailer(t *testing
 		"x-amz-trailer-signature:" + trailerSignature + "\r\n\r\n"
 	r.Body = io.NopCloser(strings.NewReader(encodedBody))
 
-	_, authenticated, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
+	_, authErr, providerErr := checkAuthentication(sigV4aTestCredentials(), "eu-central-1", r)
 	require.NoError(t, providerErr)
-	require.True(t, authenticated)
+	require.Nil(t, authErr)
 	decodedPayload, err := io.ReadAll(r.Body)
 	require.NoError(t, err)
 	assert.Equal(t, payload, decodedPayload)
@@ -774,7 +774,7 @@ func TestAwsChunkReaderRejectsMalformedFraming(t *testing.T) {
 func TestAwsChunkReaderRejectsMissingFinalCRLF(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\nXX")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\nXX")), "", "", "", newSigV4Verifier(nil), false, false, true, "", 11)
 	_, err := io.ReadAll(body)
 	assert.ErrorIs(t, err, ErrMalformedChunk)
 }
@@ -802,7 +802,7 @@ func FuzzAwsChunkReader(f *testing.F) {
 	f.Add([]byte("b\nhello world\n0\n\n"))
 
 	f.Fuzz(func(t *testing.T, content []byte) {
-		body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, "x-amz-checksum-crc32")
+		body := newAwsChunkReadCloser(context.Background(), io.NopCloser(bytes.NewReader(content)), "", "", "", newSigV4Verifier(nil), true, false, true, "x-amz-checksum-crc32", 11)
 		data, err := io.ReadAll(body)
 		// The decoded payload can never be larger than the encoded body.
 		if len(data) > len(content) {
@@ -824,7 +824,7 @@ func FuzzAwsChunkReader(f *testing.F) {
 func TestAwsChunkReaderRejectsTruncatedFinalCRLF(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
-	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\n\r")), "", "", "", newSigV4Verifier(nil), false, false, true, "")
+	body := newAwsChunkReadCloser(context.Background(), io.NopCloser(strings.NewReader("b\r\nhello world\r\n0\r\n\r")), "", "", "", newSigV4Verifier(nil), false, false, true, "", 11)
 	_, err := io.ReadAll(body)
 	assert.ErrorIs(t, err, ErrIncompleteBody)
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	httpmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware"
 	prometheusmiddleware "github.com/jdillenkofer/pithos/internal/http/middleware/prometheus"
@@ -76,7 +77,7 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	// resolver sees the rewritten path (with the bucket prefix) for virtual-hosted
 	// requests. This also places CORS inside SigV4 auth: anonymous preflights pass
 	// through and reach this handler, but a credentialed request that fails auth
-	// gets a 401 without Access-Control-* headers (an opaque CORS error in the
+	// gets an S3 auth error without Access-Control-* headers (an opaque CORS error in the
 	// browser). Acceptable, since cross-origin requests are no-credentials by
 	// default and the preflight already gates access.
 	apiHandler = httpmiddleware.MakeCORSMiddlewareWithResolver(server.resolveCORSRulesForRequest, apiHandler)
@@ -90,13 +91,7 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 	var websiteHandler http.Handler = websiteMux
 
 	fallbackHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		// Strip port if present
-		if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
-			if bracketIdx := strings.LastIndex(host, "]"); bracketIdx < colonIdx {
-				host = host[:colonIdx]
-			}
-		}
+		host := httpmiddleware.HostWithoutPort(r.Host)
 		r.URL.Path = "/" + host + r.URL.Path
 		slog.DebugContext(r.Context(), "Custom domain website request", "host", r.Host, "bucket", host, "path", r.URL.Path)
 		websiteHandler.ServeHTTP(w, r)
@@ -108,14 +103,57 @@ func SetupServer(credentialProvider authentication.CredentialProvider, region st
 
 	if credentialProvider != nil {
 		slog.Info("Authentication is enabled")
-		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, rootHandler)
+		rootHandler = authentication.MakeSignatureMiddleware(credentialProvider, region, writeAuthenticationError, rootHandler)
 	} else {
 		slog.Warn("Authentication is disabled, this is not recommended for production use")
+		rootHandler = authentication.MakeUnauthenticatedPayloadMiddleware(writeAuthenticationError, rootHandler)
 	}
+	rootHandler = makeRequestSizeLimitMiddleware(rootHandler)
+	rootHandler = makeWebsiteRequestMiddleware(apiEndpoint, rootHandler)
 	rootHandler = makeQueryValidationMiddleware(rootHandler)
 	rootHandler = httpmiddleware.MakeRequestContextMiddleware(rootHandler)
 
 	return prometheusmiddleware.New(rootHandler)
+}
+
+type websiteRequestContextKey struct{}
+
+// withWebsiteRequest marks a request as served by the website endpoint, whose
+// errors are HTML pages rather than XML.
+func withWebsiteRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, websiteRequestContextKey{}, true)
+}
+
+func isWebsiteRequest(ctx context.Context) bool {
+	isWebsite, _ := ctx.Value(websiteRequestContextKey{}).(bool)
+	return isWebsite
+}
+
+// makeWebsiteRequestMiddleware marks requests for the website endpoint before
+// authentication and the size limit run, so their errors are HTML pages too.
+func makeWebsiteRequestMiddleware(apiEndpoint string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !httpmiddleware.IsAPIHost(r.Host, apiEndpoint) {
+			r = r.WithContext(withWebsiteRequest(r.Context()))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeAuthenticationError renders an authentication failure as an HTML page
+// on the website endpoint and as an S3 XML error on the API endpoint.
+func writeAuthenticationError(w http.ResponseWriter, r *http.Request, requestErr *authentication.RequestError) {
+	if isWebsiteRequest(r.Context()) {
+		writeHTMLError(w, requestErr.StatusCode, requestErr.Code, requestErr.Message)
+		return
+	}
+	response := newErrorResponse(r, requestErr.Code, requestErr.Message, r.URL.Path)
+	if skew := requestErr.ClockSkew; skew != nil {
+		response.RequestTime = skew.RequestTime
+		response.ServerTime = skew.ServerTime.Format(time.RFC3339)
+		response.MaxAllowedSkewMilliseconds = skew.MaxAllowedSkew.Milliseconds()
+	}
+	writeXMLResponse(w, r, requestErr.StatusCode, response)
 }
 
 func isTrailingSlashBucketRoot(path string) bool {
@@ -126,9 +164,17 @@ func isTrailingSlashBucketRoot(path string) bool {
 	return withoutTrailingSlash != "" && !strings.Contains(withoutTrailingSlash[1:], "/")
 }
 
+// makeAuditRequestContextMiddleware adds the client IP for the audit log. The
+// audit log reuses the request ID of the response, so its entries can be
+// matched to the x-amz-request-id a client reports.
 func makeAuditRequestContextMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), authentication.RequestIDContextKey{}, ulid.Make().String())
+		ctx := r.Context()
+		if requestID, ok := httpmiddleware.RequestIDFromContext(ctx); ok {
+			ctx = context.WithValue(ctx, authentication.RequestIDContextKey{}, requestID)
+		} else {
+			ctx = context.WithValue(ctx, authentication.RequestIDContextKey{}, ulid.Make().String())
+		}
 		if ip := getRemoteIP(r.RemoteAddr); ip != nil {
 			ctx = context.WithValue(ctx, authentication.ClientIPContextKey{}, *ip)
 		}

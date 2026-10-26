@@ -30,7 +30,7 @@ func TestSignatureMiddlewareVerifiedAlgorithm(t *testing.T) {
 					require.Equal(t, sigV4aTestAccessKey, auth.Identity.AccessKeyID)
 					w.WriteHeader(http.StatusNoContent)
 				})
-				handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", next)
+				handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", WriteRequestError, next)
 				w := httptest.NewRecorder()
 				handler.ServeHTTP(w, r)
 				require.True(t, called)
@@ -43,13 +43,14 @@ func TestSignatureMiddlewareVerifiedAlgorithm(t *testing.T) {
 				w = httptest.NewRecorder()
 				handler.ServeHTTP(w, r)
 				require.False(t, called)
-				require.Equal(t, http.StatusUnauthorized, w.Code)
+				require.Equal(t, http.StatusForbidden, w.Code)
+				require.Contains(t, w.Body.String(), "<Code>SignatureDoesNotMatch</Code>")
 			})
 		}
 	}
 	t.Run("anonymous algorithm hint is not trusted", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/?X-Amz-Algorithm=AWS4-HMAC-SHA256", nil)
-		handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := MakeSignatureMiddleware(sigV4aTestCredentials(), "eu-central-1", WriteRequestError, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := RequestAuthenticationFromContext(r.Context())
 			require.False(t, auth.Authenticated)
 			require.Empty(t, auth.SignatureVersion)
@@ -83,8 +84,9 @@ func signedMetadataRequest(t *testing.T, algorithm signatureAlgorithm, presigned
 		}
 		r.URL.RawQuery = query.Encode()
 	} else {
+		r.Header.Set(contentSHA256Header, sha256Hex(nil))
 		r.Header.Set("x-amz-date", timestamp)
-		headers = append(headers, "x-amz-date")
+		headers = append(headers, "x-amz-content-sha256", "x-amz-date")
 		if algorithm == signatureAlgorithmV4a {
 			r.Header.Set("x-amz-region-set", "eu-central-1")
 			headers = append(headers, "x-amz-region-set")
