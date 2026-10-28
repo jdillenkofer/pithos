@@ -10,7 +10,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/google/tink/go/subtle"
+	"github.com/tink-crypto/tink-go/v2/subtle"
 )
 
 // encryptingReader produces Tink AES-GCM-HKDF streaming ciphertext (see
