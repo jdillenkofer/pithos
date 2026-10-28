@@ -13,7 +13,9 @@ var (
 	version string
 	commit  string
 	dirty   string
-	date    string
+	// date is the commit time, not the time of the build, so that release
+	// builds are reproducible.
+	date string
 )
 
 // Info describes the source used to build the running binary.
@@ -22,7 +24,7 @@ type Info struct {
 	Commit     string
 	Dirty      bool
 	DirtyKnown bool
-	Date       string
+	CommitDate string
 	GoVersion  string
 }
 
@@ -34,9 +36,9 @@ func Current() Info {
 
 func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embeddedDirty, embeddedDate string) Info {
 	info := Info{
-		Version: embeddedVersion,
-		Commit:  embeddedCommit,
-		Date:    embeddedDate,
+		Version:    embeddedVersion,
+		Commit:     embeddedCommit,
+		CommitDate: embeddedDate,
 	}
 
 	var vcsModified string
@@ -70,11 +72,11 @@ func resolve(goBuildInfo *debug.BuildInfo, embeddedVersion, embeddedCommit, embe
 	if info.Commit == "" {
 		info.Commit = "unknown"
 	}
-	if info.Date == "" {
-		info.Date = vcsTime
+	if info.CommitDate == "" {
+		info.CommitDate = vcsTime
 	}
-	if info.Date == "" {
-		info.Date = "unknown"
+	if info.CommitDate == "" {
+		info.CommitDate = "unknown"
 	}
 	if info.GoVersion == "" {
 		info.GoVersion = runtime.Version()

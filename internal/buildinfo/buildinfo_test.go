@@ -27,7 +27,7 @@ func TestResolvePrefersExplicitBuildMetadata(t *testing.T) {
 		Commit:     "release-commit",
 		Dirty:      false,
 		DirtyKnown: true,
-		Date:       "2024-05-01T12:00:00Z",
+		CommitDate: "2024-05-01T12:00:00Z",
 		GoVersion:  "go1.99.0",
 	}, info)
 }
@@ -50,7 +50,7 @@ func TestResolveFallsBackToGoVCMetadata(t *testing.T) {
 		Commit:     "local-commit",
 		Dirty:      true,
 		DirtyKnown: true,
-		Date:       "2023-06-15T08:30:00Z",
+		CommitDate: "2023-06-15T08:30:00Z",
 		GoVersion:  "go1.22.1",
 	}, info)
 }
@@ -59,9 +59,9 @@ func TestResolveReportsUnknownMetadata(t *testing.T) {
 	info := resolve(nil, "", "", "", "")
 
 	assert.Equal(t, Info{
-		Version:   "devel",
-		Commit:    "unknown",
-		Date:      "unknown",
-		GoVersion: runtime.Version(),
+		Version:    "devel",
+		Commit:     "unknown",
+		CommitDate: "unknown",
+		GoVersion:  runtime.Version(),
 	}, info)
 }
