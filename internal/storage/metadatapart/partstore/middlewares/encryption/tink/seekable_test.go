@@ -7,10 +7,10 @@ import (
 	mathrand "math/rand"
 	"testing"
 
-	streamingaeadsubtle "github.com/google/tink/go/streamingaead/subtle"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	streamingaeadsubtle "github.com/tink-crypto/tink-go/v2/streamingaead/subtle"
 )
 
 // encryptWithTink produces ciphertext exactly as the middleware's PutPart

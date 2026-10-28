@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -25,11 +27,14 @@ import (
 	"golang.org/x/crypto/hkdf"
 	"golang.org/x/crypto/scrypt"
 
-	aeadsubtle "github.com/google/tink/go/aead/subtle"
-	"github.com/google/tink/go/integration/awskms"
-	"github.com/google/tink/go/integration/hcvault"
-	streamingaeadsubtle "github.com/google/tink/go/streamingaead/subtle"
-	"github.com/google/tink/go/tink"
+	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/tink-crypto/tink-go-awskms/v3/integration/awskms"
+	"github.com/tink-crypto/tink-go-hcvault/v2/integration/hcvault"
+	aeadsubtle "github.com/tink-crypto/tink-go/v2/aead/subtle"
+	"github.com/tink-crypto/tink-go/v2/core/registry"
+	streamingaeadsubtle "github.com/tink-crypto/tink-go/v2/streamingaead/subtle"
+	"github.com/tink-crypto/tink-go/v2/tink"
 )
 
 const (
@@ -111,6 +116,36 @@ func testKeyAvailability(aead tink.AEAD, kmsType string) error {
 	return nil
 }
 
+// newVaultKMSClient creates a Tink KMS client for Vault's transit engine.
+// Existing DEKs were encrypted with the associated data sent as Vault's
+// "context" parameter, so the client must keep doing that.
+func newVaultKMSClient(uriPrefix string, tlsConfig *tls.Config, token string) (registry.KMSClient, error) {
+	httpClient := vaultapi.DefaultConfig().HttpClient
+	transport := httpClient.Transport.(*http.Transport)
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+	}
+	transport.TLSClientConfig = tlsConfig
+
+	vaultURL, err := url.Parse(uriPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := vaultapi.NewClient(&vaultapi.Config{
+		Address:    "https://" + vaultURL.Host,
+		HttpClient: httpClient,
+	})
+	if err != nil {
+		return nil, err
+	}
+	client.SetToken(token)
+
+	return hcvault.NewClientWithAEADOptions(uriPrefix, client.Logical(), hcvault.WithLegacyContextParamater())
+}
+
 // refreshVaultToken refreshes the AEAD with a new token
 func (mw *TinkEncryptionPartStoreMiddleware) refreshVaultToken() error {
 	mw.tokenMutex.Lock()
@@ -134,7 +169,7 @@ func (mw *TinkEncryptionPartStoreMiddleware) refreshVaultToken() error {
 
 	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(mw.keyURI, "/")
 
-	kmsClient, err := hcvault.NewClient(uriPrefix, mw.tlsConfig, newToken)
+	kmsClient, err := newVaultKMSClient(uriPrefix, mw.tlsConfig, newToken)
 	if err != nil {
 		return fmt.Errorf("failed to create new Vault client: %w", err)
 	}
@@ -255,7 +290,7 @@ func NewWithHCVault(vaultAddr, token, roleID, secretID, keyURI string, innerPart
 	fullKeyURI := uriPrefix + "/" + strings.TrimPrefix(keyURI, "/")
 
 	// Register the Vault KMS client with Tink
-	kmsClient, err := hcvault.NewClient(uriPrefix, tlsConfig, actualToken)
+	kmsClient, err := newVaultKMSClient(uriPrefix, tlsConfig, actualToken)
 	if err != nil {
 		return nil, err
 	}
@@ -323,8 +358,14 @@ func NewWithLocalKMS(password string, innerPartStore partstore.PartStore, mlkemK
 // keyURI: e.g. "aws-kms://arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
 // region: AWS region (e.g. "us-east-1")
 func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
-	// Create AWS KMS client
-	kmsClient, err := awskms.NewClient(keyURI)
+	return newWithAWSKMS(keyURI, innerPartStore, mlkemKey)
+}
+
+func newWithAWSKMS(keyURI string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024, opts ...awskms.ClientOption) (partstore.PartStore, error) {
+	// Existing DEKs were encrypted with the "additionalData" encryption
+	// context name, so the client must keep using it.
+	opts = append(opts, awskms.WithEncryptionContextName(awskms.LegacyAdditionalData))
+	kmsClient, err := awskms.NewClientWithOptions(context.Background(), keyURI, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"io"
 
-	streamingaeadsubtle "github.com/google/tink/go/streamingaead/subtle"
-	"github.com/google/tink/go/subtle"
+	streamingaeadsubtle "github.com/tink-crypto/tink-go/v2/streamingaead/subtle"
+	"github.com/tink-crypto/tink-go/v2/subtle"
 )
 
 // seekableDecryptingReader decrypts Tink AES-GCM-HKDF streaming ciphertext
