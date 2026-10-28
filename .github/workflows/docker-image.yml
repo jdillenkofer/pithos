@@ -33,5 +33,5 @@ jobs:
       env:
         COMMIT: ${{ github.sha }}
       run: |
-        DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        DATE="$(date -u -d "@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
         docker build . --file Dockerfile --build-arg "COMMIT=${COMMIT}" --build-arg DIRTY=false --build-arg "DATE=${DATE}" --tag "pithos:$(date +%s)"
