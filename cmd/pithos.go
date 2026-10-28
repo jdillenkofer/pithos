@@ -152,11 +152,11 @@ func main() {
 }
 
 func logBuildInfo(info buildinfo.Info) {
-	slog.Info("Starting pithos", "version", versionString(info), "commit", info.Commit, "goVersion", info.GoVersion, "buildDate", info.Date)
+	slog.Info("Starting pithos", "version", versionString(info), "commit", info.Commit, "goVersion", info.GoVersion, "commitDate", info.CommitDate)
 }
 
 func printVersion(w io.Writer, info buildinfo.Info) {
-	fmt.Fprintf(w, "pithos %s\ncommit: %s\nbuild date: %s\n%s\n", versionString(info), info.Commit, info.Date, info.GoVersion)
+	fmt.Fprintf(w, "pithos %s\ncommit: %s\ncommit date: %s\n%s\n", versionString(info), info.Commit, info.CommitDate, info.GoVersion)
 }
 
 func versionString(info buildinfo.Info) string {

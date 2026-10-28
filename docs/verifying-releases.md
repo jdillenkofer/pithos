@@ -65,6 +65,7 @@ the linker flags and the output of `go version -m` (Go version, build
 settings, commit and all module versions). For the container image it records
 the BuildKit version, the base images and the digest of each platform image.
 
-Release builds use `-trimpath` and the commit time as build date, so
-rebuilding a tag with the same toolchain produces the same binary. The C
-toolchains are not pinned, which is why `build-info.txt` records them.
+Release builds use `-trimpath` and embed the commit time instead of the build
+time (shown as `commit date` by `pithos version`), so rebuilding a tag with
+the same toolchain produces the same binary. The C toolchains are not pinned,
+which is why `build-info.txt` records them.
