@@ -302,6 +302,8 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareWithAWSKMS(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	storagePath := *tempDir
+	// awsRegion is no longer used (the region comes from the key ARN), but
+	// existing configs that still set it must keep parsing.
 	jsonData := fmt.Sprintf(`{
 				 "type": "TinkEncryptionPartStoreMiddleware",
 				 "kmsType": "aws",
@@ -324,7 +326,6 @@ func TestCanCreateTinkEncryptionPartStoreMiddlewareWithAWSKMS(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "aws", config.KMSType.Value())
 	assert.Equal(t, "aws-kms://arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012", config.KeyURI.Value())
-	assert.Equal(t, "us-east-1", config.AWSRegion.Value())
 }
 
 func TestCanCreateTinkEncryptionPartStoreMiddlewareWithVaultKMS(t *testing.T) {

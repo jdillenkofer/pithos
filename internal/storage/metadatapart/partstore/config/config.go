@@ -67,8 +67,6 @@ func (f *FilesystemPartStoreConfiguration) Instantiate(diProvider dependencyinje
 type TinkEncryptionPartStoreMiddlewareConfiguration struct {
 	KMSType internalConfig.StringProvider `json:"kmsType"`          // "aws", "vault", "local", "tpm"
 	KeyURI  internalConfig.StringProvider `json:"keyURI,omitempty"` // Not used for local/tpm KMS
-	// AWS KMS specific
-	AWSRegion internalConfig.StringProvider `json:"awsRegion,omitempty"`
 	// Vault specific
 	VaultAddress  internalConfig.StringProvider `json:"vaultAddress,omitempty"`
 	VaultToken    internalConfig.StringProvider `json:"vaultToken,omitempty"`    // Token-based auth
@@ -183,14 +181,10 @@ func (t *TinkEncryptionPartStoreMiddlewareConfiguration) Instantiate(diProvider 
 	switch kmsType {
 	case "aws":
 		keyURI := t.KeyURI.Value()
-		region := t.AWSRegion.Value()
 		if keyURI == "" {
 			return nil, errors.New("keyURI is required for AWS KMS")
 		}
-		if region == "" {
-			return nil, errors.New("awsRegion is required for AWS KMS")
-		}
-		return tink.NewWithAWSKMS(keyURI, region, innerPartStore, mlkemKey)
+		return tink.NewWithAWSKMS(keyURI, innerPartStore, mlkemKey)
 	case "vault":
 		keyURI := t.KeyURI.Value()
 		address := t.VaultAddress.Value()

@@ -356,8 +356,8 @@ func NewWithLocalKMS(password string, innerPartStore partstore.PartStore, mlkemK
 // NewWithAWSKMS creates a new TinkEncryptionPartStoreMiddleware using AWS KMS.
 // Uses envelope encryption where each part has its own DEK encrypted with the AWS KMS master key.
 // keyURI: e.g. "aws-kms://arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
-// region: AWS region (e.g. "us-east-1")
-func NewWithAWSKMS(keyURI, region string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
+// The AWS region is taken from the key ARN.
+func NewWithAWSKMS(keyURI string, innerPartStore partstore.PartStore, mlkemKey *mlkem.DecapsulationKey1024) (partstore.PartStore, error) {
 	return newWithAWSKMS(keyURI, innerPartStore, mlkemKey)
 }
 
