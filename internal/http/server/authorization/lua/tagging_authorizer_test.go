@@ -141,6 +141,7 @@ func TestExistingObjectTagsResolverErrorFailsClosed(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), taggingRequest(resolver, nil))
 	assert.NotNil(t, err)
+	assert.ErrorContains(t, err, "storage unavailable")
 	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 }
 
@@ -232,5 +233,6 @@ func TestSourceObjectTagsResolverErrorFailsClosed(t *testing.T) {
 	}
 	authorized, err := authorizer.AuthorizeRequest(context.Background(), request)
 	assert.NotNil(t, err)
+	assert.ErrorContains(t, err, "storage unavailable")
 	assert.NotEqual(t, authorization.Allow, authorized.Effect)
 }

@@ -781,7 +781,7 @@ func addTagPredicates(methods map[string]methodFactory, tagsName, tagName, equal
 	loadOrError := func(L *lua.State, m *requestMethodContext) (map[string]string, bool) {
 		loaded, err := tags(m).load(m.ctx)
 		if err != nil {
-			lua.Errorf(L, "failed to resolve %s: %v", tagsName, err)
+			lua.Errorf(L, "failed to resolve %s: %s", tagsName, err.Error())
 			return nil, false
 		}
 		return loaded, true
