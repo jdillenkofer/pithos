@@ -93,6 +93,18 @@ func compileChunk(code string) ([]byte, error) {
 	return chunk.Bytes(), nil
 }
 
+// unsafeBaseFunctions are base library functions a policy must not reach:
+// dofile and loadfile read and execute files from disk, and load compiles
+// arbitrary chunks at runtime, including unverified binary chunks.
+var unsafeBaseFunctions = []string{"dofile", "loadfile", "load"}
+
+func removeUnsafeBaseFunctions(L *lua.State) {
+	for _, name := range unsafeBaseFunctions {
+		L.PushNil()
+		L.SetGlobal(name)
+	}
+}
+
 func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
 	canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
 	if values, ok := headers[canonicalKey]; ok {
@@ -311,6 +323,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	L.Pop(1)
 	lua.Require(L, "math", lua.MathOpen, true)
 	L.Pop(1)
+	removeUnsafeBaseFunctions(L)
 	err := L.Load(bytes.NewReader(authorizer.chunk), authorizer.code, "b")
 	if err == nil {
 		err = L.ProtectedCall(0, lua.MultipleReturns, 0)
