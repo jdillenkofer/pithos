@@ -269,6 +269,11 @@ errors and deny access. Startup validates the script with a sample request;
 the return type is also checked on every real request. Top-level script return
 values never count as authorization decisions.
 
+Scripts run in a sandbox with only the Lua base, `string`, `table`, and `math`
+libraries. The `io`, `os`, `package`, and `debug` libraries are not available,
+and the base functions `dofile`, `loadfile`, and `load` are removed, so a
+script cannot read files or compile code at runtime.
+
 Malformed query strings and repeated query parameters are rejected with HTTP
 400 (`InvalidArgument`) before authentication and before Lua runs. Each query
 parameter therefore has at most one value, shared by authorization and the
