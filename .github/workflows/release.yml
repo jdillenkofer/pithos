@@ -282,7 +282,10 @@ jobs:
         with:
           cache: false
           go-version: '1.27.3'
+      # Install outside the checkout: untracked files would make Go embed
+      # vcs.modified=true and change the binary.
       - name: Install Zig
+        working-directory: ${{ runner.temp }}
         run: |
           wget https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz
           echo "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8  zig-aarch64-linux-0.17.0.tar.xz" | sha256sum --check
