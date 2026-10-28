@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/textproto"
@@ -29,14 +30,18 @@ type LuaAuthorizer struct {
 	// chunk is the policy code precompiled to a Lua binary chunk. Loading it
 	// skips lexing and parsing the source on every request; the chunk keeps
 	// the source name and debug info, so runtime errors read the same.
-	chunk         []byte
-	proxyResolver *authorization.ProxyResolver
-	tracer        trace.Tracer
+	chunk            []byte
+	maxExecutionTime time.Duration
+	proxyResolver    *authorization.ProxyResolver
+	tracer           trace.Tracer
 }
 
 type Options struct {
 	TrustForwardedHeaders bool
 	TrustedProxyCIDRs     []string
+	// MaxExecutionTime bounds a single policy evaluation. Zero selects
+	// DefaultMaxExecutionTime.
+	MaxExecutionTime time.Duration
 }
 
 func (authorizer *LuaAuthorizer) dryRun() error {
@@ -57,6 +62,13 @@ func NewLuaAuthorizer(code string) (*LuaAuthorizer, error) {
 }
 
 func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, error) {
+	maxExecutionTime := options.MaxExecutionTime
+	if maxExecutionTime < 0 {
+		return nil, fmt.Errorf("lua authorizer execution time limit must be positive, got %s", maxExecutionTime)
+	}
+	if maxExecutionTime == 0 {
+		maxExecutionTime = DefaultMaxExecutionTime
+	}
 	proxyResolver, err := authorization.NewProxyResolver(authorization.ProxyOptions{
 		TrustForwardedHeaders: options.TrustForwardedHeaders,
 		TrustedProxyCIDRs:     options.TrustedProxyCIDRs,
@@ -69,10 +81,11 @@ func NewLuaAuthorizerWithOptions(code string, options Options) (*LuaAuthorizer, 
 		return nil, err
 	}
 	luaAuthorizer := &LuaAuthorizer{
-		code:          code,
-		chunk:         chunk,
-		proxyResolver: proxyResolver,
-		tracer:        otel.Tracer("internal/http/server/authorization/lua"),
+		code:             code,
+		chunk:            chunk,
+		maxExecutionTime: maxExecutionTime,
+		proxyResolver:    proxyResolver,
+		tracer:           otel.Tracer("internal/http/server/authorization/lua"),
 	}
 	err = luaAuthorizer.dryRun()
 	if err != nil {
@@ -105,9 +118,10 @@ func removeUnsafeBaseFunctions(L *lua.State) {
 	}
 }
 
-// maxExecutionTime bounds a single policy evaluation, including the top-level
-// chunk, so a runaway script cannot pin a request goroutine indefinitely.
-const maxExecutionTime = 250 * time.Millisecond
+// DefaultMaxExecutionTime bounds a single policy evaluation, including the
+// top-level chunk, so a runaway script cannot pin a request goroutine
+// indefinitely.
+const DefaultMaxExecutionTime = 250 * time.Millisecond
 
 // deadlineCheckInstructions is how many Lua instructions run between deadline
 // checks. The hook only fires while Lua code runs, not inside Go functions.
@@ -380,7 +394,7 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	L.Pop(1)
 	removeUnsafeBaseFunctions(L)
 	L.Register("xpcall", deferredHandlerXPCall)
-	setExecutionDeadline(ctx, L, time.Now().Add(maxExecutionTime))
+	setExecutionDeadline(ctx, L, time.Now().Add(authorizer.maxExecutionTime))
 	err := L.Load(bytes.NewReader(authorizer.chunk), authorizer.code, "b")
 	if err == nil {
 		err = L.ProtectedCall(0, lua.MultipleReturns, 0)

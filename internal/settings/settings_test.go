@@ -141,3 +141,23 @@ func TestSQLCredentialSettings(t *testing.T) {
 		assert.Equal(t, 1, settings.CredentialsDatabaseIndex())
 	})
 }
+
+func TestAuthorizerTimeoutSettings(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		settings := &Settings{}
+		assert.Equal(t, 250, settings.AuthorizerTimeoutMilliseconds())
+	})
+
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv(authorizerTimeoutMillisecondsEnvKey, "1000")
+		settings, err := loadSettingsFromEnv()
+		assert.NoError(t, err)
+		assert.Equal(t, 1000, settings.AuthorizerTimeoutMilliseconds())
+	})
+
+	t.Run("arguments", func(t *testing.T) {
+		settings, err := loadSettingsFromCmdArgs([]string{"-authorizerTimeoutMilliseconds", "50"})
+		assert.NoError(t, err)
+		assert.Equal(t, 50, settings.AuthorizerTimeoutMilliseconds())
+	})
+}
