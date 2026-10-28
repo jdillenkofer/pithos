@@ -94,9 +94,32 @@ func TestRunawayScriptIsAbortedAtTimeLimit(t *testing.T) {
 			decision, err := authorizer.AuthorizeRequest(context.Background(), spinRequest())
 			assert.Error(t, err)
 			assert.NotEqual(t, authorization.Allow, decision.Effect)
-			assert.Less(t, time.Since(started), 4*maxExecutionTime)
+			assert.Less(t, time.Since(started), 4*DefaultMaxExecutionTime)
 		})
 	}
+}
+
+func TestConfiguredExecutionTimeLimit(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	limit := 20 * time.Millisecond
+	authorizer, err := NewLuaAuthorizerWithOptions(spinPolicy(`while true do end`), Options{MaxExecutionTime: limit})
+	assert.Nil(t, err)
+	started := time.Now()
+	decision, err := authorizer.AuthorizeRequest(context.Background(), spinRequest())
+	elapsed := time.Since(started)
+	assert.ErrorContains(t, err, errExecutionTimeLimitExceeded.Error())
+	assert.NotEqual(t, authorization.Allow, decision.Effect)
+	assert.GreaterOrEqual(t, elapsed, limit)
+	// Well below the default, so the configured limit is the one that applied.
+	assert.Less(t, elapsed, DefaultMaxExecutionTime)
+}
+
+func TestNegativeExecutionTimeLimitIsRejected(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	_, err := NewLuaAuthorizerWithOptions(`function authorizeRequest(request) return true end`, Options{MaxExecutionTime: -time.Millisecond})
+	assert.Error(t, err)
 }
 
 func TestRunawayTopLevelScriptFailsAtStartup(t *testing.T) {
@@ -122,7 +145,7 @@ func TestCanceledContextAbortsScript(t *testing.T) {
 	decision, err := authorizer.AuthorizeRequest(ctx, spinRequest())
 	assert.Error(t, err)
 	assert.NotEqual(t, authorization.Allow, decision.Effect)
-	assert.Less(t, time.Since(started), maxExecutionTime)
+	assert.Less(t, time.Since(started), DefaultMaxExecutionTime)
 }
 
 func TestXPCallKeepsStandardSemantics(t *testing.T) {

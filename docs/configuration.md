@@ -27,6 +27,7 @@
 | `PITHOS_CREDENTIALS_[N]_PRINCIPAL_ID` | Required stable principal ID for the Nth credential | - |
 | `PITHOS_AUTHORIZER_PATH` | Path to the Lua authorization script | `./authorizer.lua` |
 | `PITHOS_AUTHORIZER_TYPE` | Authorization backend: `lua` or `policy` | `lua` |
+| `PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS` | Maximum Lua execution time per authorization; must be positive | `250` |
 | `PITHOS_POLICY_PATH` | Path to the policy JSON file in policy mode | `./policies.json` |
 | `PITHOS_POLICY_RELOAD_INTERVAL_SECONDS` | Policy refresh interval; `0` loads only at startup | `5` |
 | `PITHOS_TRUST_FORWARDED_HEADERS` | Trust proxy forwarding headers for `clientIP` and `scheme` (`X-Forwarded-For`, `X-Forwarded-Proto`, `CF-Connecting-IP`) | `false` |
@@ -40,7 +41,8 @@ The provider settings may also be set with the `-credentialsProvider`,
 The credential values themselves are never accepted as arguments.
 
 Authorization settings have matching `-authorizerType`, `-authorizerPath`,
-`-policyPath`, and `-policyReloadIntervalSeconds` flags. See
+`-authorizerTimeoutMilliseconds`, `-policyPath`, and
+`-policyReloadIntervalSeconds` flags. See
 [Policy Authorization](policy-authorization.md) for the supported language and
 operation matrix.
 
@@ -275,7 +277,9 @@ and the base functions `dofile`, `loadfile`, and `load` are removed, so a
 script cannot read files or compile code at runtime.
 
 Each evaluation, including the script's top-level code, is limited to 250 ms
-of Lua execution and is also aborted when the client disconnects. An aborted
+of Lua execution (`PITHOS_AUTHORIZER_TIMEOUT_MILLISECONDS`) and is also
+aborted when the client disconnects. The limit cannot be disabled: `0` and
+negative values fail startup. An aborted
 script denies the request, even if it catches the error with `pcall` or
 `xpcall`; a script whose top-level code exceeds the limit fails startup. Time
 spent inside a single library call (for example one `string.rep` or pattern

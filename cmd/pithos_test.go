@@ -73,13 +73,13 @@ func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing-authorizer.lua")
 
 	t.Run("enabled requires a script", func(t *testing.T) {
-		authorizer, err := loadRequestAuthorizer(missingPath, true, false, nil)
+		authorizer, err := loadRequestAuthorizer(missingPath, true, lua.Options{})
 		require.ErrorIs(t, err, os.ErrNotExist)
 		require.Nil(t, authorizer)
 	})
 
 	t.Run("disabled remains permissive", func(t *testing.T) {
-		authorizer, err := loadRequestAuthorizer(missingPath, false, false, nil)
+		authorizer, err := loadRequestAuthorizer(missingPath, false, lua.Options{})
 		require.NoError(t, err)
 		allowed, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("read error auth=%v", enabled), func(t *testing.T) {
-			authorizer, err := loadRequestAuthorizer(t.TempDir(), enabled, false, nil)
+			authorizer, err := loadRequestAuthorizer(t.TempDir(), enabled, lua.Options{})
 			require.Error(t, err)
 			require.Nil(t, authorizer)
 		})
@@ -96,7 +96,7 @@ func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 			t.Run(fmt.Sprintf("invalid script auth=%v/%s", enabled, code), func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "authorizer.lua")
 				require.NoError(t, os.WriteFile(path, []byte(code), 0600))
-				_, err := loadRequestAuthorizer(path, enabled, false, nil)
+				_, err := loadRequestAuthorizer(path, enabled, lua.Options{})
 				require.Error(t, err)
 			})
 		}
@@ -105,11 +105,44 @@ func TestLoadRequestAuthorizerFailsClosed(t *testing.T) {
 	t.Run("explicit deny script remains effective", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "authorizer.lua")
 		require.NoError(t, os.WriteFile(path, []byte(`function authorizeRequest(r) return false end`), 0600))
-		authorizer, err := loadRequestAuthorizer(path, true, false, nil)
+		authorizer, err := loadRequestAuthorizer(path, true, lua.Options{})
 		require.NoError(t, err)
 		d, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{})
 		require.NoError(t, err)
 		require.Equal(t, authorization.ExplicitDeny, d.Effect)
+	})
+}
+
+func TestLoadConfiguredRequestAuthorizerTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "authorizer.lua")
+	require.NoError(t, os.WriteFile(path, []byte(`
+	function authorizeRequest(r)
+	  if r.bucket == "spin" then
+	    while true do end
+	  end
+	  return true
+	end
+	`), 0600))
+
+	for _, timeout := range []string{"0", "-1"} {
+		t.Run("rejects "+timeout, func(t *testing.T) {
+			configured, err := settings.LoadSettings([]string{"-authorizerPath", path, "-authorizerTimeoutMilliseconds", timeout})
+			require.NoError(t, err)
+			_, err = loadConfiguredRequestAuthorizer(configured, true)
+			require.ErrorContains(t, err, "authorizer timeout must be a positive number of milliseconds")
+		})
+	}
+
+	t.Run("applies the configured limit", func(t *testing.T) {
+		configured, err := settings.LoadSettings([]string{"-authorizerPath", path, "-authorizerTimeoutMilliseconds", "20"})
+		require.NoError(t, err)
+		authorizer, err := loadConfiguredRequestAuthorizer(configured, true)
+		require.NoError(t, err)
+		started := time.Now()
+		decision, err := authorizer.AuthorizeRequest(context.Background(), &authorization.Request{Bucket: aws.String("spin")})
+		require.Error(t, err)
+		assert.NotEqual(t, authorization.Allow, decision.Effect)
+		assert.Less(t, time.Since(started), lua.DefaultMaxExecutionTime)
 	})
 }
 

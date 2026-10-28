@@ -419,10 +419,20 @@ func loadConfiguredRequestAuthorizer(configured *settings.Settings, authenticati
 	if !strings.EqualFold(configured.AuthorizerType(), "lua") {
 		return nil, fmt.Errorf("unknown authorizer type %q", configured.AuthorizerType())
 	}
-	return loadRequestAuthorizer(configured.AuthorizerPath(), authenticationEnabled, configured.TrustForwardedHeaders(), configured.TrustedProxyCIDRs())
+	// Zero would select the default and negative values are rejected, so
+	// neither can turn the limit off.
+	timeoutMilliseconds := configured.AuthorizerTimeoutMilliseconds()
+	if timeoutMilliseconds <= 0 {
+		return nil, fmt.Errorf("authorizer timeout must be a positive number of milliseconds, got %d", timeoutMilliseconds)
+	}
+	return loadRequestAuthorizer(configured.AuthorizerPath(), authenticationEnabled, lua.Options{
+		TrustForwardedHeaders: configured.TrustForwardedHeaders(),
+		TrustedProxyCIDRs:     configured.TrustedProxyCIDRs(),
+		MaxExecutionTime:      time.Duration(timeoutMilliseconds) * time.Millisecond,
+	})
 }
 
-func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, trustForwardedHeaders bool, trustedProxyCIDRs []string) (authorization.RequestAuthorizer, error) {
+func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, options lua.Options) (authorization.RequestAuthorizer, error) {
 	authorizerCode, err := os.ReadFile(authorizerPath)
 	if err != nil {
 		if authenticationEnabled || !errors.Is(err, os.ErrNotExist) {
@@ -431,10 +441,7 @@ func loadRequestAuthorizer(authorizerPath string, authenticationEnabled bool, tr
 		slog.Warn("No authorizer.lua found and authentication is disabled — using permissive development authorizer (all requests will be allowed)")
 		authorizerCode = []byte(defaultAuthorizationCode)
 	}
-	return lua.NewLuaAuthorizerWithOptions(string(authorizerCode), lua.Options{
-		TrustForwardedHeaders: trustForwardedHeaders,
-		TrustedProxyCIDRs:     trustedProxyCIDRs,
-	})
+	return lua.NewLuaAuthorizerWithOptions(string(authorizerCode), options)
 }
 
 func validatePolicy(args []string) error {

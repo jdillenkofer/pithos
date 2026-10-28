@@ -23,6 +23,7 @@ const monitoringPortEnabledEnvKey = envKeyPrefix + "_MONITORING_PORT_ENABLED"
 const storageJsonPathEnvKey = envKeyPrefix + "_STORAGE_JSON_PATH"
 const authorizerPathEnvKey = envKeyPrefix + "_AUTHORIZER_PATH"
 const authorizerTypeEnvKey = envKeyPrefix + "_AUTHORIZER_TYPE"
+const authorizerTimeoutMillisecondsEnvKey = envKeyPrefix + "_AUTHORIZER_TIMEOUT_MILLISECONDS"
 const policyPathEnvKey = envKeyPrefix + "_POLICY_PATH"
 const policyReloadIntervalSecondsEnvKey = envKeyPrefix + "_POLICY_RELOAD_INTERVAL_SECONDS"
 const spoolDirEnvKey = envKeyPrefix + "_SPOOL_DIR"
@@ -97,6 +98,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 	storageJsonPath := getStringFromEnv(storageJsonPathEnvKey)
 	authorizerPath := getStringFromEnv(authorizerPathEnvKey)
 	authorizerType := getStringFromEnv(authorizerTypeEnvKey)
+	authorizerTimeoutMilliseconds := getIntFromEnv(authorizerTimeoutMillisecondsEnvKey)
 	policyPath := getStringFromEnv(policyPathEnvKey)
 	policyReloadIntervalSeconds := getIntFromEnv(policyReloadIntervalSecondsEnvKey)
 	spoolDir := getStringFromEnv(spoolDirEnvKey)
@@ -124,6 +126,7 @@ func loadSettingsFromEnv() (*Settings, error) {
 		storageJsonPath:                  storageJsonPath,
 		authorizerPath:                   authorizerPath,
 		authorizerType:                   authorizerType,
+		authorizerTimeoutMilliseconds:    authorizerTimeoutMilliseconds,
 		policyPath:                       policyPath,
 		policyReloadIntervalSeconds:      policyReloadIntervalSeconds,
 		spoolDir:                         spoolDir,
