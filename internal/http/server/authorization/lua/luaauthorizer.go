@@ -105,6 +105,61 @@ func removeUnsafeBaseFunctions(L *lua.State) {
 	}
 }
 
+// maxExecutionTime bounds a single policy evaluation, including the top-level
+// chunk, so a runaway script cannot pin a request goroutine indefinitely.
+const maxExecutionTime = 250 * time.Millisecond
+
+// deadlineCheckInstructions is how many Lua instructions run between deadline
+// checks. The hook only fires while Lua code runs, not inside Go functions.
+const deadlineCheckInstructions = 1000
+
+var errExecutionTimeLimitExceeded = errors.New("authorization script exceeded execution time limit")
+
+// setExecutionDeadline aborts the script once the deadline passes or ctx is
+// canceled. After the first abort the hook fires on every instruction, so a
+// script that catches the error with pcall is aborted again by the first
+// instruction it runs outside the protected call.
+func setExecutionDeadline(ctx context.Context, L *lua.State, deadline time.Time) {
+	var hook lua.Hook
+	hook = func(L *lua.State, _ lua.Debug) {
+		err := ctx.Err()
+		if err == nil && time.Now().After(deadline) {
+			err = errExecutionTimeLimitExceeded
+		}
+		if err != nil {
+			lua.SetDebugHook(L, hook, lua.MaskCount, 1)
+			lua.Errorf(L, "%s", err.Error())
+		}
+	}
+	lua.SetDebugHook(L, hook, lua.MaskCount, deadlineCheckInstructions)
+}
+
+// deferredHandlerXPCall replaces the base xpcall. go-lua runs a message
+// handler while unwinding an error, and an error raised by the execution
+// deadline hook leaves hooks disabled until the protected call returns, so a
+// looping handler could never be interrupted. This version calls the handler
+// after the protected call has returned, with hooks active again. Without the
+// debug library a handler cannot observe the difference.
+func deferredHandlerXPCall(L *lua.State) int {
+	lua.CheckType(L, 2, lua.TypeFunction)
+	argCount := L.Top() - 2
+	// Move the handler below the function: [f, h, args...] -> [h, f, args...].
+	L.PushValue(2)
+	L.Remove(2)
+	L.Insert(1)
+	if err := L.ProtectedCall(argCount, lua.MultipleReturns, 0); err == nil {
+		L.PushBoolean(true)
+		L.Insert(2)
+		return L.Top() - 1
+	}
+	// The stack is [h, error]. An error raised by the handler itself replaces
+	// the original error, matching xpcall's status-false result.
+	L.ProtectedCall(1, 1, 0)
+	L.PushBoolean(false)
+	L.Insert(-2)
+	return 2
+}
+
 func getHeaderValuesCaseInsensitive(headers map[string][]string, key string) []string {
 	canonicalKey := textproto.CanonicalMIMEHeaderKey(key)
 	if values, ok := headers[canonicalKey]; ok {
@@ -324,6 +379,8 @@ func (authorizer *LuaAuthorizer) callAuthorizerFunction(ctx context.Context, fun
 	lua.Require(L, "math", lua.MathOpen, true)
 	L.Pop(1)
 	removeUnsafeBaseFunctions(L)
+	L.Register("xpcall", deferredHandlerXPCall)
+	setExecutionDeadline(ctx, L, time.Now().Add(maxExecutionTime))
 	err := L.Load(bytes.NewReader(authorizer.chunk), authorizer.code, "b")
 	if err == nil {
 		err = L.ProtectedCall(0, lua.MultipleReturns, 0)

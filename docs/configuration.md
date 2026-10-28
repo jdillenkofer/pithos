@@ -274,6 +274,15 @@ libraries. The `io`, `os`, `package`, and `debug` libraries are not available,
 and the base functions `dofile`, `loadfile`, and `load` are removed, so a
 script cannot read files or compile code at runtime.
 
+Each evaluation, including the script's top-level code, is limited to 250 ms
+of Lua execution and is also aborted when the client disconnects. An aborted
+script denies the request, even if it catches the error with `pcall` or
+`xpcall`; a script whose top-level code exceeds the limit fails startup. Time
+spent inside a single library call (for example one `string.rep` or pattern
+match) is not interrupted, so keep inputs to such calls bounded. `xpcall`
+message handlers run after the failed call has unwound rather than at the
+point of the error.
+
 Malformed query strings and repeated query parameters are rejected with HTTP
 400 (`InvalidArgument`) before authentication and before Lua runs. Each query
 parameter therefore has at most one value, shared by authorization and the
