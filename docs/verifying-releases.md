@@ -56,3 +56,15 @@ cosign verify-blob \
 ```sh
 sha256sum -c checksums.txt --ignore-missing
 ```
+
+## Build Environment
+
+Each release includes a `build-info.txt` file, covered by `checksums.txt` and
+its signature. For every binary it records the runner image, the C compiler,
+the linker flags and the output of `go version -m` (Go version, build
+settings, commit and all module versions). For the container image it records
+the BuildKit version, the base images and the digest of each platform image.
+
+Release builds use `-trimpath` and the commit time as build date, so
+rebuilding a tag with the same toolchain produces the same binary. The C
+toolchains are not pinned, which is why `build-info.txt` records them.
