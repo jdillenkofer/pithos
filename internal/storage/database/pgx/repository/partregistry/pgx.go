@@ -28,7 +28,7 @@ const (
 	findRegistryForCondemnStmt      = "SELECT ref_count,version,unreferenced_at FROM part_registry WHERE part_id=$1 FOR UPDATE"
 	condemnStmt                     = "UPDATE part_registry SET orphaned = $1, version = version + 1, updated_at = $2 WHERE part_id = $3 AND version = $4"
 	forgetStmt                      = "DELETE FROM part_registry WHERE part_id = $1 AND orphaned AND ref_count = $2"
-	findUnreferencedStmt            = "SELECT part_id, part_store_name FROM part_registry WHERE ref_count = $1 AND part_id > $2 AND (unreferenced_at IS NULL OR unreferenced_at < $3) ORDER BY part_id LIMIT $4"
+	findUnreferencedStmt            = "SELECT part_id, part_store_name FROM part_registry WHERE ref_count = 0 AND part_id > $1 AND (unreferenced_at IS NULL OR unreferenced_at < $2) ORDER BY part_id LIMIT $3"
 	countPartsByPartIdStmt          = "SELECT COUNT(*) FROM parts WHERE part_id=$1"
 )
 
@@ -202,12 +202,15 @@ func (pr *postgresRepository) Forget(ctx context.Context, tx *sql.Tx, id partsto
 	return n == 1, err
 }
 
+// FindUnreferenced keeps ref_count = 0 as a literal in its statement: only
+// then may the planner use the partial index for prepared statements, as
+// PostgreSQL's generic plans cannot prove a bound parameter matches it.
 func (pr *postgresRepository) FindUnreferenced(ctx context.Context, tx *sql.Tx, cutoff time.Time, after *partstore.PartId, limit int) ([]partregistry.Unreferenced, error) {
 	afterId := ""
 	if after != nil {
 		afterId = after.String()
 	}
-	rows, err := tx.QueryContext(ctx, findUnreferencedStmt, 0, afterId, cutoff.UTC(), limit)
+	rows, err := tx.QueryContext(ctx, findUnreferencedStmt, afterId, cutoff.UTC(), limit)
 	if err != nil {
 		return nil, err
 	}
