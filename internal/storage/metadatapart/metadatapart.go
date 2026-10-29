@@ -118,12 +118,14 @@ type metadataPartStorage struct {
 
 const defaultGCGraceWindow = 30 * time.Minute
 const defaultGCInterval = 30 * time.Minute
+const defaultGCFullPassInterval = 24 * time.Hour
 
 type StorageOption func(*storageOptions) error
 
 type storageOptions struct {
-	gcGraceWindow time.Duration
-	gcInterval    time.Duration
+	gcGraceWindow      time.Duration
+	gcInterval         time.Duration
+	gcFullPassInterval time.Duration
 }
 
 // WithGCGraceWindow retains dereferenced parts and separately protects young orphans.
@@ -138,7 +140,20 @@ func WithGCGraceWindow(window time.Duration) StorageOption {
 	}
 }
 
-// WithGCInterval schedules garbage collection even when no new writes occur.
+// WithGCFullPassInterval schedules the full GC pass, which lists every part
+// store and reconciles the part registry. It also runs at startup.
+func WithGCFullPassInterval(interval time.Duration) StorageOption {
+	return func(options *storageOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("GC full pass interval must be positive")
+		}
+		options.gcFullPassInterval = interval
+		return nil
+	}
+}
+
+// WithGCInterval schedules the GC sweep of unreferenced parts even when no
+// new writes occur.
 func WithGCInterval(interval time.Duration) StorageOption {
 	return func(options *storageOptions) error {
 		if interval <= 0 {
@@ -183,7 +198,7 @@ func NewStorage(db database.Database, metadataStore metadatastore.MetadataStore,
 // storage class (falling back to defaultPartStore), reads resolve the store
 // recorded per part.
 func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatastore.MetadataStore, defaultPartStore partstore.PartStore, extraPartStores map[string]partstore.PartStore, storageClassToPartStore map[string]string, optionFns ...StorageOption) (storage.Storage, error) {
-	options := storageOptions{gcGraceWindow: defaultGCGraceWindow, gcInterval: defaultGCInterval}
+	options := storageOptions{gcGraceWindow: defaultGCGraceWindow, gcInterval: defaultGCInterval, gcFullPassInterval: defaultGCFullPassInterval}
 	for _, option := range optionFns {
 		if err := option(&options); err != nil {
 			return nil, err
@@ -215,7 +230,7 @@ func NewStorageWithNamedPartStores(db database.Database, metadataStore metadatas
 	if err != nil {
 		return nil, err
 	}
-	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow, options.gcInterval)
+	partGC, err := gc.New(db, metadataStore, partStores, partRegistryRepository, partDedupIndexRepository, options.gcGraceWindow, options.gcInterval, options.gcFullPassInterval)
 	if err != nil {
 		return nil, err
 	}

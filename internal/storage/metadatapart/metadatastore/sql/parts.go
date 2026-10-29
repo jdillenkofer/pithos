@@ -61,15 +61,24 @@ func (sms *sqlMetadataStore) removePartRowsByObjectIdAndSequenceNumber(ctx conte
 }
 
 func (sms *sqlMetadataStore) savePartRows(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, parts []metadatastore.Part, sequenceOffset int) error {
-	newIds := []partstore.PartId{}
+	newRefs := map[partstore.PartId]*partregistry.Ref{}
 	for i, p := range parts {
 		entity := part.Entity{PartId: p.Id, ObjectId: objectId, ETag: p.ETag, ChecksumCRC32: p.ChecksumCRC32, ChecksumCRC32C: p.ChecksumCRC32C, ChecksumCRC64NVME: p.ChecksumCRC64NVME, ChecksumSHA1: p.ChecksumSHA1, ChecksumSHA256: p.ChecksumSHA256, Size: p.Size, SequenceNumber: sequenceOffset + i, PartStoreName: p.StoreName}
 		if err := sms.partRepository.SavePart(ctx, tx, &entity); err != nil {
 			return err
 		}
-		if !p.RefPreAcquired {
-			newIds = append(newIds, p.Id)
+		if p.RefPreAcquired {
+			continue
+		}
+		if ref, ok := newRefs[p.Id]; ok {
+			ref.Delta++
+		} else {
+			newRefs[p.Id] = &partregistry.Ref{PartId: p.Id, Delta: 1, StoreName: p.StoreName}
 		}
 	}
-	return sms.partRegistryRepository.RegisterParts(ctx, tx, partregistry.RefsFromPartIds(newIds))
+	refs := make([]partregistry.Ref, 0, len(newRefs))
+	for _, ref := range newRefs {
+		refs = append(refs, *ref)
+	}
+	return sms.partRegistryRepository.RegisterParts(ctx, tx, refs)
 }

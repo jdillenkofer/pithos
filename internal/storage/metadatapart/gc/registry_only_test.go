@@ -63,14 +63,17 @@ func TestRegistryOnlyCleanupPreservesNamedStoreRetention(t *testing.T) {
 	}
 	age()
 	require.NoError(t, env.collector.runGC())
-	// The failed post-commit delete must not be mistaken for an absent ID and
-	// re-observed by registry-only cleanup in the same collection.
+	// The sweep only deletes in the recorded (default) store; the copy in the
+	// named store is left alone.
 	assertState(0, false, true)
-	require.NoError(t, env.collector.runGC())
-	assertState(1, false, true)
+	// The full pass tracks the untracked copy as an orphan of its own store
+	// and the following sweep starts its retention.
 	require.NoError(t, env.collector.runGC())
 	assertState(1, true, true)
 	age()
+	require.NoError(t, env.collector.runGC())
+	// The injected failure keeps the condemned row for a retry.
+	assertState(1, true, true)
 	require.NoError(t, env.collector.runGC())
 	assertState(0, false, false)
 }

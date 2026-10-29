@@ -105,6 +105,12 @@ func TestOrphanedRowLifecycle(t *testing.T) {
 		require.True(t, ok)
 		rows, err = repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
+		require.Len(t, rows, 1, "condemned rows stay until the part is deleted")
+		ok, err = repo.Forget(ctx, tx, id)
+		require.NoError(t, err)
+		require.True(t, ok)
+		rows, err = repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
 		require.Empty(t, rows)
 		return nil
 	})

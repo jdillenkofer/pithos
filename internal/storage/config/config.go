@@ -76,6 +76,7 @@ type MetadataPartStorageConfiguration struct {
 	Notifications     *MetadataPartNotificationConfiguration `json:"notifications,omitempty"`
 	GCGraceWindowSecs *internalConfig.Int64Provider          `json:"gcGraceWindowSeconds,omitempty"`
 	GCIntervalSecs    *internalConfig.Int64Provider          `json:"gcIntervalSeconds,omitempty"`
+	GCFullPassSecs    *internalConfig.Int64Provider          `json:"gcFullPassIntervalSeconds,omitempty"`
 	internalConfig.DynamicJsonType
 }
 
@@ -353,6 +354,13 @@ func (m *MetadataPartStorageConfiguration) Instantiate(diProvider dependencyinje
 			return nil, fmt.Errorf("gcIntervalSeconds must be positive")
 		}
 		options = append(options, metadatapart.WithGCInterval(time.Duration(seconds)*time.Second))
+	}
+	if m.GCFullPassSecs != nil {
+		seconds := m.GCFullPassSecs.Value()
+		if seconds <= 0 {
+			return nil, fmt.Errorf("gcFullPassIntervalSeconds must be positive")
+		}
+		options = append(options, metadatapart.WithGCFullPassInterval(time.Duration(seconds)*time.Second))
 	}
 	innerStorage, err := metadatapart.NewStorageWithNamedPartStores(db, metadataStore, partStore, extraPartStores, m.StorageClassToPartStore, options...)
 	if err != nil {

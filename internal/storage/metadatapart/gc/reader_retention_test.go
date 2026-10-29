@@ -84,22 +84,21 @@ func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
 			retryStore.fail = true
 			require.NoError(t, env.collector.runGC())
 			assertPresent(true) // Condemnation committed, external delete failed.
-			for range 2 {
-				require.NoError(t, env.collector.runGC())
-				assertPresent(true)
-				require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
-					ok, err := env.registryRepo.TryAddReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
-					require.NoError(t, err)
-					require.False(t, ok, "orphan retry marker must not resurrect condemned ids")
-					return nil
-				}))
-			}
 			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
-				_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at=$1 WHERE part_id=$2", time.Now().UTC().Add(-time.Hour), id.String())
-				return err
+				ok, err := env.registryRepo.TryAddReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
+				require.NoError(t, err)
+				require.False(t, ok, "a condemned row must not resurrect its id")
+				return nil
 			}))
+			// The condemned row survives the failed delete, so the next sweep
+			// retries it without starting a new retention window.
 			require.NoError(t, env.collector.runGC())
 			assertPresent(false)
+			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+				rows, err := env.registryRepo.FindAllEntities(ctx, tx.SqlTx())
+				require.Empty(t, rows)
+				return err
+			}))
 		})
 	}
 }

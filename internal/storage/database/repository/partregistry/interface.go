@@ -19,8 +19,9 @@ import (
 // records a physical part without registry row (an interrupted write or a
 // failed post-condemn deletion) until GC may delete it after retention.
 type Repository interface {
-	// RegisterParts inserts registry rows for freshly created part ids.
-	// Refs are processed in ascending part-id order.
+	// RegisterParts inserts registry rows for freshly created part ids and
+	// records the store holding each part, so GC can reclaim it without
+	// listing stores. Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	// TryAddReferences increments ref_count and clears unreferenced_at.
 	// A condemned (deleted registry row) or orphaned part is never
@@ -43,15 +44,33 @@ type Repository interface {
 	// Condemn must run in a fresh GC write transaction (not a metadata mutation
 	// transaction or an ambient reader snapshot). The first committed-zero
 	// observation starts retention; only later observations may condemn.
-	// Missing rows become orphaned rows so failed deletion retries cannot
-	// resurrect a previously condemned id.
+	// A condemned row stays orphaned until Forget, so a failed physical
+	// deletion is retried by the next sweep and the id is never resurrected.
+	// Missing rows become orphaned rows for the same reason.
 	Condemn(ctx context.Context, tx *sql.Tx, partId partstore.PartId, cutoff time.Time) (bool, error)
+	// Forget deletes a condemned row once its physical part is gone.
+	Forget(ctx context.Context, tx *sql.Tx, partId partstore.PartId) (bool, error)
+	// FindUnreferenced returns up to limit zero-reference rows after the given
+	// part id, in ascending part-id order, skipping rows still in retention.
+	FindUnreferenced(ctx context.Context, tx *sql.Tx, cutoff time.Time, after *partstore.PartId, limit int) ([]Unreferenced, error)
+	// TrackOrphan inserts an orphaned row for a physical part in storeName
+	// that has neither a registry row nor metadata references.
+	TrackOrphan(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) (bool, error)
 }
 
-// Ref is a reference-count change for one part id.
+// Ref is a reference-count change for one part id. StoreName is only used
+// by RegisterParts; nil means the default store.
 type Ref struct {
-	PartId partstore.PartId
-	Delta  int64
+	PartId    partstore.PartId
+	Delta     int64
+	StoreName *string
+}
+
+// Unreferenced is a zero-reference registry row and the store holding its
+// part; nil means the default store.
+type Unreferenced struct {
+	PartId    partstore.PartId
+	StoreName *string
 }
 
 type Entity struct {
