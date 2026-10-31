@@ -221,10 +221,25 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 			assertApiError(t, err, "InvalidPart")
 		})
 
-		t.Run("it should reject completing a multipart upload that omits an uploaded part"+testSuffix, func(t *testing.T) {
+		t.Run("it should complete a multipart upload from the listed parts only"+testSuffix, func(t *testing.T) {
 			s3Client, uploadId, completedParts := setupUpload(t)
-			err := completeUpload(s3Client, uploadId, completedParts[:1])
-			assertApiError(t, err, "InvalidPart")
+			err := completeUpload(s3Client, uploadId, completedParts[1:])
+			require.NoError(t, err)
+			getObjectResult, err := s3Client.GetObject(context.Background(), &s3.GetObjectInput{
+				Bucket: bucketName,
+				Key:    key,
+			})
+			require.NoError(t, err)
+			defer getObjectResult.Body.Close()
+			content, err := io.ReadAll(getObjectResult.Body)
+			require.NoError(t, err)
+			assert.Equal(t, "part 2 content", string(content))
+		})
+
+		t.Run("it should reject completing a multipart upload with an empty part list"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, _ := setupUpload(t)
+			err := completeUpload(s3Client, uploadId, []types.CompletedPart{})
+			assertApiError(t, err, "MalformedXML")
 		})
 
 		t.Run("it should reject completing a multipart upload with parts out of order"+testSuffix, func(t *testing.T) {
@@ -300,6 +315,9 @@ func TestMultipartUpload(t *testing.T) {
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: uploadPartResult.ETag},
+				}},
 			})
 			if err != nil {
 				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
@@ -559,6 +577,7 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult)
+			part2ETag := uploadPartResult.ETag
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
@@ -572,11 +591,16 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult)
+			part1ETag := uploadPartResult.ETag
 
 			completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: part1ETag},
+					{PartNumber: aws.Int32(2), ETag: part2ETag},
+				}},
 			})
 			if err != nil {
 				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
@@ -909,6 +933,7 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult)
+			part2ETag := uploadPartResult.ETag
 
 			uploadPartResult, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
@@ -922,11 +947,16 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult)
+			part1ETag := uploadPartResult.ETag
 
 			completeMultipartUploadResult, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: uploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: part1ETag},
+					{PartNumber: aws.Int32(2), ETag: part2ETag},
+				}},
 			})
 			if err != nil {
 				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
@@ -961,6 +991,7 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult2)
+			part2ETag2 := uploadPartResult2.ETag
 
 			uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
@@ -974,11 +1005,16 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult2)
+			part1ETag2 := uploadPartResult2.ETag
 
 			completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: uploadId2,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: part1ETag2},
+					{PartNumber: aws.Int32(2), ETag: part2ETag2},
+				}},
 			})
 			if err != nil {
 				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
@@ -1102,6 +1138,7 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult2)
+			part2ETag2 := uploadPartResult2.ETag
 
 			uploadPartResult2, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
@@ -1115,11 +1152,16 @@ func TestMultipartUpload(t *testing.T) {
 				assert.Fail(t, "UploadPart failed", "err %v", err)
 			}
 			assert.NotNil(t, uploadPartResult2)
+			part1ETag2 := uploadPartResult2.ETag
 
 			completeMultipartUploadResult2, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: uploadId2,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: part1ETag2},
+					{PartNumber: aws.Int32(2), ETag: part2ETag2},
+				}},
 			})
 			if err != nil {
 				assert.Fail(t, "CompleteMultipartUpload failed", "err %v", err)
@@ -1170,6 +1212,7 @@ func TestMultipartUpload(t *testing.T) {
 			assert.Nil(t, err)
 			assert.NotNil(t, initialPut.ETag)
 
+			partETags := map[string]*string{}
 			prepareUpload := func(payload []byte) *string {
 				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 					Bucket: bucketName,
@@ -1182,7 +1225,7 @@ func TestMultipartUpload(t *testing.T) {
 					return nil
 				}
 
-				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				uploadOut, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 					Bucket:     bucketName,
 					Key:        key,
 					UploadId:   createOut.UploadId,
@@ -1193,6 +1236,7 @@ func TestMultipartUpload(t *testing.T) {
 					return nil
 				}
 
+				partETags[*createOut.UploadId] = uploadOut.ETag
 				return createOut.UploadId
 			}
 
@@ -1217,7 +1261,10 @@ func TestMultipartUpload(t *testing.T) {
 						Bucket:   bucketName,
 						Key:      key,
 						UploadId: uploadIDs[i],
-						IfMatch:  initialPut.ETag,
+						MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+							{PartNumber: aws.Int32(1), ETag: partETags[*uploadIDs[i]]},
+						}},
+						IfMatch: initialPut.ETag,
 					})
 				}(i)
 			}
@@ -1249,6 +1296,7 @@ func TestMultipartUpload(t *testing.T) {
 			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
 			assert.Nil(t, err)
 
+			partETags := map[string]*string{}
 			prepareUpload := func(payload []byte) *string {
 				createOut, createErr := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
 					Bucket: bucketName,
@@ -1261,7 +1309,7 @@ func TestMultipartUpload(t *testing.T) {
 					return nil
 				}
 
-				_, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+				uploadOut, uploadErr := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 					Bucket:     bucketName,
 					Key:        key,
 					UploadId:   createOut.UploadId,
@@ -1272,6 +1320,7 @@ func TestMultipartUpload(t *testing.T) {
 					return nil
 				}
 
+				partETags[*createOut.UploadId] = uploadOut.ETag
 				return createOut.UploadId
 			}
 
@@ -1293,9 +1342,12 @@ func TestMultipartUpload(t *testing.T) {
 					defer wg.Done()
 					<-start
 					_, errs[i] = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
-						Bucket:      bucketName,
-						Key:         key,
-						UploadId:    uploadIDs[i],
+						Bucket:   bucketName,
+						Key:      key,
+						UploadId: uploadIDs[i],
+						MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+							{PartNumber: aws.Int32(1), ETag: partETags[*uploadIDs[i]]},
+						}},
 						IfNoneMatch: aws.String("*"),
 					})
 				}(i)

@@ -229,6 +229,7 @@ var s3ErrorMappings = []struct {
 	{ErrMissingContentLength, http.StatusLengthRequired, ""},
 	{storage.ErrInvalidPart, 400, ""},
 	{storage.ErrInvalidPartOrder, 400, ""},
+	{storage.ErrMalformedXML, 400, ""},
 	{storage.ErrEntityTooLarge, 400, ""},
 	{storage.ErrTooManyParts, 400, ""},
 	{storage.ErrInvalidTag, 400, ""},

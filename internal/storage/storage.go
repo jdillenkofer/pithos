@@ -505,6 +505,7 @@ var ErrNoSuchKey error = metadatastore.ErrNoSuchKey
 var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrInvalidPart error = metadatastore.ErrInvalidPart
 var ErrInvalidPartOrder error = metadatastore.ErrInvalidPartOrder
+var ErrMalformedXML error = metadatastore.ErrMalformedXML
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrPreconditionFailed error = metadatastore.ErrPreconditionFailed

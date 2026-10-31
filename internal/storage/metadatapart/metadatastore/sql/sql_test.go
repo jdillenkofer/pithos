@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestValidateCompleteMultipartUploadParts(t *testing.T) {
+func TestSelectCompleteMultipartUploadParts(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 
 	checksumCRC32 := "AAAAAA=="
@@ -28,6 +28,7 @@ func TestValidateCompleteMultipartUploadParts(t *testing.T) {
 	tests := []struct {
 		name          string
 		declaredParts []metadatastore.CompleteMultipartUploadPart
+		wantNumbers   []int
 		wantErr       error
 	}{
 		{
@@ -36,6 +37,12 @@ func TestValidateCompleteMultipartUploadParts(t *testing.T) {
 				{PartNumber: 1, ETag: "etag-1", ChecksumCRC32: &checksumCRC32},
 				{PartNumber: 2, ETag: "\"etag-2\""},
 			},
+			wantNumbers: []int{1, 2},
+		},
+		{
+			name:          "empty manifest",
+			declaredParts: []metadatastore.CompleteMultipartUploadPart{},
+			wantErr:       metadatastore.ErrMalformedXML,
 		},
 		{
 			name: "wrong etag",
@@ -62,11 +69,18 @@ func TestValidateCompleteMultipartUploadParts(t *testing.T) {
 			wantErr: metadatastore.ErrInvalidPart,
 		},
 		{
-			name: "omitted uploaded part",
+			name: "omitted first uploaded part",
+			declaredParts: []metadatastore.CompleteMultipartUploadPart{
+				{PartNumber: 2, ETag: "etag-2"},
+			},
+			wantNumbers: []int{2},
+		},
+		{
+			name: "omitted last uploaded part",
 			declaredParts: []metadatastore.CompleteMultipartUploadPart{
 				{PartNumber: 1, ETag: "etag-1"},
 			},
-			wantErr: metadatastore.ErrInvalidPart,
+			wantNumbers: []int{1},
 		},
 		{
 			name: "out of order parts",
@@ -80,9 +94,14 @@ func TestValidateCompleteMultipartUploadParts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCompleteMultipartUploadParts(tt.declaredParts, storedParts)
+			selectedParts, err := selectCompleteMultipartUploadParts(tt.declaredParts, storedParts)
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
+				numbers := make([]int, len(selectedParts))
+				for i, selectedPart := range selectedParts {
+					numbers[i] = selectedPart.SequenceNumber
+				}
+				assert.Equal(t, tt.wantNumbers, numbers)
 			} else {
 				assert.ErrorIs(t, err, tt.wantErr)
 			}

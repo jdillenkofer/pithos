@@ -583,7 +583,7 @@ func TestBucketVersioning(t *testing.T) {
 			assert.NotNil(t, createOut)
 			assert.NotNil(t, createOut.UploadId)
 
-			_, err = s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+			uploadPartOut, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
 				Bucket:     bucketName,
 				Key:        key,
 				UploadId:   createOut.UploadId,
@@ -596,6 +596,9 @@ func TestBucketVersioning(t *testing.T) {
 				Bucket:   bucketName,
 				Key:      key,
 				UploadId: createOut.UploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{Parts: []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: uploadPartOut.ETag},
+				}},
 			})
 			assert.Nil(t, err)
 			assert.NotNil(t, completeOut)
