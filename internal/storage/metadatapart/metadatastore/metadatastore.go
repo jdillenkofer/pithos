@@ -454,8 +454,9 @@ type MaintenanceStore interface {
 	GetInUsePartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 	GetInUsePartIdCounts(ctx context.Context, tx *sql.Tx) (map[partstore.PartId]int64, error)
 	TryAddPartReferences(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (bool, error)
-	// RegisterUnreferencedPart records a written part that no metadata
-	// references, so GC reclaims it from storeName after retention.
+	// RegisterUnreferencedPart records a written part that metadata never
+	// referenced, so the next GC sweep reclaims it from storeName. A part
+	// that is already registered is left untouched.
 	RegisterUnreferencedPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) error
 	LookupDedupPart(ctx context.Context, tx *sql.Tx, partStoreName, checksumSHA256 string, size int64) (*PartDedupEntry, error)
 	TryIndexDedupPart(ctx context.Context, tx *sql.Tx, entry PartDedupEntry) (bool, error)

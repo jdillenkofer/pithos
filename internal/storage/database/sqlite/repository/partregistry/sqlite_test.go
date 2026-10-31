@@ -184,3 +184,53 @@ func TestUpdateRefCount(t *testing.T) {
 		return nil
 	})
 }
+
+func TestRegisterUnreferencedIsCondemnedByFirstSweep(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	db, repo, cleanup := setupRepository(t)
+	defer cleanup()
+
+	partId := mustNewPartId(t)
+
+	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
+		require.NoError(t, repo.RegisterUnreferenced(ctx, tx, partId, nil))
+		// The part was never referenced, so no retention applies.
+		condemned, err := repo.Condemn(ctx, tx, partId, time.Now().UTC().Add(-time.Hour))
+		require.NoError(t, err)
+		assert.True(t, condemned)
+		return nil
+	})
+}
+
+func TestRegisterUnreferencedKeepsExistingRow(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	db, repo, cleanup := setupRepository(t)
+	defer cleanup()
+
+	referencedPartId := mustNewPartId(t)
+	orphanPartId := mustNewPartId(t)
+
+	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
+		require.NoError(t, repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: referencedPartId, Delta: 1}}))
+		tracked, err := repo.TrackOrphan(ctx, tx, orphanPartId, nil)
+		require.NoError(t, err)
+		require.True(t, tracked)
+
+		require.NoError(t, repo.RegisterUnreferenced(ctx, tx, referencedPartId, nil))
+		require.NoError(t, repo.RegisterUnreferenced(ctx, tx, orphanPartId, nil))
+
+		entities, err := repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
+		require.Len(t, entities, 2)
+		for _, entity := range entities {
+			assert.Nil(t, entity.UnreferencedAt)
+			if entity.PartId == referencedPartId {
+				assert.Equal(t, int64(1), entity.RefCount)
+				assert.False(t, entity.Orphaned)
+			} else {
+				assert.True(t, entity.Orphaned)
+			}
+		}
+		return nil
+	})
+}

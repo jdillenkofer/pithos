@@ -23,6 +23,11 @@ type Repository interface {
 	// records the store holding each part, so GC can reclaim it without
 	// listing stores. Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
+	// RegisterUnreferenced records a part in storeName that metadata never
+	// referenced. No reader can hold such a part, so its retention has
+	// already expired and the next sweep may delete it. An existing row is
+	// left untouched.
+	RegisterUnreferenced(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) error
 	// TryAddReferences increments ref_count and clears unreferenced_at.
 	// An orphaned part (condemned, or missing its registry row) is never
 	// resurrected. It returns false as soon as a guard fails; earlier

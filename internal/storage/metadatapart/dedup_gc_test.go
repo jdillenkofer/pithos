@@ -14,8 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A deduplicated write never deletes its fresh duplicate itself; GC reclaims
-// it after retention while the shared part stays live.
+// A deduplicated write never deletes its fresh duplicate itself; the next GC
+// sweep reclaims it without retention, as no reader can hold it, while the
+// shared part stays live.
 func TestDedupDuplicateIsReclaimedByGC(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	for _, backend := range []string{"sqlite", "postgres"} {
@@ -33,7 +34,7 @@ func TestDedupDuplicateIsReclaimedByGC(t *testing.T) {
 			require.NoError(t, err)
 			dedup, err := repositoryfactory.NewPartDedupIndexRepository(st.db)
 			require.NoError(t, err)
-			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, 100*time.Millisecond, 5*time.Millisecond)
+			collector, err := gc.New(st.db, st.metadataStore, st.partStores, registry, dedup, time.Hour, 5*time.Millisecond)
 			require.NoError(t, err)
 
 			bucket := storage.MustNewBucketName("bucket")
