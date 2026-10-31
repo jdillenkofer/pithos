@@ -101,9 +101,11 @@ func prepareSshServerWithShaping(t testing.TB, usePassword bool, shapeable bool)
 			hc.CapAdd = append(hc.CapAdd, "NET_ADMIN")
 		}
 	}
-	opensshServerContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
+	opensshServerContainer, err := testutils.RunContainer(func() (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
 	})
 	defer testcontainers.CleanupContainer(t, opensshServerContainer)
 	assert.Nil(t, err)

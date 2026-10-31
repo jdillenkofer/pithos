@@ -132,8 +132,10 @@ func newPostgresGCTestEnv(t *testing.T) *gcTestEnv {
 	testutils.SkipOnWindowsInGitHubActions(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, testutils.PostgresImage,
-		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	container, err := testutils.RunContainer(func() (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, testutils.PostgresImage,
+			postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
 	dbURL, err := container.ConnectionString(ctx)

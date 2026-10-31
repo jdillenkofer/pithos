@@ -16,11 +16,13 @@ func setupPostgresContainer(ctx context.Context) (*postgres.PostgresContainer, e
 	username := "postgres"
 	password := "postgres"
 	dbname := "postgres"
-	postgresContainer, err := postgres.Run(ctx, testutils.PostgresImage,
-		postgres.WithUsername(username),
-		postgres.WithPassword(password),
-		postgres.WithDatabase(dbname),
-		postgres.BasicWaitStrategies())
+	postgresContainer, err := testutils.RunContainer(func() (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, testutils.PostgresImage,
+			postgres.WithUsername(username),
+			postgres.WithPassword(password),
+			postgres.WithDatabase(dbname),
+			postgres.BasicWaitStrategies())
+	})
 	if err != nil {
 		return nil, err
 	}
