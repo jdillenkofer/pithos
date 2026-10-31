@@ -228,9 +228,65 @@ func TestRegisterUnreferencedKeepsExistingRow(t *testing.T) {
 				assert.Equal(t, int64(1), entity.RefCount)
 				assert.False(t, entity.Orphaned)
 			} else {
-				assert.True(t, entity.Orphaned)
+				assert.False(t, entity.Orphaned)
 			}
 		}
+		return nil
+	})
+}
+
+func TestRegisterPartsAdoptsTrackedRow(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	db, repo, cleanup := setupRepository(t)
+	defer cleanup()
+
+	partId := mustNewPartId(t)
+	storeName := "cold"
+
+	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
+		tracked, err := repo.TrackOrphan(ctx, tx, partId, nil)
+		require.NoError(t, err)
+		require.True(t, tracked)
+		// The first sweep observation starts retention, but does not condemn.
+		condemned, err := repo.Condemn(ctx, tx, partId, time.Now().UTC().Add(-time.Hour))
+		require.NoError(t, err)
+		require.False(t, condemned)
+
+		require.NoError(t, repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 2, StoreName: &storeName}}))
+		entities, err := repo.FindAllEntities(ctx, tx)
+		require.NoError(t, err)
+		require.Len(t, entities, 1)
+		assert.Equal(t, int64(2), entities[0].RefCount)
+		assert.Nil(t, entities[0].UnreferencedAt)
+		assert.False(t, entities[0].Orphaned)
+		unreferenced, err := repo.FindUnreferenced(ctx, tx, time.Now().UTC().Add(time.Hour), nil, 10)
+		require.NoError(t, err)
+		assert.Empty(t, unreferenced)
+		return nil
+	})
+}
+
+func TestRegisterPartsFailsForCondemnedPart(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	db, repo, cleanup := setupRepository(t)
+	defer cleanup()
+
+	condemnedPartId := mustNewPartId(t)
+	referencedPartId := mustNewPartId(t)
+
+	withWriteTx(t, db, func(ctx context.Context, tx *sql.Tx) error {
+		require.NoError(t, repo.RegisterUnreferenced(ctx, tx, condemnedPartId, nil))
+		condemned, err := repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(-time.Hour))
+		require.NoError(t, err)
+		require.True(t, condemned)
+		require.NoError(t, repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: referencedPartId, Delta: 1}}))
+
+		// The part may already be deleted, so the write must not reference it.
+		err = repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: condemnedPartId, Delta: 1}})
+		require.ErrorIs(t, err, partregistry.ErrPartCondemned)
+		// A live row is never overwritten by a colliding registration.
+		err = repo.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: referencedPartId, Delta: 1}})
+		require.ErrorIs(t, err, partregistry.ErrPartCondemned)
 		return nil
 	})
 }

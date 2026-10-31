@@ -3,6 +3,7 @@ package partregistry
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 	"time"
 
@@ -15,13 +16,15 @@ import (
 // serializes the last-reference race on Postgres (SQLite writes are already
 // fully serialized). The invariant at every commit point is
 // ref_count == COUNT(*) FROM parts WHERE part_id = X.
-// An orphaned row has no metadata references and must never gain any: it
-// records a physical part without registry row (an interrupted write or a
-// failed post-condemn deletion) until GC may delete it after retention.
+// An orphaned row has no metadata references and must never gain any: GC
+// condemned its part, or found no registry row while condemning, and the row
+// stays until the part is deleted.
 type Repository interface {
 	// RegisterParts inserts registry rows for freshly created part ids and
 	// records the store holding each part, so GC can reclaim it without
-	// listing stores. Refs are processed in ascending part-id order.
+	// listing stores. A zero-reference row that GC tracked while the write
+	// was still running is adopted; an orphaned row fails with
+	// ErrPartCondemned. Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	// RegisterUnreferenced records a part in storeName that metadata never
 	// referenced. No reader can hold such a part, so its retention has
@@ -58,10 +61,16 @@ type Repository interface {
 	// FindUnreferenced returns up to limit zero-reference rows after the given
 	// part id, in ascending part-id order, skipping rows still in retention.
 	FindUnreferenced(ctx context.Context, tx *sql.Tx, cutoff time.Time, after *partstore.PartId, limit int) ([]Unreferenced, error)
-	// TrackOrphan inserts an orphaned row for a physical part in storeName
-	// that has neither a registry row nor metadata references.
+	// TrackOrphan inserts a zero-reference row for a physical part in
+	// storeName that has neither a registry row nor metadata references. The
+	// sweep reclaims it after retention unless a write still registers it.
 	TrackOrphan(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) (bool, error)
 }
+
+// ErrPartCondemned reports that RegisterParts found a part GC condemned (the
+// part may already be gone) or a row that already holds references, so the
+// write must fail.
+var ErrPartCondemned = errors.New("part registry: part is condemned or already registered")
 
 // Ref is a reference-count change for one part id. StoreName is only used
 // by RegisterParts; nil means the default store.

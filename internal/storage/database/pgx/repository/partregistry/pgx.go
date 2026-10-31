@@ -15,7 +15,7 @@ type postgresRepository struct {
 }
 
 const (
-	insertPartRegistryStmt          = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, 1, $4, $5)"
+	registerPartStmt                = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, 1, $4, $4) ON CONFLICT(part_id) DO UPDATE SET ref_count = excluded.ref_count, part_store_name = excluded.part_store_name, version = part_registry.version + 1, updated_at = excluded.updated_at, unreferenced_at = NULL WHERE part_registry.ref_count = 0 AND NOT part_registry.orphaned"
 	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND NOT orphaned"
 	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND ref_count >= $1"
 	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version, unreferenced_at, orphaned FROM part_registry"
@@ -39,9 +39,16 @@ func NewRepository() (partregistry.Repository, error) {
 func (pr *postgresRepository) RegisterParts(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) error {
 	now := time.Now().UTC()
 	for _, ref := range partregistry.SortRefs(refs) {
-		_, err := tx.ExecContext(ctx, insertPartRegistryStmt, ref.PartId.String(), ref.Delta, ref.StoreName, now, now)
+		r, err := tx.ExecContext(ctx, registerPartStmt, ref.PartId.String(), ref.Delta, ref.StoreName, now)
 		if err != nil {
 			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("%w: %s", partregistry.ErrPartCondemned, ref.PartId.String())
 		}
 	}
 	return nil
@@ -233,7 +240,7 @@ func (pr *postgresRepository) TrackOrphan(ctx context.Context, tx *sql.Tx, id pa
 	if err := tx.QueryRowContext(ctx, countPartsByPartIdStmt, id.String()).Scan(&live); err != nil || live != 0 {
 		return false, err
 	}
-	r, err := tx.ExecContext(ctx, insertOrphanStmt, id.String(), 0, true, storeName, time.Now().UTC())
+	r, err := tx.ExecContext(ctx, insertOrphanStmt, id.String(), 0, false, storeName, time.Now().UTC())
 	if err != nil {
 		return false, err
 	}
