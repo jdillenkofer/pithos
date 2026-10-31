@@ -165,11 +165,13 @@ func declaredPartChecksumMatches(declared *string, stored *string) bool {
 	return *declared == *stored
 }
 
-// validateCompleteMultipartUploadParts checks the client-declared completion
-// manifest against the uploaded parts loaded in this transaction.
-func validateCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity) error {
+// selectCompleteMultipartUploadParts checks the client-declared completion
+// manifest against the uploaded parts loaded in this transaction and returns
+// the declared parts in manifest order. Uploaded parts missing from the
+// manifest are not part of the object, as in S3.
+func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity) ([]part.Entity, error) {
 	if len(declaredParts) == 0 {
-		return nil
+		return nil, metadatastore.ErrMalformedXML
 	}
 
 	storedPartsByNumber := map[int32]part.Entity{}
@@ -177,33 +179,60 @@ func validateCompleteMultipartUploadParts(declaredParts []metadatastore.Complete
 		storedPartsByNumber[int32(storedPart.SequenceNumber)] = storedPart
 	}
 
+	selectedParts := make([]part.Entity, 0, len(declaredParts))
 	previousPartNumber := int32(0)
 	for _, declaredPart := range declaredParts {
 		if declaredPart.PartNumber <= previousPartNumber {
-			return metadatastore.ErrInvalidPartOrder
+			return nil, metadatastore.ErrInvalidPartOrder
 		}
 		previousPartNumber = declaredPart.PartNumber
 
 		storedPart, ok := storedPartsByNumber[declaredPart.PartNumber]
 		if !ok {
-			return metadatastore.ErrInvalidPart
+			return nil, metadatastore.ErrInvalidPart
 		}
 		if declaredPart.ETag != "" && trimETagQuotes(declaredPart.ETag) != trimETagQuotes(storedPart.ETag) {
-			return metadatastore.ErrInvalidPart
+			return nil, metadatastore.ErrInvalidPart
 		}
 		if !declaredPartChecksumMatches(declaredPart.ChecksumCRC32, storedPart.ChecksumCRC32) ||
 			!declaredPartChecksumMatches(declaredPart.ChecksumCRC32C, storedPart.ChecksumCRC32C) ||
 			!declaredPartChecksumMatches(declaredPart.ChecksumCRC64NVME, storedPart.ChecksumCRC64NVME) ||
 			!declaredPartChecksumMatches(declaredPart.ChecksumSHA1, storedPart.ChecksumSHA1) ||
 			!declaredPartChecksumMatches(declaredPart.ChecksumSHA256, storedPart.ChecksumSHA256) {
-			return metadatastore.ErrInvalidPart
+			return nil, metadatastore.ErrInvalidPart
+		}
+		selectedParts = append(selectedParts, storedPart)
+	}
+
+	return selectedParts, nil
+}
+
+// releaseUnusedMultipartParts deletes the rows of uploaded parts that are not
+// in the completed object, so GC reclaims their data, and renumbers the kept
+// parts to 1..n. Kept parts are processed in ascending order and unused rows
+// are deleted first, so no renumbered row collides with an existing one.
+func (sms *sqlMetadataStore) releaseUnusedMultipartParts(ctx context.Context, tx *sql.Tx, objectId ulid.ULID, storedParts []part.Entity, selectedParts []part.Entity) error {
+	selectedNumbers := make(map[int]struct{}, len(selectedParts))
+	for _, selectedPart := range selectedParts {
+		selectedNumbers[selectedPart.SequenceNumber] = struct{}{}
+	}
+	for _, storedPart := range storedParts {
+		if _, ok := selectedNumbers[storedPart.SequenceNumber]; ok {
+			continue
+		}
+		if err := sms.removePartRowsByObjectIdAndSequenceNumber(ctx, tx, objectId, storedPart.SequenceNumber); err != nil {
+			return err
 		}
 	}
-
-	if len(declaredParts) != len(storedPartsByNumber) {
-		return metadatastore.ErrInvalidPart
+	for i := range selectedParts {
+		if selectedParts[i].SequenceNumber == i+1 {
+			continue
+		}
+		selectedParts[i].SequenceNumber = i + 1
+		if err := sms.partRepository.SavePart(ctx, tx, &selectedParts[i]); err != nil {
+			return err
+		}
 	}
-
 	return nil
 }
 
@@ -237,16 +266,26 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		checksumType = *objectEntity.ChecksumType
 	}
 
-	// Validate SequenceNumbers and calculate totalSize
-	var totalSize int64 = 0
-	parts := make([]checksumutils.PartChecksums, len(partEntities))
-
-	for i, partEntity := range partEntities {
-		if i+1 != partEntity.SequenceNumber {
-			return nil, metadatastore.ErrUploadWithInvalidSequenceNumber
+	selectedParts := partEntities
+	if opts != nil && opts.Parts != nil {
+		selectedParts, err = selectCompleteMultipartUploadParts(opts.Parts, partEntities)
+		if err != nil {
+			return nil, err
 		}
-		totalSize += partEntity.Size
+	} else {
+		// Without a manifest every uploaded part is completed, which requires
+		// consecutive part numbers.
+		for i, partEntity := range partEntities {
+			if i+1 != partEntity.SequenceNumber {
+				return nil, metadatastore.ErrUploadWithInvalidSequenceNumber
+			}
+		}
+	}
 
+	var totalSize int64 = 0
+	parts := make([]checksumutils.PartChecksums, len(selectedParts))
+	for i, partEntity := range selectedParts {
+		totalSize += partEntity.Size
 		parts[i] = checksumutils.PartChecksums{
 			ETag:              partEntity.ETag,
 			ChecksumCRC32:     partEntity.ChecksumCRC32,
@@ -255,12 +294,6 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			ChecksumSHA1:      partEntity.ChecksumSHA1,
 			ChecksumSHA256:    partEntity.ChecksumSHA256,
 			Size:              partEntity.Size,
-		}
-	}
-
-	if opts != nil {
-		if err = validateCompleteMultipartUploadParts(opts.Parts, partEntities); err != nil {
-			return nil, err
 		}
 	}
 
@@ -400,6 +433,10 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		if err := sms.saveObjectLock(ctx, tx, *objectEntity.Id, effectiveLock); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := sms.releaseUnusedMultipartParts(ctx, tx, *objectEntity.Id, partEntities, selectedParts); err != nil {
+		return nil, err
 	}
 
 	objectEntity.UploadStatus = object.UploadStatusCompleted

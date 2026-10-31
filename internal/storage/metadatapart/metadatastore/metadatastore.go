@@ -309,6 +309,7 @@ var ErrNoSuchUpload error = errors.New("NoSuchUpload")
 var ErrBadDigest error = errors.New("BadDigest")
 var ErrInvalidPart error = errors.New("InvalidPart")
 var ErrInvalidPartOrder error = errors.New("InvalidPartOrder")
+var ErrMalformedXML error = errors.New("MalformedXML")
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
@@ -443,10 +444,11 @@ type CompleteMultipartUploadOptions struct {
 	// IfNoneMatchStar, when true, requires that no object currently exists at the key;
 	// otherwise ErrPreconditionFailed is returned (HTTP 412).
 	IfNoneMatchStar bool
-	// Parts is the client-declared multipart completion manifest. When present,
-	// each declared part must match an uploaded part by number, ETag, and any
-	// supplied checksums. The manifest must be strictly ordered and include every
-	// uploaded part because this storage layer completes all uploaded parts.
+	// Parts is the client-declared multipart completion manifest. When non-nil,
+	// it must be non-empty and strictly ordered, and each declared part must
+	// match an uploaded part by number, ETag, and any supplied checksums. Only
+	// the declared parts form the object; the others are released for GC.
+	// When nil, all uploaded parts are completed.
 	Parts []CompleteMultipartUploadPart
 }
 

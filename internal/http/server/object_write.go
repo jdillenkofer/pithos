@@ -183,20 +183,17 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		handleError(err, w, r)
 		return
 	}
-	if len(data) > 0 {
-		completeMultipartUploadRequest := CompleteMultipartUploadRequest{}
-		err = xml.Unmarshal(data, &completeMultipartUploadRequest)
-		if err != nil {
-			handleError(err, w, r)
-			return
-		}
-		if len(completeMultipartUploadRequest.Parts) > 0 {
-			if completeOpts == nil {
-				completeOpts = &storage.CompleteMultipartUploadOptions{}
-			}
-			completeOpts.Parts = mapCompleteMultipartUploadParts(completeMultipartUploadRequest.Parts)
-		}
+	// S3 rejects a completion without a parts manifest; only the listed parts
+	// form the object.
+	completeMultipartUploadRequest := CompleteMultipartUploadRequest{}
+	if len(data) == 0 || xml.Unmarshal(data, &completeMultipartUploadRequest) != nil || len(completeMultipartUploadRequest.Parts) == 0 {
+		writeMalformedXML(w, r)
+		return
 	}
+	if completeOpts == nil {
+		completeOpts = &storage.CompleteMultipartUploadOptions{}
+	}
+	completeOpts.Parts = mapCompleteMultipartUploadParts(completeMultipartUploadRequest.Parts)
 
 	slog.InfoContext(r.Context(), "CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, completeOpts)
