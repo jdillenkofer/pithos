@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -28,6 +29,7 @@ var gcMetrics struct {
 	duration                 *prometheus.HistogramVec
 	lastSuccess              *prometheus.GaugeVec
 	drift, unknownStoreParts prometheus.Gauge
+	oldestOpenTransaction    prometheus.Gauge
 }
 
 const (
@@ -56,8 +58,9 @@ func registerGCMetrics() {
 		gcMetrics.deleteFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "delete_failures_total", Help: "Number of failed post-commit part deletions by part store, retried by the next sweep"}, []string{"store"})
 		gcMetrics.repairs = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "repairs_total", Help: "Number of part registry and dedup index entries repaired by full passes"}, []string{"kind"})
 		gcMetrics.unknownStoreParts = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "unknown_store_parts", Help: "Number of unreferenced parts the latest sweep skipped because their part store is not configured"})
+		gcMetrics.oldestOpenTransaction = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "oldest_open_transaction_age_seconds", Help: "Age of the oldest open database transaction seen by the latest full pass; untracked parts are only tracked once they are older than it plus the grace window"})
 	})
-	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift, gcMetrics.lastSuccess, gcMetrics.deleteFailures, gcMetrics.repairs, gcMetrics.unknownStoreParts)
+	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift, gcMetrics.lastSuccess, gcMetrics.deleteFailures, gcMetrics.repairs, gcMetrics.unknownStoreParts, gcMetrics.oldestOpenTransaction)
 }
 
 type PartGarbageCollector interface {
@@ -345,6 +348,16 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	}
 	gcMetrics.repairs.WithLabelValues(repairDedupPruned).Add(float64(pruned))
 	gcMetrics.repairs.WithLabelValues(repairDedupBackfilled).Add(float64(backfilled))
+	// Taken before listing the stores: a part listed later either is older
+	// than every transaction open now, or was created after this point.
+	trackCutoff, err := partGC.untrackedPartCutoff(ctx, cutoff)
+	if errors.Is(err, database.ErrOpenTransactionsNotVisible) {
+		slog.Warn("skipping orphan tracking: open transactions are not visible; grant the database role pg_read_all_stats or use one role for all instances", "error", err)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 	registered := make(map[partstore.PartId]struct{})
 	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		rows, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
@@ -367,9 +380,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 				return err
 			}
 			for _, id := range ids {
-				// Young parts may belong to a metadata transaction that has
-				// not committed yet.
-				if _, ok := registered[id]; !ok && id.CreatedAt().Before(cutoff) {
+				if _, ok := registered[id]; !ok && id.CreatedAt().Before(trackCutoff) {
 					untracked = append(untracked, id)
 				}
 			}
@@ -404,6 +415,31 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection tracked %d orphaned parts", numTrackedOrphans))
 	return nil
+}
+
+// untrackedPartCutoff returns the creation time before which an untracked
+// part cannot belong to a transaction that may still register it. A part is
+// created inside the transaction that registers it, and external stores
+// publish it before that transaction commits, so a long transaction that
+// stores several parts (a storage class transition, a cross-store copy)
+// exposes its first parts early. Parts older than every open transaction
+// are abandoned. cutoff keeps the grace window as tolerance for clock skew
+// between instances.
+func (partGC *partGC) untrackedPartCutoff(ctx context.Context, cutoff time.Time) (time.Time, error) {
+	reporter, ok := partGC.db.(database.OpenTransactionReporter)
+	if !ok {
+		return time.Time{}, fmt.Errorf("%w: database cannot report open transactions", database.ErrOpenTransactionsNotVisible)
+	}
+	age, open, err := reporter.OldestOpenTransactionAge(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !open {
+		gcMetrics.oldestOpenTransaction.Set(0)
+		return cutoff, nil
+	}
+	gcMetrics.oldestOpenTransaction.Set(age.Seconds())
+	return cutoff.Add(-age), nil
 }
 
 // runSweepWithContext reclaims zero-reference registry rows. Its cost is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"fmt"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -80,6 +81,27 @@ func (d *pgxDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (*databa
 		return nil, err
 	}
 	return database.NewTxController(tx, d, readOnly), nil
+}
+
+const oldestOpenTransactionStmt = "SELECT COUNT(*) FILTER (WHERE state IS NULL), EXTRACT(EPOCH FROM clock_timestamp() - MIN(xact_start))::FLOAT8 FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+
+// OldestOpenTransactionAge reads pg_stat_activity, so it sees the
+// transactions of every instance sharing the database. Sessions of other
+// roles hide their state unless the role has pg_read_all_stats; then the
+// answer is unknown. The age is measured on the database clock.
+func (d *pgxDatabase) OldestOpenTransactionAge(ctx context.Context) (time.Duration, bool, error) {
+	var hidden int64
+	var seconds sql.NullFloat64
+	if err := d.DB.QueryRowContext(ctx, oldestOpenTransactionStmt).Scan(&hidden, &seconds); err != nil {
+		return 0, false, err
+	}
+	if hidden > 0 {
+		return 0, false, fmt.Errorf("%w: %d sessions", database.ErrOpenTransactionsNotVisible, hidden)
+	}
+	if !seconds.Valid {
+		return 0, false, nil
+	}
+	return time.Duration(seconds.Float64 * float64(time.Second)), true, nil
 }
 
 func (d *pgxDatabase) GetDatabaseType() database.DatabaseType {

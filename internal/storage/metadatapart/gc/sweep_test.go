@@ -201,6 +201,84 @@ func TestWriteRegistersPartTrackedByFullPass(t *testing.T) {
 	})
 }
 
+func TestFullPassLeavesPartsOfOpenTransactions(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	forEachGCBackend(t, func(t *testing.T, env *gcTestEnv) {
+		ctx := context.Background()
+		fs, err := filesystem.New(t.TempDir())
+		require.NoError(t, err)
+		require.NoError(t, fs.Start(ctx))
+		t.Cleanup(func() { require.NoError(t, fs.Stop(ctx)) })
+		env.collector.partStores, err = partstore.NewNamedPartStores(env.physicalStore, map[string]partstore.PartStore{"cold": fs}, nil)
+		require.NoError(t, err)
+		env.collector.graceWindow = 50 * time.Millisecond
+
+		// A long transaction, such as a storage class transition, published
+		// its first part longer than the grace window ago and is still
+		// writing the next ones.
+		tx, err := env.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: false})
+		require.NoError(t, err)
+		txCtx := database.ContextWithTx(ctx, tx)
+		time.Sleep(100 * time.Millisecond)
+		id := *partstore.MustNewPartIdFromString(ulid.Make().String())
+		require.NoError(t, fs.PutPart(ctx, nil, id, bytes.NewBufferString("first part")))
+		time.Sleep(100 * time.Millisecond)
+
+		gcDone := make(chan error, 1)
+		go func() {
+			// Every GC step that could reclaim the part runs before the
+			// transaction commits.
+			err := env.collector.runFullPassWithContext(ctx)
+			if err == nil {
+				err = env.collector.runSweepWithContext(ctx)
+			}
+			if err == nil {
+				err = database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+					_, err := tx.SqlTx().ExecContext(ctx, "UPDATE part_registry SET unreferenced_at = $1 WHERE unreferenced_at IS NOT NULL", time.Now().UTC().Add(-time.Hour))
+					return err
+				})
+			}
+			if err == nil {
+				err = env.collector.runSweepWithContext(ctx)
+			}
+			gcDone <- err
+		}()
+		if env.db.GetDatabaseType() == database.DB_TYPE_POSTGRES {
+			// Postgres runs GC next to the open transaction.
+			require.NoError(t, <-gcDone)
+		}
+		coldName := "cold"
+		bucket, key := metadatastore.MustNewBucketName("bucket"), metadatastore.MustNewObjectKey("key")
+		require.NoError(t, env.metadataStore.CreateBucket(txCtx, tx.SqlTx(), bucket))
+		require.NoError(t, env.metadataStore.PutObject(txCtx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 10, Parts: []metadatastore.Part{{Id: id, Size: 10, StoreName: &coldName}}}, nil))
+		require.NoError(t, tx.Commit(ctx))
+		if env.db.GetDatabaseType() != database.DB_TYPE_POSTGRES {
+			// SQLite serializes GC's writes behind the transaction.
+			require.NoError(t, <-gcDone)
+		}
+		require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			rows, err := env.registryRepo.FindAllEntities(ctx, tx.SqlTx())
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.EqualValues(t, 1, rows[0].RefCount)
+			ids, err := fs.GetPartIds(ctx, tx)
+			require.Equal(t, []partstore.PartId{id}, ids)
+			return err
+		}))
+
+		// Once no transaction is open, an abandoned part is tracked again.
+		abandoned := *partstore.MustNewPartIdFromString(ulid.Make().String())
+		require.NoError(t, fs.PutPart(ctx, nil, abandoned, bytes.NewBufferString("abandoned")))
+		time.Sleep(100 * time.Millisecond)
+		require.NoError(t, env.collector.runFullPassWithContext(ctx))
+		require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			rows, err := env.registryRepo.FindAllEntities(ctx, tx.SqlTx())
+			require.Len(t, rows, 2)
+			return err
+		}))
+	})
+}
+
 func TestMetadataWritesRecordPartStore(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	forEachGCBackend(t, func(t *testing.T, env *gcTestEnv) {
