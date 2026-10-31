@@ -22,15 +22,24 @@ import (
 
 var gcMetricsOnce sync.Once
 var gcMetrics struct {
-	runs, errors     *prometheus.CounterVec
-	deleted, orphans prometheus.Counter
-	duration         *prometheus.HistogramVec
-	drift            prometheus.Gauge
+	runs, errors             *prometheus.CounterVec
+	deleted, orphans         prometheus.Counter
+	deleteFailures, repairs  *prometheus.CounterVec
+	duration                 *prometheus.HistogramVec
+	lastSuccess              *prometheus.GaugeVec
+	drift, unknownStoreParts prometheus.Gauge
 }
 
 const (
 	passSweep = "sweep"
 	passFull  = "full"
+)
+
+const (
+	repairRegistryRestored  = "registry_restored"
+	repairRegistryRecounted = "registry_recounted"
+	repairDedupPruned       = "dedup_pruned"
+	repairDedupBackfilled   = "dedup_backfilled"
 )
 
 const gcBatchSize = 256
@@ -43,8 +52,12 @@ func registerGCMetrics() {
 		gcMetrics.orphans = prometheus.NewCounter(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "tracked_orphans_total", Help: "Number of untracked physical parts registered as orphans by full passes"})
 		gcMetrics.errors = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "errors_total", Help: "Number of garbage collection errors by pass"}, []string{"pass"})
 		gcMetrics.drift = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "part_registry_drift", Help: "Number of part registry rows requiring reconciliation"})
+		gcMetrics.lastSuccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "last_success_timestamp_seconds", Help: "Unix timestamp of the latest successful garbage collection run by pass"}, []string{"pass"})
+		gcMetrics.deleteFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "delete_failures_total", Help: "Number of failed post-commit part deletions by part store, retried by the next sweep"}, []string{"store"})
+		gcMetrics.repairs = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "repairs_total", Help: "Number of part registry and dedup index entries repaired by full passes"}, []string{"kind"})
+		gcMetrics.unknownStoreParts = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: "pithos", Subsystem: "storage_gc", Name: "unknown_store_parts", Help: "Number of unreferenced parts the latest sweep skipped because their part store is not configured"})
 	})
-	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift)
+	pithosmetrics.Register(gcMetrics.runs, gcMetrics.duration, gcMetrics.deleted, gcMetrics.orphans, gcMetrics.errors, gcMetrics.drift, gcMetrics.lastSuccess, gcMetrics.deleteFailures, gcMetrics.repairs, gcMetrics.unknownStoreParts)
 }
 
 type PartGarbageCollector interface {
@@ -251,6 +264,8 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		gcMetrics.duration.WithLabelValues(passFull).Observe(time.Since(started).Seconds())
 		if resultErr != nil {
 			gcMetrics.errors.WithLabelValues(passFull).Inc()
+		} else {
+			gcMetrics.lastSuccess.WithLabelValues(passFull).SetToCurrentTime()
 		}
 	}()
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runFullPass")
@@ -267,17 +282,25 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	gcMetrics.drift.Set(float64(len(observations)))
 	for start := 0; start < len(observations); start += 256 {
 		end := min(start+256, len(observations))
+		var restored, recounted int
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			restored, recounted = 0, 0
 			for _, o := range observations[start:end] {
 				if o.Version == nil {
-					_, err := partGC.partRegistryRepository.RestoreMissing(ctx, tx.SqlTx(), partregistry.Ref{PartId: o.PartId, Delta: o.ActualCount})
+					ok, err := partGC.partRegistryRepository.RestoreMissing(ctx, tx.SqlTx(), partregistry.Ref{PartId: o.PartId, Delta: o.ActualCount})
 					if err != nil {
 						return err
 					}
+					if ok {
+						restored++
+					}
 				} else if o.RefCount == nil || *o.RefCount != o.ActualCount {
-					_, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
+					ok, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
 					if err != nil {
 						return err
+					}
+					if ok {
+						recounted++
 					}
 				}
 			}
@@ -285,8 +308,12 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		}); err != nil {
 			return err
 		}
+		gcMetrics.repairs.WithLabelValues(repairRegistryRestored).Add(float64(restored))
+		gcMetrics.repairs.WithLabelValues(repairRegistryRecounted).Add(float64(recounted))
 	}
 	// Pruning and backfill are idempotent and deliberately isolated from scans.
+	var pruned int
+	var backfilled int64
 	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		indexed, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
 		if err != nil {
@@ -305,11 +332,14 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), dead); err != nil {
 			return err
 		}
-		_, err = partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
+		pruned = len(dead)
+		backfilled, err = partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
 		return err
 	}); err != nil {
 		return err
 	}
+	gcMetrics.repairs.WithLabelValues(repairDedupPruned).Add(float64(pruned))
+	gcMetrics.repairs.WithLabelValues(repairDedupBackfilled).Add(float64(backfilled))
 	registered := make(map[partstore.PartId]struct{})
 	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 		rows, err := partGC.partRegistryRepository.FindAllEntities(ctx, tx.SqlTx())
@@ -345,23 +375,28 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		storeName := recordedStoreName(name)
 		for start := 0; start < len(untracked); start += gcBatchSize {
 			end := min(start+gcBatchSize, len(untracked))
+			var batchTracked int
 			if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+				batchTracked = 0
 				for _, id := range untracked[start:end] {
 					tracked, err := partGC.partRegistryRepository.TrackOrphan(ctx, tx.SqlTx(), id, storeName)
 					if err != nil {
 						return err
 					}
 					if tracked {
-						numTrackedOrphans++
+						batchTracked++
 					}
 				}
 				return nil
 			}); err != nil {
 				return err
 			}
+			// Counted per committed batch, so a failing pass still reports
+			// the orphans it already tracked.
+			gcMetrics.orphans.Add(float64(batchTracked))
+			numTrackedOrphans += batchTracked
 		}
 	}
-	gcMetrics.orphans.Add(float64(numTrackedOrphans))
 	slog.Debug(fmt.Sprintf("Garbage Collection tracked %d orphaned parts", numTrackedOrphans))
 	return nil
 }
@@ -376,12 +411,15 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		gcMetrics.duration.WithLabelValues(passSweep).Observe(time.Since(started).Seconds())
 		if resultErr != nil {
 			gcMetrics.errors.WithLabelValues(passSweep).Inc()
+		} else {
+			gcMetrics.lastSuccess.WithLabelValues(passSweep).SetToCurrentTime()
 		}
 	}()
 	ctx, span := partGC.tracer.Start(ctx, "PartGarbageCollector.runSweep")
 	defer span.End()
 	cutoff := time.Now().UTC().Add(-partGC.graceWindow)
 	numDeletedParts := 0
+	numUnknownStoreParts := 0
 	var after *partstore.PartId
 	for {
 		var candidates []partregistry.Unreferenced
@@ -397,15 +435,19 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		}
 		after = &candidates[len(candidates)-1].PartId
 		type externalDelete struct {
-			id    partstore.PartId
-			store partstore.PartStore
+			id        partstore.PartId
+			store     partstore.PartStore
+			storeName string
 		}
 		var external []externalDelete
+		var batchDeleted, batchUnknownStore int
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+			external, batchDeleted, batchUnknownStore = nil, 0, 0
 			for _, candidate := range candidates {
 				store, err := partGC.partStores.ByName(candidate.StoreName)
 				if err != nil {
 					slog.Warn("skipping unreferenced part of unknown part store", "part_id", candidate.PartId.String(), "error", err)
+					batchUnknownStore++
 					continue
 				}
 				// Condemn rechecks references under the row lock and only
@@ -421,7 +463,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 					return err
 				}
 				if partstore.CapabilitiesOf(store).Has(partstore.CapabilityTxFreeDeletePart) {
-					external = append(external, externalDelete{id: candidate.PartId, store: store})
+					external = append(external, externalDelete{id: candidate.PartId, store: store, storeName: storeLabel(candidate.StoreName)})
 					continue
 				}
 				if err = store.DeletePart(ctx, tx, candidate.PartId); err != nil {
@@ -430,18 +472,22 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 				if _, err = partGC.partRegistryRepository.Forget(ctx, tx.SqlTx(), candidate.PartId); err != nil {
 					return err
 				}
-				numDeletedParts++
+				batchDeleted++
 			}
 			return nil
 		}); err != nil {
 			return err
 		}
+		gcMetrics.deleted.Add(float64(batchDeleted))
+		numDeletedParts += batchDeleted
+		numUnknownStoreParts += batchUnknownStore
 		// External deletes run after the condemnation committed. A failed
 		// delete keeps the condemned row, so the next sweep retries it.
 		var deleted []partstore.PartId
 		for _, d := range external {
 			if err := d.store.DeletePart(ctx, nil, d.id); err != nil {
 				slog.Warn("post-commit part deletion failed; retrying in next GC sweep", "part_id", d.id.String(), "error", err)
+				gcMetrics.deleteFailures.WithLabelValues(d.storeName).Inc()
 				continue
 			}
 			deleted = append(deleted, d.id)
@@ -457,6 +503,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 			}); err != nil {
 				return err
 			}
+			gcMetrics.deleted.Add(float64(len(deleted)))
 			numDeletedParts += len(deleted)
 		}
 		if len(candidates) < gcBatchSize {
@@ -464,8 +511,16 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		}
 	}
 	slog.Debug(fmt.Sprintf("Garbage Collection deleted %d parts", numDeletedParts))
-	gcMetrics.deleted.Add(float64(numDeletedParts))
+	gcMetrics.unknownStoreParts.Set(float64(numUnknownStoreParts))
 	return nil
+}
+
+// storeLabel names the store recorded in a registry row for metric labels.
+func storeLabel(name *string) string {
+	if name == nil {
+		return partstore.DefaultPartStoreName
+	}
+	return *name
 }
 
 // recordedStoreName maps a store name to the value recorded in registry and
