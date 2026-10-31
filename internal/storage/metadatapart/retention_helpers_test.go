@@ -28,9 +28,11 @@ func assertRetainedUnreferencedParts(t *testing.T, st *metadataPartStorage) {
 			var unreferencedAt sql.NullTime
 			require.NoError(t, rows.Scan(&refCount, &unreferencedAt))
 			require.Zero(t, refCount)
-			// Never-referenced parts start out expired; others await a GC observation.
-			if unreferencedAt.Valid {
-				require.True(t, unreferencedAt.Time.Equal(time.Unix(0, 0)), "unexpected GC observation at %v", unreferencedAt.Time)
+			// Never-referenced parts start out expired; others await a GC
+			// observation. The background GC loop may already have observed a
+			// part, which only starts its retention window.
+			if unreferencedAt.Valid && !unreferencedAt.Time.Equal(time.Unix(0, 0)) {
+				require.Less(t, time.Since(unreferencedAt.Time), defaultGCGraceWindow, "retention of part observed at %v already expired", unreferencedAt.Time)
 			}
 		}
 		return rows.Err()
