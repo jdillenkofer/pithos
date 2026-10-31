@@ -306,8 +306,10 @@ func newPostgresTestStorage(t *testing.T) (*metadataPartStorage, func()) {
 	testutils.SkipOnWindowsInGitHubActions(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 	ctx := t.Context()
-	container, err := postgres.Run(ctx, testutils.PostgresImage,
-		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	container, err := testutils.RunContainer(func() (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, testutils.PostgresImage,
+			postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	})
 	require.NoError(t, err)
 	dbURL, err := container.ConnectionString(ctx)
 	require.NoError(t, err)

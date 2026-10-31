@@ -20,7 +20,9 @@ import (
 func newListingPerformanceRepository(t testing.TB) (*sql.Tx, object.Repository) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, testutils.PostgresImage, postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	container, err := testutils.RunContainer(func() (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, testutils.PostgresImage, postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"), postgres.BasicWaitStrategies())
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, container.Terminate(ctx)) })
 	url, err := container.ConnectionString(ctx)
