@@ -279,13 +279,20 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 	}); err != nil {
 		return err
 	}
-	gcMetrics.drift.Set(float64(len(observations)))
-	for start := 0; start < len(observations); start += 256 {
-		end := min(start+256, len(observations))
+	// The reconciliation lists every part, so keep only the drifted rows.
+	var drifted []partregistry.Reconciliation
+	for _, o := range observations {
+		if o.Version == nil || o.RefCount == nil || *o.RefCount != o.ActualCount {
+			drifted = append(drifted, o)
+		}
+	}
+	gcMetrics.drift.Set(float64(len(drifted)))
+	for start := 0; start < len(drifted); start += gcBatchSize {
+		end := min(start+gcBatchSize, len(drifted))
 		var restored, recounted int
 		if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 			restored, recounted = 0, 0
-			for _, o := range observations[start:end] {
+			for _, o := range drifted[start:end] {
 				if o.Version == nil {
 					ok, err := partGC.partRegistryRepository.RestoreMissing(ctx, tx.SqlTx(), partregistry.Ref{PartId: o.PartId, Delta: o.ActualCount})
 					if err != nil {
@@ -294,7 +301,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 					if ok {
 						restored++
 					}
-				} else if o.RefCount == nil || *o.RefCount != o.ActualCount {
+				} else {
 					ok, err := partGC.partRegistryRepository.UpdateRefCount(ctx, tx.SqlTx(), o.PartId, o.ActualCount, *o.Version)
 					if err != nil {
 						return err
@@ -312,8 +319,7 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 		gcMetrics.repairs.WithLabelValues(repairRegistryRecounted).Add(float64(recounted))
 	}
 	// Pruning and backfill are idempotent and deliberately isolated from scans.
-	var pruned int
-	var backfilled int64
+	var pruned, backfilled int64
 	if err := database.WithTx(ctx, partGC.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		indexed, err := partGC.partDedupIndexRepository.FindAllPartIds(ctx, tx.SqlTx())
 		if err != nil {
@@ -329,10 +335,9 @@ func (partGC *partGC) runFullPassWithContext(ctx context.Context) (resultErr err
 				dead = append(dead, id)
 			}
 		}
-		if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), dead); err != nil {
+		if pruned, err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), dead); err != nil {
 			return err
 		}
-		pruned = len(dead)
 		backfilled, err = partGC.partDedupIndexRepository.BackfillFromParts(ctx, tx.SqlTx())
 		return err
 	}); err != nil {
@@ -459,7 +464,7 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 				if !condemned {
 					continue
 				}
-				if err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{candidate.PartId}); err != nil {
+				if _, err = partGC.partDedupIndexRepository.DeleteByPartIds(ctx, tx.SqlTx(), []partstore.PartId{candidate.PartId}); err != nil {
 					return err
 				}
 				if partstore.CapabilitiesOf(store).Has(partstore.CapabilityTxFreeDeletePart) {
@@ -487,7 +492,10 @@ func (partGC *partGC) runSweepWithContext(ctx context.Context) (resultErr error)
 		for _, d := range external {
 			if err := d.store.DeletePart(ctx, nil, d.id); err != nil {
 				slog.Warn("post-commit part deletion failed; retrying in next GC sweep", "part_id", d.id.String(), "error", err)
-				gcMetrics.deleteFailures.WithLabelValues(d.storeName).Inc()
+				// A cancelled sweep is a shutdown, not a store failure.
+				if ctx.Err() == nil {
+					gcMetrics.deleteFailures.WithLabelValues(d.storeName).Inc()
+				}
 				continue
 			}
 			deleted = append(deleted, d.id)

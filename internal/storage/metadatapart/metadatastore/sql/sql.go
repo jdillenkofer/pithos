@@ -275,5 +275,6 @@ func (sms *sqlMetadataStore) TryIndexDedupPart(ctx context.Context, tx *sql.Tx, 
 }
 
 func (sms *sqlMetadataStore) DeletePartDedupEntries(ctx context.Context, tx *sql.Tx, ids []partstore.PartId) error {
-	return sms.partDedupIndexRepository.DeleteByPartIds(ctx, tx, ids)
+	_, err := sms.partDedupIndexRepository.DeleteByPartIds(ctx, tx, ids)
+	return err
 }

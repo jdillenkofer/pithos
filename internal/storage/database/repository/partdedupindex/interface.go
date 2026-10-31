@@ -12,7 +12,8 @@ type Repository interface {
 	GroupByStore(ctx context.Context, tx *sql.Tx) ([]StoreAggregate, error)
 	FindEntry(ctx context.Context, tx *sql.Tx, partStoreName, checksumSHA256 string, size int64) (*Entity, error)
 	TryInsert(ctx context.Context, tx *sql.Tx, entity *Entity) (bool, error)
-	DeleteByPartIds(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) error
+	// DeleteByPartIds returns the number of entries deleted.
+	DeleteByPartIds(ctx context.Context, tx *sql.Tx, partIds []partstore.PartId) (int64, error)
 	FindAllPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error)
 	// BackfillFromParts inserts the index entries missing for live parts rows
 	// that carry the full checksum set: one entry per
