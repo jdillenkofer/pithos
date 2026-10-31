@@ -323,9 +323,14 @@ type UploadPartCopyOptions struct {
 }
 
 type UploadPartCopyResult struct {
-	ETag            string
-	LastModified    time.Time
-	SourceVersionID *string
+	ETag              string
+	LastModified      time.Time
+	SourceVersionID   *string
+	ChecksumCRC32     *string
+	ChecksumCRC32C    *string
+	ChecksumCRC64NVME *string
+	ChecksumSHA1      *string
+	ChecksumSHA256    *string
 }
 
 type InitiateMultipartUploadResult struct {
@@ -506,6 +511,9 @@ var ErrBadDigest error = metadatastore.ErrBadDigest
 var ErrInvalidPart error = metadatastore.ErrInvalidPart
 var ErrInvalidPartOrder error = metadatastore.ErrInvalidPartOrder
 var ErrMalformedXML error = metadatastore.ErrMalformedXML
+
+type MissingPartChecksumError = metadatastore.MissingPartChecksumError
+
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge
 var ErrPreconditionFailed error = metadatastore.ErrPreconditionFailed

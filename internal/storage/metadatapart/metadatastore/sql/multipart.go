@@ -158,6 +158,22 @@ func trimETagQuotes(etag string) string {
 	return strings.Trim(etag, "\"")
 }
 
+func declaredPartChecksum(declaredPart metadatastore.CompleteMultipartUploadPart, algorithm string) *string {
+	switch algorithm {
+	case "CRC32":
+		return declaredPart.ChecksumCRC32
+	case "CRC32C":
+		return declaredPart.ChecksumCRC32C
+	case "CRC64NVME":
+		return declaredPart.ChecksumCRC64NVME
+	case "SHA1":
+		return declaredPart.ChecksumSHA1
+	case "SHA256":
+		return declaredPart.ChecksumSHA256
+	}
+	return nil
+}
+
 func declaredPartChecksumMatches(declared *string, stored *string) bool {
 	if declared == nil || stored == nil {
 		return true
@@ -168,8 +184,9 @@ func declaredPartChecksumMatches(declared *string, stored *string) bool {
 // selectCompleteMultipartUploadParts checks the client-declared completion
 // manifest against the uploaded parts loaded in this transaction and returns
 // the declared parts in manifest order. Uploaded parts missing from the
-// manifest are not part of the object, as in S3.
-func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity) ([]part.Entity, error) {
+// manifest are not part of the object, as in S3. When requiredChecksumAlgorithm
+// is set, every declared part must carry a checksum of that algorithm.
+func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMultipartUploadPart, storedParts []part.Entity, requiredChecksumAlgorithm *string) ([]part.Entity, error) {
 	if len(declaredParts) == 0 {
 		return nil, metadatastore.ErrMalformedXML
 	}
@@ -186,6 +203,9 @@ func selectCompleteMultipartUploadParts(declaredParts []metadatastore.CompleteMu
 			return nil, metadatastore.ErrInvalidPartOrder
 		}
 		previousPartNumber = declaredPart.PartNumber
+		if requiredChecksumAlgorithm != nil && declaredPartChecksum(declaredPart, *requiredChecksumAlgorithm) == nil {
+			return nil, &metadatastore.MissingPartChecksumError{Algorithm: *requiredChecksumAlgorithm, PartNumber: declaredPart.PartNumber}
+		}
 
 		storedPart, ok := storedPartsByNumber[declaredPart.PartNumber]
 		if !ok {
@@ -266,9 +286,16 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		checksumType = *objectEntity.ChecksumType
 	}
 
+	// As in S3, a composite-checksum upload created with an algorithm needs
+	// that algorithm's checksum for every part in the manifest.
+	var requiredChecksumAlgorithm *string
+	if checksumType == metadatastore.ChecksumTypeComposite {
+		requiredChecksumAlgorithm = objectEntity.ChecksumAlgorithm
+	}
+
 	selectedParts := partEntities
 	if opts != nil && opts.Parts != nil {
-		selectedParts, err = selectCompleteMultipartUploadParts(opts.Parts, partEntities)
+		selectedParts, err = selectCompleteMultipartUploadParts(opts.Parts, partEntities, requiredChecksumAlgorithm)
 		if err != nil {
 			return nil, err
 		}

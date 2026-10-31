@@ -446,9 +446,14 @@ func (csm *conditionalStorageMiddleware) UploadPartCopy(ctx context.Context, src
 		return nil, err
 	}
 	return &storage.UploadPartCopyResult{
-		ETag:            uploadResult.ETag,
-		LastModified:    time.Now(),
-		SourceVersionID: srcObject.VersionID,
+		ETag:              uploadResult.ETag,
+		LastModified:      time.Now(),
+		SourceVersionID:   srcObject.VersionID,
+		ChecksumCRC32:     uploadResult.ChecksumCRC32,
+		ChecksumCRC32C:    uploadResult.ChecksumCRC32C,
+		ChecksumCRC64NVME: uploadResult.ChecksumCRC64NVME,
+		ChecksumSHA1:      uploadResult.ChecksumSHA1,
+		ChecksumSHA256:    uploadResult.ChecksumSHA256,
 	}, nil
 }
 
