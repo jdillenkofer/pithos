@@ -150,7 +150,7 @@ func TestFullPassTracksUntrackedPartsWithoutDeleting(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, rows, 1, "young parts may belong to an uncommitted write")
 			require.Equal(t, old, rows[0].PartId)
-			require.True(t, rows[0].Orphaned)
+			require.False(t, rows[0].Orphaned, "a still running write may register a tracked part")
 			ids, err := fs.GetPartIds(ctx, tx)
 			require.ElementsMatch(t, []partstore.PartId{old, young}, ids)
 			return err
@@ -162,6 +162,40 @@ func TestFullPassTracksUntrackedPartsWithoutDeleting(t *testing.T) {
 		require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
 			ids, err := fs.GetPartIds(ctx, tx)
 			require.Equal(t, []partstore.PartId{young}, ids)
+			return err
+		}))
+	})
+}
+
+func TestWriteRegistersPartTrackedByFullPass(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	forEachGCBackend(t, func(t *testing.T, env *gcTestEnv) {
+		ctx := context.Background()
+		// A write that outlives the grace window stored its part, but has not
+		// committed its metadata when the full pass lists the store.
+		id := oldPartId()
+		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+			return env.physicalStore.PutPart(ctx, tx, id, bytes.NewBufferString("slow write"))
+		}))
+		require.NoError(t, env.collector.runFullPassWithContext(ctx))
+
+		bucket, key := metadatastore.MustNewBucketName("bucket"), metadatastore.MustNewObjectKey("key")
+		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+			require.NoError(t, env.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucket))
+			return env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 10, Parts: []metadatastore.Part{{Id: id, Size: 10}}}, nil)
+		}))
+		require.NoError(t, env.collector.runSweepWithContext(ctx))
+		ageUnreferenced(t, env)
+		require.NoError(t, env.collector.runSweepWithContext(ctx))
+		require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			rows, err := env.registryRepo.FindAllEntities(ctx, tx.SqlTx())
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.EqualValues(t, 1, rows[0].RefCount)
+			require.False(t, rows[0].Orphaned)
+			require.Nil(t, rows[0].UnreferencedAt)
+			ids, err := env.physicalStore.GetPartIds(ctx, tx)
+			require.Equal(t, []partstore.PartId{id}, ids)
 			return err
 		}))
 	})
