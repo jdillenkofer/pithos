@@ -248,6 +248,70 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 			assertApiError(t, err, "InvalidPartOrder")
 		})
 
+		// setupChecksumUpload is setupUpload for an upload created with a
+		// checksum algorithm and type; the returned parts carry no checksums.
+		setupChecksumUpload := func(t *testing.T, algorithm types.ChecksumAlgorithm, checksumType types.ChecksumType) (*s3.Client, *string, []types.CompletedPart, []*s3.UploadPartOutput) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+				Bucket: bucketName,
+			})
+			require.NoError(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{
+				Bucket:            bucketName,
+				Key:               key,
+				ChecksumAlgorithm: algorithm,
+				ChecksumType:      checksumType,
+			})
+			require.NoError(t, err)
+
+			completedParts := make([]types.CompletedPart, 0, 2)
+			uploadPartResults := make([]*s3.UploadPartOutput, 0, 2)
+			for partNumber := int32(1); partNumber <= 2; partNumber++ {
+				uploadPartResult, err := s3Client.UploadPart(context.Background(), &s3.UploadPartInput{
+					Bucket:            bucketName,
+					Key:               key,
+					UploadId:          createResult.UploadId,
+					PartNumber:        aws.Int32(partNumber),
+					ChecksumAlgorithm: algorithm,
+					Body:              bytes.NewReader([]byte(fmt.Sprintf("part %d content", partNumber))),
+				})
+				require.NoError(t, err)
+				completedParts = append(completedParts, types.CompletedPart{
+					ETag:       uploadPartResult.ETag,
+					PartNumber: aws.Int32(partNumber),
+				})
+				uploadPartResults = append(uploadPartResults, uploadPartResult)
+			}
+			return s3Client, createResult.UploadId, completedParts, uploadPartResults
+		}
+
+		t.Run("it should reject completing a composite checksum upload without part checksums"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts, uploadPartResults := setupChecksumUpload(t, types.ChecksumAlgorithmSha256, types.ChecksumTypeComposite)
+			completedParts[0].ChecksumSHA256 = uploadPartResults[0].ChecksumSHA256
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assertApiError(t, err, "InvalidRequest")
+			var apiErr smithy.APIError
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, "The upload was created using a sha256 checksum. The complete request must include the checksum for each part. It was missing for part 2 in the request.", apiErr.ErrorMessage())
+		})
+
+		t.Run("it should complete a composite checksum upload with part checksums"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts, uploadPartResults := setupChecksumUpload(t, types.ChecksumAlgorithmSha256, types.ChecksumTypeComposite)
+			for i := range completedParts {
+				completedParts[i].ChecksumSHA256 = uploadPartResults[i].ChecksumSHA256
+			}
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assert.NoError(t, err)
+		})
+
+		t.Run("it should complete a full object checksum upload without part checksums"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts, _ := setupChecksumUpload(t, types.ChecksumAlgorithmCrc32, types.ChecksumTypeFullObject)
+			err := completeUpload(s3Client, uploadId, completedParts)
+			assert.NoError(t, err)
+		})
+
 		t.Run("it should complete a multipart upload with matching etags and checksums"+testSuffix, func(t *testing.T) {
 			s3Client, uploadId, completedParts := setupUpload(t)
 			err := completeUpload(s3Client, uploadId, completedParts)
@@ -1468,6 +1532,41 @@ func TestUploadPartCopy(t *testing.T) {
 			objectBytes, err := io.ReadAll(getResult.Body)
 			assert.Nil(t, err)
 			assert.Equal(t, body, objectBytes)
+		})
+
+		t.Run("it should return part checksums for a copied part of a composite checksum upload"+testSuffix, func(t *testing.T) {
+			s3Client, _, cleanup := setupTestServer(dbType, usePathStyle, useReplication, useFilesystemPartStore, encryptionType, wrapPartStoreWithOutbox, usePartStoreCompression)
+			t.Cleanup(cleanup)
+			_, err := s3Client.CreateBucket(context.Background(), &s3.CreateBucketInput{Bucket: bucketName})
+			require.NoError(t, err)
+			_, err = s3Client.PutObject(context.Background(), &s3.PutObjectInput{Bucket: bucketName, Key: key, Body: bytes.NewReader(body)})
+			require.NoError(t, err)
+
+			createResult, err := s3Client.CreateMultipartUpload(context.Background(), &s3.CreateMultipartUploadInput{Bucket: bucketName, Key: key2, ChecksumAlgorithm: types.ChecksumAlgorithmSha256})
+			require.NoError(t, err)
+
+			copyPartResult, err := s3Client.UploadPartCopy(context.Background(), &s3.UploadPartCopyInput{
+				Bucket:     bucketName,
+				Key:        key2,
+				UploadId:   createResult.UploadId,
+				PartNumber: aws.Int32(1),
+				CopySource: aws.String(*bucketName + "/" + *key),
+			})
+			require.NoError(t, err)
+			require.NotNil(t, copyPartResult.CopyPartResult)
+			require.NotNil(t, copyPartResult.CopyPartResult.ChecksumSHA256)
+
+			_, err = s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:   bucketName,
+				Key:      key2,
+				UploadId: createResult.UploadId,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: []types.CompletedPart{
+						{ETag: copyPartResult.CopyPartResult.ETag, ChecksumSHA256: copyPartResult.CopyPartResult.ChecksumSHA256, PartNumber: aws.Int32(1)},
+					},
+				},
+			})
+			require.NoError(t, err)
 		})
 
 		t.Run("it should copy a byte range of the source into a multipart part"+testSuffix, func(t *testing.T) {

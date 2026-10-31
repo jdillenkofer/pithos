@@ -119,6 +119,10 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 	}, nil
 }
 
+func hasAllChecksums(p *metadatastore.Part) bool {
+	return p.ChecksumCRC32 != nil && p.ChecksumCRC32C != nil && p.ChecksumCRC64NVME != nil && p.ChecksumSHA1 != nil && p.ChecksumSHA256 != nil
+}
+
 func findWhollyCoveredPart(parts []metadatastore.Part, byteRange storage.ByteRange, objectSize int64) *metadatastore.Part {
 	start := int64(0)
 	if byteRange.Start != nil {
@@ -193,7 +197,9 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		}
 		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(upload.StorageClass))
 		coveredPart := findWhollyCoveredPart(srcObject.Parts, normalizedRanges[0], srcObject.Size)
-		if coveredPart != nil && coveredPart.ChecksumSHA256 != nil && partStoreNamesEqual(coveredPart.StoreName, storeName) {
+		// Only share a source part that carries every checksum; older parts
+		// lacking some are copied so the new part gets all of them.
+		if coveredPart != nil && hasAllChecksums(coveredPart) && partStoreNamesEqual(coveredPart.StoreName, storeName) {
 			added, err := mbs.metadataStore.TryAddPartReferences(ctx, tx.SqlTx(), []partstore.PartId{coveredPart.Id})
 			if err != nil {
 				return err
@@ -207,7 +213,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			if err != nil {
 				return err
 			}
-			result = storage.UploadPartCopyResult{ETag: coveredPart.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
+			result = storage.UploadPartCopyResult{ETag: coveredPart.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID, ChecksumCRC32: coveredPart.ChecksumCRC32, ChecksumCRC32C: coveredPart.ChecksumCRC32C, ChecksumCRC64NVME: coveredPart.ChecksumCRC64NVME, ChecksumSHA1: coveredPart.ChecksumSHA1, ChecksumSHA256: coveredPart.ChecksumSHA256}
 			return nil
 		}
 
@@ -249,7 +255,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 
-		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
+		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID, ChecksumCRC32: checksums.ChecksumCRC32, ChecksumCRC32C: checksums.ChecksumCRC32C, ChecksumCRC64NVME: checksums.ChecksumCRC64NVME, ChecksumSHA1: checksums.ChecksumSHA1, ChecksumSHA256: checksums.ChecksumSHA256}
 		return nil
 	})
 	mbs.reclaimWrittenParts(ctx, err, written)

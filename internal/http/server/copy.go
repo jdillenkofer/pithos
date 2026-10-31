@@ -283,8 +283,13 @@ func (s *Server) uploadPartCopyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	copyPartResult := CopyPartResult{
-		ETag:         result.ETag,
-		LastModified: result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+		ETag:              result.ETag,
+		LastModified:      result.LastModified.UTC().Format("2006-01-02T15:04:05.000Z"),
+		ChecksumCRC32:     result.ChecksumCRC32,
+		ChecksumCRC32C:    result.ChecksumCRC32C,
+		ChecksumCRC64NVME: result.ChecksumCRC64NVME,
+		ChecksumSHA1:      result.ChecksumSHA1,
+		ChecksumSHA256:    result.ChecksumSHA256,
 	}
 
 	responseHeaders := w.Header()

@@ -270,6 +270,12 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var missingPartChecksumErr *storage.MissingPartChecksumError
+	if errors.As(err, &missingPartChecksumErr) {
+		writeS3ErrorResponse(w, r, http.StatusBadRequest, "InvalidRequest", missingPartChecksumErr.Error(), r.URL.Path)
+		return
+	}
+
 	statusCode := 500
 	errResponse := ErrorResponse{}
 	errResponse.Resource = r.URL.Path

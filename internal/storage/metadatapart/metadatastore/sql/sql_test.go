@@ -13,6 +13,7 @@ import (
 	"github.com/jdillenkofer/pithos/internal/storage/metadatapart/metadatastore"
 	testutils "github.com/jdillenkofer/pithos/internal/testing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSelectCompleteMultipartUploadParts(t *testing.T) {
@@ -94,7 +95,7 @@ func TestSelectCompleteMultipartUploadParts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			selectedParts, err := selectCompleteMultipartUploadParts(tt.declaredParts, storedParts)
+			selectedParts, err := selectCompleteMultipartUploadParts(tt.declaredParts, storedParts, nil)
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
 				numbers := make([]int, len(selectedParts))
@@ -107,6 +108,33 @@ func TestSelectCompleteMultipartUploadParts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelectCompleteMultipartUploadPartsRequiresChecksumOfUploadAlgorithm(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+
+	checksumSHA256 := "c2hhMjU2"
+	storedParts := []part.Entity{
+		{SequenceNumber: 1, ETag: "\"etag-1\"", ChecksumSHA256: &checksumSHA256},
+		{SequenceNumber: 2, ETag: "\"etag-2\"", ChecksumSHA256: &checksumSHA256},
+	}
+	algorithm := "SHA256"
+
+	_, err := selectCompleteMultipartUploadParts([]metadatastore.CompleteMultipartUploadPart{
+		{PartNumber: 1, ETag: "etag-1", ChecksumSHA256: &checksumSHA256},
+		{PartNumber: 2, ETag: "etag-2"},
+	}, storedParts, &algorithm)
+	var missingErr *metadatastore.MissingPartChecksumError
+	require.ErrorAs(t, err, &missingErr)
+	assert.Equal(t, int32(2), missingErr.PartNumber)
+	assert.Equal(t, "The upload was created using a sha256 checksum. The complete request must include the checksum for each part. It was missing for part 2 in the request.", err.Error())
+
+	selectedParts, err := selectCompleteMultipartUploadParts([]metadatastore.CompleteMultipartUploadPart{
+		{PartNumber: 1, ETag: "etag-1", ChecksumSHA256: &checksumSHA256},
+		{PartNumber: 2, ETag: "etag-2", ChecksumSHA256: &checksumSHA256},
+	}, storedParts, &algorithm)
+	require.NoError(t, err)
+	assert.Len(t, selectedParts, 2)
 }
 
 func TestSqlMetadataStore(t *testing.T) {

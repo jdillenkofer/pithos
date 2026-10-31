@@ -310,6 +310,18 @@ var ErrBadDigest error = errors.New("BadDigest")
 var ErrInvalidPart error = errors.New("InvalidPart")
 var ErrInvalidPartOrder error = errors.New("InvalidPartOrder")
 var ErrMalformedXML error = errors.New("MalformedXML")
+
+// MissingPartChecksumError reports a completion manifest part without the
+// checksum of the algorithm its composite-checksum upload was created with.
+type MissingPartChecksumError struct {
+	Algorithm  string
+	PartNumber int32
+}
+
+func (e *MissingPartChecksumError) Error() string {
+	return "The upload was created using a " + strings.ToLower(e.Algorithm) + " checksum. The complete request must include the checksum for each part. It was missing for part " + strconv.Itoa(int(e.PartNumber)) + " in the request."
+}
+
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")

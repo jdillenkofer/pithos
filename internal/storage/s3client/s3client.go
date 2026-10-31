@@ -1314,6 +1314,11 @@ func (rs *s3ClientStorage) UploadPartCopy(ctx context.Context, srcBucket storage
 		if uploadPartCopyResult.CopyPartResult.LastModified != nil {
 			result.LastModified = *uploadPartCopyResult.CopyPartResult.LastModified
 		}
+		result.ChecksumCRC32 = uploadPartCopyResult.CopyPartResult.ChecksumCRC32
+		result.ChecksumCRC32C = uploadPartCopyResult.CopyPartResult.ChecksumCRC32C
+		result.ChecksumCRC64NVME = uploadPartCopyResult.CopyPartResult.ChecksumCRC64NVME
+		result.ChecksumSHA1 = uploadPartCopyResult.CopyPartResult.ChecksumSHA1
+		result.ChecksumSHA256 = uploadPartCopyResult.CopyPartResult.ChecksumSHA256
 	}
 	return result, nil
 }
