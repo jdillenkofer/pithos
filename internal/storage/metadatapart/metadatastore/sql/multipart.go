@@ -324,6 +324,10 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		}
 	}
 
+	if opts != nil && opts.ObjectSize != nil && *opts.ObjectSize != totalSize {
+		return nil, &metadatastore.ObjectSizeMismatchError{ExpectedSize: *opts.ObjectSize, ActualSize: totalSize}
+	}
+
 	calculatedChecksums, err := checksumutils.CalculateMultipartChecksums(parts, checksumType)
 	if err != nil {
 		return nil, err

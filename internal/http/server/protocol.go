@@ -276,6 +276,12 @@ func handleError(err error, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var objectSizeMismatchErr *storage.ObjectSizeMismatchError
+	if errors.As(err, &objectSizeMismatchErr) {
+		writeS3ErrorResponse(w, r, http.StatusBadRequest, "InvalidRequest", objectSizeMismatchErr.Error(), r.URL.Path)
+		return
+	}
+
 	statusCode := 500
 	errResponse := ErrorResponse{}
 	errResponse.Resource = r.URL.Path
