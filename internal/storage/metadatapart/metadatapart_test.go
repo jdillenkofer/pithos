@@ -362,6 +362,19 @@ func readObjectContent(t *testing.T, st *metadataPartStorage, bucket storage.Buc
 	return string(content)
 }
 
+// stopStorageGC stops the garbage collector loop the storage started, so a
+// test's own collector is the only one sweeping. A second sweep that loses
+// the race for a part re-registers the deleted part as an orphan.
+func stopStorageGC(t *testing.T, st *metadataPartStorage) {
+	t.Helper()
+	if st.gcTaskHandle == nil {
+		return
+	}
+	st.gcTaskHandle.Cancel()
+	require.False(t, st.gcTaskHandle.JoinWithTimeout(30*time.Second), "timed out waiting for garbage collector to stop")
+	st.gcTaskHandle = nil
+}
+
 func physicalPartIDs(t *testing.T, st *metadataPartStorage) []partstore.PartId {
 	t.Helper()
 	ctx := context.Background()

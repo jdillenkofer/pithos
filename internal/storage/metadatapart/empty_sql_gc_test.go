@@ -29,6 +29,7 @@ func TestSQLEmptyObjectRepeatedDeleteGC(t *testing.T) {
 				st, cleanup = newTestStorage(t)
 			}
 			defer cleanup()
+			stopStorageGC(t, st)
 			ctx := context.Background()
 			registry, err := repositoryfactory.NewPartRegistryRepository(st.db)
 			require.NoError(t, err)

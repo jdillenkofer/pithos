@@ -30,6 +30,7 @@ func TestDedupDuplicateIsReclaimedByGC(t *testing.T) {
 				st, cleanup = newTestStorage(t)
 			}
 			defer cleanup()
+			stopStorageGC(t, st)
 			ctx := context.Background()
 			registry, err := repositoryfactory.NewPartRegistryRepository(st.db)
 			require.NoError(t, err)
@@ -69,6 +70,7 @@ func TestFailedWritePartIsReclaimedByGC(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	st, cleanup := newTestStorageWithColdStore(t)
 	defer cleanup()
+	stopStorageGC(t, st)
 	ctx := context.Background()
 	registry, err := repositoryfactory.NewPartRegistryRepository(st.db)
 	require.NoError(t, err)
