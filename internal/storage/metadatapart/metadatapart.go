@@ -164,19 +164,6 @@ func WithGCInterval(interval time.Duration) StorageOption {
 	}
 }
 
-func (mbs *metadataPartStorage) deleteUnreferencedParts(ctx context.Context, tx database.Tx, parts []metadatastore.Part) error {
-	for _, part := range parts {
-		store, err := mbs.partStores.ByName(part.StoreName)
-		if err != nil {
-			return err
-		}
-		if err := store.DeletePart(ctx, tx, part.Id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func objectPartManifestComplete(object *metadatastore.Object) bool {
 	var size int64
 	for _, part := range object.Parts {

@@ -1607,7 +1607,7 @@ func TestAppendObject_TooManyParts(t *testing.T) {
 				return err
 			}
 		}
-		_, err := st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+		err := st.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 			Key:   key,
 			ETag:  *objectChecksums.ETag,
 			Size:  int64(maxParts) * int64(len(partData)),

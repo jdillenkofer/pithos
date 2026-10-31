@@ -96,7 +96,7 @@ func TestRegistryOnlyCleanupPreservesReReferences(t *testing.T) {
 		ok, err := env.registryRepo.TryAddReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
 		require.NoError(t, err)
 		require.True(t, ok)
-		_, err = env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Parts: []metadatastore.Part{{Id: id, RefPreAcquired: true}}}, nil)
+		err = env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Parts: []metadatastore.Part{{Id: id, RefPreAcquired: true}}}, nil)
 		return err
 	}))
 	require.NoError(t, env.collector.runGC())

@@ -63,14 +63,12 @@ func TestRegisterAddRemoveLifecycle(t *testing.T) {
 		assert.True(t, ok)
 
 		// 3 references: removing 2 keeps the part alive.
-		unreferenced, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 2}})
+		err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 2}})
 		require.NoError(t, err)
-		assert.Empty(t, unreferenced)
 
 		// Removing the last reference retains the part until GC.
-		unreferenced, err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 1}})
+		err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 1}})
 		require.NoError(t, err)
-		assert.Empty(t, unreferenced)
 
 		entities, err := repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
@@ -96,9 +94,8 @@ func TestTryAddReferencesFailsForCondemnedPart(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		unreferenced, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: condemnedPartId, Delta: 1}})
+		err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: condemnedPartId, Delta: 1}})
 		require.NoError(t, err)
-		assert.Empty(t, unreferenced)
 		condemned, err := repo.Condemn(ctx, tx, condemnedPartId, time.Now().UTC().Add(time.Hour))
 		require.NoError(t, err)
 		require.False(t, condemned) // First observe, then collect after retention.
@@ -132,12 +129,11 @@ func TestRemoveReferencesSkipsMissingRows(t *testing.T) {
 
 		// A missing row is skipped (leak-until-GC), not an error, and must not
 		// prevent decrements of other refs in the batch.
-		unreferenced, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{
+		err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{
 			{PartId: missingPartId, Delta: 1},
 			{PartId: registeredPartId, Delta: 1},
 		})
 		require.NoError(t, err)
-		assert.Empty(t, unreferenced)
 		return nil
 	})
 }
@@ -155,9 +151,8 @@ func TestRemoveReferencesSkipsInsufficientRefCount(t *testing.T) {
 
 		// Decrementing by more than the current count is skipped entirely; the
 		// row keeps its count so the part is never physically deleted.
-		unreferenced, err := repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 2}})
+		err = repo.RemoveReferences(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 2}})
 		require.NoError(t, err)
-		assert.Empty(t, unreferenced)
 
 		entities, err := repo.FindAllEntities(ctx, tx)
 		require.NoError(t, err)
@@ -167,7 +162,7 @@ func TestRemoveReferencesSkipsInsufficientRefCount(t *testing.T) {
 	})
 }
 
-func TestUpdateRefCountAndDeleteByPartId(t *testing.T) {
+func TestUpdateRefCount(t *testing.T) {
 	testutils.SkipIfIntegration(t)
 	db, repo, cleanup := setupRepository(t)
 	defer cleanup()
@@ -186,14 +181,6 @@ func TestUpdateRefCountAndDeleteByPartId(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, entities, 1)
 		assert.Equal(t, int64(1), entities[0].RefCount)
-
-		changed, err = repo.DeleteByPartId(ctx, tx, partId, 2)
-		require.NoError(t, err)
-		require.True(t, changed)
-
-		entities, err = repo.FindAllEntities(ctx, tx)
-		require.NoError(t, err)
-		assert.Empty(t, entities)
 		return nil
 	})
 }

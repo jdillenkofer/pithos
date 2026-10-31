@@ -24,22 +24,20 @@ type Repository interface {
 	// listing stores. Refs are processed in ascending part-id order.
 	RegisterParts(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	// TryAddReferences increments ref_count and clears unreferenced_at.
-	// A condemned (deleted registry row) or orphaned part is never
-	// resurrected. It returns
-	// false as soon as a guard fails; earlier increments are rolled back with
-	// the surrounding transaction by the caller. Refs are processed in
-	// ascending part-id order.
+	// An orphaned part (condemned, or missing its registry row) is never
+	// resurrected. It returns false as soon as a guard fails; earlier
+	// increments are rolled back with the surrounding transaction by the
+	// caller. Refs are processed in ascending part-id order.
 	TryAddReferences(ctx context.Context, tx *sql.Tx, refs []Ref) (bool, error)
 	// RemoveReferences decrements ref_count and clears the GC observation clock.
-	// It returns no ids: physical deletion is exclusively performed by GC.
-	// A missing row or insufficient count is skipped so the part leaks until
-	// GC instead of risking deletion of live data. Refs are
+	// Rows that reach zero are retained: physical deletion is exclusively
+	// performed by GC. A missing row or insufficient count is skipped so the
+	// part leaks until GC instead of risking deletion of live data. Refs are
 	// processed in ascending part-id order.
-	RemoveReferences(ctx context.Context, tx *sql.Tx, refs []Ref) ([]partstore.PartId, error)
+	RemoveReferences(ctx context.Context, tx *sql.Tx, refs []Ref) error
 	FindAllEntities(ctx context.Context, tx *sql.Tx) ([]Entity, error)
 	FindReconciliation(ctx context.Context, tx *sql.Tx) ([]Reconciliation, error)
 	UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error)
-	DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error)
 	// RestoreMissing inserts a row for parts without one and records the
 	// store the parts table names, so the sweep deletes from the right store.
 	RestoreMissing(ctx context.Context, tx *sql.Tx, ref Ref) (bool, error)

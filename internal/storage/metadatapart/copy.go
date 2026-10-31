@@ -213,11 +213,8 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			dstObject.Tags = srcObject.Tags
 		}
 
-		metadataResult, err := mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil)
+		err = mbs.metadataStore.PutObject(ctx, tx.SqlTx(), dstBucket, &dstObject, nil)
 		if err != nil {
-			return err
-		}
-		if err := mbs.deleteUnreferencedParts(ctx, tx, metadataResult.UnreferencedParts); err != nil {
 			return err
 		}
 

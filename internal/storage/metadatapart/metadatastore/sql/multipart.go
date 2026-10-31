@@ -129,33 +129,29 @@ func (sms *sqlMetadataStore) GetMultipartUpload(ctx context.Context, tx *sql.Tx,
 	}, nil
 }
 
-func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) (*metadatastore.PartMutationResult, error) {
+func (sms *sqlMetadataStore) UploadPart(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadID metadatastore.UploadId, partNumber int32, blb metadatastore.Part) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.UploadPart")
 	defer span.End()
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !*exists {
-		return nil, metadatastore.ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if objectEntity == nil {
-		return nil, metadatastore.ErrNoSuchKey
+		return metadatastore.ErrNoSuchKey
 	}
-	unreferencedParts, err := sms.removePartRowsByObjectIdAndSequenceNumber(ctx, tx, *objectEntity.Id, int(partNumber))
-	if err != nil {
-		return nil, err
+	if err := sms.removePartRowsByObjectIdAndSequenceNumber(ctx, tx, *objectEntity.Id, int(partNumber)); err != nil {
+		return err
 	}
-	if err := sms.savePartRows(ctx, tx, *objectEntity.Id, []metadatastore.Part{blb}, int(partNumber)); err != nil {
-		return nil, err
-	}
-	return &metadatastore.PartMutationResult{UnreferencedParts: unreferencedParts}, nil
+	return sms.savePartRows(ctx, tx, *objectEntity.Id, []metadatastore.Part{blb}, int(partNumber))
 }
 
 func trimETagQuotes(etag string) string {
@@ -278,8 +274,6 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 		return nil, err
 	}
 
-	deletedParts := []metadatastore.Part{}
-
 	versioningEnabled := bucketEntity.VersioningStatus != nil && *bucketEntity.VersioningStatus == string(metadatastore.BucketVersioningStatusEnabled)
 
 	latestObjectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKey(ctx, tx, bucketName, key)
@@ -349,8 +343,7 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			if err := sms.checkVersionDeletion(ctx, tx, nullVersionEntity, bucketEntity.ObjectLockEnabled, false); err != nil {
 				return nil, err
 			}
-			unreferencedParts, err := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id)
-			if err != nil {
+			if err := sms.removePartRowsByObjectId(ctx, tx, *nullVersionEntity.Id); err != nil {
 				return nil, err
 			}
 
@@ -363,8 +356,6 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 			if err != nil {
 				return nil, err
 			}
-
-			deletedParts = append(deletedParts, unreferencedParts...)
 
 			if opts != nil && opts.IfMatchETag != nil && latestObjectEntity != nil && latestObjectEntity.Id != nil && nullVersionEntity.Id != nil && *latestObjectEntity.Id == *nullVersionEntity.Id {
 				deleted, deleteErr := sms.objectRepository.DeleteObjectByIdAndOptimisticLockVersion(ctx, tx, *nullVersionEntity.Id, latestObjectEntity.OptimisticLockVersion)
@@ -440,7 +431,6 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 
 	metadatastore.ObserveObjectLock(ctx, metadatastore.ObjectLockObservation{VersionID: objectEntity.VersionID, Effective: effectiveLock})
 	return &metadatastore.CompleteMultipartUploadResult{
-		UnreferencedParts: deletedParts,
 		ETag:              objectEntity.ETag,
 		VersionID:         objectEntity.VersionID,
 		ChecksumCRC32:     objectEntity.ChecksumCRC32,
@@ -452,64 +442,52 @@ func (sms *sqlMetadataStore) CompleteMultipartUpload(ctx context.Context, tx *sq
 	}, nil
 }
 
-func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) (*metadatastore.AbortMultipartResult, error) {
+func (sms *sqlMetadataStore) AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, key metadatastore.ObjectKey, uploadId metadatastore.UploadId) error {
 	ctx, span := sms.tracer.Start(ctx, "SqlMetadataStore.AbortMultipartUpload")
 	defer span.End()
 
 	exists, err := sms.bucketRepository.ExistsBucketByName(ctx, tx, bucketName)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if !*exists {
-		return nil, metadatastore.ErrNoSuchBucket
+		return metadatastore.ErrNoSuchBucket
 	}
 
 	objectEntity, err := sms.objectRepository.FindObjectByBucketNameAndKeyAndUploadId(ctx, tx, bucketName, key, uploadId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if objectEntity == nil {
-		return nil, metadatastore.ErrNoSuchKey
+		return metadatastore.ErrNoSuchKey
 	}
 
-	parts, err := sms.deletePendingUpload(ctx, tx, *objectEntity.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	return &metadatastore.AbortMultipartResult{
-		UnreferencedParts: parts,
-	}, nil
+	return sms.deletePendingUpload(ctx, tx, *objectEntity.Id)
 }
 
 // deletePendingUpload removes a pending multipart upload row together with its
-// tags, user metadata and initiator, and returns the parts no longer referenced.
-func (sms *sqlMetadataStore) deletePendingUpload(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) ([]metadatastore.Part, error) {
-	parts, err := sms.removePartRowsByObjectId(ctx, tx, objectId)
-	if err != nil {
-		return nil, err
+// tags, user metadata, initiator and part references.
+func (sms *sqlMetadataStore) deletePendingUpload(ctx context.Context, tx *sql.Tx, objectId ulid.ULID) error {
+	if err := sms.removePartRowsByObjectId(ctx, tx, objectId); err != nil {
+		return err
 	}
 
-	err = sms.tagRepository.DeleteTagsByObjectId(ctx, tx, objectId)
+	err := sms.tagRepository.DeleteTagsByObjectId(ctx, tx, objectId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = sms.userMetadataRepository.DeleteUserMetadataByObjectId(ctx, tx, objectId)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := sms.deleteObjectInitiator(ctx, tx, objectId); err != nil {
-		return nil, err
+		return err
 	}
 
 	_, err = sms.objectRepository.DeleteObjectById(ctx, tx, objectId)
-	if err != nil {
-		return nil, err
-	}
-
-	return parts, nil
+	return err
 }
 
 func (sms *sqlMetadataStore) ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName metadatastore.BucketName, opts metadatastore.ListMultipartUploadsOptions) (*metadatastore.ListMultipartUploadsResult, error) {

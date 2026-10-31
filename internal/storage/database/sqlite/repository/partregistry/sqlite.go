@@ -17,11 +17,10 @@ type sqliteRepository struct {
 const (
 	insertPartRegistryStmt          = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, 1, $4, $5)"
 	addReferencesStmt               = "UPDATE part_registry SET ref_count = ref_count + $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND NOT orphaned"
-	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND ref_count >= $1 RETURNING ref_count, version"
+	removeReferencesStmt            = "UPDATE part_registry SET ref_count = ref_count - $1, version = version + 1, updated_at = $2, unreferenced_at = NULL WHERE part_id = $3 AND ref_count >= $1"
 	findAllPartRegistryEntitiesStmt = "SELECT part_id, ref_count, created_at, updated_at, version, unreferenced_at, orphaned FROM part_registry"
 	reconciliationStmt              = "SELECT p.part_id, COUNT(*) AS actual_count, r.ref_count, r.version FROM parts p LEFT JOIN part_registry r ON r.part_id = p.part_id GROUP BY p.part_id, r.ref_count, r.version UNION ALL SELECT r.part_id, 0, r.ref_count, r.version FROM part_registry r WHERE NOT EXISTS (SELECT 1 FROM parts p WHERE p.part_id = r.part_id)"
 	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, orphaned = orphaned AND $1 = 0, version = version + 1, updated_at = $2, unreferenced_at = CASE WHEN $1 = 0 AND ref_count = 0 THEN unreferenced_at ELSE NULL END WHERE part_id = $3 AND version = $4"
-	deleteByPartIdStmt              = "DELETE FROM part_registry WHERE part_id = $1 AND version = $2"
 	restoreMissingStmt              = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) SELECT $1, $2, MIN(part_store_name), 1, $3, $3 FROM parts WHERE part_id = $1 ON CONFLICT(part_id) DO NOTHING"
 	insertOrphanStmt                = "INSERT INTO part_registry (part_id, ref_count, orphaned, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, $4, 1, $5, $5) ON CONFLICT(part_id) DO NOTHING"
 	markUnreferencedStmt            = "UPDATE part_registry SET unreferenced_at = $1 WHERE part_id = $2 AND version = $3"
@@ -65,24 +64,25 @@ func (pr *sqliteRepository) TryAddReferences(ctx context.Context, tx *sql.Tx, re
 	return true, nil
 }
 
-func (pr *sqliteRepository) RemoveReferences(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) ([]partstore.PartId, error) {
+func (pr *sqliteRepository) RemoveReferences(ctx context.Context, tx *sql.Tx, refs []partregistry.Ref) error {
 	now := time.Now().UTC()
-	unreferenced := []partstore.PartId{}
 	for _, ref := range partregistry.SortRefs(refs) {
-		var refCount, version int64
-		err := tx.QueryRowContext(ctx, removeReferencesStmt, ref.Delta, now, ref.PartId.String()).Scan(&refCount, &version)
-		if err == sql.ErrNoRows {
+		// Zero-reference rows are retained; only GC may condemn and delete parts.
+		r, err := tx.ExecContext(ctx, removeReferencesStmt, ref.Delta, now, ref.PartId.String())
+		if err != nil {
+			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
 			// Missing row or insufficient ref_count: skip the decrement so the
 			// part leaks until GC instead of ever deleting live data.
 			slog.Warn(fmt.Sprintf("part registry: skipping decrement of %d for part %s (row missing or ref_count too low)", ref.Delta, ref.PartId.String()))
-			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		// Retain zero-reference rows; only GC may condemn and delete parts.
 	}
-	return unreferenced, nil
+	return nil
 }
 
 func (pr *sqliteRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) ([]partregistry.Entity, error) {
@@ -107,15 +107,6 @@ func (pr *sqliteRepository) FindAllEntities(ctx context.Context, tx *sql.Tx) ([]
 
 func (pr *sqliteRepository) UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error) {
 	r, err := tx.ExecContext(ctx, updateRefCountByPartIdStmt, refCount, time.Now().UTC(), partId.String(), version)
-	if err != nil {
-		return false, err
-	}
-	n, err := r.RowsAffected()
-	return n == 1, err
-}
-
-func (pr *sqliteRepository) DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error) {
-	r, err := tx.ExecContext(ctx, deleteByPartIdStmt, partId.String(), version)
 	if err != nil {
 		return false, err
 	}

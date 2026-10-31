@@ -143,10 +143,6 @@ type Part struct {
 	RefPreAcquired bool
 }
 
-type PartMutationResult struct {
-	UnreferencedParts []Part
-}
-
 type PartDedupEntry struct {
 	PartStoreName     string
 	ChecksumSHA256    string
@@ -164,7 +160,6 @@ type InitiateMultipartUploadResult struct {
 }
 
 type CompleteMultipartUploadResult struct {
-	UnreferencedParts []Part
 	Location          string
 	VersionID         *string
 	ETag              string
@@ -174,14 +169,6 @@ type CompleteMultipartUploadResult struct {
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
 	ChecksumType      *string
-}
-
-type DeleteBucketResult struct {
-	UnreferencedParts []Part
-}
-
-type AbortMultipartResult struct {
-	UnreferencedParts []Part
 }
 
 type Upload struct {
@@ -412,9 +399,8 @@ type DeleteObjectOptions struct {
 }
 
 type DeleteObjectResult struct {
-	VersionID         *string
-	IsDeleteMarker    bool
-	UnreferencedParts []Part
+	VersionID      *string
+	IsDeleteMarker bool
 }
 
 type ObjectVersion struct {
@@ -475,7 +461,7 @@ type MaintenanceStore interface {
 
 type BucketStore interface {
 	CreateBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName, options ...CreateBucketOptions) error
-	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*DeleteBucketResult, error)
+	DeleteBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) error
 	ListBuckets(ctx context.Context, tx *sql.Tx) ([]Bucket, error)
 	HeadBucket(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*Bucket, error)
 	GetBucketVersioningConfiguration(ctx context.Context, tx *sql.Tx, bucketName BucketName) (*BucketVersioningConfiguration, error)
@@ -657,13 +643,13 @@ type ObjectStore interface {
 	ListObjectVersions(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListObjectVersionsOptions) (*ListObjectVersionsResult, error)
 	HeadObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey) (*Object, error)
 	HeadObjectVersion(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID string) (*Object, error)
-	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) (*PartMutationResult, error)
+	PutObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *PutObjectOptions) error
 	// AppendObject appends a new part to an existing object's part list. The caller
 	// must supply the updated object metadata (including new ETag, size, and the
 	// full ordered part list). If no object exists at the key yet, a new object is
 	// created. If WriteOffset is set in opts and does not match the current object
 	// size, ErrInvalidWriteOffset is returned.
-	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) (*PartMutationResult, error)
+	AppendObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, object *Object, opts *AppendObjectOptions) error
 	DeleteObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, opts *DeleteObjectOptions) (*DeleteObjectResult, error)
 	GetBucketTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName) (map[string]string, error)
 	PutBucketTagging(ctx context.Context, tx *sql.Tx, bucketName BucketName, tags map[string]string) error
@@ -683,7 +669,7 @@ type ObjectStore interface {
 	// must match the selected object's ETag; a concurrent replacement/update
 	// surfaces as ErrPreconditionFailed. Returns ErrNoSuchKey when no selected
 	// non-delete-marker object exists.
-	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID *string, expectedETag string, storageClass string, parts []Part) (*PartMutationResult, error)
+	TransitionObject(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, versionID *string, expectedETag string, storageClass string, parts []Part) error
 }
 
 type ObjectTaggingOptions struct {
@@ -696,9 +682,9 @@ type MultipartStore interface {
 	// Returns ErrNoSuchKey when no such pending upload exists (mirroring
 	// UploadPart's behaviour for unknown uploads).
 	GetMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*Upload, error)
-	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) (*PartMutationResult, error)
+	UploadPart(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, partNumber int32, part Part) error
 	CompleteMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, checksumInput *ChecksumInput, opts *CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
-	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) (*AbortMultipartResult, error)
+	AbortMultipartUpload(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId) error
 	ListMultipartUploads(ctx context.Context, tx *sql.Tx, bucketName BucketName, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
 	ListParts(ctx context.Context, tx *sql.Tx, bucketName BucketName, key ObjectKey, uploadId UploadId, opts ListPartsOptions) (*ListPartsResult, error)
 }
@@ -773,7 +759,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		_, err := metadataStore.PutObject(ctx, tx, bucketName, &Object{
+		err := metadataStore.PutObject(ctx, tx, bucketName, &Object{
 			Key:          key,
 			LastModified: time.Now(),
 			ETag:         "",
@@ -843,7 +829,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return err
 	}
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		_, err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+		err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 			Id:   *partId,
 			Size: 0,
 			ETag: "",
@@ -884,7 +870,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 		return err
 	}
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		_, err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
+		err := metadataStore.UploadPart(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId, 1, Part{
 			Id:   *partId,
 			Size: 0,
 			ETag: "",
@@ -896,7 +882,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		_, err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
+		err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, key, initiateMultipartUploadResult.UploadId)
 		return err
 	})
 	if err != nil {
@@ -975,7 +961,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 
 	for _, upload := range expectedUploads {
 		err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-			_, err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, upload.Key, upload.UploadId)
+			err := metadataStore.AbortMultipartUpload(ctx, tx, bucketName, upload.Key, upload.UploadId)
 			return err
 		})
 		if err != nil {
@@ -984,7 +970,7 @@ func Tester(metadataStore MetadataStore, db database.Database) error {
 	}
 
 	err = runTesterTx(ctx, db, &sql.TxOptions{ReadOnly: false}, func(tx *sql.Tx) error {
-		_, err := metadataStore.DeleteBucket(ctx, tx, bucketName)
+		err := metadataStore.DeleteBucket(ctx, tx, bucketName)
 		return err
 	})
 	if err != nil {

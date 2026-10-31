@@ -230,7 +230,7 @@ func TestRunGCCollectsRolledBackPartsWithoutDeletingCommittedParts(t *testing.T)
 				if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewBufferString("abc")); err != nil {
 					return err
 				}
-				_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+				err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 					Key: metadatastore.MustNewObjectKey(key), ETag: "etag", Size: 3,
 					Parts: []metadatastore.Part{{Id: id, ETag: "etag", Size: 3}},
 				}, nil)
@@ -320,7 +320,7 @@ func TestRunGCReconcilesRegistryFromPartsTable(t *testing.T) {
 			if err := env.physicalStore.PutPart(ctx, tx, id, bytes.NewReader([]byte{byte(i)})); err != nil {
 				return err
 			}
-			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+			err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 				Key:   metadatastore.MustNewObjectKey(string(rune('a' + i))),
 				ETag:  "etag",
 				Size:  1,
@@ -411,7 +411,7 @@ func runGCBackfillScenario(t *testing.T, env *gcTestEnv) {
 		if err := env.physicalStore.PutPart(ctx, tx, part.Id, bytes.NewReader([]byte("abc"))); err != nil {
 			return err
 		}
-		_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
+		err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{
 			Key:   metadatastore.MustNewObjectKey(key),
 			ETag:  part.ETag,
 			Size:  part.Size,

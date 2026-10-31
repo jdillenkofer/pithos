@@ -57,9 +57,7 @@ func TestOldPartSurvivesDereferenceUntilRetention(t *testing.T) {
 			require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
 				require.NoError(t, store.PutPart(ctx, tx, id, bytes.NewBufferString("old data")))
 				require.NoError(t, env.registryRepo.RegisterParts(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}}))
-				removed, err := env.registryRepo.RemoveReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
-				require.Empty(t, removed)
-				return err
+				return env.registryRepo.RemoveReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
 			}))
 			assertPresent := func(present bool) {
 				require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {

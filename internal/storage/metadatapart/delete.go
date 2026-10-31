@@ -61,9 +61,6 @@ func (mbs *metadataPartStorage) DeleteObject(ctx context.Context, bucketName sto
 		if err != nil {
 			return err
 		}
-		if err := mbs.deleteUnreferencedParts(ctx, tx, metaResult.UnreferencedParts); err != nil {
-			return err
-		}
 
 		result = &storage.DeleteObjectResult{VersionID: metaResult.VersionID, IsDeleteMarker: metaResult.IsDeleteMarker}
 		return nil
@@ -158,9 +155,6 @@ func (mbs *metadataPartStorage) DeleteObjects(ctx context.Context, bucketName st
 					continue
 				}
 
-				return err
-			}
-			if err := mbs.deleteUnreferencedParts(ctx, tx, metaResult.UnreferencedParts); err != nil {
 				return err
 			}
 

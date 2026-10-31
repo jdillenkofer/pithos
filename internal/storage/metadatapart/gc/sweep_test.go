@@ -73,8 +73,7 @@ func TestSweepReclaimsFromRecordedStoreWithoutListing(t *testing.T) {
 		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
 			require.NoError(t, fs.PutPart(ctx, tx, id, bytes.NewBufferString("cold data")))
 			require.NoError(t, env.registryRepo.RegisterParts(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1, StoreName: &coldName}}))
-			_, err := env.registryRepo.RemoveReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
-			return err
+			return env.registryRepo.RemoveReferences(ctx, tx.SqlTx(), []partregistry.Ref{{PartId: id, Delta: 1}})
 		}))
 		coldIds := func() []partstore.PartId {
 			var ids []partstore.PartId
@@ -177,7 +176,7 @@ func TestMetadataWritesRecordPartStore(t *testing.T) {
 		bucket, key := metadatastore.MustNewBucketName("bucket"), metadatastore.MustNewObjectKey("key")
 		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
 			require.NoError(t, env.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucket))
-			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 2, Parts: []metadatastore.Part{{Id: hot, Size: 1}, {Id: cold, Size: 1, StoreName: &coldName}}}, nil)
+			err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 2, Parts: []metadatastore.Part{{Id: hot, Size: 1}, {Id: cold, Size: 1, StoreName: &coldName}}}, nil)
 			require.NoError(t, err)
 			_, err = env.metadataStore.DeleteObject(ctx, tx.SqlTx(), bucket, key, nil)
 			return err
@@ -206,7 +205,7 @@ func TestFullPassRestoresMissingRowWithPartStore(t *testing.T) {
 		bucket, key := metadatastore.MustNewBucketName("bucket"), metadatastore.MustNewObjectKey("key")
 		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
 			require.NoError(t, env.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucket))
-			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 1, Parts: []metadatastore.Part{{Id: id, Size: 1, StoreName: &coldName}}}, nil)
+			err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 1, Parts: []metadatastore.Part{{Id: id, Size: 1, StoreName: &coldName}}}, nil)
 			require.NoError(t, err)
 			_, err = tx.SqlTx().ExecContext(ctx, "DELETE FROM part_registry WHERE part_id = $1", id.String())
 			return err
