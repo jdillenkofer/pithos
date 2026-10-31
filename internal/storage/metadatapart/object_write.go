@@ -19,6 +19,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 	ctx, span := mbs.tracer.Start(ctx, "MetadataPartStorage.PutObject")
 	defer span.End()
 	var object metadatastore.Object
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		ifNoneMatchStar := opts != nil && opts.IfNoneMatchStar
 
@@ -34,6 +35,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		storeName, store := mbs.partStores.StoreForClass(metadatastore.EffectiveStorageClass(requestedStorageClass))
 
 		originalSize, calculatedChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+			written.add(storeName, *partId)
 			return store.PutPart(ctx, tx, *partId, reader)
 		})
 		if err != nil {
@@ -91,6 +93,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		}
 		return mbs.metadataStore.PutObject(ctx, tx.SqlTx(), bucketName, &object, metadataPutObjectOptions)
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +115,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 
 	var combinedChecksums checksumutils.ChecksumValues
 	var totalSize int64
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		versioningConfig, err := mbs.metadataStore.GetBucketVersioningConfiguration(ctx, tx.SqlTx(), bucketName)
 		if err != nil {
@@ -161,6 +165,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 
 		newPartSize, newPartChecksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(r io.Reader) error {
+			written.add(storeName, *newPartId)
 			return store.PutPart(ctx, tx, *newPartId, r)
 		})
 		if err != nil {
@@ -282,6 +287,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		}
 		return nil
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +313,8 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 
 	targetStoreName, targetStore := mbs.partStores.StoreForClass(targetStorageClass)
 
-	return database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
+	var written writtenParts
+	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var object *metadatastore.Object
 		var err error
 		var versionID *string
@@ -359,6 +366,7 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 			if err != nil {
 				return err
 			}
+			written.add(targetStoreName, *newPartId)
 			err = targetStore.PutPart(ctx, tx, *newPartId, srcReader)
 			srcReader.Close()
 			if err != nil {
@@ -380,6 +388,8 @@ func (mbs *metadataPartStorage) TransitionObjectStorageClass(ctx context.Context
 
 		return mbs.metadataStore.TransitionObject(ctx, tx.SqlTx(), bucketName, key, versionID, object.ETag, targetStorageClass, newParts)
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
+	return err
 }
 
 // partStoreNamesEqual compares two part store names where nil means the default

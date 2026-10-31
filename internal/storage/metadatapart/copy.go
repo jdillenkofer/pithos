@@ -19,6 +19,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 	defer span.End()
 
 	var result storage.CopyObjectResult
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var srcObject *metadatastore.Object
 		var err error
@@ -81,6 +82,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				return err
 			}
 			size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+				written.add(dstStoreName, *newPartId)
 				return dstStore.PutPart(ctx, tx, *newPartId, r)
 			})
 			if err != nil {
@@ -153,6 +155,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 				if err != nil {
 					return err
 				}
+				written.add(dstStoreName, *newPartId)
 				err = dstStore.PutPart(ctx, tx, *newPartId, srcReader)
 				srcReader.Close()
 				if err != nil {
@@ -221,6 +224,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 		result = storage.CopyObjectResult{ETag: dstObject.ETag, LastModified: lastModified, SourceVersionID: srcObject.VersionID, VersionID: dstObject.VersionID}
 		return nil
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}

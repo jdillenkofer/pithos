@@ -58,6 +58,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 	defer span.End()
 
 	var calculatedChecksums *checksumutils.ChecksumValues
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		// Parts route to the store of the class chosen at
 		// CreateMultipartUpload, so the upload must be resolved before the
@@ -74,6 +75,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		}
 
 		originalSize, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, reader, func(reader io.Reader) error {
+			written.add(storeName, *partId)
 			return store.PutPart(ctx, tx, *partId, reader)
 		})
 		if err != nil {
@@ -103,6 +105,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 			RefPreAcquired:    refPreAcquired,
 		})
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +144,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 	defer span.End()
 
 	var result storage.UploadPartCopyResult
+	var written writtenParts
 	err := database.WithTx(ctx, mbs.db, &sql.TxOptions{ReadOnly: false}, func(ctx context.Context, tx database.Tx) error {
 		var srcObject *metadatastore.Object
 		var err error
@@ -218,6 +222,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 			return err
 		}
 		size, checksums, err := checksumutils.CalculateChecksumsStreaming(ctx, rangeReader, func(r io.Reader) error {
+			written.add(storeName, *newPartId)
 			return store.PutPart(ctx, tx, *newPartId, r)
 		})
 		if err != nil {
@@ -247,6 +252,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		result = storage.UploadPartCopyResult{ETag: *checksums.ETag, LastModified: time.Now(), SourceVersionID: srcObject.VersionID}
 		return nil
 	})
+	mbs.reclaimWrittenParts(ctx, err, written)
 	if err != nil {
 		return nil, err
 	}
