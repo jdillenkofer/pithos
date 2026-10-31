@@ -72,13 +72,20 @@ func (r *repository) BackfillFromParts(ctx context.Context, tx *sql.Tx) (int64, 
 	return result.RowsAffected()
 }
 
-func (r *repository) DeleteByPartIds(ctx context.Context, tx *sql.Tx, ids []partstore.PartId) error {
+func (r *repository) DeleteByPartIds(ctx context.Context, tx *sql.Tx, ids []partstore.PartId) (int64, error) {
+	var deleted int64
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, deletePartDedupIndexByPartIdStmt, id.String()); err != nil {
-			return err
+		result, err := tx.ExecContext(ctx, deletePartDedupIndexByPartIdStmt, id.String())
+		if err != nil {
+			return deleted, err
 		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return deleted, err
+		}
+		deleted += n
 	}
-	return nil
+	return deleted, nil
 }
 
 func (r *repository) FindAllPartIds(ctx context.Context, tx *sql.Tx) ([]partstore.PartId, error) {
