@@ -22,7 +22,7 @@ const (
 	reconciliationStmt              = "SELECT p.part_id, COUNT(*) AS actual_count, r.ref_count, r.version FROM parts p LEFT JOIN part_registry r ON r.part_id = p.part_id GROUP BY p.part_id, r.ref_count, r.version UNION ALL SELECT r.part_id, 0, r.ref_count, r.version FROM part_registry r WHERE NOT EXISTS (SELECT 1 FROM parts p WHERE p.part_id = r.part_id)"
 	updateRefCountByPartIdStmt      = "UPDATE part_registry SET ref_count = $1, orphaned = orphaned AND $1::BIGINT = 0, version = version + 1, updated_at = $2, unreferenced_at = CASE WHEN $1::BIGINT = 0 AND ref_count = 0 THEN unreferenced_at ELSE NULL END WHERE part_id = $3 AND version = $4"
 	deleteByPartIdStmt              = "DELETE FROM part_registry WHERE part_id = $1 AND version = $2"
-	restoreMissingStmt              = "INSERT INTO part_registry (part_id,ref_count,version,created_at,updated_at) VALUES ($1,$2,1,$3,$3) ON CONFLICT(part_id) DO NOTHING"
+	restoreMissingStmt              = "INSERT INTO part_registry (part_id, ref_count, part_store_name, version, created_at, updated_at) SELECT $1::TEXT, $2::BIGINT, MIN(part_store_name), 1, $3::TIMESTAMP, $3::TIMESTAMP FROM parts WHERE part_id = $1::TEXT ON CONFLICT(part_id) DO NOTHING"
 	insertOrphanStmt                = "INSERT INTO part_registry (part_id, ref_count, orphaned, part_store_name, version, created_at, updated_at) VALUES ($1, $2, $3, $4, 1, $5, $5) ON CONFLICT(part_id) DO NOTHING"
 	markUnreferencedStmt            = "UPDATE part_registry SET unreferenced_at = $1 WHERE part_id = $2 AND version = $3"
 	findRegistryForCondemnStmt      = "SELECT ref_count,version,unreferenced_at FROM part_registry WHERE part_id=$1 FOR UPDATE"

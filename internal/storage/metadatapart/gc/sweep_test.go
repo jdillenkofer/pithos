@@ -196,3 +196,30 @@ func TestMetadataWritesRecordPartStore(t *testing.T) {
 		}))
 	})
 }
+
+func TestFullPassRestoresMissingRowWithPartStore(t *testing.T) {
+	testutils.SkipIfIntegration(t)
+	forEachGCBackend(t, func(t *testing.T, env *gcTestEnv) {
+		ctx := context.Background()
+		coldName := "cold"
+		id := oldPartId()
+		bucket, key := metadatastore.MustNewBucketName("bucket"), metadatastore.MustNewObjectKey("key")
+		require.NoError(t, database.WithTx(ctx, env.db, nil, func(ctx context.Context, tx database.Tx) error {
+			require.NoError(t, env.metadataStore.CreateBucket(ctx, tx.SqlTx(), bucket))
+			_, err := env.metadataStore.PutObject(ctx, tx.SqlTx(), bucket, &metadatastore.Object{Key: key, Size: 1, Parts: []metadatastore.Part{{Id: id, Size: 1, StoreName: &coldName}}}, nil)
+			require.NoError(t, err)
+			_, err = tx.SqlTx().ExecContext(ctx, "DELETE FROM part_registry WHERE part_id = $1", id.String())
+			return err
+		}))
+
+		require.NoError(t, env.collector.runFullPassWithContext(ctx))
+		require.NoError(t, database.WithTx(ctx, env.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+			var storeName sql.NullString
+			var refCount int64
+			require.NoError(t, tx.SqlTx().QueryRowContext(ctx, "SELECT ref_count, part_store_name FROM part_registry WHERE part_id = $1", id.String()).Scan(&refCount, &storeName))
+			require.EqualValues(t, 1, refCount)
+			require.Equal(t, sql.NullString{String: coldName, Valid: true}, storeName)
+			return nil
+		}))
+	})
+}

@@ -40,6 +40,8 @@ type Repository interface {
 	FindReconciliation(ctx context.Context, tx *sql.Tx) ([]Reconciliation, error)
 	UpdateRefCount(ctx context.Context, tx *sql.Tx, partId partstore.PartId, refCount, version int64) (bool, error)
 	DeleteByPartId(ctx context.Context, tx *sql.Tx, partId partstore.PartId, version int64) (bool, error)
+	// RestoreMissing inserts a row for parts without one and records the
+	// store the parts table names, so the sweep deletes from the right store.
 	RestoreMissing(ctx context.Context, tx *sql.Tx, ref Ref) (bool, error)
 	// Condemn must run in a fresh GC write transaction (not a metadata mutation
 	// transaction or an ambient reader snapshot). The first committed-zero
