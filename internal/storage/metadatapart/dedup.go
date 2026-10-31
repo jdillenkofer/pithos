@@ -63,7 +63,11 @@ func (mbs *metadataPartStorage) tryShareDedupPart(ctx context.Context, tx databa
 	return nil, nil
 }
 
-func (mbs *metadataPartStorage) dedupeFreshPart(ctx context.Context, tx database.Tx, storeName *string, store partstore.PartStore, freshID partstore.PartId, checksums *checksumutils.ChecksumValues, size int64) (partstore.PartId, bool, error) {
+// dedupeFreshPart shares an indexed part with the same content as the freshly
+// written part when one exists. The fresh duplicate is then registered without
+// references instead of being deleted, so only GC deletes parts and a failed
+// physical deletion never fails the write.
+func (mbs *metadataPartStorage) dedupeFreshPart(ctx context.Context, tx database.Tx, storeName *string, freshID partstore.PartId, checksums *checksumutils.ChecksumValues, size int64) (partstore.PartId, bool, error) {
 	fresh, ok := dedupEntryForPart(storeName, freshID, checksums, size)
 	if !ok {
 		return freshID, false, nil
@@ -73,7 +77,7 @@ func (mbs *metadataPartStorage) dedupeFreshPart(ctx context.Context, tx database
 		return freshID, false, err
 	}
 	if sharedID != nil {
-		if err := store.DeletePart(ctx, tx, freshID); err != nil {
+		if err := mbs.metadataStore.RegisterUnreferencedPart(ctx, tx.SqlTx(), freshID, storeName); err != nil {
 			return freshID, false, err
 		}
 		return *sharedID, true, nil

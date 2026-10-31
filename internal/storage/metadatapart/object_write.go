@@ -44,7 +44,7 @@ func (mbs *metadataPartStorage) PutObject(ctx context.Context, bucketName storag
 		if err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *partId, calculatedChecksums, *originalSize)
 		if err != nil {
 			return err
 		}
@@ -171,7 +171,7 @@ func (mbs *metadataPartStorage) AppendObject(ctx context.Context, bucketName sto
 		if err = metadatastore.ValidateChecksums(checksumInput, *newPartChecksums); err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, newPartChecksums, *newPartSize)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *newPartId, newPartChecksums, *newPartSize)
 		if err != nil {
 			return err
 		}

@@ -86,7 +86,7 @@ func (mbs *metadataPartStorage) CopyObject(ctx context.Context, srcBucket storag
 			if err != nil {
 				return err
 			}
-			dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, dstStoreName, dstStore, *newPartId, checksums, *size)
+			dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, dstStoreName, *newPartId, checksums, *size)
 			if err != nil {
 				return err
 			}

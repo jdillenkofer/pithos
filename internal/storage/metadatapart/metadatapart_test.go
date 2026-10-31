@@ -372,6 +372,28 @@ func physicalPartIDs(t *testing.T, st *metadataPartStorage) []partstore.PartId {
 	return ids
 }
 
+func registryRefCounts(t *testing.T, st *metadataPartStorage) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	var counts []int64
+	require.NoError(t, database.WithTx(ctx, st.db, &sql.TxOptions{ReadOnly: true}, func(ctx context.Context, tx database.Tx) error {
+		rows, err := tx.SqlTx().QueryContext(ctx, "SELECT ref_count FROM part_registry ORDER BY ref_count")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var count int64
+			if err := rows.Scan(&count); err != nil {
+				return err
+			}
+			counts = append(counts, count)
+		}
+		return rows.Err()
+	}))
+	return counts
+}
+
 func partIDsInStore(t *testing.T, st *metadataPartStorage, name *string) []partstore.PartId {
 	t.Helper()
 	ctx := context.Background()
@@ -556,12 +578,15 @@ func TestIdenticalPutObjectsDeduplicateContent(t *testing.T) {
 	require.NoError(t, err)
 	_, err = st.PutObject(ctx, bucket, secondKey, nil, bytes.NewReader(content), nil, nil)
 	require.NoError(t, err)
-	require.Len(t, physicalPartIDs(t, st), 1)
+	// Both objects share one part; the fresh duplicate stays registered
+	// without references until GC reclaims it.
+	require.Len(t, physicalPartIDs(t, st), 2)
+	require.Equal(t, []int64{0, 2}, registryRefCounts(t, st))
 
 	_, err = st.DeleteObject(ctx, bucket, firstKey, nil)
 	require.NoError(t, err)
 	assert.Equal(t, string(content), readObjectContent(t, st, bucket, secondKey, nil))
-	require.Len(t, physicalPartIDs(t, st), 1)
+	require.Equal(t, []int64{0, 1}, registryRefCounts(t, st))
 	_, err = st.DeleteObject(ctx, bucket, secondKey, nil)
 	require.NoError(t, err)
 	assertRetainedUnreferencedParts(t, st)

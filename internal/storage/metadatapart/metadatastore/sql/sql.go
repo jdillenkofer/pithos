@@ -258,6 +258,10 @@ func (sms *sqlMetadataStore) TryAddPartReferences(ctx context.Context, tx *sql.T
 	return sms.partRegistryRepository.TryAddReferences(ctx, tx, partregistry.RefsFromPartIds(partIds))
 }
 
+func (sms *sqlMetadataStore) RegisterUnreferencedPart(ctx context.Context, tx *sql.Tx, partId partstore.PartId, storeName *string) error {
+	return sms.partRegistryRepository.RegisterParts(ctx, tx, []partregistry.Ref{{PartId: partId, Delta: 0, StoreName: storeName}})
+}
+
 func (sms *sqlMetadataStore) LookupDedupPart(ctx context.Context, tx *sql.Tx, store, sha256 string, size int64) (*metadatastore.PartDedupEntry, error) {
 	entity, err := sms.partDedupIndexRepository.FindEntry(ctx, tx, store, sha256, size)
 	if err != nil || entity == nil {

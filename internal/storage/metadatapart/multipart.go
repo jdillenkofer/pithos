@@ -85,7 +85,7 @@ func (mbs *metadataPartStorage) UploadPart(ctx context.Context, bucketName stora
 		if err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *partId, calculatedChecksums, *originalSize)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *partId, calculatedChecksums, *originalSize)
 		if err != nil {
 			return err
 		}
@@ -223,7 +223,7 @@ func (mbs *metadataPartStorage) UploadPartCopy(ctx context.Context, srcBucket st
 		if err != nil {
 			return err
 		}
-		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, store, *newPartId, checksums, *size)
+		dedupedPartID, refPreAcquired, err := mbs.dedupeFreshPart(ctx, tx, storeName, *newPartId, checksums, *size)
 		if err != nil {
 			return err
 		}
