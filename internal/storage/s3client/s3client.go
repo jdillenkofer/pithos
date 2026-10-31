@@ -1363,6 +1363,9 @@ func (rs *s3ClientStorage) CompleteMultipartUpload(ctx context.Context, bucketNa
 			Parts: mapCompleteMultipartUploadParts(opts.Parts),
 		}
 	}
+	if opts != nil {
+		input.MpuObjectSize = opts.ObjectSize
+	}
 	completeMultipartUploadResult, err := rs.s3Client.CompleteMultipartUpload(ctx, input)
 	var notFoundError *types.NotFound
 	if err != nil && errors.As(err, &notFoundError) {

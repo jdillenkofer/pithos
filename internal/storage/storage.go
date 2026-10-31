@@ -513,6 +513,7 @@ var ErrInvalidPartOrder error = metadatastore.ErrInvalidPartOrder
 var ErrMalformedXML error = metadatastore.ErrMalformedXML
 
 type MissingPartChecksumError = metadatastore.MissingPartChecksumError
+type ObjectSizeMismatchError = metadatastore.ObjectSizeMismatchError
 
 var ErrNotImplemented error = metadatastore.ErrNotImplemented
 var ErrEntityTooLarge error = metadatastore.ErrEntityTooLarge

@@ -307,7 +307,7 @@ func completeMultipartUploadOptionsFromInput(input *s3.CompleteMultipartUploadIn
 		})
 	}
 
-	return &storage.CompleteMultipartUploadOptions{Parts: parts}
+	return &storage.CompleteMultipartUploadOptions{Parts: parts, ObjectSize: input.MpuObjectSize}
 }
 
 func (a *StorageToS3UploadAPIClientAdapter) CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {

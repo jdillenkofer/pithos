@@ -322,6 +322,17 @@ func (e *MissingPartChecksumError) Error() string {
 	return "The upload was created using a " + strings.ToLower(e.Algorithm) + " checksum. The complete request must include the checksum for each part. It was missing for part " + strconv.Itoa(int(e.PartNumber)) + " in the request."
 }
 
+// ObjectSizeMismatchError reports a completion whose x-amz-mp-object-size
+// differs from the total size of the parts in the manifest.
+type ObjectSizeMismatchError struct {
+	ExpectedSize int64
+	ActualSize   int64
+}
+
+func (e *ObjectSizeMismatchError) Error() string {
+	return "The provided 'x-amz-mp-object-size' header value " + strconv.FormatInt(e.ExpectedSize, 10) + " does not match the actual object size " + strconv.FormatInt(e.ActualSize, 10) + "."
+}
+
 var ErrUploadWithInvalidSequenceNumber error = errors.New("UploadWithInvalidSequenceNumber")
 var ErrNotImplemented error = errors.New("not implemented")
 var ErrEntityTooLarge error = errors.New("EntityTooLarge")
@@ -462,6 +473,10 @@ type CompleteMultipartUploadOptions struct {
 	// the declared parts form the object; the others are released for GC.
 	// When nil, all uploaded parts are completed.
 	Parts []CompleteMultipartUploadPart
+	// ObjectSize, when non-nil, is the client-declared total object size
+	// (x-amz-mp-object-size); completion fails with ObjectSizeMismatchError
+	// unless the selected parts add up to it.
+	ObjectSize *int64
 }
 
 type MaintenanceStore interface {

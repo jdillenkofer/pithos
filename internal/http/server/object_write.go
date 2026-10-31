@@ -177,6 +177,15 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		handleError(ErrInvalidRequest, w, r)
 		return
 	}
+	var objectSize *int64
+	if objectSizeHeaderValue := r.Header.Get(mpObjectSizeHeader); objectSizeHeaderValue != "" {
+		objectSizeI64, err := strconv.ParseInt(objectSizeHeaderValue, 10, 64)
+		if err != nil || objectSizeI64 < 0 {
+			handleError(ErrInvalidArgument, w, r)
+			return
+		}
+		objectSize = &objectSizeI64
+	}
 
 	data, err := readLimitedBody(r, w, maxCompleteMultipartUploadBodySize)
 	if err != nil {
@@ -194,6 +203,7 @@ func (s *Server) completeMultipartUploadHandler(w http.ResponseWriter, r *http.R
 		completeOpts = &storage.CompleteMultipartUploadOptions{}
 	}
 	completeOpts.Parts = mapCompleteMultipartUploadParts(completeMultipartUploadRequest.Parts)
+	completeOpts.ObjectSize = objectSize
 
 	slog.InfoContext(r.Context(), "CompleteMultipartUpload", "bucket", bucketName.String(), "key", key.String(), "uploadId", uploadId.String())
 	result, err := s.storage.CompleteMultipartUpload(ctx, bucketName, key, uploadId, checksumInput, completeOpts)

@@ -312,6 +312,46 @@ func TestCompleteMultipartUploadPartVerification(t *testing.T) {
 			assert.NoError(t, err)
 		})
 
+		completeUploadWithObjectSize := func(s3Client *s3.Client, uploadId *string, parts []types.CompletedPart, objectSize int64) error {
+			_, err := s3Client.CompleteMultipartUpload(context.Background(), &s3.CompleteMultipartUploadInput{
+				Bucket:        bucketName,
+				Key:           key,
+				UploadId:      uploadId,
+				MpuObjectSize: aws.Int64(objectSize),
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: parts,
+				},
+			})
+			return err
+		}
+
+		t.Run("it should reject completing a multipart upload with a mismatching object size"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts, 29)
+			assertApiError(t, err, "InvalidRequest")
+			var apiErr smithy.APIError
+			require.ErrorAs(t, err, &apiErr)
+			assert.Equal(t, "The provided 'x-amz-mp-object-size' header value 29 does not match the actual object size 28.", apiErr.ErrorMessage())
+
+			// The rejected completion leaves the upload intact.
+			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts, 28)
+			assert.NoError(t, err)
+		})
+
+		t.Run("it should check the object size against the listed parts only"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], 28)
+			assertApiError(t, err, "InvalidRequest")
+			err = completeUploadWithObjectSize(s3Client, uploadId, completedParts[1:], 14)
+			assert.NoError(t, err)
+		})
+
+		t.Run("it should reject completing a multipart upload with a negative object size"+testSuffix, func(t *testing.T) {
+			s3Client, uploadId, completedParts := setupUpload(t)
+			err := completeUploadWithObjectSize(s3Client, uploadId, completedParts, -1)
+			assertApiError(t, err, "InvalidArgument")
+		})
+
 		t.Run("it should complete a multipart upload with matching etags and checksums"+testSuffix, func(t *testing.T) {
 			s3Client, uploadId, completedParts := setupUpload(t)
 			err := completeUpload(s3Client, uploadId, completedParts)

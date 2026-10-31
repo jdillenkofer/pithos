@@ -254,6 +254,7 @@ const checksumCRC64NVMEHeader = "x-amz-checksum-crc64nvme"
 const checksumSHA1Header = "x-amz-checksum-sha1"
 const checksumSHA256Header = "x-amz-checksum-sha256"
 const writeOffsetBytesHeader = "x-amz-write-offset-bytes"
+const mpObjectSizeHeader = "x-amz-mp-object-size"
 const versionIDHeader = "x-amz-version-id"
 const deleteMarkerHeader = "x-amz-delete-marker"
 
